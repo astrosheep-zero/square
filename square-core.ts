@@ -3,6 +3,21 @@ export type Reach = 'bell';
 export type Audience =
   | { readonly kind: 'bell' }
   | { readonly kind: 'mentions'; readonly names: readonly string[] };
+export type ActivityId = `act/${number}`;
+
+export function formatActivityId(index: number): ActivityId {
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw new Error(`Invalid activity index: ${index}`);
+  }
+  return `act/${index}`;
+}
+
+export function parseActivityId(value: string): number | undefined {
+  if (value === 'act/0') return 0;
+  if (typeof value !== 'string' || !/^act\/[1-9]\d*$/.test(value)) return undefined;
+  const index = Number(value.slice(4));
+  return Number.isSafeInteger(index) ? index : undefined;
+}
 
 export interface Hold {
   active: boolean;

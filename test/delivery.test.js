@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel, leaseOwnsNotification, markDeliveredNotifications } from '../dist/delivery.js';
+import { formatActivityId } from '../dist/square-core.js';
 
 function doc(acts, runtime = emptyRuntimeState(acts.length)) {
   return {
@@ -54,7 +55,7 @@ test('pending attention is post-join, independent of the read cursor, and closes
   assert.deepEqual(delivery.pendingFor('bob').map(({ item }) => item.index), [3]);
   assert.equal(markDeliveredNotifications(square, 'Bob', [square.acts[3]], 6), true);
   assert.deepEqual(deriveDeliveryModel(square).pendingFor('Bob'), []);
-  assert.equal(square.runtime.deliveryReceipts.Bob.act_3.status, 'delivered');
+  assert.equal(square.runtime.deliveryReceipts.Bob[formatActivityId(3)].status, 'delivered');
 });
 
 test('a participant who has stepped out is not a delivery target', () => {

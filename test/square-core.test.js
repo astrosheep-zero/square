@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { audienceIncludes, audienceOf, fold, perceive, resolveAudience, validate } from '../dist/square-core.js';
+import { audienceIncludes, audienceOf, fold, formatActivityId, parseActivityId, perceive, resolveAudience, validate } from '../dist/square-core.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -98,4 +98,32 @@ test('a bell becomes eligible again exactly at the end of its quota window', () 
     validate(state, { kind: 'say', actor: 'Alice', at: T0 + 1_000 + 60 * 60 * 1_000, body: 'later', reach: 'bell' }).ok,
     true
   );
+});
+
+test('square-core is the only activity-id formatter and accepts only the canonical spelling', () => {
+  assert.equal(formatActivityId(0), 'act/0');
+  assert.equal(formatActivityId(12), 'act/12');
+  assert.equal(parseActivityId('act/0'), 0);
+  assert.equal(parseActivityId('act/12'), 12);
+
+  const underscore = ['act', '12'].join('_');
+  const rejected = [
+    underscore,
+    '12',
+    'act/012',
+    'act/+12',
+    'act/-1',
+    ' act/12',
+    'act/12 ',
+    'act/12.0',
+    'ACT/12',
+    'act/',
+    'act/1e2',
+  ];
+  for (const value of rejected) {
+    assert.equal(parseActivityId(value), undefined, value);
+  }
+  assert.throws(() => formatActivityId(-1));
+  assert.throws(() => formatActivityId(1.5));
+  assert.throws(() => formatActivityId(Number.MAX_SAFE_INTEGER + 1));
 });

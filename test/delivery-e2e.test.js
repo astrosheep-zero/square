@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { formatActivityId } from '../dist/square-core.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
@@ -227,7 +228,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
 
     item.cli('Bob', ['catch', '--now'], 40);
     const caught = loadSquare(item.squarePath);
-    assert.equal(caught.runtime.deliveryReceipts.Bob[`act_${act.index}`].status, 'delivered');
+    assert.equal(caught.runtime.deliveryReceipts.Bob[formatActivityId(act.index)].status, 'delivered');
     assert.ok(caught.runtime.cursors.Bob.consumedThroughIndex >= act.index);
     assert.deepEqual(deriveDeliveryModel(caught).pendingFor('Bob'), []);
 
@@ -276,7 +277,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
     held.child.kill('SIGKILL');
     await new Promise((resolve) => held.child.once('close', resolve));
     const interrupted = loadSquare(item.squarePath).runtime;
-    const lease = interrupted.notifyLeases[JSON.stringify([`act_${act.index}`, 'bob'])];
+    const lease = interrupted.notifyLeases[JSON.stringify([formatActivityId(act.index), 'bob'])];
     assert.equal(lease.phase, 'dispatching');
     assert.equal(callCount(callLog), 1);
 

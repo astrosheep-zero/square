@@ -3,6 +3,7 @@ import {
   deriveDeliveryModel,
   type DirectedNotificationRoute,
 } from './delivery.js';
+import { formatActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './wake-attempts.js';
 import { joinedRecipients, wakeEvidence } from './wake-evidence.js';
@@ -74,7 +75,7 @@ export function classifyDeliveryHealth(
 
 function formatItem(item: DeliveryHealthItem): string {
   const evidence = item.attempt?.signature === undefined ? '' : ` · ${item.attempt.signature}`;
-  return `  · act_${item.actIndex} → @${item.recipient} from @${item.actor} · ${formatDuration(item.ageMs)}${evidence}`;
+  return `  · ${formatActivityId(item.actIndex)} → @${item.recipient} from @${item.actor} · ${formatDuration(item.ageMs)}${evidence}`;
 }
 
 export function doctorDeliveryHealth(

@@ -18,6 +18,7 @@ import {
   type StoredAct,
   type WatchLease,
 } from './model.js';
+import { parseActivityId } from './square-core.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
 const ARCHIVE_MAGIC = Buffer.from('SQARCH01', 'ascii');
@@ -117,15 +118,6 @@ function validateRecord(value: unknown, item: (candidate: unknown) => boolean): 
     && Object.entries(value).every(([key, candidate]) => key.length > 0 && item(candidate));
 }
 
-function parseActIndexId(id: string): number | undefined {
-  const match = /^act_(\d+)$/.exec(id);
-  if (!match) return undefined;
-  const digits = match[1];
-  if (digits.length > 1 && digits.startsWith('0')) return undefined;
-  const index = Number(digits);
-  return Number.isSafeInteger(index) ? index : undefined;
-}
-
 function parseNotifyLeaseKey(key: string): { index: number; name: string } | undefined {
   let parsed: unknown;
   try {
@@ -138,7 +130,7 @@ function parseNotifyLeaseKey(key: string): { index: number; name: string } | und
   if (typeof id !== 'string' || typeof name !== 'string' || name.length === 0 || nameKey(name) !== name) {
     return undefined;
   }
-  const index = parseActIndexId(id);
+  const index = parseActivityId(id);
   if (index === undefined) return undefined;
   if (JSON.stringify([id, name]) !== key) return undefined;
   return { index, name };
@@ -155,7 +147,7 @@ function validateRuntime(value: unknown): value is SquareRuntimeState {
   return Object.entries(value.deliveryReceipts).every(([name, receipts]) =>
     name.length > 0
       && isObject(receipts)
-      && Object.entries(receipts).every(([id, receipt]) => parseActIndexId(id) !== undefined && validateDeliveryReceipt(receipt))
+      && Object.entries(receipts).every(([id, receipt]) => parseActivityId(id) !== undefined && validateDeliveryReceipt(receipt))
   );
 }
 
@@ -166,7 +158,7 @@ function validateAssignedRuntimeReferences(runtime: SquareRuntimeState): 'ok' | 
   }
   for (const receipts of Object.values(runtime.deliveryReceipts)) {
     for (const id of Object.keys(receipts)) {
-      const index = parseActIndexId(id);
+      const index = parseActivityId(id);
       if (index === undefined) return 'malformed';
       if (index >= bound) return 'future';
     }

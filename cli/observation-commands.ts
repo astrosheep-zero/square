@@ -6,6 +6,7 @@ import { sessionInbox } from '../inbox.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { cmdListSquares } from '../list.js';
 import { type ActivitiesOptions, type WatchOptions, sameName } from '../model.js';
+import { parseActivityId } from '../square-core.js';
 import {
   commandPrefix,
   participantCommandPrefix,
@@ -108,9 +109,9 @@ export const catchCommand: CommandSpec<WatchOptions> = {
 };
 
 function parseActRef(value: string, flag: string): number {
-  const match = value.trim().match(/^(?:act_)?(\d+)$/i);
-  if (!match) fail(`Invalid ${flag}: expected an activity id like act_12 or 12.`);
-  return Number(match[1]);
+  const index = parseActivityId(value);
+  if (index === undefined) fail(`Invalid ${flag}: expected an activity id like act/12`);
+  return index;
 }
 
 function parseTimestamp(value: string, flag: string): number {

@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { emptyRuntimeState, writeSquareFile } from '../dist/artifact.js';
 import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
+import { formatActivityId } from '../dist/square-core.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { presentOnce } from '../dist/presented.js';
 import { lookupParticipant, recordJoin } from '../dist/registry.js';
@@ -73,7 +74,7 @@ test('session inbox returns only canonical pending directed notifications', () =
     );
 
     item.runtime.deliveryReceipts.Bob = {
-      act_2: { status: 'delivered', at: 6 },
+      [formatActivityId(2)]: { status: 'delivered', at: 6 },
     };
     item.persist();
     inbox = sessionInbox('claude-session');
@@ -152,7 +153,7 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
-    assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/SQUARE\.square#act_2/);
+    assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/SQUARE\.square#act\/2/);
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.match(response.hookSpecificOutput.additionalContext, /square --location '\/tmp\/SQUARE\.square' --as 'Bob' catch --now/);
     assert.equal(

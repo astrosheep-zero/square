@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { decodeArchive, loadArchive, loadSquare } from '../dist/artifact.js';
+import { formatActivityId } from '../dist/square-core.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -669,11 +670,11 @@ test('ambient catch and history show full body to a mention target and presence 
   assert.equal(archive.status, 0, archive.stderr);
   assert.match(archive.stdout, /secret reach phrase @Bob/);
 
-  const exact = run(withPath(file, ['history', '--at', 'act_3', '-C', '0']), { env: { SQUARE_NOW_MS: '9000' } });
+  const exact = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0']), { env: { SQUARE_NOW_MS: '9000' } });
   assert.equal(exact.status, 0, exact.stderr);
   assert.match(exact.stdout, /secret reach phrase @Bob/);
 
-  const json = run(withPath(file, ['history', '--ids', '3', '--json']), { env: { SQUARE_NOW_MS: '10000' } });
+  const json = run(withPath(file, ['history', '--ids', formatActivityId(3), '--json']), { env: { SQUARE_NOW_MS: '10000' } });
   assert.equal(json.status, 0, json.stderr);
   assert.match(JSON.parse(json.stdout).body, /secret reach phrase/);
 
@@ -749,6 +750,9 @@ test('mention omits persisted reach while bell persists explicitly', () => {
   assert.equal(help.status, 0, help.stderr);
   assert.doesNotMatch(help.stdout, /beside/);
   assert.match(help.stdout, /--bell/);
+  assert.match(help.stdout, /--reply <activity-id>/);
+  assert.match(help.stdout, /act\/12/);
+  assert.doesNotMatch(help.stdout, /act\/N/);
 });
 
 test('express --reply preserves one causal activity reference', () => {
@@ -758,23 +762,46 @@ test('express --reply preserves one causal activity reference', () => {
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'question @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
-  const replied = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_2', 'answer @Alice']), {
+  const replied = run(withName(file, 'Bob', ['express', '--force', '--reply', formatActivityId(2), 'answer @Alice']), {
     env: { SQUARE_NOW_MS: '4000' },
   });
   assert.equal(replied.status, 0, replied.stderr);
   assert.equal(loadSquare(file).acts.at(-1).reply, 2);
 
-  const history = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--full']));
+  const history = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--full']));
   assert.equal(history.status, 0, history.stderr);
-  assert.match(history.stdout, /act_3.*replies to act_2/);
+  assert.match(history.stdout, /act\/3.*replies to act\/2/);
 
-  const json = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--json']));
+  const json = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--json']));
   assert.equal(json.status, 0, json.stderr);
-  assert.equal(JSON.parse(json.stdout).reply, 'act_2');
+  assert.equal(JSON.parse(json.stdout).reply, formatActivityId(2));
 
-  const missing = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_99', 'orphan @Alice']));
+  const missing = run(withName(file, 'Bob', ['express', '--force', '--reply', formatActivityId(99), 'orphan @Alice']));
   assert.equal(missing.status, 2);
-  assert.match(missing.stderr, /Unknown reply activity: act_99/);
+  assert.match(missing.stderr, /Unknown reply activity: act\/99/);
+});
+
+test('CLI activity selectors accept only canonical textual ids', () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--bell', 'anchor']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
+
+  const underscore = ['act', '1'].join('_');
+  for (const [flag, args] of [
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', underscore, 'later @Alice'])],
+    ['--at', withPath(file, ['history', '--at', underscore])],
+    ['--after', withPath(file, ['history', '--after', underscore])],
+    ['--ids', withPath(file, ['history', '--ids', underscore])],
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', '1', 'later @Alice'])],
+    ['--at', withPath(file, ['history', '--at', '1'])],
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', ` ${formatActivityId(1)} `, 'later @Alice'])],
+    ['--at', withPath(file, ['history', '--at', ` ${formatActivityId(1)} `])],
+  ]) {
+    const result = run(args);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, new RegExp(`Invalid ${flag}: expected an activity id like act/12`));
+  }
 });
 
 test('compact archives older activities into a SQARCH01 file and preserves stable indexes', () => {
@@ -863,10 +890,10 @@ test('history power filters and jsonl stay read-only', () => {
   const grepped = run(withPath(file, ['history', '--grep', 'schema v3', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(grepped.status, 0, grepped.stderr);
   const row = JSON.parse(grepped.stdout.trim().split('\n').at(-1));
-  assert.match(row.id, /^act_/);
+  assert.match(row.id, /^act\//);
   assert.match(row.body, /schema v3/);
 
-  const centerOnly = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
+  const centerOnly = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(centerOnly.status, 0, centerOnly.stderr);
   assert.match(centerOnly.stdout, /hello @Bob please check/);
   assert.doesNotMatch(centerOnly.stdout, /deploy failed on schema v3/);
@@ -895,7 +922,7 @@ test('history grep searches ids, participant names, and bodies', () => {
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'first inventory @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['express', '--force', 'facts only @Alice']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
-  const byId = run(withPath(file, ['history', '--grep', '^act_2$', '--json']));
+  const byId = run(withPath(file, ['history', '--grep', `^${formatActivityId(2)}$`, '--json']));
   assert.equal(byId.status, 0, byId.stderr);
   assert.equal(JSON.parse(byId.stdout).body, 'first inventory @Bob');
 
@@ -903,13 +930,13 @@ test('history grep searches ids, participant names, and bodies', () => {
   assert.equal(byParticipant.status, 0, byParticipant.stderr);
   assert.equal(JSON.parse(byParticipant.stdout).body, 'facts only @Alice');
 
-  const acrossFields = run(withPath(file, ['history', '--grep', 'act_2|facts only', '--limit', '2', '--json']));
+  const acrossFields = run(withPath(file, ['history', '--grep', `${formatActivityId(2)}|facts only`, '--limit', '2', '--json']));
   assert.equal(acrossFields.status, 0, acrossFields.stderr);
-  assert.deepEqual(acrossFields.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act_2', 'act_3']);
+  assert.deepEqual(acrossFields.stdout.trim().split('\n').map((line) => JSON.parse(line).id), [formatActivityId(2), formatActivityId(3)]);
 
-  const compactId = run(withPath(file, ['history', '--grep', '^act_2$']));
+  const compactId = run(withPath(file, ['history', '--grep', `^${formatActivityId(2)}$`]));
   assert.equal(compactId.status, 0, compactId.stderr);
-  assert.match(compactId.stdout, /act_2 · Alice/);
+  assert.match(compactId.stdout, /act\/2 · Alice/);
   assert.match(compactId.stdout, /first inventory/);
 });
 
@@ -923,13 +950,13 @@ test('history grep defaults to a compact character-bounded search view', () => {
   const compact = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /\b1 match\b/);
-  assert.match(compact.stdout, /act_\d+ · Alice ·/);
+  assert.match(compact.stdout, /act\/\d+ · Alice ·/);
   assert.match(compact.stdout, /needle/);
   assert.match(compact.stdout, /· 0 chars before · \d+ chars after/);
   assert.doesNotMatch(compact.stdout, /TAIL/);
   assert.doesNotMatch(compact.stdout, /�/);
   assert.doesNotMatch(compact.stdout, /footprints/);
-  assert.match(compact.stdout, /history --at act_\d+ -C 2 --full/);
+  assert.match(compact.stdout, /history --at act\/\d+ -C 2 --full/);
 
   const full = run(withPath(file, ['history', '--grep', 'needle', '--full']), { env: { SQUARE_NOW_MS: '3000' } });
   assert.equal(full.status, 0, full.stderr);
@@ -1031,7 +1058,7 @@ test('status shows attention state and stable activity ids', () => {
   const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.match(personal.stdout, /Bob.*1 mention waiting/);
   assert.match(personal.stdout, /please check @Bob/);
-  assert.match(personal.stdout, /act_\d+/);
+  assert.match(personal.stdout, /act\/\d+/);
   assert.doesNotMatch(personal.stdout, /Alice.*caught up/);
 
   assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
@@ -1190,7 +1217,7 @@ test('list, participants, and clipped status use current state and executable hi
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);
-  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act_\d+ -C 2 --full/);
+  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act\/\d+ -C 2 --full/);
   assert.match(status.stdout, /throttle 2\/min/);
 });
 

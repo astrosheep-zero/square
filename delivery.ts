@@ -12,14 +12,14 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
-import { audienceOf, resolveAudience } from './square-core.js';
+import { audienceOf, formatActivityId, resolveAudience } from './square-core.js';
 import { actId, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
 
 export function notificationMessageId(squarePath: string, actIndex: number): string {
-  return `square:${squarePath}#act_${actIndex}`;
+  return `square:${squarePath}#${formatActivityId(actIndex)}`;
 }
 
 export interface PlannedNotification {

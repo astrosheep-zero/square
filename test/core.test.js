@@ -157,6 +157,6 @@ test('reply rejects an activity id that has not landed yet', () => {
   const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
   assert.throws(
     () => decideAct(doc, { name: 'Alice', body: 'late answer', force: true, now: 2, reply: 9 }),
-    /Unknown reply activity: act_9/
+    /Unknown reply activity: act\/9/
   );
 });

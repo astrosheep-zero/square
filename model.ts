@@ -123,7 +123,7 @@ export interface ActivitiesOptions {
   before?: number;
   /** Exclusive lower bound on act.at (ms). Alias of --since. */
   after?: number;
-  /** Exclusive lower bound on stable act index (--after act_N). */
+  /** Exclusive lower bound on stable act index (--after act/<index>). */
   afterIndex?: number;
   /** Center act index for a context window (--at). */
   atIndex?: number;

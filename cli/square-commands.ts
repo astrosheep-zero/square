@@ -21,6 +21,7 @@ import { hasAutomaticDeliveryIdentity, localParticipantOwner, recordLocalDone, r
 import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, isCurrentlyJoined, nowMs, resolveRosterName } from '../runtime.js';
 import { createSquare, execute } from '../square-application.js';
+import { formatActivityId, parseActivityId } from '../square-core.js';
 
 import {
   type CommandContext,
@@ -199,9 +200,9 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else if (argument === '--beside') fail('✕ express does not know --beside\n» square express --help');
     else if (argument === '--bell') bell = true;
     else if (argument === '--reply') {
-      const value = requireValue(argv, index, argument).trim().match(/^(?:act_)?(\d+)$/i);
-      if (!value || !Number.isSafeInteger(Number(value[1]))) fail('Invalid --reply: expected an activity id like act_12 or 12.');
-      reply = Number(value[1]);
+      const replyIndex = parseActivityId(requireValue(argv, index, argument));
+      if (replyIndex === undefined) fail('Invalid --reply: expected an activity id like act/12');
+      reply = replyIndex;
       index += 1;
     }
     else bodyArgs.push(argument);
@@ -227,7 +228,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       noWait: intent.noWait,
       reach: intent.reach,
       reply: intent.reply,
-      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply act_${intent.reply}`} -`,
+      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply ${formatActivityId(intent.reply)}`} -`,
     });
   },
   present: () => {},

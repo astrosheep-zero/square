@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { formatActivityId } from '../dist/square-core.js';
 import {
   hasAttemptableWakeRoute,
   isWakeRouteAttemptable,
@@ -30,7 +31,7 @@ function row(item, overrides = {}) {
     ts: 1_000,
     attention: {
       square_path: item.attention.squarePath,
-      act_id: 'act_4',
+      act_id: formatActivityId(4),
       recipient: 'Faye',
     },
     route_kind: 'paseo',

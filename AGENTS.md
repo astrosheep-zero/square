@@ -45,6 +45,7 @@ CLI voice:
 - Express hints (the 4-line pool above) surface on a participant's first activity and every fifth after; they teach embodied expression, not CLI mechanics.
 
 Implementation taste:
+- Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square document and events.
 - The authoritative artifact is one versioned `.square` binary snapshot containing both document and runtime facts; there is no runtime sidecar.
 - Keep the binary codec and the internal square model strictly layered. Only the artifact boundary reads or writes square bytes.

@@ -9,8 +9,8 @@ export type {
   WatchLease,
   WatchOptions,
 } from './model.js';
-export type { Act, Reach } from './square-core.js';
-export { extractMentions } from './square-core.js';
+export type { Act, ActivityId, Reach } from './square-core.js';
+export { extractMentions, formatActivityId, parseActivityId } from './square-core.js';
 export { loadSquare } from './artifact.js';
 export {
   countSays,
@@ -36,10 +36,11 @@ import {
 } from './runtime.js';
 import { decideAct, resolveKnownName } from './decisions.js';
 import { execute } from './square-application.js';
+import { parseActivityId, type ActivityId } from './square-core.js';
 
 export { WATCH_STALE_MS };
 
-export type ActRef = number | `act_${number}`;
+export type ActRef = number | ActivityId;
 
 export interface ParticipantPresence {
   watching: boolean;
@@ -53,9 +54,9 @@ export interface ExpressOptions {
 
 function actRefIndex(ref: ActRef): number {
   if (typeof ref === 'number') return ref;
-  const match = ref.match(/^act_(\d+)$/);
-  if (!match) throw new Error(`Invalid act ref: ${ref}`);
-  return Number(match[1]);
+  const index = parseActivityId(ref);
+  if (index === undefined) throw new Error(`Invalid act ref: ${ref}`);
+  return index;
 }
 
 export function getReadState(squarePath: string, name: string): ReadCursor | undefined {

@@ -1,4 +1,4 @@
-import { audienceIncludes, audienceOf, fold, type Reach } from './square-core.js';
+import { audienceIncludes, audienceOf, fold, formatActivityId, type ActivityId, type Reach } from './square-core.js';
 import {
   SquareError,
   type StoredAct,
@@ -142,9 +142,9 @@ export function actStableIndex(act: StoredAct): number {
   return act.index;
 }
 
-export function actId(actOrIndex: StoredAct | number): string {
+export function actId(actOrIndex: StoredAct | number): ActivityId {
   const index = typeof actOrIndex === 'number' ? actOrIndex : actStableIndex(actOrIndex);
-  return `act_${index}`;
+  return formatActivityId(index);
 }
 
 export function getReadState(doc: SquareDoc, name: string): ReadCursor | undefined {

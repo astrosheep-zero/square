@@ -24,7 +24,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
-import { extractMentions, validate, type SquareState } from './square-core.js';
+import { extractMentions, formatActivityId, validate, type SquareState } from './square-core.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
@@ -104,7 +104,8 @@ export function decideAct(
   const reply = input.reply;
   if (reply !== undefined) {
     if (!Number.isSafeInteger(reply) || reply < 0 || reply >= doc.runtime.nextActIndex) {
-      throw new SquareError('invalid_args', `Unknown reply activity: act_${reply}`);
+      const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
+      throw new SquareError('invalid_args', `Unknown reply activity: ${label}`);
     }
   }
 

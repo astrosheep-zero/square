@@ -21,6 +21,7 @@ import {
   writeSquareFile,
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
+import { formatActivityId } from '../dist/square-core.js';
 import { appendAct } from '../dist/square-application.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
@@ -71,9 +72,9 @@ test('encode/decode roundtrip preserves document history and runtime', () => {
     ],
   });
   doc.runtime.cursors.Alice = { consumedThroughIndex: 4, updatedAt: 1700000004000 };
-  doc.runtime.deliveryReceipts.Bob = { act_1: { status: 'delivered', at: 1700000001500 } };
+  doc.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 1700000001500 } };
   doc.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
-  doc.runtime.notifyLeases[JSON.stringify(['act_1', 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
+  doc.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
 
   const decoded = decodeSquare(encodeSquare(doc));
   assert.deepEqual(decoded, doc);
@@ -192,11 +193,11 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
   assert.throws(() => encodeSquare(futureCursor), /runtime references an unassigned activity index/);
 
   const futureReceipt = structuredClone(doc);
-  futureReceipt.runtime.deliveryReceipts.Bob = { act_2: { status: 'delivered', at: 3 } };
+  futureReceipt.runtime.deliveryReceipts.Bob = { [formatActivityId(2)]: { status: 'delivered', at: 3 } };
   assert.throws(() => encodeSquare(futureReceipt), /runtime references an unassigned activity index/);
 
   const futureLease = structuredClone(doc);
-  futureLease.runtime.notifyLeases[JSON.stringify(['act_2', 'bob'])] = {
+  futureLease.runtime.notifyLeases[JSON.stringify([formatActivityId(2), 'bob'])] = {
     leaseId: 'n1',
     expiresAt: 9,
     phase: 'claimed',
@@ -208,12 +209,16 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
   assert.throws(() => encodeSquare(malformedLease), /snapshot schema is malformed/);
 
   const mixedCaseLease = structuredClone(doc);
-  mixedCaseLease.runtime.notifyLeases[JSON.stringify(['act_1', 'Bob'])] = {
+  mixedCaseLease.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'Bob'])] = {
     leaseId: 'n1',
     expiresAt: 9,
     phase: 'claimed',
   };
   assert.throws(() => encodeSquare(mixedCaseLease), /snapshot schema is malformed/);
+
+  const underscoreReceipt = structuredClone(doc);
+  underscoreReceipt.runtime.deliveryReceipts.Bob = { [['act', '1'].join('_')]: { status: 'delivered', at: 3 } };
+  assert.throws(() => encodeSquare(underscoreReceipt), /snapshot schema is malformed/);
 });
 
 test('archived activity references remain valid below nextActIndex', () => {
@@ -223,8 +228,8 @@ test('archived activity references remain valid below nextActIndex', () => {
   doc.acts[0].index = 4;
   doc.runtime.nextActIndex = 5;
   doc.runtime.cursors.Bob = { consumedThroughIndex: 1, updatedAt: 2 };
-  doc.runtime.deliveryReceipts.Bob = { act_1: { status: 'delivered', at: 2 } };
-  doc.runtime.notifyLeases[JSON.stringify(['act_1', 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
+  doc.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 2 } };
+  doc.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
   assert.deepEqual(decodeSquare(encodeSquare(doc)), doc);
 });
 
@@ -237,7 +242,7 @@ test('a future receipt cannot persist and suppress the next real mention', () =>
   });
   const poisoned = loadSquare(squarePath);
   poisoned.runtime.deliveryReceipts.Bob = {
-    [`act_${poisoned.runtime.nextActIndex}`]: { status: 'delivered', at: 3 },
+    [formatActivityId(poisoned.runtime.nextActIndex)]: { status: 'delivered', at: 3 },
   };
   assert.throws(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
 

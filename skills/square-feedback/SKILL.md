@@ -19,7 +19,7 @@ Every report must identify the source Square unambiguously. Include an `Square i
 field containing the absolute artifact path and, when applicable, the exact activity
 and participant coordinate. Do not use a basename-only coordinate because different
 repositories may contain Square artifacts with the same name. Example:
-`/Users/example/project/.square/SQUARE-main.square#act_42 (@root)`.
+`/Users/example/project/.square/SQUARE-main.square#act/42 (@root)`.
 
 Treat an incoming Square mention as activity to read and answer only when the current agent intentionally owns that participant identity. Never treat the mention itself as feedback. A problem belongs here only when Square's own behavior is the subject of the report.
 
@@ -28,7 +28,7 @@ Use this template:
 ```markdown
 **Square feedback**
 - Area: `<command / hook / skill / artifact>`
-- Square identity: `<absolute artifact path[#act_N] [(participant)]>`
+- Square identity: `<absolute artifact path[#act/<index>] [(participant)]>`
 - Expected: `<what should have happened>`
 - Observed: `<what actually happened>`
 - Evidence: `<exact command, error, activity id, or smallest useful trace>`
@@ -45,7 +45,7 @@ square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.squ
 - Square identity: `/absolute/path/to/project/.square/SQUARE-main.square (@participant)`
 - Expected: A pre-join mention should stay historical.
 - Observed: The Stop hook repeated the same mention every turn.
-- Evidence: `act_1`; cursor was at `act_6` while no delivered receipt existed.
+- Evidence: `act/1`; cursor was at `act/6` while no delivered receipt existed.
 - Impact: repeated work
 EOF
 ```

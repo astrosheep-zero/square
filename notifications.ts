@@ -17,6 +17,7 @@ import { sessionInbox } from './inbox.js';
 import { hasPresentedAttention } from './presented.js';
 import { nameKey, SquareError, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { PaseoAdapter } from './paseo-delivery.js';
 import { quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
@@ -94,19 +95,26 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
   return false;
 }
 
-export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
-  const doc = loadSquare(squarePath);
-  return isDeliveryDelivered(doc, known(doc, name), typeof ref === 'number' ? ref : Number(ref.slice(4)));
+function notificationIndex(ref: number | ActivityId): number {
+  if (typeof ref === 'number') return ref;
+  const index = parseActivityId(ref);
+  if (index === undefined) throw new Error(`Invalid act ref: ${ref}`);
+  return index;
 }
 
-export function hasAttentionNotification(squarePath: string, name: string, ref: number | `act_${number}`, env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId): boolean {
+  const doc = loadSquare(squarePath);
+  return isDeliveryDelivered(doc, known(doc, name), notificationIndex(ref));
+}
+
+export function hasAttentionNotification(squarePath: string, name: string, ref: number | ActivityId, env: NodeJS.ProcessEnv = process.env): boolean {
   const doc = loadSquare(squarePath);
   const recipient = known(doc, name);
-  const index = typeof ref === 'number' ? ref : Number(ref.slice(4));
+  const index = notificationIndex(ref);
   return isDeliveryDelivered(doc, recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
 }
 
-export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId, opts: { timeoutMs?: number } = {}): Promise<boolean> {
   const deadline = Date.now() + (opts.timeoutMs ?? 30000);
   while (Date.now() <= deadline) {
     if (hasDeliveredNotification(squarePath, name, ref)) return true;
@@ -122,7 +130,7 @@ interface ProcessNotificationOptions {
 }
 
 function notifyLeaseKey(recipient: string, actIndex: number): string {
-  return JSON.stringify([`act_${actIndex}`, nameKey(recipient)]);
+  return JSON.stringify([formatActivityId(actIndex), nameKey(recipient)]);
 }
 
 type NotifyLeaseClaim =

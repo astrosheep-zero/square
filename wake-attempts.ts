@@ -5,6 +5,7 @@ import path from 'node:path';
 import { withFileLockSync } from './file-lock.js';
 import { isWakeRouteKind, nameKey, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
+import { formatActivityId, parseActivityId } from './square-core.js';
 
 export type WakeOutcome = 'accepted' | 'unknown' | 'failed';
 
@@ -47,7 +48,7 @@ export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export function wakeAttentionKey(attention: WakeAttention): string {
-  return JSON.stringify([canonicalSquarePath(attention.squarePath), `act_${attention.actIndex}`, nameKey(attention.recipient)]);
+  return JSON.stringify([canonicalSquarePath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
 }
 
 function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
@@ -58,7 +59,7 @@ function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
   if (
     row.v !== 1 || typeof row.ts !== 'number' || !Number.isFinite(row.ts) || row.ts > now || now - row.ts > RETENTION_MS ||
     row.attention === undefined || typeof row.attention.square_path !== 'string' || row.attention.square_path === '' ||
-    typeof row.attention.act_id !== 'string' || !/^act_\d+$/.test(row.attention.act_id) ||
+    typeof row.attention.act_id !== 'string' || parseActivityId(row.attention.act_id) === undefined ||
     typeof row.attention.recipient !== 'string' || row.attention.recipient === '' ||
     typeof row.outcome !== 'string' || !VALID_OUTCOMES.has(row.outcome as WakeOutcome) ||
     typeof row.attempt_n !== 'number' || !Number.isInteger(row.attempt_n) || row.attempt_n <= 0 ||
@@ -94,11 +95,13 @@ function writeRows(filePath: string, rows: WakeAttemptRow[]): void {
 }
 
 function fromRow(row: WakeAttemptRow): WakeAttempt {
+  const actIndex = parseActivityId(row.attention.act_id);
+  if (actIndex === undefined) throw new Error(`Invalid wake activity id: ${row.attention.act_id}`);
   return {
     at: row.ts,
     attention: {
       squarePath: canonicalSquarePath(row.attention.square_path),
-      actIndex: Number(row.attention.act_id.slice(4)),
+      actIndex,
       recipient: row.attention.recipient,
     },
     routeKind: row.route_kind,
@@ -175,7 +178,7 @@ function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
     ts: safe.at,
     attention: {
       square_path: canonicalSquarePath(safe.attention.squarePath),
-      act_id: `act_${safe.attention.actIndex}`,
+      act_id: formatActivityId(safe.attention.actIndex),
       recipient: safe.attention.recipient,
     },
     route_kind: safe.routeKind,
