@@ -3,7 +3,7 @@
 import type { Act } from './square-core.js';
 export type { Act, Reach } from './square-core.js';
 
-export const WAKE_ROUTE_KINDS = ['paseo'] as const;
+export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-app-server', 'claude-native', 'pi-extension', 'paseo'] as const;
 export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export function isWakeRouteKind(value: unknown): value is WakeRouteKind {

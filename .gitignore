@@ -2,6 +2,7 @@ node_modules/
 .square/
 .agora/
 dist/
-.keiyaku/
+.keiyaku/*
+!.keiyaku/settings.json
 .pi/
 reference/paseo/

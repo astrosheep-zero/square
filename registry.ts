@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 
 import { nameKey, sameName, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
-import { refreshPaseoRoute, retireOwnerWakeRoutes } from './routes.js';
+import { publishWakeRoutes, retireOwnerWakeRoutes } from './routes.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 
@@ -383,7 +383,7 @@ export function recordLocalJoin(name: string, squarePath: string, env: NodeJS.Pr
   for (const identity of identities) {
     recordJoin(identity.sessionId, name, squarePath, { ...identity, at, ownerId });
   }
-  refreshPaseoRoute(ownerId, env, at);
+  publishWakeRoutes(ownerId, { at, env });
   for (const previousOwnerId of new Set(current.map((binding) => binding.ownerId))) {
     if (previousOwnerId !== ownerId) retireOwnerWakeRoutes(previousOwnerId, { at, env });
   }
