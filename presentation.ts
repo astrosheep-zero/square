@@ -520,21 +520,8 @@ export function renderDoctorClean(): string {
   return '✓ no problems found';
 }
 
-export function renderDoctorProblems(problems: { kind: string; message: string }[]): string {
-  return [`✕ ${problems.length} ${pluralize(problems.length, 'problem')} found`, ...problems.map((problem) => `  · ${problem.kind}: ${problem.message}`)].join('\n');
-}
-
 export function renderDoctorUnfixable(reason: string): string {
-  return ['✕ cannot repair', `  · ${reason}`].join('\n');
-}
-
-export function renderDoctorRepaired(actions: { message: string }[], quarantinedCount: number, sidecarPath: string | undefined): string {
-  if (actions.length === 0) return '✓ no problems found';
-  return [
-    '✓ repaired',
-    ...actions.map((action) => `  · ${action.message}`),
-    ...(quarantinedCount > 0 && sidecarPath !== undefined ? [`  · quarantined ${quarantinedCount} act block(s)`, `  · sidecar ${sidecarPath}`] : []),
-  ].join('\n');
+  return ['✕ unreadable artifact', `  · ${reason}`].join('\n');
 }
 
 export function renderWatchOutput(

@@ -8,8 +8,6 @@
   },
   "files": [
     "dist",
-    "template.md",
-    "templates",
     "guides",
     "skills",
     "extensions",

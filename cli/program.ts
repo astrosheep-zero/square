@@ -5,8 +5,9 @@ import { defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
 function isMutatingCommand(command: string, argv: string[]): boolean {
+  void argv;
   if (['build', 'join', 'catch', 'express', 'done', 'hold', 'resume', 'compact'].includes(command)) return true;
-  return command === 'doctor' && argv.includes('--fix');
+  return false;
 }
 
 function handleSquareError(error: unknown): never {
@@ -22,7 +23,7 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
   try {
     const requestedHelp = helpRequest(rawArgs);
     if (requestedHelp !== undefined) {
-      await executeRegisteredCommand('help', requestedHelp.command === undefined ? [] : [requestedHelp.command], defaultContext('help', '.square/SQUARE.md'));
+      await executeRegisteredCommand('help', requestedHelp.command === undefined ? [] : [requestedHelp.command], defaultContext('help', '.square/SQUARE.square'));
       return;
     }
 

@@ -111,7 +111,7 @@ export function formatHarnessResult(result: HarnessCommandResult): string {
 }
 
 export function runHarnessCommand(argv: string[], squarePath?: string): Promise<string> {
-  const context = { homeDir: os.homedir(), squarePath: squarePath ?? '.square/SQUARE.md', command: 'harness' };
+  const context = { homeDir: os.homedir(), squarePath: squarePath ?? '.square/SQUARE.square', command: 'harness' };
   const intent = harnessCommand.parse(argv, context);
   return Promise.resolve(harnessCommand.execute(intent, context)).then(formatHarnessResult);
 }

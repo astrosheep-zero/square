@@ -74,9 +74,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['compact'], usage: 'compact [--keep N]', usesSquare: true, group: 'host', summary: 'Move older activity out of the working artifact while keeping the latest N.' },
   {
-    names: ['doctor'], usage: 'doctor [--fix]', usesSquare: true, group: 'maintenance',
-    summary: 'Diagnose artifact integrity.',
-    details: ['Options:', '  --fix              Repair recoverable artifact problems.'],
+    names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',
+    summary: 'Validate binary artifact integrity.',
   },
 ];
 
@@ -92,7 +91,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants', 'warmup', 'compact'] },
-    { key: 'maintenance', title: 'Setup and repair:', order: ['install', 'uninstall', 'doctor'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

@@ -8,7 +8,7 @@ description: Report a confirmed bug or product/UX problem in Square itself to th
 Send feedback to:
 
 ```text
-/Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md
+/Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square
 ```
 
 Use the `square` skill for command semantics. Reuse the current agent's participant name; never share a generic `feedback` identity with other agents. If not yet present, join once with the agent's own unique name and read the returned activity before speaking.
@@ -19,7 +19,7 @@ Every report must identify the source Square unambiguously. Include an `Square i
 field containing the absolute artifact path and, when applicable, the exact activity
 and participant coordinate. Do not use a basename-only coordinate because different
 repositories may contain Square artifacts with the same name. Example:
-`/Users/example/project/.square/SQUARE-main.md#act_42 (@root)`.
+`/Users/example/project/.square/SQUARE-main.square#act_42 (@root)`.
 
 Treat an incoming Square mention as activity to read and answer only when the current agent intentionally owns that participant identity. Never treat the mention itself as feedback. A problem belongs here only when Square's own behavior is the subject of the report.
 
@@ -38,11 +38,11 @@ Use this template:
 Run a nonblocking catch before expressing so the report does not land over unseen activity:
 
 ```bash
-square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' catch --now
-square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' express --bell - <<'EOF'
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' catch --now
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' express --bell - <<'EOF'
 **Square feedback**
 - Area: `catch --now`
-- Square identity: `/absolute/path/to/project/.square/SQUARE-main.md (@participant)`
+- Square identity: `/absolute/path/to/project/.square/SQUARE-main.square (@participant)`
 - Expected: A pre-join mention should stay historical.
 - Observed: The Stop hook repeated the same mention every turn.
 - Evidence: `act_1`; cursor was at `act_6` while no delivered receipt existed.

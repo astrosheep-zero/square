@@ -1,10 +1,8 @@
 import fs from 'node:fs';
-import path from 'node:path';
 
-import { diagnoseSquareFile, emptyRuntimeState, loadRuntimeSidecar, loadSquare, mergeRuntimeState, renderArtifactAct, renderSquare, renderSquareDoc, saveRuntimeSidecar } from './artifact.js';
+import { createSquareDoc, loadArchive, loadSquare, writeArchiveFile, writeSquareFile } from './artifact.js';
 import { type Act } from './square-core.js';
 import { coreCompact, coreDone, coreHold, coreResume, decideAct, decideJoin, resolveKnownName } from './decisions.js';
-import { planRepair, type PlanRepairResult } from './doctor.js';
 import { withFileLock } from './file-lock.js';
 import { stageReplacement, type StagedReplacement } from './harness-stage.js';
 import { SquareError, type BuildOptions, type HardCap, type Reach, type SquareDoc, type StoredAct, type WakeRouteKind } from './model.js';
@@ -30,15 +28,14 @@ export type Intent =
   | { type: 'transition-notify'; key: string; leaseId: string; expiresAt: number; phase: 'claimed' | 'dispatching'; attemptN?: number; routeKind?: WakeRouteKind }
   | { type: 'release-notify'; key: string; leaseId: string }
   | { type: 'consume'; name: string; throughIndex: number; at: number }
-  | { type: 'compact'; keep: number; archivePath: string }
-  | { type: 'repair'; doc: SquareDoc; quarantine?: { path: string; blocks: string[] } };
+  | { type: 'compact'; keep: number; archivePath: string };
 
 export interface Committed<Result> {
   result: Result;
   acts: StoredAct[];
 }
 
-/** The only persistence primitive: one per-square lock, one Markdown write, one sidecar write. */
+/** The only mutation boundary: one per-square lock around one complete snapshot commit. */
 export async function withSquareLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
   return withFileLock(
     `${squarePath}.lock`,
@@ -48,10 +45,7 @@ export async function withSquareLock<T>(squarePath: string, fn: () => T | Promis
 }
 
 export function writeSquareDoc(squarePath: string, doc: SquareDoc): void {
-  const temporary = path.join(path.dirname(squarePath), `.${path.basename(squarePath)}.${process.pid}.${Date.now()}.tmp`);
-  fs.writeFileSync(temporary, renderSquareDoc(doc));
-  fs.renameSync(temporary, squarePath);
-  saveRuntimeSidecar(squarePath, doc.runtime);
+  writeSquareFile(squarePath, doc);
 }
 
 export function appendAct(squarePath: string, doc: SquareDoc, act: Act): StoredAct {
@@ -73,13 +67,11 @@ function applyActs(doc: SquareDoc, acts: Act[], mutateRuntime?: (doc: SquareDoc)
   return stored;
 }
 
-/**
- * Publish a dependent persistence file before the Square document. A retained
- * backup lets a failed document commit restore the prior file exactly.
- */
-function prepareAppend(filePath: string, block: string, existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : ''): StagedReplacement {
+/** Publish a dependent archive before the main snapshot, retaining rollback evidence. */
+function prepareArchive(filePath: string, acts: StoredAct[]): StagedReplacement {
+  const existing = fs.existsSync(filePath) ? loadArchive(filePath) : [];
   return stageReplacement(filePath, (stage) => {
-    fs.writeFileSync(stage, `${existing}${existing === '' ? '' : '\n'}${block}\n`);
+    writeArchiveFile(stage, [...existing, ...acts]);
   });
 }
 
@@ -191,27 +183,9 @@ function plan(doc: SquareDoc, intent: Intent): CommitPlan<unknown> {
         replaceDoc: result.doc,
         preparePersistence: archive.length === 0
           ? undefined
-          : () => {
-              const existing = fs.existsSync(intent.archivePath) ? fs.readFileSync(intent.archivePath, 'utf8') : '';
-              const block = archive
-                .map((act, index) => renderArtifactAct(act, { first: existing === '' && index === 0 }))
-                .join('\n');
-              return prepareAppend(intent.archivePath, block, existing);
-            },
+          : () => prepareArchive(intent.archivePath, archive),
       };
     }
-    case 'repair':
-      return {
-        result: undefined,
-        acts: [],
-        replaceDoc: intent.doc,
-        preparePersistence: intent.quarantine === undefined || intent.quarantine.blocks.length === 0
-          ? undefined
-          : () => {
-              const block = intent.quarantine!.blocks.join('\n\n');
-              return prepareAppend(intent.quarantine!.path, block);
-            },
-      };
   }
 }
 
@@ -251,44 +225,6 @@ export async function createSquare(
     if (fs.existsSync(squarePath) && !options.force) {
       throw new SquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
     }
-    const temporary = path.join(path.dirname(squarePath), `.${path.basename(squarePath)}.${process.pid}.${Date.now()}.tmp`);
-    fs.mkdirSync(path.dirname(squarePath), { recursive: true });
-    fs.writeFileSync(temporary, renderSquare(options, snippet));
-    fs.renameSync(temporary, squarePath);
-    saveRuntimeSidecar(squarePath, emptyRuntimeState(0));
+    writeSquareFile(squarePath, createSquareDoc(options, snippet));
   });
-}
-
-/** Keep artifact repair planning and dependent quarantine persistence inside the application boundary. */
-export async function repairSquare(squarePath: string): Promise<PlanRepairResult> {
-  const result = await withSquareLock(squarePath, () => {
-    const repair = planRepair(diagnoseSquareFile(squarePath));
-    if (repair.diagnosis.unfixable || repair.repaired === undefined) return { repair };
-    // Repair changes Markdown only. Keep the sidecar's runtime metadata and
-    // merge history boundaries so a doctor run cannot erase delivery state or
-    // reuse a stable activity index.
-    const sidecarRuntime = loadRuntimeSidecar(squarePath, repair.repaired.doc.runtime);
-    const indexesPreserved = repair.diagnosis.acts.every(
-      ({ act }, index) => repair.repaired!.doc.acts[index]?.index === act.index,
-    );
-    if (indexesPreserved) {
-      repair.repaired.doc.runtime = mergeRuntimeState(repair.repaired.doc.runtime, sidecarRuntime);
-    } else {
-      repair.repaired.doc.runtime = emptyRuntimeState(
-        Math.max(repair.repaired.doc.runtime.nextActIndex, sidecarRuntime.nextActIndex),
-      );
-      repair.repaired.actions.push({ message: 'reset runtime delivery metadata because act indexes changed' });
-    }
-    const quarantinePath = squarePath.replace(/\.md$/, '') + '.quarantine.md';
-    const intent: Intent = {
-      type: 'repair',
-      doc: repair.repaired.doc,
-      ...(repair.repaired.quarantinedBlocks.length === 0
-        ? {}
-        : { quarantine: { path: quarantinePath, blocks: repair.repaired.quarantinedBlocks } }),
-    };
-    commitPlan(squarePath, repair.repaired.doc, plan(repair.repaired.doc, intent));
-    return { repair };
-  });
-  return result.repair;
 }

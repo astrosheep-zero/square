@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { decodeArchive, loadArchive, loadSquare } from '../dist/artifact.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -16,8 +16,9 @@ const TEST_PRESENTED = path.join(TEST_STATE, 'presented.ndjsonl');
 test.after(() => fs.rmSync(TEST_STATE, { recursive: true, force: true }));
 
 function testEnv(overrides = {}) {
-  return {
+  const env = {
     ...process.env,
+    NODE_NO_WARNINGS: '1',
     CLAUDE_CODE_SESSION_ID: '',
     CLAUDE_CODE_CHILD_SESSION: '',
     CODEX_THREAD_ID: '',
@@ -34,6 +35,9 @@ function testEnv(overrides = {}) {
     SQUARE_DISABLE_PASEO_WAKE: '1',
     ...overrides,
   };
+  delete env.FORCE_COLOR;
+  env.NO_COLOR = '1';
+  return env;
 }
 
 function run(args, opts = {}) {
@@ -47,7 +51,7 @@ function run(args, opts = {}) {
 
 function tempSquare() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-v2-'));
-  return path.join(dir, 'square.md');
+  return path.join(dir, 'SQUARE.square');
 }
 
 function withPath(file, args = []) {
@@ -96,9 +100,8 @@ function assertDraftRecovery(result, file, name, body, command) {
   assert.match(result.stdout + result.stderr, new RegExp(`< '${draftPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
 }
 
-function runtimeState(text, file) {
-  const sidecar = JSON.parse(fs.readFileSync(file + '.runtime.json', 'utf8'));
-  return sidecar;
+function runtimeState(file) {
+  return loadSquare(file).runtime;
 }
 
 test('install and uninstall manage an explicit OpenCode target', () => {
@@ -138,7 +141,7 @@ test('standalone skills install target is removed; skills ship with plugins', ()
 });
 
 test('delivery harness doctor skips a missing or unreadable square path', () => {
-  const missing = path.join(os.tmpdir(), `square-missing-${process.pid}-${Date.now()}.md`);
+  const missing = path.join(os.tmpdir(), `square-missing-${process.pid}-${Date.now()}.square`);
   const result = run(withPath(missing, ['harness', 'doctor', 'delivery']));
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /delivery health skipped/);
@@ -188,11 +191,11 @@ test('every public subcommand exposes scoped help without a square', () => {
   }
   assert.match(index.stdout, /^In the square:$/m);
   assert.match(index.stdout, /^Prepare and manage:$/m);
-  assert.match(index.stdout, /^Setup and repair:$/m);
+  assert.match(index.stdout, /^Setup:$/m);
   assert.match(index.stdout, /^  list$/m);
   assert.doesNotMatch(index.stdout, /^  ls,/m);
 
-  const missingSquare = path.join(cwd, 'missing.md');
+  const missingSquare = path.join(cwd, 'missing.square');
   const withGlobals = run(['--as', 'Alice', '--location', missingSquare, 'catch', '-h'], { cwd });
   assert.equal(withGlobals.status, 0, withGlobals.stderr);
   assert.match(withGlobals.stdout, /Usage: square \[--location <path>\] --as <name> catch/);
@@ -232,16 +235,19 @@ test('help command resolves aliases and rejects unknown commands', () => {
   }
 });
 
-test('build writes v3 frontmatter with no participants field', () => {
+test('build writes one SQUARE01 snapshot with no sidecar or Markdown markers', () => {
   const file = tempSquare();
   const result = build(file);
   assert.equal(result.status, 0, result.stderr);
-  const text = fs.readFileSync(file, 'utf8');
-  assert.match(text, /^format_version: 3$/m);
-  assert.doesNotMatch(text, /^participants:/m);
-  assert.doesNotMatch(text, /mind_square_state/);
-  const runtime = runtimeState(text, file);
-  assert.equal(runtime.version, 2);
+  const bytes = fs.readFileSync(file);
+  assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name !== path.basename(file) && !name.endsWith('.lock')), []);
+  const doc = loadSquare(file);
+  assert.equal(doc.hardCap, 3);
+  assert.deepEqual(doc.preamble, ['## Topic', '', 'Testing v2']);
+  assert.deepEqual(doc.acts, []);
+  const runtime = runtimeState(file);
+  assert.equal('version' in runtime, false);
   assert.equal(runtime.nextActIndex, 0);
 });
 
@@ -410,44 +416,26 @@ test('express does not surface delivery-health diagnostics during normal use', (
   assert.match(diagnosed.stdout, /unreachable: 1/);
 });
 
-test('doctor --fix rejects unsupported format versions', () => {
+test('doctor is a dry validator and rejects Markdown bytes', () => {
   const file = tempSquare();
-  const v1 = `---
-participants: Alice, Bob
-hard_cap: 3
-format_version: 1
----
-
-## Warmup
-<!-- square:warmup -->
-warmup
-
-## Activities
-<!-- square:activities -->
-`;
-  fs.writeFileSync(file, v1);
-  const result = run(withPath(file, ['doctor', '--fix']));
+  fs.writeFileSync(file, '---\nhard_cap: 3\n---\n\n## Warmup\nwarmup\n');
+  const result = run(withPath(file, ['doctor']));
   assert.notEqual(result.status, 0, result.stdout);
-  assert.match(result.stderr || result.stdout, /no longer supported|unfixable|Create a new square/);
+  assert.match(result.stdout, /unreadable artifact/);
+  assert.match(result.stdout, /Invalid square artifact/);
+  assert.doesNotMatch(result.stdout + result.stderr, /repaired|quarantine|--fix/);
+
+  const help = run(['doctor', '--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.doesNotMatch(help.stdout, /--fix/);
 });
 
-test('doctor --fix prunes registry memberships whose square no longer exists', () => {
-  const target = tempSquare();
-  const obsolete = tempSquare();
-  assert.equal(build(target).status, 0);
-  assert.equal(build(obsolete).status, 0);
-  assert.equal(run(withName(obsolete, 'Alice', ['join']), {
-    env: { CODEX_THREAD_ID: 'registry-prune-session' },
-  }).status, 0);
-  fs.rmSync(obsolete);
-
-  const fixed = run(withPath(target, ['doctor', '--fix']));
-  assert.equal(fixed.status, 0, fixed.stderr);
-  assert.match(fixed.stdout, /pruned \d+ obsolete registry membership/);
-
-  const inbox = run(['inbox', '--for-session', 'registry-prune-session', '--json']);
-  assert.equal(inbox.status, 0, inbox.stderr);
-  assert.deepEqual(JSON.parse(inbox.stdout), []);
+test('doctor --fix is not a command', () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  const result = run(withPath(file, ['doctor', '--fix']));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /invalid arguments for doctor/);
 });
 
 test('catch --mention shows only matching say acts and suppresses room changes', () => {
@@ -747,10 +735,10 @@ test('mention omits persisted reach while bell persists explicitly', () => {
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'mention @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['express', '--force', '--bell', 'bell line']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
-  const text = fs.readFileSync(file, 'utf8');
-  assert.match(text, /<!-- square:act \{"index":2,"kind":"say","actor":"Alice","at":3000\} -->/);
-  assert.match(text, /<!-- square:act \{"index":3,"kind":"say","actor":"Bob","at":4000,"reach":"bell"\} -->/);
-  assert.doesNotMatch(text, /beside/);
+  const persisted = loadSquare(file);
+  assert.equal(persisted.acts[2].reach, undefined);
+  assert.equal(persisted.acts[3].reach, 'bell');
+  assert.doesNotMatch(JSON.stringify(persisted), /beside/);
 
   const removed = run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'gone @Bob']));
   assert.notEqual(removed.status, 0);
@@ -775,7 +763,6 @@ test('express --reply preserves one causal activity reference', () => {
   });
   assert.equal(replied.status, 0, replied.stderr);
   assert.equal(loadSquare(file).acts.at(-1).reply, 2);
-  assert.match(fs.readFileSync(file, 'utf8'), /"reply":2/);
 
   const history = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--full']));
   assert.equal(history.status, 0, history.stderr);
@@ -790,7 +777,7 @@ test('express --reply preserves one causal activity reference', () => {
   assert.match(missing.stderr, /Unknown reply activity: act_99/);
 });
 
-test('compact archives older activities into a v2 sidecar and preserves stable indexes', () => {
+test('compact archives older activities into a SQARCH01 file and preserves stable indexes', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
@@ -805,11 +792,19 @@ test('compact archives older activities into a v2 sidecar and preserves stable i
 
   const doc = loadSquare(file);
   assert.deepEqual(doc.acts.map((act) => [act.kind, act.actor]), [['say', 'Bob']]);
+  assert.equal(doc.acts[0].index, 2);
 
-  const archive = fs.readFileSync(file.replace(/\.md$/, '.archive.md'), 'utf8');
-  assert.match(archive, /<!-- square:act \{"index":0,"kind":"join","actor":"Alice","at":1000\} -->/);
-  assert.match(archive, /<!-- square:act \{"index":1,"kind":"join","actor":"Bob","at":2000\} -->/);
-  assert.doesNotMatch(archive, /evt_/);
+  const archivePath = file.replace(/\.square$/, '.archive.square');
+  const archiveBytes = fs.readFileSync(archivePath);
+  assert.equal(archiveBytes.subarray(0, 8).toString('ascii'), 'SQARCH01');
+  const archived = loadArchive(archivePath);
+  assert.deepEqual(archived.map((act) => [act.index, act.kind, act.actor]), [
+    [0, 'join', 'Alice'],
+    [1, 'join', 'Bob'],
+  ]);
+  assert.equal(archived[0].at, 1000);
+  assert.equal(archived[1].at, 2000);
+  assert.doesNotMatch(JSON.stringify(decodeArchive(archiveBytes)), /evt_/);
 });
 
 test('inbox stays read-only while codex admits pending attention once at a boundary', () => {
@@ -992,8 +987,8 @@ test('history search reports shown and total matches consistently', () => {
 
 test('implicit writes refuse when more than one square is available', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ambiguous-'));
-  const first = path.join(cwd, '.square', 'first.md');
-  const second = path.join(cwd, '.square', 'second.md');
+  const first = path.join(cwd, '.square', 'first.square');
+  const second = path.join(cwd, '.square', 'second.square');
   fs.mkdirSync(path.dirname(first), { recursive: true });
   assert.equal(run(['--location', first, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'first' }).status, 0);
   assert.equal(run(['--location', second, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'second' }).status, 0);
@@ -1007,7 +1002,7 @@ test('implicit writes refuse when more than one square is available', () => {
   assert.equal(doctor.status, 0, doctor.stderr);
   const doctorFix = run(['doctor', '--fix'], { cwd });
   assert.notEqual(doctorFix.status, 0);
-  assert.match(doctorFix.stderr, /» square list\n$/);
+  assert.match(doctorFix.stderr, /invalid arguments for doctor/);
 });
 
 test('history grep describes an empty result precisely', () => {
@@ -1057,14 +1052,14 @@ test('status header counts only participants still in the square', () => {
 
 test('headers shorten absolute square paths inside the working directory', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-short-path-'));
-  const file = path.join(cwd, '.square', 'review.md');
+  const file = path.join(cwd, '.square', 'review.square');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const built = run(['--location', file, 'build', '--cap', 'unlimited', '--force'], {
     cwd,
     input: '## Topic\n\nShort paths\n',
   });
   assert.equal(built.status, 0, built.stderr);
-  assert.match(built.stdout, /the square at \.square\/review\.md/);
+  assert.match(built.stdout, /the square at \.square\/review\.square/);
   assert.doesNotMatch(built.stdout, new RegExp(file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
@@ -1151,8 +1146,8 @@ test('join is bounded and points to the complete warmup', () => {
 
 test('list bounds recursive discovery by default and accepts an explicit depth', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-depth-'));
-  const visible = path.join(cwd, 'one', 'two', 'three', 'four', 'visible-square');
-  const deeper = path.join(cwd, 'one', 'two', 'three', 'four', 'five', 'deeper.md');
+  const visible = path.join(cwd, 'one', 'two', 'three', 'four', 'visible-square.square');
+  const deeper = path.join(cwd, 'one', 'two', 'three', 'four', 'five', 'deeper.square');
   fs.mkdirSync(path.dirname(visible), { recursive: true });
   fs.mkdirSync(path.dirname(deeper), { recursive: true });
 
@@ -1162,12 +1157,12 @@ test('list bounds recursive discovery by default and accepts an explicit depth',
   const bounded = run(['list'], { cwd });
   assert.equal(bounded.status, 0, bounded.stderr);
   assert.match(bounded.stdout, /visible-square/);
-  assert.doesNotMatch(bounded.stdout, /deeper\.md/);
+  assert.doesNotMatch(bounded.stdout, /deeper\.square/);
 
   const expanded = run(['list', '--depth', '5'], { cwd });
   assert.equal(expanded.status, 0, expanded.stderr);
   assert.match(expanded.stdout, /visible-square/);
-  assert.match(expanded.stdout, /deeper\.md/);
+  assert.match(expanded.stdout, /deeper\.square/);
 
   const invalid = run(['list', '--depth', '-1'], { cwd });
   assert.equal(invalid.status, 2);
@@ -1176,7 +1171,7 @@ test('list bounds recursive discovery by default and accepts an explicit depth',
 
 test('list, participants, and clipped status use current state and executable hints', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-current-state-'));
-  const file = path.join(cwd, '.square', 'state.md');
+  const file = path.join(cwd, '.square', 'state.square');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   assert.equal(run(['build', '--location', file, '--cap', '10', '--throttle', '2', '--force'], { cwd, input: '## Topic\n\nCurrent state\n' }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { cwd }).status, 0);

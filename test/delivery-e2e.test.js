@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { loadSquare, parseSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
+import { loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { wakeGraceMs } from '../dist/notifications.js';
@@ -23,7 +23,7 @@ const WORKER = path.join(ROOT, 'test', 'fixtures', 'delivery-worker.js');
 
 function workshop() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-delivery-e2e-'));
-  const squarePath = path.join(root, 'SQUARE.md');
+  const squarePath = path.join(root, 'SQUARE.square');
   const env = {
     ...process.env,
     HOME: root,
@@ -174,8 +174,7 @@ test('artifact roundtrip derives only directed pending attention', () => {
   try {
     item.cli('Alice', ['express', '--force', 'please review @Bob'], 30);
 
-    const parsed = parseSquare(renderSquareDoc(loadSquare(item.squarePath)));
-    const pending = deriveDeliveryModel(parsed).pendingFor('Bob');
+    const pending = deriveDeliveryModel(loadSquare(item.squarePath)).pendingFor('Bob');
     assert.equal(pending.length, 1);
   } finally {
     item.cleanup();
@@ -282,7 +281,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
     assert.equal(callCount(callLog), 1);
 
     lease.expiresAt = 1;
-    saveRuntimeSidecar(item.squarePath, interrupted);
+    writeSquareFile(item.squarePath, { ...loadSquare(item.squarePath), runtime: interrupted });
     const recovery = await runWorker(item, act.index, 'accepted', callLog);
     const later = await runWorker(item, act.index, 'accepted', callLog);
     assert.equal(recovery.code, 0, recovery.stderr);

@@ -92,8 +92,8 @@ test('host controls preserve the requesting actor and body', () => {
 
 test('a participant cursor advances to the newest self activity and never reuses an index', () => {
   const doc = makeDoc();
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'square-core-')), 'square.md');
-  appendAct(file, doc, { kind: 'join', actor: 'Alice', at: 1, body: '' });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'square-core-')), 'SQUARE.square');
+  appendAct(file, doc, { kind: 'join', actor: 'Alice', at: 1 });
   appendAct(file, doc, { kind: 'say', actor: 'Alice', at: 2, body: 'hello' });
   appendAct(file, doc, { kind: 'done', actor: 'Alice', at: 3, body: 'bye' });
 
@@ -110,11 +110,11 @@ test('a valid expression emits the caller as actor and preserves its body, reach
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
     ],
     runtime: {
-      version: 2,
       nextActIndex: 2,
       cursors: {},
       deliveryReceipts: {},
       leases: {},
+      notifyLeases: {},
     },
   });
   const decision = decideAct(doc, {

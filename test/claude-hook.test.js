@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 
-import { emptyRuntimeState, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
+import { emptyRuntimeState, writeSquareFile } from '../dist/artifact.js';
 import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { presentOnce } from '../dist/presented.js';
@@ -33,25 +33,27 @@ function spawnHook(sessionId, env) {
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-hook-'));
-  const squarePath = path.join(root, 'square.md');
+  const squarePath = path.join(root, 'SQUARE.square');
   const registryPath = path.join(root, 'sessions.ndjsonl');
   const previous = process.env.SQUARE_REGISTRY;
   process.env.SQUARE_REGISTRY = registryPath;
   const acts = [
-    { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
     { kind: 'say', actor: 'Alice', at: 4, body: 'attention', reach: 'bell', index: 3 },
     { kind: 'say', actor: 'Alice', at: 5, body: 'ambient', index: 4 },
   ];
   const runtime = { ...emptyRuntimeState(5), nextActIndex: 5 };
   const doc = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };
-  fs.writeFileSync(squarePath, renderSquareDoc(doc));
-  saveRuntimeSidecar(squarePath, runtime);
+  writeSquareFile(squarePath, doc);
   recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code' });
   return {
     squarePath,
     runtime,
+    persist() {
+      writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
+    },
     cleanup() {
       if (previous === undefined) delete process.env.SQUARE_REGISTRY;
       else process.env.SQUARE_REGISTRY = previous;
@@ -73,7 +75,7 @@ test('session inbox returns only canonical pending directed notifications', () =
     item.runtime.deliveryReceipts.Bob = {
       act_2: { status: 'delivered', at: 6 },
     };
-    saveRuntimeSidecar(item.squarePath, item.runtime);
+    item.persist();
     inbox = sessionInbox('claude-session');
     assert.deepEqual(
       inbox[0].notifications.map((notification) => notification.actIndex),
@@ -86,20 +88,19 @@ test('session inbox returns only canonical pending directed notifications', () =
 
 test('session inbox never resurrects a mention from before the recipient joined', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-prejoin-'));
-  const squarePath = path.join(root, 'square.md');
+  const squarePath = path.join(root, 'SQUARE.square');
   const registryPath = path.join(root, 'sessions.ndjsonl');
   const previous = process.env.SQUARE_REGISTRY;
   process.env.SQUARE_REGISTRY = registryPath;
   try {
     const acts = [
-      { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
+      { kind: 'join', actor: 'Alice', at: 1, index: 0 },
       { kind: 'say', actor: 'Alice', at: 2, body: 'join us @Bob', index: 1 },
-      { kind: 'join', actor: 'Bob', at: 3, body: '', index: 2 },
+      { kind: 'join', actor: 'Bob', at: 3, index: 2 },
       { kind: 'say', actor: 'Alice', at: 4, body: 'welcome @Bob', index: 3 },
     ];
     const runtime = { ...emptyRuntimeState(4), nextActIndex: 4 };
-    fs.writeFileSync(squarePath, renderSquareDoc({ hardCap: null, preamble: [], warmup: ['test'], acts, runtime }));
-    saveRuntimeSidecar(squarePath, runtime);
+    writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
     recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code' });
 
     const inbox = sessionInbox('prejoin-session');
@@ -120,7 +121,7 @@ test('session inbox does not inherit an active catch lease after ownership chang
       heartbeatAt: Date.now(),
       expiresAt: Date.now() + 60_000,
     };
-    saveRuntimeSidecar(item.squarePath, item.runtime);
+    item.persist();
 
     recordJoin('replacement-session', 'Bob', item.squarePath, {
       channel: 'claude-code',
@@ -142,7 +143,7 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
   try {
     const inbox = [{
       name: 'Bob',
-      squarePath: '/tmp/square.md',
+      squarePath: '/tmp/SQUARE.square',
       notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
     }];
     const response = claudeHookResponse(
@@ -151,9 +152,9 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
-    assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/square\.md#act_2/);
+    assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/SQUARE\.square#act_2/);
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
-    assert.match(response.hookSpecificOutput.additionalContext, /square --location '\/tmp\/square\.md' --as 'Bob' catch --now/);
+    assert.match(response.hookSpecificOutput.additionalContext, /square --location '\/tmp\/SQUARE\.square' --as 'Bob' catch --now/);
     assert.equal(
       claudeHookResponse(
         { session_id: 'session', hook_event_name: 'PostToolBatch' },
@@ -192,7 +193,7 @@ test('failed presentation remains available to the next guarantee path', () => {
   const presented = path.join(os.tmpdir(), `square-presented-retry-${Date.now()}.ndjsonl`);
   const inbox = [{
     name: 'Bob',
-    squarePath: '/tmp/retry-square.md',
+    squarePath: '/tmp/retry-square.square',
     notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
@@ -211,12 +212,12 @@ test('unrelated participants do not share an adapter delivery lock', () => {
   const presented = path.join(os.tmpdir(), `square-presented-independent-${Date.now()}.ndjsonl`);
   const aliceInbox = [{
     name: 'Alice',
-    squarePath: '/tmp/independent.md',
+    squarePath: '/tmp/independent.square',
     notifications: [{ actIndex: 1, actor: 'Cara', at: 2, route: 'mention', body: 'hello @Alice' }],
   }];
   const bobInbox = [{
     name: 'Bob',
-    squarePath: '/tmp/independent.md',
+    squarePath: '/tmp/independent.square',
     notifications: [{ actIndex: 2, actor: 'Cara', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
@@ -272,7 +273,7 @@ test('active catch owns matching attention at every adapter boundary', () => {
       heartbeatAt: now,
       expiresAt: now + 60_000,
     };
-    saveRuntimeSidecar(item.squarePath, item.runtime);
+    item.persist();
 
     assert.equal(
       claudeHookResponse(
@@ -300,7 +301,7 @@ test('a boundary still admits notifications excluded by an active catch filter',
       expiresAt: now + 60_000,
       filter: { participants: ['Cara'] },
     };
-    saveRuntimeSidecar(item.squarePath, item.runtime);
+    item.persist();
 
     const response = claudeHookResponse(
       { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },

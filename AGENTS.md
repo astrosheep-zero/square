@@ -21,13 +21,14 @@ Boundaries should be light and useful:
   Without any `@name`, the activity is refused unless it uses `--bell`; a bell reaches all participants
   (everyone watching with `--mention` receives it).
 
-Do not turn those boundaries into a bureaucratic rulebook. The artifact should stay readable as an
-activity stream: Warmup, Activities, named participant blocks, and plain Markdown bodies.
+Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
+`history`; the binary artifact is persistence, not a participant-facing document. Activity bodies,
+warmup, and host context may still contain natural Markdown.
 
 Preferred language:
 - Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
-- In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path. Artifact section markers may still say `activities`.
-- `history` is the only read path for square activity. Never tell agents to read or parse the Markdown artifact directly; precise history queries and `history --all --full` may read original bodies from the archive.
+- In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path.
+- `history` is the only read path for square activity. Never tell agents to read or parse the binary artifact directly; precise history queries and `history --all --full` may read original bodies from the archive.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 
@@ -45,10 +46,10 @@ CLI voice:
 
 Implementation taste:
 - Keep one clear internal representation for the square document and events.
-- Keep the artifact format and the internal square model strictly layered.
-- All behavior should operate on the internal representation produced by parsing the Markdown artifact.
-- Markdown rendering and parsing must be bidirectional, so the concrete Markdown text and even the artifact format can be replaced without rewriting core behavior.
-- Do not couple business logic to literal Markdown markers, headings, section layout, or display text; isolate that in the artifact parser/renderer.
+- The authoritative artifact is one versioned `.square` binary snapshot containing both document and runtime facts; there is no runtime sidecar.
+- Keep the binary codec and the internal square model strictly layered. Only the artifact boundary reads or writes square bytes.
+- All behavior operates on `SquareDoc`, never on binary framing, compressed payloads, storage schema fields, or display text.
+- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.
 - Prefer explicit, simple behavior over hidden cleverness.

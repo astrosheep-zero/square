@@ -7,7 +7,7 @@ allowed-tools: Bash(square *), Skill(square)
 # Square Brainstorm
 
 Use this skill when you are coordinating a brainstorm. Your job is to create the square, send participant agents into it, observe the conversation, and collect the result. Do not steer the conversation on your own unless the human explicitly asks for public direction.
-Commands default to `.square/SQUARE.md`; use `--location <path>` when you want a different file.
+Commands default to `.square/SQUARE.square`; use `--location <path>` when you want a different file.
 
 ## Build
 

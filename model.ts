@@ -37,13 +37,6 @@ export class SquareError extends Error {
   }
 }
 
-export const WARMUP_HEADING = '## Warmup';
-export const WARMUP_MARKER = '<!-- square:warmup -->';
-export const ACTIVITIES_HEADING = '## Activities';
-export const ACTIVITIES_MARKER = '<!-- square:activities -->';
-export const ACT_MARKER_PREFIX = '<!-- square:act';
-export const CURRENT_FORMAT_VERSION = 3;
-
 export type HardCap = number | null;
 
 export interface BuildOptions {
@@ -107,7 +100,6 @@ export interface NotifyLease {
 }
 
 export interface SquareRuntimeState {
-  version: 2;
   nextActIndex: number;
   cursors: Record<string, ReadCursor>;
   deliveryReceipts: Record<string, Record<string, DeliveryReceipt>>;

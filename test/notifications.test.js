@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { emptyRuntimeState, loadSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
+import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { recordJoin } from '../dist/registry.js';
@@ -14,7 +14,7 @@ import { readWakeAttempts } from '../dist/wake-attempts.js';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
-  const squarePath = path.join(root, 'square.md');
+  const squarePath = path.join(root, 'SQUARE.square');
   const env = {
     SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
@@ -22,8 +22,8 @@ function fixture() {
     SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
   };
   const acts = [
-    { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'private payload @Bob', index: 2 },
   ];
   const doc = {
@@ -33,8 +33,7 @@ function fixture() {
     acts,
     runtime: { ...emptyRuntimeState(3), nextActIndex: 3 },
   };
-  fs.writeFileSync(squarePath, renderSquareDoc(doc));
-  saveRuntimeSidecar(squarePath, doc.runtime);
+  writeSquareFile(squarePath, doc);
   return { root, squarePath, env };
 }
 

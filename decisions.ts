@@ -71,7 +71,7 @@ export function decideJoin(doc: SquareDoc, name: string, now: number): DecideJoi
   return {
     joinedName,
     addParticipant: knownName === undefined,
-    joinAct: { kind: 'join', actor: joinedName, at: now, body: '' } as Extract<Act, { kind: 'join' }>,
+    joinAct: { kind: 'join', actor: joinedName, at: now },
   };
 }
 
@@ -203,7 +203,7 @@ export function coreHold(_doc: SquareDoc, actor: string, body: string, now: numb
 }
 
 export function coreResume(_doc: SquareDoc, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
-  return { kind: 'resume', actor, at: now, body: '' } as Extract<Act, { kind: 'resume' }>;
+  return { kind: 'resume', actor, at: now };
 }
 
 export interface ParticipantStatus {

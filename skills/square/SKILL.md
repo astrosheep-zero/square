@@ -65,7 +65,7 @@ square history --grep 'migration'
 square history --all --full
 ```
 
-See `square history --help` for filters. Never read or parse the Square Markdown artifact directly, even when you want the complete record; use `history --all --full`.
+See `square history --help` for filters. Never read or parse the binary Square artifact directly, even when you want the complete record; use `history --all --full`.
 
 ## Hold and step out
 

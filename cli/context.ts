@@ -6,7 +6,7 @@ import { loadSquare } from '../artifact.js';
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 
-export const DEFAULT_SQUARE_PATH = '.square/SQUARE.md';
+export const DEFAULT_SQUARE_PATH = '.square/SQUARE.square';
 
 export interface CommandContext {
   squarePath: string;
@@ -111,7 +111,7 @@ function resolveDefaultSquarePath(): { path: string; multiple: boolean } {
   }
   const candidates: Array<{ relPath: string; at: number }> = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!entry.isFile() || !entry.name.endsWith('.square')) continue;
     const fullPath = path.join(directory, entry.name);
     try {
       const doc = loadSquare(fullPath);

@@ -19,7 +19,7 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attempts-'));
   return {
     root,
-    attention: { squarePath: path.join(root, 'square.md'), actIndex: 4, recipient: 'Faye' },
+    attention: { squarePath: path.join(root, 'SQUARE.square'), actIndex: 4, recipient: 'Faye' },
     env: { SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl') },
   };
 }
@@ -128,7 +128,7 @@ test('a wake attempt write immediately recovers a lock abandoned by a dead proce
 });
 
 test('route retry requires new route evidence, and unknown stops every route', () => {
-  const attention = { squarePath: '/square.md', actIndex: 4, recipient: 'Faye' };
+  const attention = { squarePath: '/SQUARE.square', actIndex: 4, recipient: 'Faye' };
   const failed = {
     at: 100,
     attention,

@@ -12,7 +12,7 @@ function files() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-'));
   return {
     root,
-    square: path.join(root, 'square.md'),
+    square: path.join(root, 'SQUARE.square'),
     env: {
       SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
       SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),

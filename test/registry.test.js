@@ -46,7 +46,7 @@ function withRegistry() {
 test('registry folds lifecycle by session, square, and participant name', () => {
   const cleanup = withRegistry();
   try {
-    const squarePath = path.join(os.tmpdir(), 'triple-key-square.md');
+    const squarePath = path.join(os.tmpdir(), 'triple-key-square.square');
     const now = Date.now();
     recordJoin('session-1', 'Alice', squarePath, {
       channel: 'claude-code',
@@ -83,7 +83,7 @@ test('registry folds lifecycle by session, square, and participant name', () => 
 test('the latest ownership claim exclusively routes a participant name', () => {
   const cleanup = withRegistry();
   try {
-    const squarePath = path.join(os.tmpdir(), 'exclusive-owner-square.md');
+    const squarePath = path.join(os.tmpdir(), 'exclusive-owner-square.square');
     const now = Date.now();
     recordJoin('session-a', 'Alice', squarePath, { channel: 'codex', at: now });
     recordJoin('session-b', 'alice', squarePath, { channel: 'claude-code', at: now });
@@ -103,7 +103,7 @@ test('the latest ownership claim exclusively routes a participant name', () => {
 test('one local command keeps its native and Paseo identities in the same ownership claim', () => {
   const cleanup = withRegistry();
   try {
-    const squarePath = path.join(os.tmpdir(), 'multi-channel-owner-square.md');
+    const squarePath = path.join(os.tmpdir(), 'multi-channel-owner-square.square');
     recordLocalJoin('Alice', squarePath, {
       CLAUDE_CODE_SESSION_ID: 'claude-session',
       PASEO_AGENT_ID: 'paseo-agent',
@@ -123,7 +123,7 @@ test('one local command keeps its native and Paseo identities in the same owners
 test('inherited PASEO_AGENT_ID alone does not adopt a native session into the parent owner', () => {
   const cleanup = withRegistry();
   try {
-    const squarePath = path.join(os.tmpdir(), 'nested-owner-square.md');
+    const squarePath = path.join(os.tmpdir(), 'nested-owner-square.square');
     const parentEnv = {
       PASEO_AGENT_ID: 'paseo-agent',
       CODEX_THREAD_ID: 'parent-codex',
@@ -169,7 +169,7 @@ test('only explicit join claims local ownership and done closes the current owne
   const cleanup = withRegistry();
   try {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-cli-'));
-    const squarePath = path.join(root, 'square.md');
+    const squarePath = path.join(root, 'SQUARE.square');
     const env = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: 'resume-session',
@@ -260,7 +260,7 @@ test('only explicit join claims local ownership and done closes the current owne
 test('registry ignores stale and malformed cache rows', () => {
   const cleanup = withRegistry();
   try {
-    const squarePath = path.join(os.tmpdir(), 'stale-square.md');
+    const squarePath = path.join(os.tmpdir(), 'stale-square.square');
     const now = Date.now();
     recordJoin('stale-session', 'Alice', squarePath, { at: now - 8 * 24 * 60 * 60 * 1000 });
     fs.appendFileSync(process.env.SQUARE_REGISTRY, '{bad json}\n');
@@ -274,9 +274,9 @@ test('registry pruning removes only bindings disproved by their square artifacts
   const cleanup = withRegistry();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-prune-'));
   try {
-    const squarePath = path.join(root, 'square.md');
-    const brokenPath = path.join(root, 'broken.md');
-    const missingPath = path.join(root, 'missing.md');
+    const squarePath = path.join(root, 'SQUARE.square');
+    const brokenPath = path.join(root, 'broken.square');
+    const missingPath = path.join(root, 'missing.square');
     const isolatedEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -367,11 +367,11 @@ test('stream recipient filtering matches the addressed participant', () => {
     { kind: 'join', actor: 'Cara', at: 3, body: '', index: 2 },
   ];
   const runtime = {
-    version: 2,
     nextActIndex: 6,
     cursors: {},
     deliveryReceipts: {},
     leases: {},
+    notifyLeases: {},
   };
   const doc = {
     hardCap: null,

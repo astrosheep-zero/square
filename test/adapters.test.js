@@ -11,7 +11,7 @@ import squarePiExtension, {
   pendingInbox,
   renderPiInbox,
 } from '../extensions/square-pi.js';
-import { emptyRuntimeState, loadSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
+import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
   CLAUDE_PLUGIN_ID,
@@ -46,7 +46,7 @@ import {
 function sampleInbox() {
   return [{
     name: 'Bob',
-    squarePath: '/tmp/square.md',
+    squarePath: '/tmp/SQUARE.square',
     notifications: [{ actIndex: 7, actor: 'Alice', at: 8, route: 'mention', body: 'hello @Bob' }],
   }];
 }
@@ -173,7 +173,7 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
 
 test('package participant intents persist through the shared application pipeline', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-api-'));
-  const squarePath = path.join(dir, 'square.md');
+  const squarePath = path.join(dir, 'SQUARE.square');
   const doc = {
     hardCap: null,
     preamble: [],
@@ -181,8 +181,7 @@ test('package participant intents persist through the shared application pipelin
     acts: [],
     runtime: emptyRuntimeState(0),
   };
-  fs.writeFileSync(squarePath, renderSquareDoc(doc));
-  saveRuntimeSidecar(squarePath, doc.runtime);
+  writeSquareFile(squarePath, doc);
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
@@ -203,36 +202,27 @@ test('package participant intents persist through the shared application pipelin
 
 test('failed compact archive staging leaves the Square document unchanged', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-compact-stage-failure-'));
-  const squarePath = path.join(dir, 'square.md');
+  const squarePath = path.join(dir, 'SQUARE.square');
   const doc = {
     hardCap: null,
     preamble: [],
     warmup: ['warmup'],
     acts: [
-      { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
+      { kind: 'join', actor: 'Alice', at: 1, index: 0 },
       { kind: 'say', actor: 'Alice', at: 2, body: 'keep history', index: 1 },
     ],
     runtime: emptyRuntimeState(2),
   };
   doc.runtime.cursors.Alice = { consumedThroughIndex: 1, updatedAt: 2 };
-  fs.writeFileSync(squarePath, renderSquareDoc(doc));
-  saveRuntimeSidecar(squarePath, doc.runtime);
+  writeSquareFile(squarePath, doc);
   const blockedParent = path.join(dir, 'not-a-directory');
   fs.writeFileSync(blockedParent, 'file');
   try {
     await assert.rejects(
-      execute(squarePath, { type: 'compact', keep: 1, archivePath: path.join(blockedParent, 'archive.md') }),
+      execute(squarePath, { type: 'compact', keep: 1, archivePath: path.join(blockedParent, 'archive.square') }),
       /EEXIST|ENOTDIR|ENOENT/
     );
     assert.deepEqual(loadSquare(squarePath).acts.map((item) => item.index), [0, 1]);
-    await assert.rejects(
-      execute(squarePath, {
-        type: 'repair',
-        doc: { ...doc, warmup: ['repaired warmup'] },
-        quarantine: { path: path.join(blockedParent, 'quarantine.md'), blocks: ['discarded fragment'] },
-      }),
-      /EEXIST|ENOTDIR|ENOENT/
-    );
     assert.deepEqual(loadSquare(squarePath).warmup, ['warmup']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -424,26 +414,25 @@ test('OpenCode admits pending attention after a tool without replacing its outpu
 
 test('Pi inbox helpers expose stable notification identity and commands', () => {
   const inbox = sampleInbox();
-  assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.md', notifications: [] }]).length, 1);
-  assert.deepEqual(inboxKeys(inbox), ['/tmp/square.md\u0000bob\u00007']);
+  assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
+  assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(renderPiInbox(inbox), /1 unread Square notification/);
-  assert.match(renderPiInbox(inbox), /square:\/tmp\/square\.md#act_7/);
-  assert.match(renderPiInbox(inbox), /square --location '\/tmp\/square\.md' --as 'Bob' catch --now/);
+  assert.match(renderPiInbox(inbox), /square:\/tmp\/SQUARE\.square#act_7/);
+  assert.match(renderPiInbox(inbox), /square --location '\/tmp\/SQUARE\.square' --as 'Bob' catch --now/);
 });
 
 function piFixture(sessionId) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
-  const squarePath = path.join(root, 'square.md');
+  const squarePath = path.join(root, 'SQUARE.square');
   const registry = path.join(root, 'sessions.ndjsonl');
   const presented = path.join(root, 'presented.ndjsonl');
   const runtime = { ...emptyRuntimeState(3), nextActIndex: 3 };
   const acts = [
-    { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
   ];
-  fs.writeFileSync(squarePath, renderSquareDoc({ hardCap: null, preamble: [], warmup: ['test'], acts, runtime }));
-  saveRuntimeSidecar(squarePath, runtime);
+  writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
   return { root, squarePath, registry, presented, sessionId };
 }
 
