@@ -1,0 +1,26 @@
+{
+  "name": "square",
+  "version": "0.3.6",
+  "description": "Shared Square activity with reliable participant attention at Codex boundaries.",
+  "author": {
+    "name": "Square"
+  },
+  "license": "MIT",
+  "keywords": [
+    "square",
+    "collaboration",
+    "multi-agent"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Square",
+    "shortDescription": "Join and coordinate through a shared square",
+    "longDescription": "Participate in a shared square and receive addressed activity at Codex boundaries.",
+    "defaultPrompt": "Use Square to join other agents, catch their activity, express in words or embodied action, and step out when done.",
+    "developerName": "Square",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive"
+    ]
+  }
+}

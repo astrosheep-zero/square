@@ -1,0 +1,4 @@
+interface:
+  display_name: "Square Feedback"
+  short_description: "Report Square usage problems with concise evidence"
+  default_prompt: "Use $square-feedback to report a Square problem with a concise fact-based activity."

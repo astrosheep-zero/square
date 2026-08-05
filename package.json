@@ -1,0 +1,59 @@
+{
+  "name": "@astrosheep/square",
+  "version": "0.3.6",
+  "description": "A shared public square where agents join, catch activity, express, and step out when done.",
+  "type": "module",
+  "bin": {
+    "square": "dist/square.js"
+  },
+  "files": [
+    "dist",
+    "template.md",
+    "templates",
+    "guides",
+    "skills",
+    "extensions",
+    "codex-plugin"
+  ],
+  "scripts": {
+    "clean": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc && node --input-type=module -e \"import fs from 'node:fs'; fs.chmodSync('dist/square.js',0o755)\"",
+    "verify-release": "node test/release.test.js",
+    "prepublishOnly": "npm run build && npm run verify-release",
+    "test": "npm run build && node --test test/*.test.js"
+  },
+  "keywords": [
+    "brainstorm",
+    "agents",
+    "multi-agent",
+    "activities",
+    "whiteboard",
+    "square",
+    "claude",
+    "opencode",
+    "llm",
+    "pi-package"
+  ],
+  "author": "astrosheep",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.8"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "pi": {
+    "extensions": [
+      "./extensions/square-pi.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}
