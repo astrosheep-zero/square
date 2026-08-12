@@ -15,7 +15,9 @@ import {
   processActNotificationsOnce,
 } from '../dist/notifications.js';
 import { readNotificationFailures, recordNotificationFailure } from '../dist/notification-failures.js';
-import { discoverPaseoAgents, PaseoWakeError } from '../dist/wake-sink.js';
+import { discoverPaseoAgents } from '../dist/paseo-state.js';
+import { dispatchPaseoNotification, PaseoWakeError } from '../dist/paseo-delivery.js';
+import { presentOnce } from '../dist/presented.js';
 
 function tempSquare() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
@@ -46,7 +48,7 @@ test('Paseo discovery fails promptly when the daemon command hangs', () => {
   const probe = spawnSync(process.execPath, [
     '--input-type=module',
     '-e',
-    "import { discoverPaseoAgents } from './dist/wake-sink.js'; console.log(JSON.stringify(discoverPaseoAgents(20)));",
+    "import { discoverPaseoAgents } from './dist/paseo-state.js'; console.log(JSON.stringify(discoverPaseoAgents(20)));",
   ], {
     cwd: path.resolve(import.meta.dirname, '..'),
     encoding: 'utf8',
@@ -56,6 +58,31 @@ test('Paseo discovery fails promptly when the daemon command hangs', () => {
   const result = JSON.parse(probe.stdout);
   assert.deepEqual(result.agents, []);
   assert.match(result.error, /ETIMEDOUT|timed out/i);
+});
+
+test('Paseo discovery always uses the global agent inventory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-paseo-global-'));
+  const paseo = path.join(dir, 'paseo');
+  const log = path.join(dir, 'args.log');
+  fs.writeFileSync(
+    paseo,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "$SQUARE_FAKE_PASEO_LOG"\nprintf '%s\\n' '[]'\n`
+  );
+  fs.chmodSync(paseo, 0o755);
+  const previousBin = process.env.SQUARE_PASEO_BIN;
+  const previousLog = process.env.SQUARE_FAKE_PASEO_LOG;
+  process.env.SQUARE_PASEO_BIN = paseo;
+  process.env.SQUARE_FAKE_PASEO_LOG = log;
+  try {
+    assert.deepEqual(discoverPaseoAgents().agents, []);
+    assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['ls', '--global', '--json']);
+  } finally {
+    if (previousBin === undefined) delete process.env.SQUARE_PASEO_BIN;
+    else process.env.SQUARE_PASEO_BIN = previousBin;
+    if (previousLog === undefined) delete process.env.SQUARE_FAKE_PASEO_LOG;
+    else process.env.SQUARE_FAKE_PASEO_LOG = previousLog;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('matchesMentionTarget keeps broadcast semantics for say acts', () => {
@@ -326,6 +353,189 @@ test('mention dispatch launches one detached worker and the worker routes unread
   assert.deepEqual(dispatched, [['Bob', file]]);
 });
 
+test('notification recipients dispatch independently', async () => {
+  const file = tempSquare();
+  writeDoc(file, {
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'join', actor: 'Cara', at: 3, body: '' },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'attention', reach: 'bell' },
+    ],
+  });
+  const started = [];
+  const releases = [];
+  const processing = processActNotificationsOnce(file, 3, {
+    sinks: [{ name: 'test', dispatch(notification) {
+      started.push(notification.recipient);
+      return new Promise((resolve) => releases.push(resolve));
+    } }],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started.sort(), ['Bob', 'Cara']);
+  for (const release of releases) release();
+  await processing;
+});
+
+test('only retryable wake failures back off, and attention is rechecked before retry', async () => {
+  const file = tempSquare();
+  const root = path.dirname(file);
+  const registry = path.join(root, 'sessions.ndjsonl');
+  const presented = path.join(root, 'presented.ndjsonl');
+  writeDoc(file, {
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' },
+    ],
+  });
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  const previousPresented = process.env.SQUARE_PRESENTED;
+  process.env.SQUARE_REGISTRY = registry;
+  process.env.SQUARE_PRESENTED = presented;
+  try {
+    recordJoin('bob-session', 'Bob', file, { channel: 'codex', ownerId: 'bob-owner' });
+    let attempts = 0;
+    const delays = [];
+    await processActNotificationsOnce(file, 2, {
+      retryDelaysMs: [10, 20],
+      delay: async (ms) => {
+        delays.push(ms);
+        presentOnce('bob-session', () => [{
+          name: 'Bob',
+          squarePath: file,
+          notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hey @Bob' }],
+        }], () => true);
+      },
+      sinks: [{ name: 'test', async dispatch() {
+        attempts++;
+        throw new PaseoWakeError('pre-accept failure', undefined, true);
+      } }],
+    });
+    assert.equal(attempts, 1);
+    assert.deepEqual(delays, [10]);
+  } finally {
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    if (previousPresented === undefined) delete process.env.SQUARE_PRESENTED;
+    else process.env.SQUARE_PRESENTED = previousPresented;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('unknown wake failures are never retried', async () => {
+  const file = tempSquare();
+  writeDoc(file, {
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' },
+    ],
+  });
+  let attempts = 0;
+  await processActNotificationsOnce(file, 2, {
+    retryDelaysMs: [1, 1],
+    delay: async () => { throw new Error('unknown failure must not sleep'); },
+    sinks: [{ name: 'test', async dispatch() {
+      attempts++;
+      throw new PaseoWakeError('unknown outcome');
+    } }],
+  });
+  assert.equal(attempts, 1);
+});
+
+test('Paseo rechecks presented attention after a running tool boundary', async () => {
+  const file = tempSquare();
+  const root = path.dirname(file);
+  const registry = path.join(root, 'sessions.ndjsonl');
+  const presented = path.join(root, 'presented.ndjsonl');
+  const doc = writeDoc(file, {
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' },
+    ],
+  });
+  const notification = planActNotifications(doc, doc.acts[2])[0];
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  const previousPresented = process.env.SQUARE_PRESENTED;
+  process.env.SQUARE_REGISTRY = registry;
+  process.env.SQUARE_PRESENTED = presented;
+  try {
+    recordJoin('bob-session', 'Bob', file, {
+      channel: 'codex',
+      paseoAgentId: 'bob-agent',
+      ownerId: 'bob-owner',
+    });
+    let sends = 0;
+    await dispatchPaseoNotification(notification, { squarePath: file }, {
+      discover: () => ({ agents: [{ id: 'bob-agent', name: 'Bob', status: 'running' }] }),
+      waitForBoundary: async () => {
+        presentOnce('bob-session', () => [{
+          name: 'Bob',
+          squarePath: file,
+          notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hey @Bob' }],
+        }], () => true);
+        return true;
+      },
+      sendWake: () => { sends++; },
+    });
+    assert.equal(sends, 0);
+  } finally {
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    if (previousPresented === undefined) delete process.env.SQUARE_PRESENTED;
+    else process.env.SQUARE_PRESENTED = previousPresented;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Paseo retries only provable discovery failures; timeout outcomes are unknown', async () => {
+  const file = tempSquare();
+  const root = path.dirname(file);
+  const registry = path.join(root, 'sessions.ndjsonl');
+  const doc = writeDoc(file, {
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' },
+    ],
+  });
+  const notification = planActNotifications(doc, doc.acts[2])[0];
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  process.env.SQUARE_REGISTRY = registry;
+  try {
+    recordJoin('bob-session', 'Bob', file, {
+      channel: 'codex',
+      paseoAgentId: 'bob-agent',
+      ownerId: 'bob-owner',
+    });
+    await assert.rejects(
+      dispatchPaseoNotification(notification, { squarePath: file }, {
+        discover: () => ({ agents: [], error: 'spawnSync paseo ENOENT' }),
+      }),
+      (error) => error instanceof PaseoWakeError && error.retryable === true
+    );
+    await assert.rejects(
+      dispatchPaseoNotification(notification, { squarePath: file }, {
+        discover: () => ({ agents: [], error: 'Paseo discovery timed out.' }),
+      }),
+      (error) => error instanceof PaseoWakeError && error.retryable === false
+    );
+    await assert.rejects(
+      dispatchPaseoNotification(notification, { squarePath: file }, {
+        discover: () => ({ agents: [{ id: 'bob-agent', name: 'Bob', status: 'running' }] }),
+        waitForBoundary: async () => false,
+      }),
+      (error) => error instanceof PaseoWakeError && error.retryable === false
+    );
+  } finally {
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('notify-once skips attention presented to the current owner', async () => {
   const file = tempSquare();
   const root = path.dirname(file);
@@ -380,7 +590,7 @@ test('notify-once skips attention presented to the current owner', async () => {
   }
 });
 
-test('notify-once sends only to the exact registered idle Paseo agent', async () => {
+test('notify-once sends wake-only to the exact registered idle Paseo agent', async () => {
   const file = tempSquare();
   const root = path.dirname(file);
   writeDoc(file, {
@@ -433,14 +643,84 @@ test('notify-once sends only to the exact registered idle Paseo agent', async ()
   assert.equal(fs.existsSync(log), true);
   const sent = fs.readFileSync(log, 'utf8');
   assert.match(sent, /^send\nexact-agent-id\n/m);
-  assert.match(sent, /hey @Bob/);
+  assert.match(sent, /native adapter/);
+  assert.match(sent, /catch --now/);
+  assert.doesNotMatch(sent, /hey @Bob/);
   assert.doesNotMatch(sent, /same-name-decoy/);
-  const rows = fs.readFileSync(presented, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].v, 2);
+  assert.equal(fs.existsSync(presented), false);
 });
 
-test('Paseo carries only a wake when the same owner has a native guarantee session', () => {
+test('an active matching catch receives the notification before Paseo wakes', async () => {
+  const file = tempSquare();
+  const root = path.dirname(file);
+  const registry = path.join(root, 'sessions.ndjsonl');
+  const log = path.join(root, 'paseo-send.log');
+  const bin = path.join(root, 'bin');
+  const paseo = path.join(bin, 'paseo');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(
+    paseo,
+    `#!/bin/sh\nif [ "$1" = "ls" ]; then\n  printf '%s\\n' '[{"id":"bob-agent","name":"Bob","status":"idle"}]'\nelif [ "$1" = "send" ]; then\n  printf '%s\\n' "$@" > "$SQUARE_FAKE_PASEO_LOG"\nfi\n`
+  );
+  fs.chmodSync(paseo, 0o755);
+
+  const previous = {
+    registry: process.env.SQUARE_REGISTRY,
+    presented: process.env.SQUARE_PRESENTED,
+    paseoBin: process.env.SQUARE_PASEO_BIN,
+    disableWake: process.env.SQUARE_DISABLE_PASEO_WAKE,
+    fakeLog: process.env.SQUARE_FAKE_PASEO_LOG,
+  };
+  process.env.SQUARE_REGISTRY = registry;
+  process.env.SQUARE_PRESENTED = path.join(root, 'presented.ndjsonl');
+  process.env.SQUARE_PASEO_BIN = paseo;
+  process.env.SQUARE_DISABLE_PASEO_WAKE = '0';
+  process.env.SQUARE_FAKE_PASEO_LOG = log;
+  try {
+    const doc = writeDoc(file, {
+      acts: [
+        { kind: 'join', actor: 'Alice', at: 1, body: '' },
+        { kind: 'join', actor: 'Bob', at: 2, body: '' },
+        { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' },
+      ],
+    });
+    recordJoin('bob-session', 'Bob', file, {
+      channel: 'paseo',
+      paseoAgentId: 'bob-agent',
+      ownerId: 'bob-owner',
+    });
+    const now = Date.now();
+    doc.runtime.leases.Bob = {
+      leaseId: 'catch-active',
+      ownerId: 'bob-owner',
+      heartbeatAt: now,
+      expiresAt: now + 10_000,
+    };
+    saveRuntimeSidecar(file, doc.runtime);
+
+    const wake = processActNotificationsOnce(file, 2);
+    await sleep(25);
+    doc.runtime.deliveryReceipts.Bob = { act_2: { status: 'delivered', at: Date.now() } };
+    saveRuntimeSidecar(file, doc.runtime);
+    await wake;
+
+    assert.equal(fs.existsSync(log), false);
+  } finally {
+    if (previous.registry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previous.registry;
+    if (previous.presented === undefined) delete process.env.SQUARE_PRESENTED;
+    else process.env.SQUARE_PRESENTED = previous.presented;
+    if (previous.paseoBin === undefined) delete process.env.SQUARE_PASEO_BIN;
+    else process.env.SQUARE_PASEO_BIN = previous.paseoBin;
+    if (previous.disableWake === undefined) delete process.env.SQUARE_DISABLE_PASEO_WAKE;
+    else process.env.SQUARE_DISABLE_PASEO_WAKE = previous.disableWake;
+    if (previous.fakeLog === undefined) delete process.env.SQUARE_FAKE_PASEO_LOG;
+    else process.env.SQUARE_FAKE_PASEO_LOG = previous.fakeLog;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Paseo carries only a wake when native and Paseo bindings share an owner', () => {
   const file = tempSquare();
   const root = path.dirname(file);
   writeDoc(file, {

@@ -38,6 +38,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.8"
   },
   "exports": {
@@ -55,5 +56,9 @@
     "skills": [
       "./skills"
     ]
+  },
+  "dependencies": {
+    "@getpaseo/client": "^0.3.1",
+    "ws": "^8.21.3"
   }
 }

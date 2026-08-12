@@ -18,7 +18,6 @@ import {
   recordLocalJoin,
 } from '../dist/registry.js';
 import { streamNotificationFor } from '../dist/stream.js';
-import { paseoOwnershipSnapshot, selectPaseoWakeAgents } from '../dist/wake-sink.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -208,25 +207,6 @@ test('only participant actions refresh local registration and done closes it', (
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session'), []);
     fs.rmSync(root, { recursive: true, force: true });
-  } finally {
-    cleanup();
-  }
-});
-
-test('Paseo routing selects exact registered agent ids, never name or cwd guesses', () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'paseo-route-square.md');
-    recordJoin('session-1', 'Bob', squarePath, {
-      channel: 'claude-code',
-      paseoAgentId: 'exact-agent-id',
-    });
-    const selected = selectPaseoWakeAgents(paseoOwnershipSnapshot(lookupParticipant(squarePath, 'bob')), [
-      { id: 'same-name-decoy', name: 'Bob', status: 'idle', cwd: process.cwd() },
-      { id: 'exact-agent-id', name: 'unrelated-display-name', status: 'running', cwd: '/elsewhere' },
-      { id: 'exact-but-error', name: 'Bob', status: 'error', cwd: process.cwd() },
-    ]);
-    assert.deepEqual(selected.map((agent) => agent.id), ['exact-agent-id']);
   } finally {
     cleanup();
   }

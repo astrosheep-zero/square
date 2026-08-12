@@ -13,7 +13,9 @@ import { recordNotificationFailure } from './notification-failures.js';
 import { hasPresentedAttention } from './presented.js';
 import { SquareError } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
-import { defaultWakeSinks } from './wake-sink.js';
+import { defaultWakeSinks } from './paseo-delivery.js';
+
+const NOTIFICATION_RETRY_DELAYS_MS = [250, 1000, 3000] as const;
 
 export type { NotificationSink, PendingNotification, PlannedNotification } from './delivery.js';
 export { planActNotifications, matchesMentionTarget };
@@ -30,6 +32,10 @@ export function notificationDeliveryWaitMs(): number {
   const value = Number.parseInt(process.env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? '5000', 10);
   if (!Number.isFinite(value) || value <= 0) throw new SquareError('invalid_args', 'Invalid SQUARE_NOTIFY_DELIVERY_WAIT_MS: expected a positive integer.');
   return value;
+}
+
+export function notificationRetryDelaysMs(): number[] {
+  return [...NOTIFICATION_RETRY_DELAYS_MS];
 }
 
 export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
@@ -53,28 +59,46 @@ export async function waitForDeliveredNotification(squarePath: string, name: str
   return false;
 }
 
-export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: { sinks?: NotificationSink[] } = {}): Promise<void> {
+interface ProcessNotificationOptions {
+  sinks?: NotificationSink[];
+  retryDelaysMs?: number[];
+  delay?: (ms: number) => Promise<void>;
+}
+
+export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
   const doc = loadSquare(squarePath);
   const item = doc.acts.find((candidate) => candidate.index === actIndex);
   if (item === undefined) return;
   const notifications = planActNotifications(doc, item).filter(isPendingNotification);
-  for (const notification of notifications) {
-    if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index)) continue;
-    for (const sink of opts.sinks ?? defaultWakeSinks()) {
-      try {
-        await sink.dispatch(notification, { squarePath });
-      } catch (error) {
-        recordNotificationFailure(squarePath, {
-          actIndex: notification.item.index,
-          recipient: notification.recipient,
-          route: notification.route,
-          sink: sink.name,
-          message: error instanceof Error ? error.message : String(error),
-          ...(error instanceof Error && 'diagnostic' in error ? { diagnostic: (error as Error & { diagnostic?: unknown }).diagnostic } : {}),
-        });
+  const sinks = opts.sinks ?? defaultWakeSinks();
+  const retryDelays = opts.retryDelaysMs ?? [];
+  const delay = opts.delay ?? ((ms: number) => sleep(ms));
+
+  await Promise.all(notifications.map(async (notification) => {
+    if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index)) return;
+    for (const sink of sinks) {
+      for (let attempt = 0; ; attempt += 1) {
+        if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index)) break;
+        try {
+          await sink.dispatch(notification, { squarePath });
+          break;
+        } catch (error) {
+          recordNotificationFailure(squarePath, {
+            actIndex: notification.item.index,
+            recipient: notification.recipient,
+            route: notification.route,
+            sink: sink.name,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof Error && 'diagnostic' in error ? { diagnostic: (error as Error & { diagnostic?: unknown }).diagnostic } : {}),
+          });
+          const retryable = error instanceof Error && 'retryable' in error && error.retryable === true;
+          const retryDelay = retryDelays[attempt];
+          if (!retryable || retryDelay === undefined) break;
+          await delay(retryDelay);
+        }
       }
     }
-  }
+  }));
 }
 
 export interface DispatchActNotificationsOptions {

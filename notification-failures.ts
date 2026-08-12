@@ -22,7 +22,10 @@ export function notificationFailuresPath(squarePath: string, env: NodeJS.Process
 }
 
 function redact(value: unknown, secret = process.env.PASEO_PASSWORD): unknown {
-  if (typeof value === 'string') return secret ? value.split(secret).join('[redacted]') : value;
+  if (typeof value === 'string') {
+    const withoutKnownSecret = secret ? value.split(secret).join('[redacted]') : value;
+    return withoutKnownSecret.replace(/([?&]password=)[^&\s]+/gi, '$1[redacted]');
+  }
   if (Array.isArray(value)) return value.map((item) => redact(item, secret));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redact(item, secret)]));
