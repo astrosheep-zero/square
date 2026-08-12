@@ -1,0 +1,4 @@
+interface:
+  display_name: "Developing Sqaure"
+  short_description: "Develop Square through explicit invariants and narrow boundaries"
+  default_prompt: "Use $developing-sqaure to implement and verify a focused Square change."
