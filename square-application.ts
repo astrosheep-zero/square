@@ -5,10 +5,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { emptyRuntimeState, loadRuntimeSidecar, loadSquare, mergeRuntimeState, renderArtifactAct, renderSquare, renderSquareDoc, saveRuntimeSidecar } from './artifact.js';
 import { type Act } from './square-core.js';
 import { coreCompact, coreDone, coreHold, coreResume, decideAct, decideJoin, resolveKnownName } from './decisions.js';
-import { dispatchActNotifications } from './notifications.js';
 import { planRepair, type PlanRepairResult } from './doctor.js';
 import { stageReplacement, type StagedReplacement } from './harness-stage.js';
 import { SquareError, type BuildOptions, type HardCap, type Reach, type SquareDoc, type StoredAct } from './model.js';
+import type { WakeRouteKind } from './routes.js';
 import { advanceCursor, freshWatchLease, LOCK_RETRY_MS, LOCK_STALE_MS, removeWatchLease, touchPresenceCursor, watchLease, writeWatchLease } from './runtime.js';
 
 export interface CommitPlan<Result> {
@@ -27,6 +27,9 @@ export type Intent =
   | { type: 'done'; name: string; body: string; now: number }
   | { type: 'lease'; name: string; leaseId: string; at: number; expiresAt: number; ownerId?: string; force?: boolean; filter?: { participants?: string[]; mention?: string } }
   | { type: 'release-lease'; name: string; leaseId: string }
+  | { type: 'claim-notify'; key: string; leaseId: string; at: number; expiresAt: number }
+  | { type: 'transition-notify'; key: string; leaseId: string; expiresAt: number; phase: 'claimed' | 'dispatching'; attemptN?: number; routeKind?: WakeRouteKind }
+  | { type: 'release-notify'; key: string; leaseId: string }
   | { type: 'consume'; name: string; throughIndex: number; at: number }
   | { type: 'compact'; keep: number; archivePath: string }
   | { type: 'repair'; doc: SquareDoc; quarantine?: { path: string; blocks: string[] } };
@@ -149,6 +152,46 @@ function plan(doc: SquareDoc, intent: Intent): CommitPlan<unknown> {
         mutateRuntime: (nextDoc) => { removeWatchLease(nextDoc, name, intent.leaseId); },
       };
     }
+    case 'claim-notify': {
+      const current = doc.runtime.notifyLeases[intent.key];
+      if (current !== undefined && current.expiresAt > intent.at) return { result: { type: 'busy' as const }, acts: [] };
+      if (current?.phase === 'dispatching') return { result: { type: 'ambiguous' as const, lease: current }, acts: [] };
+      return {
+        result: { type: 'acquired' as const, leaseId: intent.leaseId },
+        acts: [],
+        mutateRuntime: (nextDoc) => {
+          nextDoc.runtime.notifyLeases[intent.key] = {
+            leaseId: intent.leaseId,
+            expiresAt: intent.expiresAt,
+            phase: 'claimed',
+          };
+        },
+      };
+    }
+    case 'transition-notify': {
+      if (doc.runtime.notifyLeases[intent.key]?.leaseId !== intent.leaseId) return { result: { updated: false }, acts: [] };
+      return {
+        result: { updated: true },
+        acts: [],
+        mutateRuntime: (nextDoc) => {
+          nextDoc.runtime.notifyLeases[intent.key] = {
+            leaseId: intent.leaseId,
+            expiresAt: intent.expiresAt,
+            phase: intent.phase,
+            ...(intent.attemptN === undefined ? {} : { attemptN: intent.attemptN }),
+            ...(intent.routeKind === undefined ? {} : { routeKind: intent.routeKind }),
+          };
+        },
+      };
+    }
+    case 'release-notify': {
+      if (doc.runtime.notifyLeases[intent.key]?.leaseId !== intent.leaseId) return { result: { released: false }, acts: [] };
+      return {
+        result: { released: true },
+        acts: [],
+        mutateRuntime: (nextDoc) => { delete nextDoc.runtime.notifyLeases[intent.key]; },
+      };
+    }
     case 'consume': {
       const name = resolveKnownName(doc, intent.name);
       return {
@@ -215,7 +258,10 @@ export async function execute<Result = unknown>(squarePath: string, intent: Inte
     return commitPlan(squarePath, doc, plan(doc, intent) as CommitPlan<Result>);
   });
   for (const act of committed.acts) {
-    if (act.kind === 'say') await dispatchActNotifications(squarePath, act);
+    if (act.kind === 'say') {
+      const { dispatchActNotifications } = await import('./notifications.js');
+      await dispatchActNotifications(squarePath, act);
+    }
   }
   return committed;
 }

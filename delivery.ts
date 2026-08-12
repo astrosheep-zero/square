@@ -10,6 +10,7 @@ import {
   sameName,
 } from './model.js';
 import { actId, extractMentions, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import type { WakeRoute, WakeRouteKind } from './routes.js';
 
 export type NotificationRoute = 'mention' | 'beside' | 'broadcast' | 'bell';
 export type DirectedNotificationRoute = Exclude<NotificationRoute, 'broadcast'>;
@@ -29,10 +30,23 @@ export interface PendingNotification extends PlannedNotification {
   route: DirectedNotificationRoute;
 }
 
-export interface WakeSinkContext { squarePath: string; }
-export interface NotificationSink {
-  name: string;
-  dispatch(notification: PendingNotification, ctx: WakeSinkContext): Promise<void>;
+export interface WakeRequest {
+  squarePath: string;
+  actIndex: number;
+  recipient: string;
+  actor: string;
+  route: DirectedNotificationRoute;
+}
+
+export type WakeDispatchResult =
+  | { outcome: 'accepted' }
+  | { outcome: 'unknown'; signature: string; message: string; diagnostic?: unknown }
+  | { outcome: 'failed'; signature: string; message: string; retryable: boolean; diagnostic?: unknown }
+  | { outcome: 'cancelled' };
+
+export interface WakeAdapter {
+  readonly kind: WakeRouteKind;
+  dispatch(route: WakeRoute, request: WakeRequest, beforeSend: () => Promise<boolean>): Promise<WakeDispatchResult>;
 }
 
 export function isPendingNotification(notification: PlannedNotification): notification is PendingNotification {

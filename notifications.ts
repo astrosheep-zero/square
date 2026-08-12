@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -6,18 +7,29 @@ import { loadSquare } from './artifact.js';
 import {
   isDeliveryDelivered,
   isPendingNotification,
-  type NotificationSink,
   planActNotifications,
+  type WakeAdapter,
 } from './delivery.js';
-import { recordNotificationFailure } from './notification-failures.js';
 import { hasPresentedAttention } from './presented.js';
-import { SquareError } from './model.js';
+import { nameKey, SquareError, type NotifyLease } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
-import { defaultWakeSinks } from './paseo-delivery.js';
+import { PaseoAdapter } from './paseo-delivery.js';
+import { lookupParticipant } from './registry.js';
+import type { WakeRouteKind } from './routes.js';
+import { execute } from './square-application.js';
+import {
+  nextWakeAttemptNumber,
+  recordRecoveredUnknown,
+  recordWakeAttempt,
+  terminalWakeAttempt,
+  type WakeAttention,
+} from './wake-attempts.js';
+import { WakePort } from './wake-port.js';
 
 const NOTIFICATION_RETRY_DELAYS_MS = [250, 1000, 3000] as const;
+const NOTIFY_LEASE_MS = 5 * 60 * 1000;
 
-export type { NotificationSink, PendingNotification, PlannedNotification } from './delivery.js';
+export type { PendingNotification, PlannedNotification } from './delivery.js';
 export { planActNotifications, matchesMentionTarget };
 
 function known(doc: ReturnType<typeof loadSquare>, name: string): string {
@@ -60,9 +72,157 @@ export async function waitForDeliveredNotification(squarePath: string, name: str
 }
 
 interface ProcessNotificationOptions {
-  sinks?: NotificationSink[];
+  adapters?: WakeAdapter[];
+  env?: NodeJS.ProcessEnv;
   retryDelaysMs?: number[];
   delay?: (ms: number) => Promise<void>;
+}
+
+function notifyLeaseKey(recipient: string, actIndex: number): string {
+  return JSON.stringify([`act_${actIndex}`, nameKey(recipient)]);
+}
+
+type NotifyLeaseClaim =
+  | { type: 'acquired'; leaseId: string }
+  | { type: 'busy' }
+  | { type: 'ambiguous'; lease: NotifyLease };
+
+async function claimNotifyLease(squarePath: string, recipient: string, actIndex: number): Promise<NotifyLeaseClaim> {
+  const at = Date.now();
+  const committed = await execute<NotifyLeaseClaim>(squarePath, {
+    type: 'claim-notify',
+    key: notifyLeaseKey(recipient, actIndex),
+    leaseId: randomUUID(),
+    at,
+    expiresAt: at + NOTIFY_LEASE_MS,
+  });
+  return committed.result;
+}
+
+async function transitionNotifyLease(
+  squarePath: string,
+  recipient: string,
+  actIndex: number,
+  leaseId: string,
+  phase: 'claimed' | 'dispatching',
+  routeKind?: WakeRouteKind,
+  attemptN?: number
+): Promise<boolean> {
+  const at = Date.now();
+  const committed = await execute<{ updated: boolean }>(squarePath, {
+    type: 'transition-notify',
+    key: notifyLeaseKey(recipient, actIndex),
+    leaseId,
+    expiresAt: at + NOTIFY_LEASE_MS,
+    phase,
+    ...(routeKind === undefined ? {} : { routeKind }),
+    ...(attemptN === undefined ? {} : { attemptN }),
+  });
+  return committed.result.updated;
+}
+
+function releaseNotifyLease(squarePath: string, recipient: string, actIndex: number, leaseId: string): Promise<unknown> {
+  return execute(squarePath, {
+    type: 'release-notify',
+    key: notifyLeaseKey(recipient, actIndex),
+    leaseId,
+  });
+}
+
+async function processNotification(
+  squarePath: string,
+  notification: import('./delivery.js').PendingNotification,
+  opts: ProcessNotificationOptions
+): Promise<void> {
+  const env = opts.env ?? process.env;
+  const attention: WakeAttention = {
+    squarePath,
+    actIndex: notification.item.index,
+    recipient: notification.recipient,
+  };
+  if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) return;
+  if (terminalWakeAttempt(attention, { env }) !== undefined) return;
+
+  const claim = await claimNotifyLease(squarePath, notification.recipient, notification.item.index);
+  if (claim.type === 'busy') return;
+  if (claim.type === 'ambiguous') {
+    const recovered = recordRecoveredUnknown(attention, claim.lease, env);
+    if (recovered !== undefined) {
+      await releaseNotifyLease(squarePath, notification.recipient, notification.item.index, claim.lease.leaseId);
+    }
+    return;
+  }
+
+  const { leaseId } = claim;
+  let releaseLease = true;
+  try {
+    if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) return;
+    if (terminalWakeAttempt(attention, { env }) !== undefined) return;
+    const owners = new Set(lookupParticipant(squarePath, notification.recipient).map((binding) => binding.ownerId));
+    const port = new WakePort(opts.adapters ?? [new PaseoAdapter()], env);
+    const result = await port.dispatch(
+      owners,
+      {
+        squarePath,
+        actIndex: notification.item.index,
+        recipient: notification.recipient,
+        actor: notification.item.actor,
+        route: notification.route,
+      },
+      {
+        nextAttemptN: () => nextWakeAttemptNumber(attention, { env }),
+        beforeSend: async (route, attemptN) => {
+          if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) {
+            return false;
+          }
+          const dispatching = await transitionNotifyLease(
+            squarePath,
+            notification.recipient,
+            notification.item.index,
+            leaseId,
+            'dispatching',
+            route.kind,
+            attemptN,
+          );
+          if (dispatching) releaseLease = false;
+          return dispatching;
+        },
+        record: async (route, attemptN, outcome) => {
+          if (outcome.outcome === 'failed') {
+            await transitionNotifyLease(squarePath, notification.recipient, notification.item.index, leaseId, 'claimed');
+            releaseLease = true;
+          }
+          recordWakeAttempt({
+            attention,
+            routeKind: route.kind,
+            outcome: outcome.outcome,
+            attemptN,
+            ...('signature' in outcome ? { signature: outcome.signature } : {}),
+            ...('message' in outcome ? { message: outcome.message } : {}),
+            ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
+          }, env);
+          if (outcome.outcome !== 'failed') releaseLease = true;
+        },
+      },
+      { retryDelaysMs: opts.retryDelaysMs, delay: opts.delay }
+    );
+    if (result.outcome === 'exhausted') {
+      recordWakeAttempt({
+        attention,
+        outcome: 'failed',
+        signature: result.attemptedRoutes === 0 ? 'no_fresh_route' : 'routes_exhausted',
+        attemptN: nextWakeAttemptNumber(attention, { env }),
+        terminal: true,
+        message: result.attemptedRoutes === 0
+          ? 'No fresh wake route has an implemented adapter.'
+          : 'Every eligible wake route failed before acceptance.',
+      }, env);
+    }
+  } finally {
+    if (releaseLease) {
+      await releaseNotifyLease(squarePath, notification.recipient, notification.item.index, leaseId);
+    }
+  }
 }
 
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
@@ -70,35 +230,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   const item = doc.acts.find((candidate) => candidate.index === actIndex);
   if (item === undefined) return;
   const notifications = planActNotifications(doc, item).filter(isPendingNotification);
-  const sinks = opts.sinks ?? defaultWakeSinks();
-  const retryDelays = opts.retryDelaysMs ?? [];
-  const delay = opts.delay ?? ((ms: number) => sleep(ms));
-
-  await Promise.all(notifications.map(async (notification) => {
-    if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index)) return;
-    for (const sink of sinks) {
-      for (let attempt = 0; ; attempt += 1) {
-        if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index)) break;
-        try {
-          await sink.dispatch(notification, { squarePath });
-          break;
-        } catch (error) {
-          recordNotificationFailure(squarePath, {
-            actIndex: notification.item.index,
-            recipient: notification.recipient,
-            route: notification.route,
-            sink: sink.name,
-            message: error instanceof Error ? error.message : String(error),
-            ...(error instanceof Error && 'diagnostic' in error ? { diagnostic: (error as Error & { diagnostic?: unknown }).diagnostic } : {}),
-          });
-          const retryable = error instanceof Error && 'retryable' in error && error.retryable === true;
-          const retryDelay = retryDelays[attempt];
-          if (!retryable || retryDelay === undefined) break;
-          await delay(retryDelay);
-        }
-      }
-    }
-  }));
+  await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
 }
 
 export interface DispatchActNotificationsOptions {

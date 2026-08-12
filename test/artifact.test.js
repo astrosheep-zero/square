@@ -83,6 +83,10 @@ test('loadSquare rejects malformed runtime sidecar fields', () => {
     ['cursors', (runtime) => ({ ...runtime, cursors: { Alice: { consumedThroughIndex: '0' } } })],
     ['deliveryReceipts', (runtime) => ({ ...runtime, deliveryReceipts: { Alice: { bad: {} } } })],
     ['leases', (runtime) => ({ ...runtime, leases: { Alice: { leaseId: '' } } })],
+    ['notifyLeases', (runtime) => ({
+      ...runtime,
+      notifyLeases: { attention: { leaseId: 'lease', expiresAt: 1, phase: 'dispatching', attemptN: 1, routeKind: 'invalid' } },
+    })],
   ];
 
   for (const [field, mutate] of malformed) {

@@ -3,7 +3,6 @@
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { recordNotificationFailure } from '../notification-failures.js';
 import { notificationDeliveryWaitMs, notificationRetryDelaysMs, processActNotificationsOnce } from '../notifications.js';
 
 function args(argv: string[]): { squarePath: string; actIndex: number } {
@@ -25,15 +24,6 @@ async function main(): Promise<void> {
   await processActNotificationsOnce(squarePath, actIndex, { retryDelaysMs: notificationRetryDelaysMs() });
 }
 
-main().catch((error) => {
-  const squarePath = process.argv.includes('--square-path') ? process.argv[process.argv.indexOf('--square-path') + 1] : undefined;
-  if (squarePath) {
-    recordNotificationFailure(squarePath, {
-      actIndex: Number(process.argv[process.argv.indexOf('--act-index') + 1]) || 0,
-      sink: 'worker',
-      message: error instanceof Error ? error.message : String(error),
-      diagnostic: { phase: 'worker' },
-    });
-  }
+main().catch(() => {
   process.exitCode = 0;
 });

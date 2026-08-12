@@ -2,12 +2,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export type WakeRouteKind =
-  | 'paseo'
-  | 'pi-extension'
-  | 'opencode-server'
-  | 'codex-app-server'
-  | 'claude-native';
+export const WAKE_ROUTE_KINDS = [
+  'paseo',
+  'pi-extension',
+  'opencode-server',
+  'codex-app-server',
+  'claude-native',
+] as const;
+
+export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export type WakeRouteSource = 'join-env' | 'boundary-adapter';
 
@@ -33,17 +36,15 @@ interface RouteRow {
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ROUTE_FRESH_MS = 24 * 60 * 60 * 1000;
-const VALID_KINDS = new Set<WakeRouteKind>([
-  'paseo',
-  'pi-extension',
-  'opencode-server',
-  'codex-app-server',
-  'claude-native',
-]);
+const VALID_KINDS = new Set<string>(WAKE_ROUTE_KINDS);
 const VALID_SOURCES = new Set<WakeRouteSource>(['join-env', 'boundary-adapter']);
 
 export function routesPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_ROUTES || path.join(os.homedir(), '.square', 'routes.ndjsonl');
+}
+
+export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
+  return typeof value === 'string' && VALID_KINDS.has(value);
 }
 
 function routeKey(ownerId: string, kind: WakeRouteKind): string {
@@ -66,7 +67,7 @@ function parseRow(raw: string, now: number): RouteRow | undefined {
     typeof row.ts !== 'number' || !Number.isFinite(row.ts) || row.ts > now || now - row.ts > RETENTION_MS ||
     typeof row.owner_id !== 'string' || row.owner_id === '' ||
     typeof row.session_id !== 'string' || row.session_id === '' ||
-    typeof row.kind !== 'string' || !VALID_KINDS.has(row.kind as WakeRouteKind)
+    !isWakeRouteKind(row.kind)
   ) return undefined;
   if (row.op === 'upsert' && (!stringRecord(row.address) || !VALID_SOURCES.has(row.source as WakeRouteSource))) {
     return undefined;

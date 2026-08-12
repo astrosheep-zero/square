@@ -53,6 +53,7 @@ export function planRepair(text: string): PlanRepairResult {
       cursors: {},
       deliveryReceipts: {},
       leases: {},
+      notifyLeases: {},
     },
   };
 

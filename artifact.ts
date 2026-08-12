@@ -12,6 +12,7 @@ import {
   type Reach,
   type ReadCursor,
   type DeliveryReceipt,
+  type NotifyLease,
   type SquareRuntimeState,
   type WatchLease,
   type BuildOptions,
@@ -22,6 +23,7 @@ import {
   sameName,
 } from './model.js';
 import { formatTimestamp, parseTimestamp } from './time.js';
+import { isWakeRouteKind } from './routes.js';
 
 const V2_KINDS = new Set(['say', 'join', 'done', 'hold', 'resume']);
 
@@ -86,6 +88,7 @@ export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
     cursors: {},
     deliveryReceipts: {},
     leases: {},
+    notifyLeases: {},
   };
 }
 
@@ -161,12 +164,16 @@ function validateRuntimeSidecar(squarePath: string, value: unknown): SquareRunti
   if (!isObject(value.leases) || !Object.values(value.leases).every(isWatchLease)) {
     throw invalidRuntimeSidecar(squarePath, 'leases contains an invalid watch lease.');
   }
+  if (value.notifyLeases !== undefined && (!isObject(value.notifyLeases) || !Object.values(value.notifyLeases).every(isNotifyLease))) {
+    throw invalidRuntimeSidecar(squarePath, 'notifyLeases contains an invalid notify lease.');
+  }
   return {
     version: 2,
     nextActIndex: value.nextActIndex,
     cursors: value.cursors as Record<string, ReadCursor>,
     deliveryReceipts: value.deliveryReceipts as Record<string, Record<string, DeliveryReceipt>>,
     leases: value.leases as Record<string, WatchLease>,
+    notifyLeases: (value.notifyLeases ?? {}) as Record<string, NotifyLease>,
   };
 }
 
@@ -295,6 +302,16 @@ export function isWatchLease(value: unknown): boolean {
   if (participants !== undefined && (!Array.isArray(participants) || !participants.every((item) => typeof item === 'string'))) return false;
   const mention = value.filter.mention;
   return mention === undefined || typeof mention === 'string';
+}
+
+export function isNotifyLease(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (typeof value.leaseId !== 'string' || value.leaseId === '') return false;
+  if (typeof value.expiresAt !== 'number' || !Number.isFinite(value.expiresAt)) return false;
+  if (value.phase !== 'claimed' && value.phase !== 'dispatching') return false;
+  if (value.attemptN !== undefined && (typeof value.attemptN !== 'number' || !Number.isInteger(value.attemptN) || value.attemptN <= 0)) return false;
+  if (value.routeKind !== undefined && !isWakeRouteKind(value.routeKind)) return false;
+  return value.phase !== 'dispatching' || (value.attemptN !== undefined && value.routeKind !== undefined);
 }
 
 function invalidVersionGuidance(reason: string): SquareError {

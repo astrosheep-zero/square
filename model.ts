@@ -1,6 +1,7 @@
 // Shared model and constants for Square.
 
 import type { Act } from './square-core.js';
+import type { WakeRouteKind } from './routes.js';
 export type { Act, Reach } from './square-core.js';
 
 export type SquareErrorCode =
@@ -66,12 +67,21 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
+export interface NotifyLease {
+  leaseId: string;
+  expiresAt: number;
+  phase: 'claimed' | 'dispatching';
+  attemptN?: number;
+  routeKind?: WakeRouteKind;
+}
+
 export interface SquareRuntimeState {
   version: 2;
   nextActIndex: number;
   cursors: Record<string, ReadCursor>;
   deliveryReceipts: Record<string, Record<string, DeliveryReceipt>>;
   leases: Record<string, WatchLease>;
+  notifyLeases: Record<string, NotifyLease>;
 }
 
 export interface SquareDoc {
