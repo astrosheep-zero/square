@@ -101,11 +101,11 @@ function runtimeState(text, file) {
   return sidecar;
 }
 
-test('OpenCode harness install links the canonical plugin and Agent skills', () => {
+test('install and uninstall accept multiple explicit targets', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');
   try {
-    const result = run(['harness', 'install', 'opencode'], {
+    const result = run(['install', 'skills', 'opencode', 'pi'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -113,6 +113,14 @@ test('OpenCode harness install links the canonical plugin and Agent skills', () 
     const skill = path.join(home, '.agents', 'skills', 'square');
     assert.equal(fs.realpathSync(plugin), path.join(ROOT, 'extensions', 'square-opencode.js'));
     assert.equal(fs.realpathSync(skill), path.join(ROOT, 'skills', 'square'));
+    assert.equal(fs.realpathSync(path.join(home, '.pi', 'agent', 'extensions', 'square.js')), path.join(ROOT, 'extensions', 'square-pi.js'));
+
+    const removed = run(['uninstall', 'skills', 'opencode', 'pi'], {
+      env: { HOME: home, XDG_CONFIG_HOME: config },
+    });
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.existsSync(plugin), false);
+    assert.equal(fs.existsSync(skill), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -147,6 +155,8 @@ test('every public subcommand exposes scoped help without a square', () => {
     'participants',
     'hold',
     'resume',
+    'install',
+    'uninstall',
     'harness',
     'compact',
     'doctor',

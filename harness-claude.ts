@@ -41,6 +41,7 @@ export async function installClaudePlugin(homeDir: string, run: ClaudeCommandRun
     fs.cpSync(fileURLToPath(new URL('../skills/square/', import.meta.url)), plugin, { recursive: true });
     writeJson(path.join(stage, '.claude-plugin', 'marketplace.json'), {
       name: CLAUDE_MARKETPLACE_NAME,
+      owner: { name: 'Square' },
       plugins: [{ name: SQUARE_IDENTITY.pluginName, source: './plugins/square' }],
     });
   });

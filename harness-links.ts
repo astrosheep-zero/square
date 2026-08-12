@@ -29,16 +29,19 @@ export function installHarnessLinks(links: HarnessLink[], force = false): string
     if (!fs.existsSync(link.source)) {
       throw new Error(`Harness link source is missing: ${link.source}`);
     }
+    const existing = lstatMaybe(link.target);
     return {
       ...link,
-      existing: lstatMaybe(link.target),
+      existing,
       sourceIsDirectory: fs.statSync(link.source).isDirectory(),
+      alreadyManaged: existing !== undefined && sameLink(link.source, link.target),
     };
   });
-  for (const { target, existing } of prepared) {
-    if (existing !== undefined && !force) throw new Error(`Refusing to overwrite existing link: ${target}\nPass -f to replace it.`);
+  for (const { target, existing, alreadyManaged } of prepared) {
+    if (existing !== undefined && !alreadyManaged && !force) throw new Error(`Refusing to overwrite existing link: ${target}\nPass -f to replace it.`);
   }
-  for (const { source, target, existing, sourceIsDirectory } of prepared) {
+  for (const { source, target, existing, sourceIsDirectory, alreadyManaged } of prepared) {
+    if (alreadyManaged) continue;
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (existing !== undefined) fs.rmSync(target, { recursive: true, force: true });
     const symlinkType = os.platform() === 'win32' && sourceIsDirectory ? 'junction' : 'file';

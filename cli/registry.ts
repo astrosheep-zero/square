@@ -1,7 +1,7 @@
 import { buildCommand, compactCommand, doneCommand, expressCommand, holdCommand, joinCommand, resumeCommand } from './square-commands.js';
 import { doctorCommand } from './maintenance-commands.js';
 import { type CommandContext, type CommandSpec } from './context.js';
-import { harnessCommand } from './harness-command.js';
+import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
 import { helpCommand, versionCommand } from './meta-commands.js';
 import {
   catchCommand,
@@ -35,6 +35,8 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['done'], spec: doneCommand },
   { names: ['hold'], spec: holdCommand },
   { names: ['resume'], spec: resumeCommand },
+  { names: ['install'], spec: installCommand },
+  { names: ['uninstall'], spec: uninstallCommand },
   { names: ['harness'], spec: harnessCommand },
   { names: ['compact'], spec: compactCommand },
   { names: ['doctor'], spec: doctorCommand },

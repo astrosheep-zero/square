@@ -11,8 +11,12 @@ import { type CommandSpec } from './context.js';
 
 export type HarnessCommandAction = HarnessAction;
 export interface ParsedHarnessCommand {
-  action: HarnessCommandAction;
   target?: string;
+}
+
+export interface ParsedInstallCommand {
+  targets: string[];
+  all: boolean;
   force: boolean;
 }
 
@@ -21,34 +25,75 @@ export interface HarnessCommandResult {
   notes: string[];
 }
 
+function installTargets(intent: ParsedInstallCommand, action: 'install' | 'uninstall'): string[] {
+  const available = harnessTargets().filter((target) => target.capabilities.includes(action));
+  const names = intent.all ? available.map((target) => target.name) : [...new Set(intent.targets)];
+  if (names.length === 0) throw new Error(`${action} requires one or more targets, or --all`);
+  for (const name of names) {
+    if (!available.some((target) => target.name === name)) {
+      throw new Error(`Unknown ${action} target: ${name}`);
+    }
+  }
+  return names;
+}
+
+function parseInstall(argv: string[], action: 'install' | 'uninstall'): ParsedInstallCommand {
+  const all = argv.includes('--all');
+  const force = argv.includes('-f') || argv.includes('--force');
+  const allowedOptions = action === 'install' ? ['--all', '-f', '--force'] : ['--all'];
+  const option = argv.find((argument) => argument.startsWith('-') && !allowedOptions.includes(argument));
+  if (option !== undefined) throw new Error(`Unknown ${action} option: ${option}`);
+  if (action === 'uninstall' && force) throw new Error(`Unknown uninstall option: ${argv.find((item) => item === '-f' || item === '--force')}`);
+  const targets = argv.filter((argument) => !argument.startsWith('-'));
+  if (all && targets.length > 0) throw new Error(`Cannot combine ${action} --all with named targets`);
+  return { targets, all, force };
+}
+
+function targetCommand(action: 'install' | 'uninstall'): CommandSpec<ParsedInstallCommand, HarnessCommandResult> {
+  return {
+    parse(argv) { return parseInstall(argv, action); },
+    async execute(intent, context) {
+      const results: HarnessTargetResult[] = [];
+      for (const target of installTargets(intent, action)) {
+        results.push(await executeHarnessTarget(target, action, {
+          homeDir: context.homeDir,
+          squarePath: context.squarePath,
+          force: intent.force,
+        }));
+      }
+      return {
+        notes: results.flatMap((result) => result.notes),
+        lines: results.flatMap((result) => result.lines),
+      };
+    },
+    present(result) { process.stdout.write(formatHarnessResult(result)); },
+  };
+}
+
+export const installCommand = targetCommand('install');
+export const uninstallCommand = targetCommand('uninstall');
+
 export const harnessCommand: CommandSpec<ParsedHarnessCommand, HarnessCommandResult> = {
   parse(argv) {
-    const action = argv[0];
-    if (action !== 'install' && action !== 'uninstall' && action !== 'doctor') {
-      throw new Error('harness requires install, uninstall, or doctor');
-    }
+    if (argv[0] !== 'doctor') throw new Error('harness only supports doctor');
     const rest = argv.slice(1);
-    const option = rest.find((argument) => argument.startsWith('-') && argument !== '-f' && argument !== '--force');
+    const option = rest.find((argument) => argument.startsWith('-'));
     if (option !== undefined) throw new Error(`Unknown harness option: ${option}`);
+    if (rest.length > 1) throw new Error('harness doctor accepts at most one target');
     return {
-      action,
-      target: rest.find((argument) => !argument.startsWith('-')),
-      force: rest.includes('-f') || rest.includes('--force'),
+      target: rest[0],
     };
   },
   async execute(intent, context) {
-    if (intent.target === undefined && intent.action !== 'doctor') {
-      throw new Error('harness install/uninstall requires an explicit target: skills | claude | codex | opencode | pi');
-    }
     const targetNames = intent.target === undefined
       ? harnessTargets().map((target) => target.name)
       : [intent.target];
     const results: HarnessTargetResult[] = [];
     for (const target of targetNames) {
-      results.push(await executeHarnessTarget(target, intent.action, {
+      results.push(await executeHarnessTarget(target, 'doctor', {
         homeDir: context.homeDir,
         squarePath: context.squarePath,
-        force: intent.force,
+        force: false,
       }));
     }
     return {

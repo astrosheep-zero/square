@@ -150,7 +150,7 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
   const command = args[0];
-  const resolved = !explicitSquarePath && !['ls', 'list', 'version'].includes(command ?? '')
+  const resolved = !explicitSquarePath && !['ls', 'list', 'version', 'install', 'uninstall'].includes(command ?? '')
     ? resolveDefaultSquarePath()
     : { path: requestedPath ?? DEFAULT_SQUARE_PATH, multiple: false };
   return { squarePath: resolved.path, explicitSquarePath, multipleSquares: resolved.multiple, name, args };

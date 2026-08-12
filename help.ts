@@ -46,7 +46,7 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Inspect bounded machine-local notifications for a native session.',
     details: ['Options:', '  --for-session <id>  Required harness session id.', '  --json              Emit structured JSON.'],
   },
-  { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Run one native turn-boundary hook event from JSON on stdin.', hiddenFromIndex: true },
+  { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   {
     names: ['history'], usage: '[--as <name>] history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search what happened without changing what you have caught.',
@@ -58,9 +58,19 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['hold'], usage: '--as <name> hold [reason | -]', usesSquare: true, group: 'participant', summary: 'Raise a hand and pause participant activity.' },
   { names: ['resume'], usage: '--as <name> resume', usesSquare: true, group: 'participant', summary: 'Lower the raised hand and resume activity.' },
   {
-    names: ['harness'], usage: 'harness <install <skills|claude|codex|opencode|pi> [-f] | uninstall <skills|claude|codex|opencode|pi> | doctor [skills|claude|codex|opencode|pi|delivery]>', usesSquare: true, group: 'maintenance',
-    summary: 'Install, remove, or diagnose official harness adapters.',
-    details: ['Targets:', '  skills, claude, codex, opencode, pi  Install, remove, or diagnose one adapter.', '  delivery                              Diagnose delivery only; skips when no readable artifact is selected.'],
+    names: ['install'], usage: 'install (--all | <target>...) [-f]', group: 'maintenance',
+    summary: 'Install Square support for one or more agent hosts.',
+    details: ['Targets:', '  skills, claude, codex, opencode, pi', '', 'Options:', '  --all       Install every supported target.', '  -f, --force Replace existing managed links.'],
+  },
+  {
+    names: ['uninstall'], usage: 'uninstall (--all | <target>...)', group: 'maintenance',
+    summary: 'Remove Square support from one or more agent hosts.',
+    details: ['Targets:', '  skills, claude, codex, opencode, pi', '', 'Options:', '  --all  Remove every supported target.'],
+  },
+  {
+    names: ['harness'], usage: 'harness doctor [skills|claude|codex|opencode|pi|delivery]', usesSquare: true, group: 'maintenance', hiddenFromIndex: true,
+    summary: 'Diagnose installed agent-host support.',
+    details: ['Targets:', '  skills, claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                              Diagnose delivery for the selected square.'],
   },
   { names: ['compact'], usage: 'compact [--keep N]', usesSquare: true, group: 'host', summary: 'Move older activity out of the working artifact while keeping the latest N.' },
   {
@@ -82,7 +92,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants', 'warmup', 'compact'] },
-    { key: 'maintenance', title: 'Setup and repair:', order: ['harness', 'doctor'] },
+    { key: 'maintenance', title: 'Setup and repair:', order: ['install', 'uninstall', 'doctor'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

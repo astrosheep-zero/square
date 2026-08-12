@@ -63,7 +63,7 @@ test('Square identity keeps package, plugin, and marketplace coordinates aligned
   assert.equal(SQUARE_IDENTITY.packageVersion, JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')).version);
 });
 
-test('managed link targets retain both skills and require force even for an existing link', () => {
+test('managed link targets are idempotent and still require force for another owner', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-links-'));
   const links = skillLinks(home, ['.agents']);
   try {
@@ -71,6 +71,9 @@ test('managed link targets retain both skills and require force even for an exis
     installHarnessLinks(links);
     assert.equal(path.basename(fs.realpathSync(path.join(home, '.agents', 'skills', 'square'))), 'square');
     assert.equal(path.basename(fs.realpathSync(path.join(home, '.agents', 'skills', 'brainstorm'))), 'brainstorm');
+    assert.equal(installHarnessLinks(links).length, 2);
+    fs.rmSync(links[0].target, { force: true });
+    fs.writeFileSync(links[0].target, 'another owner');
     assert.throws(() => installHarnessLinks(links), /Pass -f to replace it/);
     assert.equal(installHarnessLinks(links, true).length, 2);
   } finally {
@@ -208,6 +211,8 @@ test('Claude installation leaves a diagnosable bundle that can be removed', asyn
   try {
     const installed = await installClaudePlugin(home, runClaude);
     assert.equal(fs.existsSync(path.join(installed.pluginRoot, 'SKILL.md')), true);
+    const marketplace = JSON.parse(fs.readFileSync(path.join(installed.marketplaceRoot, '.claude-plugin', 'marketplace.json'), 'utf8'));
+    assert.deepEqual(marketplace.owner, { name: 'Square' });
     assert.match((await doctorClaudePlugin(home, runClaude)).join('\n'), /✓ square@astrosheep installed/);
     await uninstallClaudePlugin(home, runClaude);
     assert.equal(fs.existsSync(installed.marketplaceRoot), false);
@@ -252,6 +257,37 @@ test('Codex installation leaves a self-contained bundle with hooks enabled', asy
     assert.match((await doctorCodexPlugin(home, runCodex)).join('\n'), /✓ square@astrosheep installed/);
     await uninstallCodexPlugin(home, runCodex);
     assert.equal(fs.existsSync(installed.marketplaceRoot), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Codex installation refreshes the marketplace source already configured for its identity', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-existing-source-'));
+  const existing = path.join(home, '.square', 'codex', 'marketplace');
+  const config = path.join(home, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  fs.writeFileSync(config, `[marketplaces.astrosheep]\nsource_type = "local"\nsource = ${JSON.stringify(existing)}\n`);
+  fs.mkdirSync(existing, { recursive: true });
+  fs.writeFileSync(path.join(existing, 'previous.txt'), 'old bundle');
+  const calls = [];
+  const runCodex = (_home, args) => {
+    calls.push(args);
+    return {
+      status: 0,
+      stdout: args[0] === 'plugin' && args[1] === 'add'
+        ? JSON.stringify({ installedPath: '/tmp/square' })
+        : enabledPlugins(CODEX_PLUGIN_ID),
+      stderr: '',
+    };
+  };
+  try {
+    const installed = await installCodexPlugin(home, runCodex);
+    assert.equal(installed.marketplaceRoot, existing);
+    assert.equal(installed.pluginRoot, path.join(existing, 'plugins', 'square'));
+    assert.deepEqual(calls.find((args) => args[1] === 'marketplace' && args[2] === 'add')?.[3], existing);
+    assert.equal(fs.existsSync(path.join(existing, 'plugins', 'square', 'hooks', 'hooks.json')), true);
+    assert.match((await doctorCodexPlugin(home, runCodex)).join('\n'), new RegExp(existing.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
