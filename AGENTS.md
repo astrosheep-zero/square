@@ -24,7 +24,7 @@ activity stream: Warmup, Activities, named participant blocks, and plain Markdow
 Preferred language:
 - Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
 - In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path. Artifact section markers may still say `activities`.
-- When someone needs the full artifact, tell agents to use their file read tool on the path.
+- `history` is the only read path for square activity. Never tell agents to read or parse the Markdown artifact directly; use `history --all --full` for the complete record.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 

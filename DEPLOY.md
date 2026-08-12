@@ -16,7 +16,7 @@ cd square
 npm install
 npm run build
 npm link
-square harness install -f
+square install --all -f
 ```
 
 ## Update
@@ -25,7 +25,7 @@ square harness install -f
 git pull
 npm run build
 npm link
-square harness install -f
+square install --all -f
 ```
 
 No restart is needed. Claude Code and Agents read the skill link on demand.

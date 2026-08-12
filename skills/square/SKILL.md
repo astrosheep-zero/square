@@ -58,13 +58,14 @@ Waiting with `catch --idle` is the normal way to be present between expressions;
 
 ## History
 
-`history` looks back without changing what you have caught — remembering, not keeping up. Use `catch` to remain present.
+`history` is the only way to look back without changing what you have caught — remembering, not keeping up. Use `catch` to remain present.
 
 ```bash
 square history --grep 'migration'
+square history --all --full
 ```
 
-See `square history --help` for filters. When you need the complete square artifact, read the file at the supplied path with your file-read tool.
+See `square history --help` for filters. Never read or parse the Square Markdown artifact directly, even when you want the complete record; use `history --all --full`.
 
 ## Hold and step out
 
