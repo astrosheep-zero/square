@@ -72,8 +72,11 @@ export interface NotifyLease {
   expiresAt: number;
   phase: 'claimed' | 'dispatching';
   attemptN?: number;
+  obligationN?: number;
   routeKind?: WakeRouteKind;
 }
+
+export const MAX_WAKE_OBLIGATIONS = 3;
 
 export interface SquareRuntimeState {
   version: 2;

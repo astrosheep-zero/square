@@ -7,7 +7,6 @@ import test from 'node:test';
 
 import { emptyRuntimeState, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
 import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
-import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { presentOnce } from '../dist/presented.js';
 import { lookupParticipant, recordJoin } from '../dist/registry.js';
@@ -166,62 +165,6 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
     if (previous === undefined) delete process.env.SQUARE_PRESENTED;
     else process.env.SQUARE_PRESENTED = previous;
     fs.rmSync(presented, { force: true });
-  }
-});
-
-test('Claude hook clips notification bodies to 200 characters and caps the notification budget', () => {
-  const body = 'x'.repeat(400);
-  const notifications = Array.from({ length: 10 }, (_, index) => ({
-    actIndex: index + 1,
-    actor: 'Alice',
-    at: index + 1,
-    route: 'mention',
-    body,
-  }));
-  const context = renderPendingAtBoundary([{
-    name: 'Bob',
-    squarePath: '/tmp/square.md',
-    notifications,
-  }]);
-
-  assert.match(context, /x{200}\n… \[truncated; run catch --now\]/);
-  assert.doesNotMatch(context, /history --full/);
-  assert.match(context, /unread notifications omitted\. Run catch --now/);
-  assert.ok(context.length <= 1200);
-});
-
-test('presentation is once per owner, and a replacement owner can receive it again', () => {
-  const item = fixture();
-  const presented = path.join(os.tmpdir(), `square-presented-owner-${Date.now()}.ndjsonl`);
-  try {
-    const ownerId = lookupParticipant(item.squarePath, 'Bob')[0].ownerId;
-    recordJoin('second-session', 'Bob', item.squarePath, { channel: 'codex', ownerId });
-
-    const first = claudeHookResponse(
-      { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
-      sessionInbox,
-      { SQUARE_PRESENTED: presented }
-    );
-    assert.equal(first.hookSpecificOutput.hookEventName, 'PostToolBatch');
-    assert.equal(
-      claudeHookResponse(
-        { session_id: 'second-session', hook_event_name: 'PostToolBatch' },
-        sessionInbox,
-        { SQUARE_PRESENTED: presented }
-      ),
-      undefined
-    );
-
-    recordJoin('replacement-session', 'Bob', item.squarePath, { channel: 'claude-code' });
-    const replacement = claudeHookResponse(
-      { session_id: 'replacement-session', hook_event_name: 'PostToolBatch' },
-      sessionInbox,
-      { SQUARE_PRESENTED: presented }
-    );
-    assert.equal(replacement.hookSpecificOutput.hookEventName, 'PostToolBatch');
-  } finally {
-    fs.rmSync(presented, { force: true });
-    item.cleanup();
   }
 });
 

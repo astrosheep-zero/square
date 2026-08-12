@@ -149,13 +149,14 @@ test('package participant intents persist through the shared application pipelin
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
     await join(squarePath, 'Alice');
-    await express(squarePath, 'Alice', 'one', { force: true });
+    await express(squarePath, 'Alice', 'one', { force: true, requireAck: true });
     await hold(squarePath, 'Alice', 'pause');
     await resume(squarePath, 'Alice');
     await done(squarePath, 'Alice', 'complete');
     const persisted = loadSquare(squarePath);
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
     assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2, 3, 4]);
+    assert.equal(persisted.acts[1].requiresAck, true);
   } finally {
     if (previousDisableWake === undefined) delete process.env.SQUARE_DISABLE_PASEO_WAKE;
     else process.env.SQUARE_DISABLE_PASEO_WAKE = previousDisableWake;

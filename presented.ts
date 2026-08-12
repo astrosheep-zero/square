@@ -52,7 +52,7 @@ function readRows(filePath: string, now = Date.now()): PresentedRow[] {
       const parsed = JSON.parse(line) as Partial<PresentedRow>;
       if (
         parsed.v !== 2 ||
-        typeof parsed.ts !== 'number' ||
+        typeof parsed.ts !== 'number' || !Number.isFinite(parsed.ts) ||
         typeof parsed.owner_id !== 'string' ||
         typeof parsed.square_path !== 'string' ||
         typeof parsed.name !== 'string' ||
@@ -191,14 +191,26 @@ export function hasPresentedForOwner(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): boolean {
+  return presentedAtForOwner(ownerId, squarePath, name, actIndex, env, now) !== undefined;
+}
+
+export function presentedAtForOwner(
+  ownerId: string,
+  squarePath: string,
+  name: string,
+  actIndex: number,
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): number | undefined {
   const resolved = canonicalSquarePath(squarePath);
-  return readRows(presentedPath(env), now).some(
-    (row) =>
+  return readRows(presentedPath(env), now)
+    .filter((row) =>
       row.owner_id === ownerId &&
       canonicalSquarePath(row.square_path) === resolved &&
       sameName(row.name, name) &&
       row.act_index === actIndex
-  );
+    )
+    .reduce<number | undefined>((latest, row) => latest === undefined ? row.ts : Math.max(latest, row.ts), undefined);
 }
 
 /** True when any current participant owner has already received this attention. */
@@ -209,9 +221,23 @@ export function hasPresentedAttention(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): boolean {
+  return presentedAttentionAt(squarePath, name, actIndex, env, now) !== undefined;
+}
+
+/** Latest presentation carried by a current participant owner. */
+export function presentedAttentionAt(
+  squarePath: string,
+  name: string,
+  actIndex: number,
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): number | undefined {
   const ownerIds = new Set(lookupParticipant(squarePath, name, now).map((binding) => binding.ownerId));
-  if (ownerIds.size === 0) return false;
-  return [...ownerIds].some((ownerId) => hasPresentedForOwner(ownerId, squarePath, name, actIndex, env, now));
+  return [...ownerIds].reduce<number | undefined>((latest, ownerId) => {
+    const at = presentedAtForOwner(ownerId, squarePath, name, actIndex, env, now);
+    if (at === undefined) return latest;
+    return latest === undefined ? at : Math.max(latest, at);
+  }, undefined);
 }
 
 /**

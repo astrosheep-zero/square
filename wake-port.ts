@@ -44,8 +44,9 @@ export class WakePort {
     ownerIds: Set<string>,
     request: WakeRequest,
     hooks: WakePortHooks,
+    now: number,
   ): Promise<WakePortResult> {
-    for (const route of this.routes(ownerIds)) {
+    for (const route of this.routes(ownerIds, now)) {
       if (!hooks.canAttempt(route)) continue;
       const adapter = this.adapters.get(route.kind)!;
       const attemptN = hooks.nextAttemptN();

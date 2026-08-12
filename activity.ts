@@ -25,6 +25,7 @@ export interface ActivityOptions {
   noWait?: boolean;
   reach?: import('./model.js').Reach;
   reply?: number;
+  requireAck?: boolean;
 }
 
 function draftDirFor(squarePath: string): string {
@@ -105,6 +106,7 @@ export async function cmdActivity(
       now: nowMs(),
       ...(reach === undefined ? {} : { reach }),
       ...(opts.reply === undefined ? {} : { reply: opts.reply }),
+      ...(opts.requireAck === true ? { requiresAck: true as const } : {}),
     });
     const decision = committed.result;
     const freshDoc = loadSquare(squarePath);

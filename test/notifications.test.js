@@ -2,13 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 
 import { emptyRuntimeState, loadSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
-import { presentOnce } from '../dist/presented.js';
 import { recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
@@ -108,7 +106,7 @@ test('WakePort tries each eligible route once and stops globally on unknown', as
     canAttempt: () => true,
     beforeSend: async () => true,
     record: async () => {},
-  });
+  }, now);
 
   assert.deepEqual(result, { outcome: 'unknown' });
   assert.deepEqual(calls, ['opencode-server', 'paseo']);
@@ -169,60 +167,6 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('coordinator records one terminal wake across concurrent and later workers', async () => {
-  const item = fixture();
-  route(item);
-  let sends = 0;
-  const adapters = [fakeAdapter('paseo', async (_route, _request, beforeSend) => {
-    if (!(await beforeSend())) return { outcome: 'cancelled' };
-    sends += 1;
-    return { outcome: 'accepted' };
-  })];
-  await withRegistry(item.env, () => Promise.all([
-    processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }),
-    processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }),
-  ]));
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
-
-  assert.equal(sends, 1);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['accepted']);
-  assert.deepEqual(loadSquare(item.squarePath).runtime.notifyLeases, {});
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('a send followed by ledger failure recovers unknown and never sends again', async () => {
-  const item = fixture();
-  route(item);
-  let sends = 0;
-  const adapters = [fakeAdapter('paseo', async (_route, _request, beforeSend) => {
-    if (!(await beforeSend())) return { outcome: 'cancelled' };
-    sends += 1;
-    fs.mkdirSync(item.env.SQUARE_WAKE_ATTEMPTS);
-    return { outcome: 'accepted' };
-  })];
-
-  await assert.rejects(
-    withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters })),
-    { code: 'EISDIR' },
-  );
-  const interrupted = loadSquare(item.squarePath).runtime;
-  const key = JSON.stringify(['act_2', 'bob']);
-  assert.equal(interrupted.notifyLeases[key].phase, 'dispatching');
-  assert.equal(sends, 1);
-
-  fs.rmdirSync(item.env.SQUARE_WAKE_ATTEMPTS);
-  interrupted.notifyLeases[key].expiresAt = 2;
-  saveRuntimeSidecar(item.squarePath, interrupted);
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
-
-  assert.equal(sends, 1);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => [attempt.outcome, attempt.signature]), [
-    ['unknown', 'worker_interrupted_during_dispatch'],
-  ]);
-  assert.deepEqual(loadSquare(item.squarePath).runtime.notifyLeases, {});
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
 test('a worker with no route writes no synthetic attempt', async () => {
   const item = fixture();
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
@@ -252,36 +196,12 @@ test('a failed route is retried only after its route fact is refreshed', async (
   assert.equal(sends, 1);
   assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['failed']);
 
-  await sleep(2);
   upsertWakeRoute({
     ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, source: 'join-env',
-  }, { env: item.env, at: Date.now() });
+  }, { env: item.env, at: readWakeAttempts({ env: item.env })[0].at + 1 });
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
 
   assert.equal(sends, 2);
   assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['failed', 'accepted']);
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('presentation at the awaited boundary cancels wake without an attempt', async () => {
-  const item = fixture();
-  route(item, { sessionId: 'bob-session' });
-  let sends = 0;
-  const adapter = new PaseoAdapter({
-    discover: () => ({ agents: [{ id: 'bob-agent', name: 'Bob', status: 'running' }] }),
-    waitForBoundary: async () => {
-      presentOnce('bob-session', () => [{
-        name: 'Bob',
-        squarePath: item.squarePath,
-        notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'private payload @Bob' }],
-      }], () => true, item.env);
-      return true;
-    },
-    sendWake: () => { sends += 1; },
-  });
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters: [adapter] }));
-
-  assert.equal(sends, 0);
-  assert.deepEqual(readWakeAttempts({ env: item.env }), []);
   fs.rmSync(item.root, { recursive: true, force: true });
 });

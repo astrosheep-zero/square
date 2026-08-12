@@ -1,14 +1,14 @@
 import { loadSquare } from './artifact.js';
 import { deriveDeliveryModel, wakeGraceMs, type DirectedNotificationRoute } from './delivery.js';
-import { hasPresentedAttention } from './presented.js';
+import { presentedAttentionAt } from './presented.js';
 import { lookupParticipant } from './registry.js';
 import { readWakeRoutes } from './routes.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { formatDuration } from './time.js';
 import {
+  deriveWakeObligation,
   hasAttemptableWakeRoute,
   readWakeAttempts,
-  terminalWakeEvidence,
   type WakeAttempt,
 } from './wake-attempts.js';
 import { IMPLEMENTED_WAKE_ROUTE_KINDS } from './wake-port.js';
@@ -18,7 +18,8 @@ export type DeliveryHealthKind =
   | 'wake-accepted'
   | 'wake-unknown'
   | 'presented-not-delivered'
-  | 'unreachable';
+  | 'unreachable'
+  | 'unacknowledged';
 
 export interface DeliveryHealthItem {
   squarePath: string;
@@ -38,9 +39,10 @@ const DISPLAY_ORDER: readonly DeliveryHealthKind[] = [
   'wake-unknown',
   'presented-not-delivered',
   'unreachable',
+  'unacknowledged',
 ];
 
-const ACTIONABLE = new Set<DeliveryHealthKind>(['wake-unknown', 'unreachable']);
+const ACTIONABLE = new Set<DeliveryHealthKind>(['wake-unknown', 'unreachable', 'unacknowledged']);
 
 function currentWakeRoutes(
   squarePath: string,
@@ -71,20 +73,34 @@ export function classifyDeliveryHealth(
   return recipients.flatMap((recipient) => model.pendingFor(recipient).map((note) => {
     const attention = { squarePath, actIndex: note.item.index, recipient: note.recipient };
     const ageMs = Math.max(0, now - note.item.at);
-    const presented = hasPresentedAttention(squarePath, note.recipient, note.item.index, env, now);
+    const presentedAt = presentedAttentionAt(squarePath, note.recipient, note.item.index, env, now);
     const attempts = readWakeAttempts({ attention, env, now });
-    const terminal = terminalWakeEvidence(attempts);
+    const obligation = deriveWakeObligation(
+      note.item.kind === 'say' && note.item.requiresAck === true,
+      attempts,
+      now,
+      presentedAt,
+    );
     const routes = currentWakeRoutes(squarePath, note.recipient, now, env);
-    const kind: DeliveryHealthKind = presented
-      ? 'presented-not-delivered'
-      : terminal?.outcome === 'accepted'
-        ? 'wake-accepted'
-        : terminal?.outcome === 'unknown'
+    const hasAttemptableRoute = obligation.type === 'open'
+      && hasAttemptableWakeRoute(routes, attempts, obligation.obligationN);
+    const kind: DeliveryHealthKind = obligation.type === 'exhausted'
+      ? 'unacknowledged'
+      : presentedAt !== undefined
+          || (obligation.type === 'stopped' && obligation.reason === 'presented')
+          ? 'presented-not-delivered'
+        : obligation.type === 'stopped' && obligation.reason === 'unknown'
           ? 'wake-unknown'
-          : ageMs > wakeGraceMs(env) && !hasAttemptableWakeRoute(routes, attempts)
+          : obligation.type === 'waiting' || (obligation.type === 'stopped' && obligation.reason === 'accepted')
+            ? 'wake-accepted'
+          : ageMs > wakeGraceMs(env) && !hasAttemptableRoute
             ? 'unreachable'
             : 'awaiting';
-    const attempt = terminal ?? attempts.at(-1);
+    const attempt = obligation.type === 'stopped'
+      ? obligation.attempt
+      : obligation.type === 'waiting' || obligation.type === 'exhausted'
+        ? obligation.evidence.kind === 'accepted' ? obligation.evidence.attempt : attempts.at(-1)
+        : attempts.at(-1);
     return {
       squarePath,
       recipient: note.recipient,

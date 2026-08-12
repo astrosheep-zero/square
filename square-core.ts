@@ -11,7 +11,7 @@ export interface Hold {
 export type Act =
   | { kind: 'join'; actor: Participant; at?: number }
   | { kind: 'done'; actor: Participant; at?: number; body?: string }
-  | { kind: 'say'; actor: Participant; at?: number; body: string; reach?: Reach; reply?: number }
+  | { kind: 'say'; actor: Participant; at?: number; body: string; reach?: Reach; reply?: number; requiresAck?: true }
   | { kind: 'hold'; actor?: Participant; at?: number; body?: string }
   | { kind: 'resume'; actor?: Participant; at?: number }
   | { kind: 'read'; actor: Participant; at?: number; through: number };

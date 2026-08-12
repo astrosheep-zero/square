@@ -52,6 +52,7 @@ interface ActivityIntent {
   noWait: boolean;
   reach?: Reach;
   reply?: number;
+  requireAck: boolean;
 }
 
 interface BodyIntent {
@@ -171,6 +172,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   let beside: string | undefined;
   let bell = false;
   let reply: number | undefined;
+  let requireAck = false;
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -180,6 +182,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
       beside = requireValue(argv, index, argument);
       index += 1;
     } else if (argument === '--bell') bell = true;
+    else if (argument === '--require-ack') requireAck = true;
     else if (argument === '--reply') {
       const value = requireValue(argv, index, argument).trim().match(/^(?:act_)?(\d+)$/i);
       if (!value || !Number.isSafeInteger(Number(value[1]))) fail('Invalid --reply: expected an activity id like act_12 or 12.');
@@ -193,11 +196,11 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
       const piped = readPipedBodyFallback();
-      if (piped !== undefined) return { name: requireParticipant(context.name), activity: piped, force, noWait, reach, reply };
+      if (piped !== undefined) return { name: requireParticipant(context.name), activity: piped, force, noWait, reach, reply, requireAck };
     }
     fail("express requires a body argument (a quoted string or '-' with piped stdin)");
   }
-  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, reach, reply };
+  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, reach, reply, requireAck };
 }
 
 export const expressCommand: CommandSpec<ActivityIntent> = {
@@ -209,7 +212,8 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       noWait: intent.noWait,
       reach: intent.reach,
       reply: intent.reply,
-      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply act_${intent.reply}`} -`,
+      requireAck: intent.requireAck,
+      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply act_${intent.reply}`}${intent.requireAck ? ' --require-ack' : ''} -`,
     });
   },
   present: () => {},

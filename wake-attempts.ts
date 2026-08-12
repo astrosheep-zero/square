@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { nameKey, type NotifyLease } from './model.js';
+import { MAX_WAKE_OBLIGATIONS, nameKey, type NotifyLease } from './model.js';
 import { canonicalSquarePath } from './registry.js';
 import { isWakeRouteKind, type WakeRoute, type WakeRouteKind } from './routes.js';
 
@@ -21,6 +21,7 @@ export interface WakeAttempt {
   outcome: WakeOutcome;
   signature?: string;
   attemptN: number;
+  obligationN: number;
   message?: string;
   diagnostic?: unknown;
 }
@@ -33,6 +34,7 @@ interface WakeAttemptRow {
   outcome: WakeOutcome;
   signature?: string;
   attempt_n: number;
+  obligation_n: number;
   message?: string;
   diagnostic?: unknown;
 }
@@ -40,6 +42,8 @@ interface WakeAttemptRow {
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5 * 60 * 1000;
 const VALID_OUTCOMES = new Set<WakeOutcome>(['accepted', 'unknown', 'failed']);
+export const WAKE_ACK_ESCALATION_MS = 10 * 60 * 1000;
+export { MAX_WAKE_OBLIGATIONS } from './model.js';
 const lockWait = new Int32Array(new SharedArrayBuffer(4));
 
 export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -62,6 +66,7 @@ function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
     typeof row.attention.recipient !== 'string' || row.attention.recipient === '' ||
     typeof row.outcome !== 'string' || !VALID_OUTCOMES.has(row.outcome as WakeOutcome) ||
     typeof row.attempt_n !== 'number' || !Number.isInteger(row.attempt_n) || row.attempt_n <= 0 ||
+    typeof row.obligation_n !== 'number' || !Number.isInteger(row.obligation_n) || row.obligation_n <= 0 || row.obligation_n > MAX_WAKE_OBLIGATIONS ||
     !isWakeRouteKind(row.route_kind) ||
     (row.signature !== undefined && typeof row.signature !== 'string') ||
     (row.outcome !== 'accepted' && (typeof row.signature !== 'string' || row.signature === '')) ||
@@ -92,6 +97,7 @@ function fromRow(row: WakeAttemptRow): WakeAttempt {
     outcome: row.outcome,
     ...(row.signature === undefined ? {} : { signature: row.signature }),
     attemptN: row.attempt_n,
+    obligationN: row.obligation_n,
     ...(row.message === undefined ? {} : { message: row.message }),
     ...(row.diagnostic === undefined ? {} : { diagnostic: row.diagnostic }),
   };
@@ -107,33 +113,109 @@ export function readWakeAttempts(
     .filter((attempt) => expected === undefined || wakeAttentionKey(attempt.attention) === expected);
 }
 
-export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined {
-  return attempts.findLast((attempt) => attempt.outcome === 'accepted' || attempt.outcome === 'unknown');
+export type WakeInformedness =
+  | { kind: 'accepted'; at: number; attempt: WakeAttempt }
+  | { kind: 'presented'; at: number };
+
+export type WakeObligationState =
+  | { type: 'open'; obligationN: number }
+  | { type: 'waiting'; evidence: WakeInformedness; opensAt: number }
+  | { type: 'stopped'; reason: 'accepted' | 'unknown' | 'presented'; attempt?: WakeAttempt; evidence?: WakeInformedness }
+  | { type: 'exhausted'; evidence: WakeInformedness; exhaustedAt: number };
+
+export function terminalWakeEvidence(
+  attempts: readonly WakeAttempt[],
+  obligationN: number,
+): WakeAttempt | undefined {
+  return attempts.reduce<WakeAttempt | undefined>((latest, attempt) => {
+    if (attempt.obligationN !== obligationN || (attempt.outcome !== 'accepted' && attempt.outcome !== 'unknown')) {
+      return latest;
+    }
+    return latest === undefined || attempt.at > latest.at ? attempt : latest;
+  }, undefined);
 }
 
-export function terminalWakeAttempt(
-  attention: WakeAttention,
-  opts: { now?: number; env?: NodeJS.ProcessEnv } = {}
-): WakeAttempt | undefined {
-  return terminalWakeEvidence(readWakeAttempts({ attention, ...opts }));
+export function deriveWakeObligation(
+  requiresAck: boolean,
+  attempts: readonly WakeAttempt[],
+  now: number,
+  presentedAt?: number,
+): WakeObligationState {
+  const unknown = attempts.findLast((attempt) => attempt.outcome === 'unknown');
+  const accepted = attempts.filter((attempt) => attempt.outcome === 'accepted');
+  const latestAccepted = accepted.reduce<WakeAttempt | undefined>(
+    (latest, attempt) => latest === undefined || attempt.at > latest.at ? attempt : latest,
+    undefined,
+  );
+  const acceptedEvidence: WakeInformedness | undefined = latestAccepted === undefined
+    ? undefined
+    : { kind: 'accepted', at: latestAccepted.at, attempt: latestAccepted };
+  const presentedEvidence: WakeInformedness | undefined = presentedAt === undefined
+    ? undefined
+    : { kind: 'presented', at: presentedAt };
+  const informedness = acceptedEvidence === undefined
+    ? presentedEvidence
+    : presentedEvidence === undefined || acceptedEvidence.at >= presentedEvidence.at
+      ? acceptedEvidence
+      : presentedEvidence;
+
+  if (!requiresAck) {
+    if (presentedEvidence !== undefined) return { type: 'stopped', reason: 'presented', evidence: presentedEvidence };
+    if (unknown !== undefined) return { type: 'stopped', reason: 'unknown', attempt: unknown };
+    return latestAccepted === undefined
+      ? { type: 'open', obligationN: 1 }
+      : { type: 'stopped', reason: 'accepted', attempt: latestAccepted, evidence: acceptedEvidence };
+  }
+
+  if (informedness === undefined) {
+    return unknown === undefined
+      ? { type: 'open', obligationN: 1 }
+      : { type: 'stopped', reason: 'unknown', attempt: unknown };
+  }
+
+  const opensAt = informedness.at + WAKE_ACK_ESCALATION_MS;
+  const windowElapsed = now > opensAt;
+  const acceptedObligations = new Set(accepted.map((attempt) => attempt.obligationN));
+  if (unknown !== undefined) {
+    return windowElapsed
+      ? { type: 'exhausted', evidence: informedness, exhaustedAt: opensAt }
+      : { type: 'stopped', reason: 'unknown', attempt: unknown, evidence: informedness };
+  }
+  if (presentedEvidence !== undefined) {
+    return windowElapsed
+      ? { type: 'exhausted', evidence: informedness, exhaustedAt: opensAt }
+      : { type: 'waiting', evidence: informedness, opensAt };
+  }
+  if (!windowElapsed) {
+    return { type: 'waiting', evidence: informedness, opensAt };
+  }
+  return acceptedObligations.size < MAX_WAKE_OBLIGATIONS
+    ? { type: 'open', obligationN: acceptedObligations.size + 1 }
+    : { type: 'exhausted', evidence: informedness, exhaustedAt: opensAt };
 }
 
 export function isWakeRouteAttemptable(
   route: Pick<WakeRoute, 'kind' | 'updatedAt'>,
   attempts: readonly WakeAttempt[],
+  obligationN: number,
 ): boolean {
-  if (terminalWakeEvidence(attempts) !== undefined) return false;
-  const failed = attempts.findLast(
-    (attempt) => attempt.routeKind === route.kind && attempt.outcome === 'failed',
-  );
+  if (attempts.some((attempt) => attempt.outcome === 'unknown')) return false;
+  if (terminalWakeEvidence(attempts, obligationN) !== undefined) return false;
+  const failed = attempts.reduce<WakeAttempt | undefined>((latest, attempt) => {
+    if (attempt.obligationN !== obligationN || attempt.routeKind !== route.kind || attempt.outcome !== 'failed') {
+      return latest;
+    }
+    return latest === undefined || attempt.at > latest.at ? attempt : latest;
+  }, undefined);
   return failed === undefined || route.updatedAt > failed.at;
 }
 
 export function hasAttemptableWakeRoute(
   routes: readonly Pick<WakeRoute, 'kind' | 'updatedAt'>[],
   attempts: readonly WakeAttempt[],
+  obligationN: number,
 ): boolean {
-  return routes.some((route) => isWakeRouteAttemptable(route, attempts));
+  return routes.some((route) => isWakeRouteAttemptable(route, attempts, obligationN));
 }
 
 export function nextWakeAttemptNumber(
@@ -192,6 +274,7 @@ function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
     outcome: safe.outcome,
     ...(safe.signature === undefined ? {} : { signature: safe.signature }),
     attempt_n: safe.attemptN,
+    obligation_n: safe.obligationN,
     ...(safe.message === undefined ? {} : { message: safe.message }),
     ...(safe.diagnostic === undefined ? {} : { diagnostic: safe.diagnostic }),
   };
@@ -203,6 +286,9 @@ export function recordWakeAttempt(
 ): WakeAttempt {
   const value = { ...attempt, at: attempt.at ?? Date.now() } as WakeAttempt;
   if (!isWakeRouteKind(value.routeKind)) throw new Error('Wake attempts require a real adapter route kind.');
+  if (!Number.isInteger(value.obligationN) || value.obligationN <= 0 || value.obligationN > MAX_WAKE_OBLIGATIONS) {
+    throw new Error(`Wake attempts require obligationN between 1 and ${MAX_WAKE_OBLIGATIONS}.`);
+  }
   if (value.outcome !== 'accepted' && !value.signature) {
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
@@ -213,15 +299,22 @@ export function recordWakeAttempt(
 
 export function recordRecoveredUnknown(
   attention: WakeAttention,
-  lease: Pick<NotifyLease, 'attemptN' | 'routeKind'>,
+  lease: Pick<NotifyLease, 'attemptN' | 'obligationN' | 'routeKind'>,
   env: NodeJS.ProcessEnv = process.env,
   at = Date.now()
 ): WakeAttempt | undefined {
   const routeKind = lease.routeKind;
   if (lease.attemptN === undefined || !isWakeRouteKind(routeKind)) return undefined;
+  const obligationN = lease.obligationN;
+  if (obligationN === undefined) return undefined;
   const file = wakeAttemptsPath(env);
   return withLedgerLock(file, () => {
-    const terminal = terminalWakeAttempt(attention, { now: at, env });
+    const attempts = readRows(env, at).map(fromRow).filter(
+      (attempt) => wakeAttentionKey(attempt.attention) === wakeAttentionKey(attention),
+    );
+    const unknown = attempts.findLast((attempt) => attempt.outcome === 'unknown');
+    if (unknown !== undefined) return unknown;
+    const terminal = terminalWakeEvidence(attempts, obligationN);
     if (terminal !== undefined) return terminal;
     const value: WakeAttempt = {
       at,
@@ -230,6 +323,7 @@ export function recordRecoveredUnknown(
       outcome: 'unknown',
       signature: 'worker_interrupted_during_dispatch',
       attemptN: lease.attemptN!,
+      obligationN,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
     fs.appendFileSync(file, `${JSON.stringify(toRow(value, env))}\n`, { mode: 0o600 });

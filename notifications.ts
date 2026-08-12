@@ -10,7 +10,7 @@ import {
   planActNotifications,
   type WakeAdapter,
 } from './delivery.js';
-import { hasPresentedAttention } from './presented.js';
+import { hasPresentedAttention, presentedAttentionAt } from './presented.js';
 import { nameKey, SquareError, type NotifyLease } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
@@ -18,12 +18,12 @@ import { lookupParticipant } from './registry.js';
 import type { WakeRouteKind } from './routes.js';
 import { execute } from './square-application.js';
 import {
+  deriveWakeObligation,
   isWakeRouteAttemptable,
   nextWakeAttemptNumber,
   readWakeAttempts,
   recordRecoveredUnknown,
   recordWakeAttempt,
-  terminalWakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
 import { WakePort } from './wake-port.js';
@@ -65,6 +65,7 @@ export async function waitForDeliveredNotification(squarePath: string, name: str
 interface ProcessNotificationOptions {
   adapters?: WakeAdapter[];
   env?: NodeJS.ProcessEnv;
+  now?: () => number;
 }
 
 function notifyLeaseKey(recipient: string, actIndex: number): string {
@@ -95,7 +96,8 @@ async function transitionNotifyLease(
   leaseId: string,
   phase: 'claimed' | 'dispatching',
   routeKind?: WakeRouteKind,
-  attemptN?: number
+  attemptN?: number,
+  obligationN?: number,
 ): Promise<boolean> {
   const at = Date.now();
   const committed = await execute<{ updated: boolean }>(squarePath, {
@@ -106,6 +108,7 @@ async function transitionNotifyLease(
     phase,
     ...(routeKind === undefined ? {} : { routeKind }),
     ...(attemptN === undefined ? {} : { attemptN }),
+    ...(obligationN === undefined ? {} : { obligationN }),
   });
   return committed.result.updated;
 }
@@ -124,13 +127,22 @@ async function processNotification(
   opts: ProcessNotificationOptions
 ): Promise<void> {
   const env = opts.env ?? process.env;
+  const now = opts.now ?? Date.now;
   const attention: WakeAttention = {
     squarePath,
     actIndex: notification.item.index,
     recipient: notification.recipient,
   };
-  if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) return;
-  if (terminalWakeAttempt(attention, { env }) !== undefined) return;
+  const requiresAck = notification.item.kind === 'say' && notification.item.requiresAck === true;
+  if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
+  const initialAt = now();
+  const initialObligation = deriveWakeObligation(
+    requiresAck,
+    readWakeAttempts({ attention, env, now: initialAt }),
+    initialAt,
+    presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, initialAt),
+  );
+  if (initialObligation.type !== 'open') return;
 
   const claim = await claimNotifyLease(squarePath, notification.recipient, notification.item.index);
   if (claim.type === 'busy') return;
@@ -145,9 +157,19 @@ async function processNotification(
   const { leaseId } = claim;
   let releaseLease = true;
   try {
-    if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) return;
-    if (terminalWakeAttempt(attention, { env }) !== undefined) return;
-    const owners = new Set(lookupParticipant(squarePath, notification.recipient).map((binding) => binding.ownerId));
+    if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
+    const obligationAt = now();
+    const obligation = deriveWakeObligation(
+      requiresAck,
+      readWakeAttempts({ attention, env, now: obligationAt }),
+      obligationAt,
+      presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, obligationAt),
+    );
+    if (obligation.type !== 'open') return;
+    const obligationN = obligation.obligationN;
+    const owners = new Set(
+      lookupParticipant(squarePath, notification.recipient, obligationAt).map((binding) => binding.ownerId),
+    );
     const port = new WakePort(opts.adapters ?? [new PaseoAdapter()], env);
     await port.dispatch(
       owners,
@@ -159,15 +181,22 @@ async function processNotification(
         route: notification.route,
       },
       {
-        nextAttemptN: () => nextWakeAttemptNumber(attention, { env }),
+        nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
         canAttempt: (route) => isWakeRouteAttemptable(
           route,
-          readWakeAttempts({ attention, env }),
+          readWakeAttempts({ attention, env, now: now() }),
+          obligationN,
         ),
         beforeSend: async (route, attemptN) => {
-          if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) {
-            return false;
-          }
+          if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return false;
+          const currentAt = now();
+          const current = deriveWakeObligation(
+            requiresAck,
+            readWakeAttempts({ attention, env, now: currentAt }),
+            currentAt,
+            presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, currentAt),
+          );
+          if (current.type !== 'open' || current.obligationN !== obligationN) return false;
           const dispatching = await transitionNotifyLease(
             squarePath,
             notification.recipient,
@@ -176,6 +205,7 @@ async function processNotification(
             'dispatching',
             route.kind,
             attemptN,
+            obligationN,
           );
           if (dispatching) releaseLease = false;
           return dispatching;
@@ -190,6 +220,8 @@ async function processNotification(
             routeKind: route.kind,
             outcome: outcome.outcome,
             attemptN,
+            obligationN,
+            at: now(),
             ...('signature' in outcome ? { signature: outcome.signature } : {}),
             ...('message' in outcome ? { message: outcome.message } : {}),
             ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
@@ -197,6 +229,7 @@ async function processNotification(
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
       },
+      obligationAt,
     );
   } finally {
     if (releaseLease) {

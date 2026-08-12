@@ -47,6 +47,7 @@ export interface ParticipantPresence {
 export interface ExpressOptions {
   force?: boolean;
   reply?: ActRef;
+  requireAck?: boolean;
 }
 
 function actRefIndex(ref: ActRef): number {
@@ -115,6 +116,7 @@ export async function express(squarePath: string, name: string, body: string, op
     force: opts.force ?? false,
     now: Date.now(),
     ...(opts.reply === undefined ? {} : { reply: actRefIndex(opts.reply) }),
+    ...(opts.requireAck === true ? { requiresAck: true as const } : {}),
   });
   if (committed.result.type !== 'sent') throw new Error(`Activity rejected: ${committed.result.type}`);
 }
