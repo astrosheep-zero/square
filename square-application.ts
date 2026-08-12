@@ -21,7 +21,7 @@ export interface CommitPlan<Result> {
 
 export type Intent =
   | { type: 'join'; name: string; now: number }
-  | { type: 'say'; name: string; body: string; force: boolean; now: number; reach?: Reach }
+  | { type: 'say'; name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
   | { type: 'hold'; actor: string; body: string; now: number }
   | { type: 'resume'; actor: string; now: number }
   | { type: 'done'; name: string; body: string; now: number }

@@ -214,7 +214,8 @@ export function renderEventCli(
         mention !== undefined && extractMentions(event.body).some((name) => sameName(name, mention))
           ? ` · calls your name across the square — @${mention}`
           : '';
-      return `● ${event.actor} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${bodySuffix(body)}`;
+      const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
+      return `● ${event.actor} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}${bodySuffix(body)}`;
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);

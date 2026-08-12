@@ -51,6 +51,7 @@ interface ActivityIntent {
   force: boolean;
   noWait: boolean;
   reach?: Reach;
+  reply?: number;
 }
 
 interface BodyIntent {
@@ -169,6 +170,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   let noWait = false;
   let beside: string | undefined;
   let bell = false;
+  let reply: number | undefined;
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -178,6 +180,12 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
       beside = requireValue(argv, index, argument);
       index += 1;
     } else if (argument === '--bell') bell = true;
+    else if (argument === '--reply') {
+      const value = requireValue(argv, index, argument).trim().match(/^(?:act_)?(\d+)$/i);
+      if (!value || !Number.isSafeInteger(Number(value[1]))) fail('Invalid --reply: expected an activity id like act_12 or 12.');
+      reply = Number(value[1]);
+      index += 1;
+    }
     else bodyArgs.push(argument);
   }
   if (bell && beside !== undefined) fail('Invalid express options: --beside and --bell are mutually exclusive.');
@@ -185,11 +193,11 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
       const piped = readPipedBodyFallback();
-      if (piped !== undefined) return { name: requireParticipant(context.name), activity: piped, force, noWait, reach };
+      if (piped !== undefined) return { name: requireParticipant(context.name), activity: piped, force, noWait, reach, reply };
     }
     fail("express requires a body argument (a quoted string or '-' with piped stdin)");
   }
-  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, reach };
+  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, reach, reply };
 }
 
 export const expressCommand: CommandSpec<ActivityIntent> = {
@@ -200,7 +208,8 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       force: intent.force,
       noWait: intent.noWait,
       reach: intent.reach,
-      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg} -`,
+      reply: intent.reply,
+      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply act_${intent.reply}`} -`,
     });
   },
   present: () => {},

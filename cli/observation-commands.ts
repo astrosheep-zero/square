@@ -255,6 +255,7 @@ function renderFields(doc: ReturnType<typeof loadSquare>, item: import('../model
       case 'kind': return item.kind;
       case 'body': return 'body' in item && typeof item.body === 'string' ? item.body.replace(/\s+/g, ' ').trim() : '';
       case 'number': return item.kind === 'say' ? String(sayNumberFor(doc.acts, item)) : '';
+      case 'reply': return item.kind === 'say' && item.reply !== undefined ? actId(item.reply) : '';
       default: return '';
     }
   }).join('\t');
@@ -272,6 +273,7 @@ function jsonLine(doc: ReturnType<typeof loadSquare>, item: import('../model.js'
     body: 'body' in act && typeof act.body === 'string' ? act.body : '',
     number: act.kind === 'say' ? sayNumberFor(doc.acts, act) : null,
     reach: act.kind === 'say' ? act.reach ?? null : null,
+    reply: act.kind === 'say' && act.reply !== undefined ? actId(act.reply) : null,
   });
 }
 

@@ -207,19 +207,20 @@ test('reach persists only for beside and bell, and old v3 without reach still pa
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
       { kind: 'say', actor: 'Alice', at: 3, body: 'center' },
       { kind: 'say', actor: 'Alice', at: 4, body: 'aside', reach: { beside: 'Bob' } },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'bell', reach: 'bell' },
+      { kind: 'say', actor: 'Alice', at: 5, body: 'bell', reach: 'bell', reply: 2 },
     ],
   });
 
   const rendered = renderSquareDoc(doc);
   assert.match(rendered, /<!-- square:act \{"index":2,"kind":"say","actor":"Alice","at":3\} -->/);
   assert.match(rendered, /<!-- square:act \{"index":3,"kind":"say","actor":"Alice","at":4,"reach":\{"beside":"Bob"\}\} -->/);
-  assert.match(rendered, /<!-- square:act \{"index":4,"kind":"say","actor":"Alice","at":5,"reach":"bell"\} -->/);
+  assert.match(rendered, /<!-- square:act \{"index":4,"kind":"say","actor":"Alice","at":5,"reach":"bell","reply":2\} -->/);
 
   const parsed = parseSquare(rendered);
   assert.equal(parsed.acts[2].reach, undefined);
   assert.deepEqual(parsed.acts[3].reach, { beside: 'Bob' });
   assert.equal(parsed.acts[4].reach, 'bell');
+  assert.equal(parsed.acts[4].reply, 2);
 
   const oldV3 = rendered.replace(/,"reach":\{"beside":"Bob"\}/, '').replace(/,"reach":"bell"/, '');
   const parsedOld = parseSquare(oldV3);

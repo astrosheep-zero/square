@@ -26,9 +26,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --last <N>  Show the last N public activities (default 10).', '  --all       Show the complete history.'],
   },
   {
-    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--beside <name> | --bell] <activity | ->', usesSquare: true, group: 'participant',
+    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--beside <name> | --bell] [--reply <act_N>] <activity | ->', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
-    details: ['Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --beside <name>   Speak aside to one participant.', "  --bell            Call every participant's attention to this activity."],
+    details: ['Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --beside <name>   Speak aside to one participant.', "  --bell            Call every participant's attention to this activity.", '  --reply <act_N>   Mark this activity as a reply to an earlier activity.'],
   },
   {
     names: ['catch'], usage: '--as <name> catch (--now | --idle <duration>) [--from <names>] [--mention [name]] [--replace]', usesSquare: true, group: 'participant',

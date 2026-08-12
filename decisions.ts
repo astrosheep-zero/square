@@ -94,19 +94,25 @@ const UNREAD_PREVIEW_LIMIT = 3;
 
 export function decideAct(
   doc: SquareDoc,
-  input: { name: string; body: string; force: boolean; now: number; reach?: Reach }
+  input: { name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
 ): ActDecision {
   const { now, force } = input;
   const name = resolveKnownName(doc, input.name);
   const body = input.body;
   if (body.trim() === '') throw new SquareError('invalid_args', 'express body cannot be empty');
   const reach = input.reach;
+  const reply = input.reply;
+  if (reply !== undefined) {
+    if (!Number.isSafeInteger(reply) || reply < 0 || reply >= doc.runtime.nextActIndex) {
+      throw new SquareError('invalid_args', `Unknown reply activity: act_${reply}`);
+    }
+  }
 
   const state = foldedState(doc);
   const current = participantState(state, name);
   const result = validate(
     state,
-    { kind: 'say', actor: name, at: now, body, ...(reach !== undefined ? { reach } : {}) },
+    { kind: 'say', actor: name, at: now, body, ...(reach !== undefined ? { reach } : {}), ...(reply !== undefined ? { reply } : {}) },
     { hardCap: doc.hardCap, throttlePerMinute: doc.throttlePerMinute, throttleWindowMs: THROTTLE_WINDOW_MS }
   );
   if (!result.ok) {
@@ -162,7 +168,7 @@ export function decideAct(
   const ownActCount = (current?.activityCount ?? 0) + 1;
   return {
     type: 'sent',
-    act: { kind: 'say', actor: name, at: now, body, ...(reach !== undefined ? { reach } : {}) },
+    act: { kind: 'say', actor: name, at: now, body, ...(reach !== undefined ? { reach } : {}), ...(reply !== undefined ? { reply } : {}) },
     confirmation: `● heads turn your way — #${ownActCount}`,
     ownActCount,
     pendingPublic: unreadPublic,

@@ -103,7 +103,7 @@ test('a participant cursor advances to the newest self activity and never reuses
   fs.rmSync(path.dirname(file), { recursive: true, force: true });
 });
 
-test('a valid expression emits the caller as actor and preserves its body and reach', () => {
+test('a valid expression emits the caller as actor and preserves its body, reach, and reply', () => {
   const doc = makeDoc({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
@@ -121,6 +121,7 @@ test('a valid expression emits the caller as actor and preserves its body and re
     name: 'Alice',
     body: 'hi @Bob',
     reach: { beside: 'Bob' },
+    reply: 1,
     force: true,
     now: 3,
   });
@@ -128,8 +129,16 @@ test('a valid expression emits the caller as actor and preserves its body and re
   assert.equal(decision.type, 'sent');
   if (decision.type === 'sent') {
     assert.deepEqual(
-      { kind: decision.act.kind, actor: decision.act.actor, body: decision.act.body, reach: decision.act.reach },
-      { kind: 'say', actor: 'Alice', body: 'hi @Bob', reach: { beside: 'Bob' } }
+      { kind: decision.act.kind, actor: decision.act.actor, body: decision.act.body, reach: decision.act.reach, reply: decision.act.reply },
+      { kind: 'say', actor: 'Alice', body: 'hi @Bob', reach: { beside: 'Bob' }, reply: 1 }
     );
   }
+});
+
+test('reply rejects an activity id that has not landed yet', () => {
+  const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
+  assert.throws(
+    () => decideAct(doc, { name: 'Alice', body: 'late answer', force: true, now: 2, reply: 9 }),
+    /Unknown reply activity: act_9/
+  );
 });

@@ -63,6 +63,7 @@ function renderActMarker(act: StoredAct): string {
     actor: act.actor,
     at: act.at,
     ...(act.kind === 'say' && act.reach !== undefined ? { reach: act.reach } : {}),
+    ...(act.kind === 'say' && act.reply !== undefined ? { reply: act.reply } : {}),
   };
   return `${ACT_MARKER_PREFIX} ${JSON.stringify(marker)} -->`;
 }
@@ -402,6 +403,7 @@ export interface ParsedActMarker {
   actor?: string;
   at?: number;
   reach?: Reach;
+  reply?: number;
 }
 
 function parseReach(value: unknown): Reach | undefined {
@@ -432,10 +434,18 @@ export function parseActMarker(line: string | undefined): ParsedActMarker | null
     ...(typeof parsed.actor === 'string' ? { actor: parsed.actor } : {}),
     ...(typeof parsed.at === 'number' && Number.isFinite(parsed.at) ? { at: parsed.at } : {}),
     ...(parsed.reach !== undefined ? { reach: parseReach(parsed.reach) } : {}),
+    ...(parsed.reply !== undefined ? { reply: parseReply(parsed.reply) } : {}),
   };
 }
 
-function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, head: StoredActHead): { index: number; reach?: Reach } {
+function parseReply(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new SquareError('invalid_args', 'Invalid square: malformed act reply metadata.');
+  }
+  return value;
+}
+
+function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, head: StoredActHead): { index: number; reach?: Reach; reply?: number } {
   if (marker.kind === undefined || marker.actor === undefined) {
     throw new SquareError('invalid_args', 'Invalid square: act marker is missing kind/actor metadata.');
   }
@@ -451,7 +461,10 @@ function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, 
   if (marker.at !== head.at) {
     throw new SquareError('invalid_args', `Invalid square: act marker timestamp does not match ${kind} ${actor}.`);
   }
-  return { index: marker.index, ...(marker.reach !== undefined ? { reach: marker.reach } : {}) };
+  if (marker.reply !== undefined && kind !== 'say') {
+    throw new SquareError('invalid_args', 'Invalid square: only say acts may reply to another activity.');
+  }
+  return { index: marker.index, ...(marker.reach !== undefined ? { reach: marker.reach } : {}), ...(marker.reply !== undefined ? { reply: marker.reply } : {}) };
 }
 
 export function activitiesSourceLines(text: string): string[] {
@@ -501,7 +514,7 @@ function parseActBlock(blockLines: string[]): StoredAct {
     if (blockLines[i] === '') i++;
     body = unquoteBody(blockLines.slice(i));
   }
-  return { ...head, body, index: meta.index, ...(meta.reach !== undefined ? { reach: meta.reach } : {}) } as StoredAct;
+  return { ...head, body, index: meta.index, ...(meta.reach !== undefined ? { reach: meta.reach } : {}), ...(meta.reply !== undefined ? { reply: meta.reply } : {}) } as StoredAct;
 }
 
 function parseActs(text: string): ParsedActs {

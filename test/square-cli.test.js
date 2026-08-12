@@ -699,6 +699,33 @@ test('center omits persisted reach while beside and bell persist explicitly', ()
   assert.match(text, /<!-- square:act \{"index":4,"kind":"say","actor":"Bob","at":5000,"reach":"bell"\} -->/);
 });
 
+test('express --reply preserves one causal activity reference', () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'question']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+
+  const replied = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_2', 'answer']), {
+    env: { SQUARE_NOW_MS: '4000' },
+  });
+  assert.equal(replied.status, 0, replied.stderr);
+  assert.equal(loadSquare(file).acts.at(-1).reply, 2);
+  assert.match(fs.readFileSync(file, 'utf8'), /"reply":2/);
+
+  const history = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--full']));
+  assert.equal(history.status, 0, history.stderr);
+  assert.match(history.stdout, /act_3.*replies to act_2/);
+
+  const json = run(withPath(file, ['history', '--at', 'act_3', '-C', '0', '--json']));
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).reply, 'act_2');
+
+  const missing = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_99', 'orphan']));
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /Unknown reply activity: act_99/);
+});
+
 test('compact archives older activities into a v2 sidecar and preserves stable indexes', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
