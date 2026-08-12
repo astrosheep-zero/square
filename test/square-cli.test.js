@@ -367,23 +367,22 @@ test('actor cursor advances on any self activity', () => {
 
 test('express does not surface delivery-health diagnostics during normal use', () => {
   const file = tempSquare();
-  const baseline = path.join(path.dirname(file), 'delivery-baseline.json');
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hey @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
   const acted = run(withName(file, 'Bob', ['express', '--force', 'still working']), {
-    env: { SQUARE_NOW_MS: '70000', SQUARE_DELIVERY_STALE_MS: '1' },
+    env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(acted.status, 0, acted.stderr);
   assert.doesNotMatch(acted.stdout + acted.stderr, /delivery|receipt|harness doctor|pending/i);
 
   const diagnosed = run(withPath(file, ['harness', 'doctor', 'delivery']), {
-    env: { SQUARE_NOW_MS: '70000', SQUARE_DELIVERY_STALE_MS: '1', SQUARE_DELIVERY_BASELINE: baseline },
+    env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(diagnosed.status, 0, diagnosed.stderr);
-  assert.match(diagnosed.stdout, /unacknowledged|pending/i);
+  assert.match(diagnosed.stdout, /unreachable: 1/);
 });
 
 test('doctor --fix rejects unsupported format versions', () => {

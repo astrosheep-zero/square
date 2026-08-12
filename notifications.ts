@@ -18,7 +18,9 @@ import { lookupParticipant } from './registry.js';
 import type { WakeRouteKind } from './routes.js';
 import { execute } from './square-application.js';
 import {
+  isWakeRouteAttemptable,
   nextWakeAttemptNumber,
+  readWakeAttempts,
   recordRecoveredUnknown,
   recordWakeAttempt,
   terminalWakeAttempt,
@@ -26,7 +28,6 @@ import {
 } from './wake-attempts.js';
 import { WakePort } from './wake-port.js';
 
-const NOTIFICATION_RETRY_DELAYS_MS = [250, 1000, 3000] as const;
 const NOTIFY_LEASE_MS = 5 * 60 * 1000;
 
 export type { PendingNotification, PlannedNotification } from './delivery.js';
@@ -39,16 +40,6 @@ function known(doc: ReturnType<typeof loadSquare>, name: string): string {
 }
 
 export { notificationMessageId } from './delivery.js';
-
-export function notificationDeliveryWaitMs(): number {
-  const value = Number.parseInt(process.env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? '5000', 10);
-  if (!Number.isFinite(value) || value <= 0) throw new SquareError('invalid_args', 'Invalid SQUARE_NOTIFY_DELIVERY_WAIT_MS: expected a positive integer.');
-  return value;
-}
-
-export function notificationRetryDelaysMs(): number[] {
-  return [...NOTIFICATION_RETRY_DELAYS_MS];
-}
 
 export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
   const doc = loadSquare(squarePath);
@@ -74,8 +65,6 @@ export async function waitForDeliveredNotification(squarePath: string, name: str
 interface ProcessNotificationOptions {
   adapters?: WakeAdapter[];
   env?: NodeJS.ProcessEnv;
-  retryDelaysMs?: number[];
-  delay?: (ms: number) => Promise<void>;
 }
 
 function notifyLeaseKey(recipient: string, actIndex: number): string {
@@ -160,7 +149,7 @@ async function processNotification(
     if (terminalWakeAttempt(attention, { env }) !== undefined) return;
     const owners = new Set(lookupParticipant(squarePath, notification.recipient).map((binding) => binding.ownerId));
     const port = new WakePort(opts.adapters ?? [new PaseoAdapter()], env);
-    const result = await port.dispatch(
+    await port.dispatch(
       owners,
       {
         squarePath,
@@ -171,6 +160,10 @@ async function processNotification(
       },
       {
         nextAttemptN: () => nextWakeAttemptNumber(attention, { env }),
+        canAttempt: (route) => isWakeRouteAttemptable(
+          route,
+          readWakeAttempts({ attention, env }),
+        ),
         beforeSend: async (route, attemptN) => {
           if (hasAttentionNotification(squarePath, notification.recipient, notification.item.index, env)) {
             return false;
@@ -204,20 +197,7 @@ async function processNotification(
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
       },
-      { retryDelaysMs: opts.retryDelaysMs, delay: opts.delay }
     );
-    if (result.outcome === 'exhausted') {
-      recordWakeAttempt({
-        attention,
-        outcome: 'failed',
-        signature: result.attemptedRoutes === 0 ? 'no_fresh_route' : 'routes_exhausted',
-        attemptN: nextWakeAttemptNumber(attention, { env }),
-        terminal: true,
-        message: result.attemptedRoutes === 0
-          ? 'No fresh wake route has an implemented adapter.'
-          : 'Every eligible wake route failed before acceptance.',
-      }, env);
-    }
   } finally {
     if (releaseLease) {
       await releaseNotifyLease(squarePath, notification.recipient, notification.item.index, leaseId);

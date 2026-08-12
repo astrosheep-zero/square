@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from 'node:timers/promises';
-
 import type { WakeAdapter, WakeDispatchResult, WakeRequest } from './delivery.js';
 import { readWakeRoutes, type WakeRoute, type WakeRouteKind } from './routes.js';
 
@@ -13,13 +11,16 @@ const ROUTE_PRIORITY: readonly WakeRouteKind[] = [
 
 export interface WakePortHooks {
   nextAttemptN(): number;
+  canAttempt(route: WakeRoute): boolean;
   beforeSend(route: WakeRoute, attemptN: number): Promise<boolean>;
   record(route: WakeRoute, attemptN: number, result: Exclude<WakeDispatchResult, { outcome: 'cancelled' }>): Promise<void>;
 }
 
 export type WakePortResult =
   | { outcome: 'accepted' | 'unknown' | 'cancelled' }
-  | { outcome: 'exhausted'; attemptedRoutes: number };
+  | { outcome: 'exhausted' };
+
+export const IMPLEMENTED_WAKE_ROUTE_KINDS: readonly WakeRouteKind[] = ['paseo'];
 
 /** Select routes globally; adapters own only transport-specific live proof and dispatch. */
 export class WakePort {
@@ -43,26 +44,16 @@ export class WakePort {
     ownerIds: Set<string>,
     request: WakeRequest,
     hooks: WakePortHooks,
-    opts: { retryDelaysMs?: number[]; delay?: (ms: number) => Promise<void> } = {}
   ): Promise<WakePortResult> {
-    const retryDelays = opts.retryDelaysMs ?? [];
-    const delay = opts.delay ?? ((ms: number) => sleep(ms));
-    let attemptedRoutes = 0;
-
     for (const route of this.routes(ownerIds)) {
+      if (!hooks.canAttempt(route)) continue;
       const adapter = this.adapters.get(route.kind)!;
-      attemptedRoutes += 1;
-      for (let retry = 0; ; retry += 1) {
-        const attemptN = hooks.nextAttemptN();
-        const result = await adapter.dispatch(route, request, () => hooks.beforeSend(route, attemptN));
-        if (result.outcome === 'cancelled') return result;
-        await hooks.record(route, attemptN, result);
-        if (result.outcome === 'accepted' || result.outcome === 'unknown') return { outcome: result.outcome };
-        const retryDelay = result.retryable ? retryDelays[retry] : undefined;
-        if (retryDelay === undefined) break;
-        await delay(retryDelay);
-      }
+      const attemptN = hooks.nextAttemptN();
+      const result = await adapter.dispatch(route, request, () => hooks.beforeSend(route, attemptN));
+      if (result.outcome === 'cancelled') return result;
+      await hooks.record(route, attemptN, result);
+      if (result.outcome === 'accepted' || result.outcome === 'unknown') return { outcome: result.outcome };
     }
-    return { outcome: 'exhausted', attemptedRoutes };
+    return { outcome: 'exhausted' };
   }
 }

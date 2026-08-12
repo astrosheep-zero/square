@@ -92,7 +92,6 @@ export class PaseoAdapter implements WakeAdapter {
         outcome: 'failed',
         signature: 'invalid_address',
         message: 'Paseo route has no agent id.',
-        retryable: false,
         diagnostic: diagnostic('selection', route, 'invalid_address'),
       };
     }
@@ -103,7 +102,6 @@ export class PaseoAdapter implements WakeAdapter {
         outcome: 'failed',
         signature: discoveryRetryable(discovery.error) ? 'discovery_transient' : 'discovery_rejected',
         message: `Paseo unavailable: ${discovery.error}`,
-        retryable: discoveryRetryable(discovery.error),
         diagnostic: diagnostic('discovery', route, 'unavailable'),
       };
     }
@@ -113,7 +111,6 @@ export class PaseoAdapter implements WakeAdapter {
         outcome: 'failed',
         signature: agent === undefined ? 'address_not_found' : 'agent_not_active',
         message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle or running.',
-        retryable: false,
         diagnostic: diagnostic('selection', route, agent === undefined ? 'not_found' : 'not_active'),
       };
     }
@@ -123,7 +120,6 @@ export class PaseoAdapter implements WakeAdapter {
         outcome: 'failed',
         signature: 'boundary_unavailable',
         message: 'Paseo did not reach the current tool boundary before the wake timeout.',
-        retryable: false,
         diagnostic: diagnostic('boundary', route, 'unavailable'),
       };
     }
@@ -159,9 +155,8 @@ export class PaseoAdapter implements WakeAdapter {
       if (kind === 'unknown') return { outcome: 'unknown', signature: 'send_unknown', message, diagnostic: details };
       return {
         outcome: 'failed',
-        signature: kind === 'retryable' ? 'send_pre_accept_transient' : 'send_pre_accept_rejected',
+        signature: kind === 'transient' ? 'send_pre_accept_transient' : 'send_pre_accept_rejected',
         message,
-        retryable: kind === 'retryable',
         diagnostic: details,
       };
     }

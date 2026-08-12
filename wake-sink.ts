@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 export interface PaseoWakeRequest { agentId: string; prompt: string; }
 
-export type PaseoWakeFailureKind = 'retryable' | 'permanent' | 'unknown';
+export type PaseoWakeFailureKind = 'transient' | 'rejected' | 'unknown';
 
 export class PaseoWakeSendError extends Error {
   constructor(message: string, public readonly kind: PaseoWakeFailureKind) {
@@ -29,8 +29,8 @@ function commandError(output: string): { code?: string; message: string } | unde
 }
 
 function classifyCommandFailure(code: string | undefined, message: string): PaseoWakeFailureKind {
-  if (code === 'DAEMON_NOT_RUNNING' || /ECONNREFUSED|ENOENT|not found.*executable/i.test(message)) return 'retryable';
-  if (/password|auth|unauthori[sz]ed|agent not found|rejected/i.test(message)) return 'permanent';
+  if (code === 'DAEMON_NOT_RUNNING' || /ECONNREFUSED|ENOENT|not found.*executable/i.test(message)) return 'transient';
+  if (/password|auth|unauthori[sz]ed|agent not found|rejected/i.test(message)) return 'rejected';
   return 'unknown';
 }
 
@@ -49,7 +49,7 @@ export function sendPaseoWake(
   );
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
-    const kind: PaseoWakeFailureKind = code === 'ENOENT' || code === 'ECONNREFUSED' ? 'retryable' : 'unknown';
+    const kind: PaseoWakeFailureKind = code === 'ENOENT' || code === 'ECONNREFUSED' ? 'transient' : 'unknown';
     throw new PaseoWakeSendError(result.error.message, kind);
   }
   if (result.status === 0) return;

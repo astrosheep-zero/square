@@ -188,10 +188,11 @@ export function hasPresentedForOwner(
   squarePath: string,
   name: string,
   actIndex: number,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
 ): boolean {
   const resolved = canonicalSquarePath(squarePath);
-  return readRows(presentedPath(env)).some(
+  return readRows(presentedPath(env), now).some(
     (row) =>
       row.owner_id === ownerId &&
       canonicalSquarePath(row.square_path) === resolved &&
@@ -205,17 +206,18 @@ export function hasPresentedAttention(
   squarePath: string,
   name: string,
   actIndex: number,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
 ): boolean {
-  const ownerIds = new Set(lookupParticipant(squarePath, name).map((binding) => binding.ownerId));
+  const ownerIds = new Set(lookupParticipant(squarePath, name, now).map((binding) => binding.ownerId));
   if (ownerIds.size === 0) return false;
-  return [...ownerIds].some((ownerId) => hasPresentedForOwner(ownerId, squarePath, name, actIndex, env));
+  return [...ownerIds].some((ownerId) => hasPresentedForOwner(ownerId, squarePath, name, actIndex, env, now));
 }
 
 /**
  * Serialize presentation only for the affected participants. Delivery runs
  * outside the short ledger-write lock, so unrelated owners never wait on an
- * adapter. A throwing callback leaves no row and remains retryable.
+ * adapter. A throwing callback leaves no row and remains unpresented.
  */
 export function presentOnce<T>(
   sessionId: string,

@@ -3,7 +3,8 @@
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { notificationDeliveryWaitMs, notificationRetryDelaysMs, processActNotificationsOnce } from '../notifications.js';
+import { wakeGraceMs } from '../delivery.js';
+import { processActNotificationsOnce } from '../notifications.js';
 
 function args(argv: string[]): { squarePath: string; actIndex: number } {
   let squarePath: string | undefined;
@@ -20,8 +21,8 @@ function args(argv: string[]): { squarePath: string; actIndex: number } {
 async function main(): Promise<void> {
   if (process.env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
   const { squarePath, actIndex } = args(process.argv.slice(2));
-  await sleep(notificationDeliveryWaitMs());
-  await processActNotificationsOnce(squarePath, actIndex, { retryDelaysMs: notificationRetryDelaysMs() });
+  await sleep(wakeGraceMs());
+  await processActNotificationsOnce(squarePath, actIndex);
 }
 
 main().catch(() => {

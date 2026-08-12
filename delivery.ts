@@ -1,5 +1,6 @@
 import {
   type DeliveryReceipt,
+  SquareError,
   type SquareDoc,
   type SquareRuntimeState,
   type StoredAct,
@@ -41,8 +42,16 @@ export interface WakeRequest {
 export type WakeDispatchResult =
   | { outcome: 'accepted' }
   | { outcome: 'unknown'; signature: string; message: string; diagnostic?: unknown }
-  | { outcome: 'failed'; signature: string; message: string; retryable: boolean; diagnostic?: unknown }
+  | { outcome: 'failed'; signature: string; message: string; diagnostic?: unknown }
   | { outcome: 'cancelled' };
+
+export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const value = Number.parseInt(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? '5000', 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new SquareError('invalid_args', 'Invalid SQUARE_NOTIFY_DELIVERY_WAIT_MS: expected a positive integer.');
+  }
+  return value;
+}
 
 export interface WakeAdapter {
   readonly kind: WakeRouteKind;

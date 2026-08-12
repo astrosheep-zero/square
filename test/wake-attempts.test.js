@@ -5,10 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  hasAttemptableWakeRoute,
+  isWakeRouteAttemptable,
   readWakeAttempts,
-  recordRecoveredUnknown,
   recordWakeAttempt,
-  terminalWakeAttempt,
+  terminalWakeEvidence,
 } from '../dist/wake-attempts.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -39,15 +40,16 @@ function row(item, overrides = {}) {
   };
 }
 
-test('wake attempt reads ignore malformed, future, and expired rows', () => {
+test('wake attempt reads accept only real adapter outcomes inside retention', () => {
   const item = fixture();
   const now = 8 * DAY_MS;
   fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
     '{bad json',
     JSON.stringify(row(item, { ts: now - 7 * DAY_MS - 1 })),
     JSON.stringify(row(item, { ts: now + 1 })),
-    JSON.stringify(row(item, { ts: now - DAY_MS, attempt_n: 0 })),
-    JSON.stringify(row(item, { ts: now - 7 * DAY_MS, outcome: 'accepted', attempt_n: 2 })),
+    JSON.stringify(row(item, { ts: now - DAY_MS, route_kind: undefined })),
+    JSON.stringify(row(item, { ts: now - DAY_MS, outcome: 'unknown', signature: undefined })),
+    JSON.stringify(row(item, { ts: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attempt_n: 2 })),
   ].join('\n'));
 
   assert.deepEqual(readWakeAttempts({ env: item.env, now }).map((attempt) => [attempt.outcome, attempt.attemptN]), [
@@ -56,7 +58,7 @@ test('wake attempt reads ignore malformed, future, and expired rows', () => {
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('wake attempt persistence redacts Paseo secrets recursively', () => {
+test('wake attempt persistence redacts transport credentials recursively', () => {
   const item = fixture();
   const env = { ...item.env, PASEO_PASSWORD: 'very-secret' };
   recordWakeAttempt({
@@ -75,58 +77,31 @@ test('wake attempt persistence redacts Paseo secrets recursively', () => {
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('interrupted dispatch recovery is idempotent', () => {
-  const item = fixture();
-  const lease = { attemptN: 3, routeKind: 'paseo' };
-  const first = recordRecoveredUnknown(item.attention, lease, item.env, 1_000);
-  const second = recordRecoveredUnknown(item.attention, lease, item.env, 1_001);
-
-  assert.equal(first?.outcome, 'unknown');
-  assert.equal(second?.attemptN, 3);
-  assert.deepEqual(readWakeAttempts({ env: item.env, now: 1_001 }).map((attempt) => attempt.signature), [
-    'worker_interrupted_during_dispatch',
-  ]);
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('a pre-accept failure does not close interrupted dispatch recovery', () => {
-  const item = fixture();
-  recordWakeAttempt({
-    attention: item.attention,
+test('a failed route becomes attemptable only after new route evidence; terminal evidence stops every route', () => {
+  const attention = { squarePath: '/square.md', actIndex: 4, recipient: 'Faye' };
+  const failed = {
+    at: 100,
+    attention,
     routeKind: 'paseo',
     outcome: 'failed',
-    signature: 'send_pre_accept_transient',
-    attemptN: 3,
-    at: 999,
-  }, item.env);
-  recordRecoveredUnknown(item.attention, { attemptN: 3, routeKind: 'paseo' }, item.env, 1_000);
+    signature: 'address_not_found',
+    attemptN: 1,
+  };
+  const sameFact = { kind: 'paseo', updatedAt: 100 };
+  const newFact = { kind: 'paseo', updatedAt: 101 };
 
-  assert.deepEqual(readWakeAttempts({ env: item.env, now: 1_000 }).map((attempt) => attempt.outcome), [
-    'failed',
-    'unknown',
-  ]);
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
+  assert.equal(isWakeRouteAttemptable(sameFact, [failed]), false);
+  assert.equal(isWakeRouteAttemptable(newFact, [failed]), true);
+  assert.equal(hasAttemptableWakeRoute([sameFact], [failed]), false);
 
-test('a later diagnostic failure cannot reopen terminal attention', () => {
-  const item = fixture();
-  recordWakeAttempt({
-    attention: item.attention,
+  const unknown = {
+    at: 102,
+    attention,
     routeKind: 'paseo',
     outcome: 'unknown',
     signature: 'send_unknown',
-    attemptN: 1,
-    at: 1_000,
-  }, item.env);
-  recordWakeAttempt({
-    attention: item.attention,
-    routeKind: 'paseo',
-    outcome: 'failed',
-    signature: 'late_failure',
-    attemptN: 1,
-    at: 1_001,
-  }, item.env);
-
-  assert.equal(terminalWakeAttempt(item.attention, { env: item.env, now: 1_001 })?.outcome, 'unknown');
-  fs.rmSync(item.root, { recursive: true, force: true });
+    attemptN: 2,
+  };
+  assert.equal(terminalWakeEvidence([failed, unknown]), unknown);
+  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), false);
 });

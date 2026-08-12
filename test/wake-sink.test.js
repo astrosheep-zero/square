@@ -24,12 +24,12 @@ function captureKind(run) {
   assert.fail('Expected Paseo wake to fail.');
 }
 
-test('Paseo connection refusal is retryable before daemon acceptance', () => {
+test('Paseo connection refusal is a transient pre-accept failure', () => {
   const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"DAEMON_NOT_RUNNING","message":"connect ECONNREFUSED"}}' >&2\nexit 1`);
   const previous = process.env.SQUARE_PASEO_BIN;
   process.env.SQUARE_PASEO_BIN = fake.file;
   try {
-    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'retryable');
+    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'transient');
   } finally {
     if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
     else process.env.SQUARE_PASEO_BIN = previous;
@@ -37,12 +37,12 @@ test('Paseo connection refusal is retryable before daemon acceptance', () => {
   }
 });
 
-test('Paseo authentication rejection is permanent', () => {
+test('Paseo authentication rejection is a proven pre-accept rejection', () => {
   const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"SEND_FAILED","message":"Incorrect password"}}' >&2\nexit 1`);
   const previous = process.env.SQUARE_PASEO_BIN;
   process.env.SQUARE_PASEO_BIN = fake.file;
   try {
-    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'permanent');
+    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'rejected');
   } finally {
     if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
     else process.env.SQUARE_PASEO_BIN = previous;

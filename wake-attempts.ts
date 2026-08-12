@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { nameKey, type NotifyLease } from './model.js';
 import { canonicalSquarePath } from './registry.js';
-import { isWakeRouteKind, type WakeRouteKind } from './routes.js';
+import { isWakeRouteKind, type WakeRoute, type WakeRouteKind } from './routes.js';
 
 export type WakeOutcome = 'accepted' | 'unknown' | 'failed';
 
@@ -17,11 +17,10 @@ export interface WakeAttention {
 export interface WakeAttempt {
   at: number;
   attention: WakeAttention;
-  routeKind?: WakeRouteKind;
+  routeKind: WakeRouteKind;
   outcome: WakeOutcome;
   signature?: string;
   attemptN: number;
-  terminal?: boolean;
   message?: string;
   diagnostic?: unknown;
 }
@@ -30,11 +29,10 @@ interface WakeAttemptRow {
   v: 1;
   ts: number;
   attention: { square_path: string; act_id: string; recipient: string };
-  route_kind?: WakeRouteKind;
+  route_kind: WakeRouteKind;
   outcome: WakeOutcome;
   signature?: string;
   attempt_n: number;
-  terminal?: true;
   message?: string;
   diagnostic?: unknown;
 }
@@ -64,9 +62,9 @@ function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
     typeof row.attention.recipient !== 'string' || row.attention.recipient === '' ||
     typeof row.outcome !== 'string' || !VALID_OUTCOMES.has(row.outcome as WakeOutcome) ||
     typeof row.attempt_n !== 'number' || !Number.isInteger(row.attempt_n) || row.attempt_n <= 0 ||
-    (row.route_kind !== undefined && !isWakeRouteKind(row.route_kind)) ||
+    !isWakeRouteKind(row.route_kind) ||
     (row.signature !== undefined && typeof row.signature !== 'string') ||
-    (row.terminal !== undefined && row.terminal !== true) ||
+    (row.outcome !== 'accepted' && (typeof row.signature !== 'string' || row.signature === '')) ||
     (row.message !== undefined && typeof row.message !== 'string')
   ) return undefined;
   return row as WakeAttemptRow;
@@ -90,11 +88,10 @@ function fromRow(row: WakeAttemptRow): WakeAttempt {
       actIndex: Number(row.attention.act_id.slice(4)),
       recipient: row.attention.recipient,
     },
-    ...(row.route_kind === undefined ? {} : { routeKind: row.route_kind }),
+    routeKind: row.route_kind,
     outcome: row.outcome,
     ...(row.signature === undefined ? {} : { signature: row.signature }),
     attemptN: row.attempt_n,
-    ...(row.terminal === true ? { terminal: true } : {}),
     ...(row.message === undefined ? {} : { message: row.message }),
     ...(row.diagnostic === undefined ? {} : { diagnostic: row.diagnostic }),
   };
@@ -110,15 +107,33 @@ export function readWakeAttempts(
     .filter((attempt) => expected === undefined || wakeAttentionKey(attempt.attention) === expected);
 }
 
-function isTerminalAttempt(attempt: WakeAttempt): boolean {
-  return attempt.outcome === 'accepted' || attempt.outcome === 'unknown' || attempt.terminal === true;
+export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined {
+  return attempts.findLast((attempt) => attempt.outcome === 'accepted' || attempt.outcome === 'unknown');
 }
 
 export function terminalWakeAttempt(
   attention: WakeAttention,
   opts: { now?: number; env?: NodeJS.ProcessEnv } = {}
 ): WakeAttempt | undefined {
-  return readWakeAttempts({ attention, ...opts }).findLast(isTerminalAttempt);
+  return terminalWakeEvidence(readWakeAttempts({ attention, ...opts }));
+}
+
+export function isWakeRouteAttemptable(
+  route: Pick<WakeRoute, 'kind' | 'updatedAt'>,
+  attempts: readonly WakeAttempt[],
+): boolean {
+  if (terminalWakeEvidence(attempts) !== undefined) return false;
+  const failed = attempts.findLast(
+    (attempt) => attempt.routeKind === route.kind && attempt.outcome === 'failed',
+  );
+  return failed === undefined || route.updatedAt > failed.at;
+}
+
+export function hasAttemptableWakeRoute(
+  routes: readonly Pick<WakeRoute, 'kind' | 'updatedAt'>[],
+  attempts: readonly WakeAttempt[],
+): boolean {
+  return routes.some((route) => isWakeRouteAttemptable(route, attempts));
 }
 
 export function nextWakeAttemptNumber(
@@ -173,11 +188,10 @@ function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
       act_id: `act_${safe.attention.actIndex}`,
       recipient: safe.attention.recipient,
     },
-    ...(safe.routeKind === undefined ? {} : { route_kind: safe.routeKind }),
+    route_kind: safe.routeKind,
     outcome: safe.outcome,
     ...(safe.signature === undefined ? {} : { signature: safe.signature }),
     attempt_n: safe.attemptN,
-    ...(safe.terminal === true ? { terminal: true } : {}),
     ...(safe.message === undefined ? {} : { message: safe.message }),
     ...(safe.diagnostic === undefined ? {} : { diagnostic: safe.diagnostic }),
   };
@@ -188,6 +202,10 @@ export function recordWakeAttempt(
   env: NodeJS.ProcessEnv = process.env
 ): WakeAttempt {
   const value = { ...attempt, at: attempt.at ?? Date.now() } as WakeAttempt;
+  if (!isWakeRouteKind(value.routeKind)) throw new Error('Wake attempts require a real adapter route kind.');
+  if (value.outcome !== 'accepted' && !value.signature) {
+    throw new Error(`${value.outcome} wake attempts require a transport signature.`);
+  }
   const file = wakeAttemptsPath(env);
   withLedgerLock(file, () => fs.appendFileSync(file, `${JSON.stringify(toRow(value, env))}\n`, { mode: 0o600 }));
   return value;
@@ -212,7 +230,6 @@ export function recordRecoveredUnknown(
       outcome: 'unknown',
       signature: 'worker_interrupted_during_dispatch',
       attemptN: lease.attemptN!,
-      terminal: true,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
     fs.appendFileSync(file, `${JSON.stringify(toRow(value, env))}\n`, { mode: 0o600 });
