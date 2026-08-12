@@ -1,5 +1,6 @@
 import { loadSquare } from '../artifact.js';
-import { runClaudeHook, runCodexHook } from '../claude-hook.js';
+import { runClaudeHook } from '../claude-hook.js';
+import { runCodexHook } from '../codex-hook.js';
 import { coreActivities, coreParticipants, coreStatus } from '../decisions.js';
 import { sessionInbox } from '../inbox.js';
 import { cmdListSquares } from '../list.js';

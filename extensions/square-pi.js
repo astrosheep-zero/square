@@ -1,6 +1,4 @@
-import { renderClaudeInboxContext } from '../dist/claude-hook.js';
-import { sessionInbox } from '../dist/inbox.js';
-import { presentOnce } from '../dist/presented.js';
+import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 
 export function pendingInbox(inbox) {
   return inbox.filter((item) => item.notifications?.length > 0);
@@ -13,13 +11,13 @@ export function inboxKeys(inbox) {
 }
 
 export function renderPiInbox(inbox) {
-  return renderClaudeInboxContext(pendingInbox(inbox));
+  return renderPendingAtBoundary(pendingInbox(inbox));
 }
 
 export default function squarePiExtension(pi) {
   let sessionId;
   let previousSessionId;
-  const present = (deliver) => sessionId === undefined ? undefined : presentOnce(sessionId, (id) => sessionInbox(id), deliver);
+  const present = (deliver) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver);
 
   pi.on('session_start', async (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
@@ -29,7 +27,7 @@ export default function squarePiExtension(pi) {
 
   pi.on('before_agent_start', async () => {
     try {
-      return present((inbox) => ({ message: { customType: 'square', content: renderPiInbox(inbox), display: true } }));
+      return present((context) => ({ message: { customType: 'square', content: context, display: true } }));
     } catch {
       return undefined;
     }

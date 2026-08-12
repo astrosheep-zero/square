@@ -134,32 +134,30 @@ test('recent liveness flags recipient who acted after a notification without del
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('inject context carries stable message ids and Stop re-blocks until delivered', () => {
+test('boundary context carries stable message ids and is presented once', () => {
   const inbox = [{
     name: 'Bob',
     squarePath: '/tmp/square.md',
     notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   const id = notificationMessageId('/tmp/square.md', 2);
-  const ups = claudeHookResponse(
-    { session_id: 's', hook_event_name: 'UserPromptSubmit' },
+  const presented = path.join(os.tmpdir(), `p-${Date.now()}.ndjsonl`);
+  const response = claudeHookResponse(
+    { session_id: 's', hook_event_name: 'PostToolBatch' },
     () => inbox,
-    { SQUARE_PRESENTED: path.join(os.tmpdir(), `p-${Date.now()}.ndjsonl`) }
+    { SQUARE_PRESENTED: presented }
   );
-  assert.match(ups.hookSpecificOutput.additionalContext, new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(ups.hookSpecificOutput.additionalContext, /Ids are stable across turns/);
-
-  const stop1 = claudeHookResponse(
-    { session_id: 's', hook_event_name: 'Stop', stop_hook_active: false },
-    () => inbox
+  assert.match(response.hookSpecificOutput.additionalContext, new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(response.hookSpecificOutput.additionalContext, /Ids are stable across boundaries/);
+  assert.equal(
+    claudeHookResponse(
+      { session_id: 's', hook_event_name: 'PostToolBatch' },
+      () => inbox,
+      { SQUARE_PRESENTED: presented }
+    ),
+    undefined
   );
-  const stop2 = claudeHookResponse(
-    { session_id: 's', hook_event_name: 'Stop', stop_hook_active: false },
-    () => inbox
-  );
-  assert.equal(stop1.decision, 'block');
-  assert.equal(stop2.decision, 'block');
-  assert.match(stop1.reason, new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  fs.rmSync(presented, { force: true });
 });
 
 test('doctor health records backlog baseline delta', () => {

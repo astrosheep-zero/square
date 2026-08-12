@@ -275,7 +275,7 @@ test('Codex installation preserves the prior bundle when the host rejects it', a
   }
 });
 
-test('OpenCode system injection and idle wake share the native owner model', async () => {
+test('OpenCode admits pending attention after a tool without replacing its output', async () => {
   const item = piFixture('opencode-session');
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
@@ -285,40 +285,36 @@ test('OpenCode system injection and idle wake share the native owner model', asy
   process.env.SQUARE_PRESENTED = item.presented;
   recordJoin('opencode-session', 'Bob', item.squarePath, { channel: 'opencode' });
   try {
-    const prompts = [];
-    const hooks = await squareOpenCodePlugin({
-      client: {
-        session: {
-          async promptAsync(request) { prompts.push(request); },
-        },
-      },
-    });
+    const hooks = await squareOpenCodePlugin({});
 
     const shell = { env: {} };
     await hooks['shell.env']({ sessionID: 'opencode-session', cwd: item.root }, shell);
     assert.equal(shell.env.OPENCODE_SESSION_ID, 'opencode-session');
 
-    await hooks.event({
-      event: { type: 'session.idle', properties: { sessionID: 'opencode-session' } },
+    const rejected = {};
+    Object.defineProperty(rejected, 'output', {
+      get() { return 'first tool result'; },
+      set() { throw new Error('host rejected context'); },
     });
-    await hooks.event({
-      event: { type: 'session.idle', properties: { sessionID: 'opencode-session' } },
-    });
-    assert.equal(prompts.length, 1);
-    assert.doesNotMatch(prompts[0].body.parts[0].text, /hello @Bob/);
+    await hooks['tool.execute.after'](
+      { sessionID: 'opencode-session', tool: 'read', callID: 'call-1', args: {} },
+      rejected
+    );
 
-    const rejected = { system: { push() { throw new Error('host rejected context'); } } };
-    await hooks['experimental.chat.system.transform']({ sessionID: 'opencode-session' }, rejected);
+    const first = { title: 'read', output: 'second tool result', metadata: {} };
+    await hooks['tool.execute.after'](
+      { sessionID: 'opencode-session', tool: 'read', callID: 'call-2', args: {} },
+      first
+    );
+    assert.match(first.output, /^second tool result/);
+    assert.match(first.output, /hello @Bob/);
 
-    const first = { system: [] };
-    await hooks['experimental.chat.system.transform']({ sessionID: 'opencode-session' }, first);
-    assert.equal(first.system.length, 1);
-    assert.match(first.system[0], /hello @Bob/);
-
-    const second = { system: [] };
-    await hooks['experimental.chat.system.transform']({ sessionID: 'opencode-session' }, second);
-    assert.deepEqual(second.system, []);
-    await hooks.dispose();
+    const second = { title: 'read', output: 'third tool result', metadata: {} };
+    await hooks['tool.execute.after'](
+      { sessionID: 'opencode-session', tool: 'read', callID: 'call-3', args: {} },
+      second
+    );
+    assert.equal(second.output, 'third tool result');
   } finally {
     if (previous.registry === undefined) delete process.env.SQUARE_REGISTRY;
     else process.env.SQUARE_REGISTRY = previous.registry;

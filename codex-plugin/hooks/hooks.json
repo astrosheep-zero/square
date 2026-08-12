@@ -1,25 +1,14 @@
 {
   "hooks": {
-    "UserPromptSubmit": [
+    "PostToolUse": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "square codex-hook",
             "timeout": 5,
-            "statusMessage": "square-codex-hook"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "square codex-hook",
-            "timeout": 5,
-            "statusMessage": "square-codex-hook"
+            "statusMessage": "square-codex-hook",
+            "additionalContextLimit": 1200
           }
         ]
       }

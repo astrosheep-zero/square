@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process';
 import test from 'node:test';
 
 import { emptyRuntimeState, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
-import { claudeHookResponse, renderClaudeInboxContext, runClaudeHook } from '../dist/claude-hook.js';
+import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
+import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { presentOnce } from '../dist/presented.js';
 import { lookupParticipant, recordJoin } from '../dist/registry.js';
@@ -27,7 +28,7 @@ function spawnHook(sessionId, env) {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
     child.on('close', (status) => resolve({ status, stdout, stderr }));
-    child.stdin.end(JSON.stringify({ session_id: sessionId, hook_event_name: 'UserPromptSubmit' }));
+    child.stdin.end(JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolBatch' }));
   });
 }
 
@@ -135,7 +136,7 @@ test('session inbox does not inherit an active catch lease after ownership chang
   }
 });
 
-test('Claude hook adds bounded context at UserPromptSubmit and presents once', () => {
+test('Claude admits bounded context at an agent boundary and presents once', () => {
   const presented = path.join(os.tmpdir(), `square-presented-${Date.now()}.ndjsonl`);
   const previous = process.env.SQUARE_PRESENTED;
   process.env.SQUARE_PRESENTED = presented;
@@ -146,17 +147,17 @@ test('Claude hook adds bounded context at UserPromptSubmit and presents once', (
       notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
     }];
     const response = claudeHookResponse(
-      { session_id: 'session', hook_event_name: 'UserPromptSubmit' },
+      { session_id: 'session', hook_event_name: 'PostToolBatch' },
       () => inbox
     );
-    assert.equal(response.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
     assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/square\.md#act_2/);
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.match(response.hookSpecificOutput.additionalContext, /square --square-path '\/tmp\/square\.md' --as 'Bob' catch --now/);
     assert.equal(
       claudeHookResponse(
-        { session_id: 'session', hook_event_name: 'UserPromptSubmit' },
+        { session_id: 'session', hook_event_name: 'PostToolBatch' },
         () => inbox
       ),
       undefined
@@ -177,7 +178,7 @@ test('Claude hook clips notification bodies to 200 characters and caps the notif
     route: 'mention',
     body,
   }));
-  const context = renderClaudeInboxContext([{
+  const context = renderPendingAtBoundary([{
     name: 'Bob',
     squarePath: '/tmp/square.md',
     notifications,
@@ -197,14 +198,14 @@ test('presentation is once per owner, and a replacement owner can receive it aga
     recordJoin('second-session', 'Bob', item.squarePath, { channel: 'codex', ownerId });
 
     const first = claudeHookResponse(
-      { session_id: 'claude-session', hook_event_name: 'UserPromptSubmit' },
+      { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented }
     );
-    assert.equal(first.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.equal(first.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.equal(
       claudeHookResponse(
-        { session_id: 'second-session', hook_event_name: 'UserPromptSubmit' },
+        { session_id: 'second-session', hook_event_name: 'PostToolBatch' },
         sessionInbox,
         { SQUARE_PRESENTED: presented }
       ),
@@ -213,11 +214,11 @@ test('presentation is once per owner, and a replacement owner can receive it aga
 
     recordJoin('replacement-session', 'Bob', item.squarePath, { channel: 'claude-code' });
     const replacement = claudeHookResponse(
-      { session_id: 'replacement-session', hook_event_name: 'UserPromptSubmit' },
+      { session_id: 'replacement-session', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented }
     );
-    assert.equal(replacement.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.equal(replacement.hookSpecificOutput.hookEventName, 'PostToolBatch');
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();
@@ -236,7 +237,7 @@ test('concurrent native sessions produce one presentation for their shared owner
       spawnHook('second-session', env),
     ]);
     assert.deepEqual(results.map((result) => result.status), [0, 0]);
-    assert.equal(results.filter((result) => result.stdout.includes('UserPromptSubmit')).length, 1);
+    assert.equal(results.filter((result) => result.stdout.includes('PostToolBatch')).length, 1);
     assert.equal(results.filter((result) => result.stdout === '').length, 1);
   } finally {
     fs.rmSync(presented, { force: true });
@@ -301,7 +302,7 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', (
     const paseoOwner = lookupParticipant(item.squarePath, 'Bob')[0].ownerId;
 
     const response = claudeHookResponse(
-      { session_id: 'nested-claude', hook_event_name: 'UserPromptSubmit' },
+      { session_id: 'nested-claude', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented, PASEO_AGENT_ID: 'paseo-agent' }
     );
@@ -317,28 +318,7 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', (
   }
 });
 
-test('Claude Stop hook blocks once and respects stop_hook_active', () => {
-  const inbox = [{
-    name: 'Bob',
-    squarePath: '/tmp/square.md',
-    notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'bell', body: 'attention' }],
-  }];
-  const blocked = claudeHookResponse(
-    { session_id: 'session', hook_event_name: 'Stop', stop_hook_active: false },
-    () => inbox
-  );
-  assert.equal(blocked.decision, 'block');
-  assert.match(blocked.reason, /catch --now/);
-  assert.equal(
-    claudeHookResponse(
-      { session_id: 'session', hook_event_name: 'Stop', stop_hook_active: true },
-      () => inbox
-    ),
-    undefined
-  );
-});
-
-test('active catch owns UserPromptSubmit delivery while Stop remains the fallback', () => {
+test('active catch owns matching attention at every adapter boundary', () => {
   const item = fixture();
   const presented = path.join(os.tmpdir(), `square-presented-active-catch-${Date.now()}.ndjsonl`);
   try {
@@ -353,27 +333,20 @@ test('active catch owns UserPromptSubmit delivery while Stop remains the fallbac
 
     assert.equal(
       claudeHookResponse(
-        { session_id: 'claude-session', hook_event_name: 'UserPromptSubmit' },
+        { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
         sessionInbox,
         { SQUARE_PRESENTED: presented }
       ),
       undefined
     );
 
-    const stopped = claudeHookResponse(
-      { session_id: 'claude-session', hook_event_name: 'Stop', stop_hook_active: false },
-      sessionInbox,
-      { SQUARE_PRESENTED: presented }
-    );
-    assert.equal(stopped.decision, 'block');
-    assert.match(stopped.reason, /hello @Bob/);
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();
   }
 });
 
-test('UserPromptSubmit still injects notifications excluded by an active catch filter', () => {
+test('a boundary still admits notifications excluded by an active catch filter', () => {
   const item = fixture();
   const presented = path.join(os.tmpdir(), `square-presented-filtered-catch-${Date.now()}.ndjsonl`);
   try {
@@ -387,11 +360,11 @@ test('UserPromptSubmit still injects notifications excluded by an active catch f
     saveRuntimeSidecar(item.squarePath, item.runtime);
 
     const response = claudeHookResponse(
-      { session_id: 'claude-session', hook_event_name: 'UserPromptSubmit' },
+      { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented }
     );
-    assert.equal(response.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
   } finally {
     fs.rmSync(presented, { force: true });

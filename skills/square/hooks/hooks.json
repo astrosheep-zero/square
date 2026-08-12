@@ -1,18 +1,7 @@
 {
-  "description": "Bounded Square inbox checks at supported Claude Code turn boundaries",
+  "description": "Bounded Square inbox admission between Claude Code agent steps",
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "square claude-hook",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
+    "PostToolBatch": [
       {
         "hooks": [
           {

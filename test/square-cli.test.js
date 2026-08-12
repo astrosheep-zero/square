@@ -721,7 +721,7 @@ test('compact archives older activities into a v2 sidecar and preserves stable i
   assert.doesNotMatch(archive, /evt_/);
 });
 
-test('inbox stays read-only while codex-hook presents once and Stop blocks undelivered', () => {
+test('inbox stays read-only while codex admits pending attention once at a boundary', () => {
   const file = tempSquare();
   const root = path.dirname(file);
   const registry = path.join(root, 'sessions.ndjsonl');
@@ -750,28 +750,20 @@ test('inbox stays read-only while codex-hook presents once and Stop blocks undel
 
   const inject = spawnSync(process.execPath, [CLI, 'codex-hook'], {
     encoding: 'utf8',
-    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'UserPromptSubmit' }),
+    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'PostToolUse' }),
     env: testEnv(env),
   });
   assert.equal(inject.status, 0, inject.stderr);
-  assert.match(inject.stdout, /"hookEventName":"UserPromptSubmit"/);
+  assert.match(inject.stdout, /"hookEventName":"PostToolUse"/);
 
   const duplicate = spawnSync(process.execPath, [CLI, 'codex-hook'], {
     encoding: 'utf8',
-    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'UserPromptSubmit' }),
+    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'PostToolUse' }),
     env: testEnv(env),
   });
   assert.equal(duplicate.status, 0, duplicate.stderr);
   assert.equal(duplicate.stdout, '');
 
-  const stop = spawnSync(process.execPath, [CLI, 'codex-hook'], {
-    encoding: 'utf8',
-    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'Stop', stop_hook_active: false }),
-    env: testEnv(env),
-  });
-  assert.equal(stop.status, 0, stop.stderr);
-  assert.match(stop.stdout, /"decision":"block"/);
-  assert.match(stop.stdout, /catch --now/);
 });
 
 test('history power filters and jsonl stay read-only', () => {
