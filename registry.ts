@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { loadSquare } from './artifact.js';
 import { nameKey, sameName } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
+import { refreshJoinEnvRoutes, retireOwnerWakeRoutes } from './routes.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 
@@ -379,6 +380,7 @@ export function recordLocalJoin(name: string, squarePath: string, env: NodeJS.Pr
   for (const identity of identities) {
     recordJoin(identity.sessionId, name, squarePath, { ...identity, at, ownerId });
   }
+  refreshJoinEnvRoutes(ownerId, env, at);
 }
 
 export function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): void {
@@ -399,4 +401,5 @@ export function recordLocalDone(name: string, squarePath: string, env: NodeJS.Pr
       at,
     });
   }
+  retireOwnerWakeRoutes(ownerId, { at, env });
 }
