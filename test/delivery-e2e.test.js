@@ -8,6 +8,7 @@ import test from 'node:test';
 import { loadSquare, parseSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
+import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { presentOnce } from '../dist/presented.js';
@@ -292,7 +293,10 @@ test('a crash after send recovers unknown and permanently prevents a second send
     assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { env: item.env }));
+    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      graceMs: wakeGraceMs(item.env),
+      env: item.env,
+    }));
     assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-unknown');
   } finally {
     item.cleanup();
@@ -344,7 +348,10 @@ test('presented evidence is scoped to the current participant owner', async () =
     const adapter = acceptedAdapter();
 
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] }));
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { env: item.env }));
+    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      graceMs: wakeGraceMs(item.env),
+      env: item.env,
+    }));
 
     assert.equal(adapter.calls, 1);
     assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
@@ -374,6 +381,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
       now: () => firstAttemptAt,
     }));
     const unreachable = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      graceMs: wakeGraceMs(item.env),
       now: firstAttemptAt + 500,
       env: item.env,
     }));
@@ -409,8 +417,9 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
 
     const before = snapshotFiles(item.root);
     const evidence = withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env));
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { now, env: item.env }));
-    const doctor = withRegistry(item.env, () => doctorDeliveryHealth(item.squarePath, now, item.env));
+    const graceMs = wakeGraceMs(item.env);
+    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { graceMs, now, env: item.env }));
+    const doctor = withRegistry(item.env, () => doctorDeliveryHealth(item.squarePath, graceMs, now, item.env));
     const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now,
@@ -430,7 +439,10 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
     }));
     assert.equal(adapter.calls, 1);
     assert.equal(wakeIsEligible(withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env))), false);
-    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { env: item.env }))
+    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      graceMs: wakeGraceMs(item.env),
+      env: item.env,
+    }))
       .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },

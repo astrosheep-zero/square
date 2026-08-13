@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 import { doctorDeliveryHealth } from './delivery-health.js';
+import { wakeGraceMs } from './notifications.js';
 
 import {
   doctorClaudePlugin,
@@ -127,7 +128,7 @@ const TARGETS: readonly HarnessTarget[] = [
     name: 'delivery',
     capabilities: ['doctor'],
     doctor: ({ squarePath }) => result(readableSquarePath(squarePath)
-      ? doctorDeliveryHealth(squarePath)
+      ? doctorDeliveryHealth(squarePath, wakeGraceMs())
       : ['○ delivery health skipped (no readable square path)']),
   },
 ];

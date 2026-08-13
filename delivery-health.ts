@@ -1,7 +1,6 @@
 import { loadSquare } from './artifact.js';
 import {
   deriveDeliveryModel,
-  wakeGraceMs,
   type DirectedNotificationRoute,
 } from './delivery.js';
 import { formatDuration } from './time.js';
@@ -40,7 +39,7 @@ const ACTIONABLE = new Set<DeliveryHealthKind>(['wake-unknown', 'unreachable']);
 /** Purely classify current pending attention from the artifact and durable ledgers. */
 export function classifyDeliveryHealth(
   squarePath: string,
-  opts: { now?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { graceMs: number; now?: number; env?: NodeJS.ProcessEnv },
 ): DeliveryHealthItem[] {
   const now = opts.now ?? Date.now();
   const env = opts.env ?? process.env;
@@ -55,7 +54,7 @@ export function classifyDeliveryHealth(
         ? 'wake-accepted'
         : evidence.terminal?.outcome === 'unknown'
           ? 'wake-unknown'
-          : ageMs > wakeGraceMs(env) && evidence.attemptableRoutes.length === 0
+          : ageMs > opts.graceMs && evidence.attemptableRoutes.length === 0
             ? 'unreachable'
             : 'awaiting';
     const attempt = evidence.terminal ?? evidence.attempts.at(-1);
@@ -80,10 +79,11 @@ function formatItem(item: DeliveryHealthItem): string {
 
 export function doctorDeliveryHealth(
   squarePath: string,
+  graceMs: number,
   now = Date.now(),
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const items = classifyDeliveryHealth(squarePath, { now, env });
+  const items = classifyDeliveryHealth(squarePath, { graceMs, now, env });
   if (items.length === 0) return ['✓ no pending delivery attention'];
 
   const out = [`· delivery attention · ${items.length} pending`];

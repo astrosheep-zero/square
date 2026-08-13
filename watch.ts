@@ -25,7 +25,7 @@ import {
   touchPresenceCursor,
   writeWatchLease,
 } from './runtime.js';
-import { withSquareLock, writeSquareDoc } from './square-application.js';
+import { execute, withSquareLock, writeSquareDoc } from './square-application.js';
 import {
   renderWatchForceTakeover,
   renderWatchAlreadyActive,
@@ -47,7 +47,6 @@ import {
 } from './activity-feed.js';
 import { coreParticipants, resolveKnownName } from './decisions.js';
 import { hasAutomaticDeliveryIdentity, localParticipantOwner } from './registry.js';
-import { execute } from './square-application.js';
 
 type WatchResult =
   | { type: 'output'; stdout: string; status?: WatchStatus }

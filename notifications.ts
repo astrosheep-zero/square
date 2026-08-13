@@ -11,7 +11,6 @@ import {
   isPendingNotification,
   leaseOwnsNotification,
   planActNotifications,
-  wakeGraceMs,
   type WakeAdapter,
   type WakeRequest,
 } from './delivery.js';
@@ -45,6 +44,14 @@ function known(doc: ReturnType<typeof loadSquare>, name: string): string {
 }
 
 export { notificationMessageId } from './delivery.js';
+
+export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const value = Number.parseInt(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? '5000', 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new SquareError('invalid_args', 'Invalid SQUARE_NOTIFY_DELIVERY_WAIT_MS: expected a positive integer.');
+  }
+  return value;
+}
 
 function catchCommand(squarePath: string, recipient: string): string {
   return `square --as ${quoteShell(recipient)} --square-path ${quoteShell(squarePath)} catch --now`;

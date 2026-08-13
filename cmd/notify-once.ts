@@ -3,8 +3,7 @@
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { wakeGraceMs } from '../delivery.js';
-import { processActNotificationsOnce } from '../notifications.js';
+import { processActNotificationsOnce, wakeGraceMs } from '../notifications.js';
 
 function args(argv: string[]): { squarePath: string; actIndex: number } {
   let squarePath: string | undefined;
