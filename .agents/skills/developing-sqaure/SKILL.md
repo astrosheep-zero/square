@@ -35,7 +35,6 @@ Treat `AGENTS.md` as project authority. Read it before changing behavior, then i
 5. Add or retain only tests that directly prove the resulting invariants.
 6. Run focused tests while iterating, then the full suite.
 7. Inspect the final diff for leaked concepts, stale vocabulary, compatibility ballast, and unrelated churn.
-8. Verify the staged snapshot before committing so unstaged local files cannot make the commit appear healthy.
 
 ## Test Real Invariants
 
@@ -59,6 +58,6 @@ Treat tests as evidence about the product model, not as a scenario archive.
 
 Use Square history to recover existing rulings before asking a new question. Consult Faye only when verified code evidence leaves a cross-cutting invariant unresolved and the answer could redirect multiple modules. Send one self-contained question through the `communicating-with-faye` and `square` skills, then implement the ruling without adding a status conversation.
 
-## Commit Verification
+## Manage Work With Keiyaku Tasks
 
-Stage only the intended slice. Create a temporary commit or equivalent staged snapshot, check it out in a temporary worktree, run `npm test` from that worktree, then remove the temporary worktree. Commit the accepted slice with a message that names the behavior, not the implementation activity.
+Use Keiyaku tasks when work needs durable planning: priority, dependencies, readiness, coordination across deliveries, or lifecycle tracking. Keep task scope aligned with the product invariant being changed, connect real dependencies explicitly, and update the task as the work moves from open through completion. Do not create tasks as boilerplate for trivial work or treat `task start` as execution or Contract binding.
