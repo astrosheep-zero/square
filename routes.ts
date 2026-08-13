@@ -2,17 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const WAKE_ROUTE_KINDS = ['paseo'] as const;
-
-export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
-
-export interface WakeRoute {
-  ownerId: string;
-  sessionId: string;
-  kind: WakeRouteKind;
-  address: Record<string, string>;
-  updatedAt: number;
-}
+import { isWakeRouteKind, type WakeRoute, type WakeRouteKind } from './model.js';
+export { isWakeRouteKind, WAKE_ROUTE_KINDS } from './model.js';
+export type { WakeRoute, WakeRouteKind } from './model.js';
 
 interface RouteRow {
   v: 1;
@@ -26,14 +18,8 @@ interface RouteRow {
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const ROUTE_FRESH_MS = 24 * 60 * 60 * 1000;
-const VALID_KINDS = new Set<string>(WAKE_ROUTE_KINDS);
-
 export function routesPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_ROUTES || path.join(os.homedir(), '.square', 'routes.ndjsonl');
-}
-
-export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
-  return typeof value === 'string' && VALID_KINDS.has(value);
 }
 
 function routeKey(ownerId: string, kind: WakeRouteKind): string {

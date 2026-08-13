@@ -1,8 +1,22 @@
 // Shared model and constants for Square.
 
 import type { Act } from './square-core.js';
-import type { WakeRouteKind } from './routes.js';
 export type { Act, Reach } from './square-core.js';
+
+export const WAKE_ROUTE_KINDS = ['paseo'] as const;
+export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
+
+export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
+  return typeof value === 'string' && (WAKE_ROUTE_KINDS as readonly string[]).includes(value);
+}
+
+export interface WakeRoute {
+  ownerId: string;
+  sessionId: string;
+  kind: WakeRouteKind;
+  address: Record<string, string>;
+  updatedAt: number;
+}
 
 export type SquareErrorCode =
   | 'not_found'
@@ -65,6 +79,23 @@ export interface WatchLease {
   heartbeatAt: number;
   expiresAt: number;
   filter?: WatchLeaseFilter;
+}
+
+export type DirectedNotificationRoute = 'mention' | 'beside' | 'bell';
+
+export interface InboxNotification {
+  actIndex: number;
+  actor: string;
+  at: number;
+  route: DirectedNotificationRoute;
+  body: string;
+}
+
+export interface InboxMembership {
+  name: string;
+  squarePath: string;
+  notifications: InboxNotification[];
+  catchLease?: WatchLease;
 }
 
 export interface NotifyLease {

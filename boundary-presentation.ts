@@ -1,5 +1,6 @@
 import { leaseOwnsNotification, notificationMessageId } from './delivery.js';
-import { sessionInbox, type InboxMembership } from './inbox.js';
+import { sessionInbox } from './inbox.js';
+import type { InboxMembership } from './model.js';
 import { participantCommandPrefix } from './presentation.js';
 import { presentOnce } from './presented.js';
 

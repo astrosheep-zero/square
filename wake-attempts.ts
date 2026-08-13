@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { nameKey, type NotifyLease } from './model.js';
+import { isWakeRouteKind, nameKey, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
-import { isWakeRouteKind, type WakeRoute, type WakeRouteKind } from './routes.js';
 
 export type WakeOutcome = 'accepted' | 'unknown' | 'failed';
 

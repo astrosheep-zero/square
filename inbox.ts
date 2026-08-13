@@ -1,23 +1,8 @@
 import { loadSquare } from './artifact.js';
-import { deriveDeliveryModel, type DirectedNotificationRoute } from './delivery.js';
+import { deriveDeliveryModel } from './delivery.js';
+import { type InboxMembership } from './model.js';
 import { lookupSessionBindings } from './registry.js';
 import { freshWatchLease, isCurrentlyJoined, resolveRosterName } from './runtime.js';
-import type { WatchLease } from './model.js';
-
-export interface InboxNotification {
-  actIndex: number;
-  actor: string;
-  at: number;
-  route: DirectedNotificationRoute;
-  body: string;
-}
-
-export interface InboxMembership {
-  name: string;
-  squarePath: string;
-  notifications: InboxNotification[];
-  catchLease?: WatchLease;
-}
 
 export function sessionInbox(sessionId: string): InboxMembership[] {
   const inbox: InboxMembership[] = [];

@@ -1,5 +1,6 @@
 import { presentPendingAtBoundary } from './boundary-presentation.js';
-import { sessionInbox, type InboxMembership } from './inbox.js';
+import { sessionInbox } from './inbox.js';
+import type { InboxMembership } from './model.js';
 
 export interface CodexHookInput {
   session_id?: unknown;

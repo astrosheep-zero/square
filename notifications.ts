@@ -17,12 +17,11 @@ import {
 } from './delivery.js';
 import { sessionInbox } from './inbox.js';
 import { hasPresentedAttention } from './presented.js';
-import { nameKey, SquareError, type NotifyLease } from './model.js';
+import { nameKey, SquareError, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
 import { quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
-import { type WakeRouteKind } from './routes.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { execute } from './square-application.js';
 import {
@@ -64,7 +63,7 @@ function renderWakePayload(request: WakeRequest): string {
   ].join('\n');
 }
 
-async function waitForCatch(route: import('./routes.js').WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
+async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
   const binding = lookupParticipant(request.squarePath, request.recipient)
     .find((item) => item.ownerId === route.ownerId);
   const activeCatch = binding && sessionInbox(binding.sessionId)

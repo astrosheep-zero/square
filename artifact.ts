@@ -23,7 +23,7 @@ import {
   sameName,
 } from './model.js';
 import { formatTimestamp, parseTimestamp } from './time.js';
-import { isWakeRouteKind } from './routes.js';
+import { isWakeRouteKind } from './model.js';
 
 const V2_KINDS = new Set(['say', 'join', 'done', 'hold', 'resume']);
 

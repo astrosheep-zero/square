@@ -37,6 +37,16 @@ function quarantinePath(squarePath: string): string {
   return squarePath.replace(/\.md$/, '') + '.quarantine.md';
 }
 
+function registryActs(squarePath: string): ReturnType<typeof loadSquare>['acts'] | undefined {
+  if (!fs.existsSync(squarePath)) return [];
+  try {
+    return loadSquare(squarePath).acts;
+  } catch {
+    // A temporarily unreadable artifact cannot disprove a cache binding.
+    return undefined;
+  }
+}
+
 export const doctorCommand: CommandSpec<DoctorIntent, DoctorResult> = {
   parse(argv, context) {
     let fix = false;
@@ -73,7 +83,7 @@ export const doctorCommand: CommandSpec<DoctorIntent, DoctorResult> = {
       };
     }
     const repaired = repair.repaired!;
-    const registry = pruneRegistry();
+    const registry = pruneRegistry(registryActs);
     if (registry.removed > 0) {
       repaired.actions.push({ message: `pruned ${registry.removed} obsolete registry membership(s)` });
     }

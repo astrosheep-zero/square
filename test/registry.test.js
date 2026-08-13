@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
+import { loadSquare } from '../dist/artifact.js';
 import {
   canonicalSquarePath,
   hasAutomaticDeliveryIdentity,
@@ -269,7 +270,14 @@ test('registry pruning removes only bindings disproved by their square artifacts
     recordJoin('missing-session', 'Bob', missingPath);
     recordJoin('uncertain-session', 'Dave', brokenPath);
 
-    assert.deepEqual(pruneRegistry(), { removed: 2, kept: 2 });
+    assert.deepEqual(pruneRegistry((candidate) => {
+      if (!fs.existsSync(candidate)) return [];
+      try {
+        return loadSquare(candidate).acts;
+      } catch {
+        return undefined;
+      }
+    }), { removed: 2, kept: 2 });
     assert.equal(lookupSession('valid-session').length, 1);
     assert.equal(lookupSession('uncertain-session').length, 1);
     assert.deepEqual(lookupSession('not-joined-session'), []);

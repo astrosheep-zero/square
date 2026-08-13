@@ -1,20 +1,22 @@
 import {
   type DeliveryReceipt,
+  type DirectedNotificationRoute,
   SquareError,
   type SquareDoc,
   type SquareRuntimeState,
   type StoredAct,
   type WatchLease,
   type WatchLeaseFilter,
+  type WakeRoute,
+  type WakeRouteKind,
   type Reach,
   findParticipantName,
   sameName,
 } from './model.js';
 import { actId, extractMentions, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
-import type { WakeRoute, WakeRouteKind } from './routes.js';
 
-export type NotificationRoute = 'mention' | 'beside' | 'broadcast' | 'bell';
-export type DirectedNotificationRoute = Exclude<NotificationRoute, 'broadcast'>;
+export type NotificationRoute = DirectedNotificationRoute | 'broadcast';
+export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
 
 export function notificationMessageId(squarePath: string, actIndex: number): string {

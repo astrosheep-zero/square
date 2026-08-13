@@ -3,9 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import type { InboxMembership } from './inbox.js';
 import { canonicalSquarePath, lookupParticipant, lookupSessionBindings } from './registry.js';
-import { sameName } from './model.js';
+import { sameName, type InboxMembership } from './model.js';
 
 interface PresentedRow {
   v: 2;

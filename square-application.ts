@@ -7,8 +7,7 @@ import { type Act } from './square-core.js';
 import { coreCompact, coreDone, coreHold, coreResume, decideAct, decideJoin, resolveKnownName } from './decisions.js';
 import { planRepair, type PlanRepairResult } from './doctor.js';
 import { stageReplacement, type StagedReplacement } from './harness-stage.js';
-import { SquareError, type BuildOptions, type HardCap, type Reach, type SquareDoc, type StoredAct } from './model.js';
-import type { WakeRouteKind } from './routes.js';
+import { SquareError, type BuildOptions, type HardCap, type Reach, type SquareDoc, type StoredAct, type WakeRouteKind } from './model.js';
 import { advanceCursor, freshWatchLease, LOCK_RETRY_MS, LOCK_STALE_MS, removeWatchLease, touchPresenceCursor, watchLease, writeWatchLease } from './runtime.js';
 
 export interface CommitPlan<Result> {

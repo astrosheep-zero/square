@@ -1,5 +1,5 @@
 import type { WakeAdapter, WakeDispatchResult } from './delivery.js';
-import type { WakeRoute, WakeRouteKind } from './routes.js';
+import type { WakeRoute, WakeRouteKind } from './model.js';
 
 export interface WakePortHooks {
   nextAttemptN(): number;

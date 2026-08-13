@@ -1,10 +1,10 @@
 import { loadSquare } from './artifact.js';
 import { isDeliveryDelivered } from './delivery.js';
-import { type SquareDoc } from './model.js';
+import { type SquareDoc, type WakeRoute } from './model.js';
 import { hasPresentedAttention } from './presented.js';
 import { lookupParticipant } from './registry.js';
 import { isCurrentlyJoined } from './runtime.js';
-import { readWakeRoutes, type WakeRoute } from './routes.js';
+import { readWakeRoutes } from './routes.js';
 import {
   isWakeRouteAttemptable,
   readWakeAttempts,

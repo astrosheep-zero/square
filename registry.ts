@@ -11,8 +11,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-import { loadSquare } from './artifact.js';
-import { nameKey, sameName } from './model.js';
+import { nameKey, sameName, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { refreshPaseoRoute, retireOwnerWakeRoutes } from './routes.js';
 
@@ -306,18 +305,15 @@ export interface RegistryPruneResult {
   kept: number;
 }
 
-function bindingIsProvablyObsolete(binding: RegistryBinding): boolean {
-  if (!fs.existsSync(binding.squarePath)) return true;
-  try {
-    return !isCurrentlyJoined(loadSquare(binding.squarePath).acts, binding.name);
-  } catch {
-    // A temporarily unreadable artifact is uncertain, so preserve its binding.
-    return false;
-  }
+function bindingIsProvablyObsolete(binding: RegistryBinding, acts: StoredAct[] | undefined): boolean {
+  return acts !== undefined && !isCurrentlyJoined(acts, binding.name);
 }
 
 /** Compact the registry and remove only bindings disproved by their authoritative artifact. */
-export function pruneRegistry(now = Date.now()): RegistryPruneResult {
+export function pruneRegistry(
+  readActs: (squarePath: string) => StoredAct[] | undefined,
+  now = Date.now(),
+): RegistryPruneResult {
   const filePath = registryPath();
   let raw: string;
   try {
@@ -327,7 +323,7 @@ export function pruneRegistry(now = Date.now()): RegistryPruneResult {
     throw error;
   }
   const active = foldRegistry(raw, now);
-  const kept = active.filter((binding) => !bindingIsProvablyObsolete(binding));
+  const kept = active.filter((binding) => !bindingIsProvablyObsolete(binding, readActs(binding.squarePath)));
   writeRegistryBindings(filePath, kept);
   return { removed: active.length - kept.length, kept: kept.length };
 }
