@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -8,15 +9,21 @@ import {
   deriveDeliveryModel,
   isDeliveryDelivered,
   isPendingNotification,
+  leaseOwnsNotification,
   planActNotifications,
   wakeGraceMs,
   type WakeAdapter,
+  type WakeRequest,
 } from './delivery.js';
+import { sessionInbox } from './inbox.js';
 import { hasPresentedAttention } from './presented.js';
 import { nameKey, SquareError, type NotifyLease } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
+import { quoteShell } from './presentation.js';
+import { lookupParticipant } from './registry.js';
 import { type WakeRouteKind } from './routes.js';
+import { isCurrentlyJoined } from './runtime.js';
 import { execute } from './square-application.js';
 import {
   nextWakeAttemptNumber,
@@ -39,6 +46,49 @@ function known(doc: ReturnType<typeof loadSquare>, name: string): string {
 }
 
 export { notificationMessageId } from './delivery.js';
+
+function catchCommand(squarePath: string, recipient: string): string {
+  return `square --as ${quoteShell(recipient)} --square-path ${quoteShell(squarePath)} catch --now`;
+}
+
+function renderWakePayload(request: WakeRequest): string {
+  const display = request.squarePath.startsWith(homedir())
+    ? `~${request.squarePath.slice(homedir().length)}`
+    : request.squarePath;
+  return [
+    '<system-reminder source="square">',
+    `${request.route === 'bell' ? 'Bell' : request.route === 'beside' ? 'Beside' : 'Mention'} from @${request.actor} in \`${display}\``,
+    'The native adapter will present it at the next boundary. If no native wake is available, pull from the square yourself.',
+    `\`${catchCommand(request.squarePath, request.recipient)}\``,
+    '</system-reminder>',
+  ].join('\n');
+}
+
+async function waitForCatch(route: import('./routes.js').WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
+  const binding = lookupParticipant(request.squarePath, request.recipient)
+    .find((item) => item.ownerId === route.ownerId);
+  const activeCatch = binding && sessionInbox(binding.sessionId)
+    .find((item) => item.name === request.recipient)?.catchLease;
+  if (!activeCatch || !leaseOwnsNotification(activeCatch, {
+    actor: request.actor,
+    body,
+    route: request.route,
+    recipient: request.recipient,
+  })) return false;
+
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const doc = loadSquare(request.squarePath);
+    if (isDeliveryDelivered(doc, request.recipient, request.actIndex)) return true;
+    const currentBinding = lookupParticipant(request.squarePath, request.recipient)
+      .find((item) => item.ownerId === route.ownerId);
+    const lease = currentBinding && sessionInbox(currentBinding.sessionId)
+      .find((item) => item.name === request.recipient)?.catchLease;
+    if (!lease || lease.expiresAt <= Date.now()) return false;
+    await sleep(Math.min(250, lease.expiresAt - Date.now()));
+  }
+  return false;
+}
 
 export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
   const doc = loadSquare(squarePath);
@@ -150,19 +200,23 @@ async function processNotification(
     const evidence = wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
     if (!wakeIsEligible(evidence)) return;
     const port = new WakePort(opts.adapters ?? [new PaseoAdapter()]);
+    const request: WakeRequest = {
+      squarePath,
+      actIndex: notification.item.index,
+      recipient: notification.recipient,
+      actor: notification.item.actor,
+      route: notification.route,
+    };
     await port.dispatch(
       evidence.attemptableRoutes,
-      {
-        squarePath,
-        actIndex: notification.item.index,
-        recipient: notification.recipient,
-        actor: notification.item.actor,
-        route: notification.route,
-      },
+      renderWakePayload(request),
       {
         nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
         beforeSend: async (route, attemptN) => {
+          if (await waitForCatch(route, request, notification.item.body)) return false;
           const currentAt = now();
+          const latest = loadSquare(squarePath);
+          if (!isCurrentlyJoined(latest.acts, notification.recipient)) return false;
           const current = wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
           if (!wakeIsEligible(current)) return false;
           if (!current.attemptableRoutes.some((candidate) =>

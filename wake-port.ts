@@ -1,4 +1,4 @@
-import type { WakeAdapter, WakeDispatchResult, WakeRequest } from './delivery.js';
+import type { WakeAdapter, WakeDispatchResult } from './delivery.js';
 import type { WakeRoute, WakeRouteKind } from './routes.js';
 
 export interface WakePortHooks {
@@ -21,14 +21,14 @@ export class WakePort {
 
   async dispatch(
     routes: readonly WakeRoute[],
-    request: WakeRequest,
+    payload: string,
     hooks: WakePortHooks,
   ): Promise<WakePortResult> {
     for (const route of routes) {
       const adapter = this.adapters.get(route.kind);
       if (adapter === undefined) continue;
       const attemptN = hooks.nextAttemptN();
-      const result = await adapter.dispatch(route, request, () => hooks.beforeSend(route, attemptN));
+      const result = await adapter.dispatch(route.address, payload, () => hooks.beforeSend(route, attemptN));
       if (result.outcome === 'cancelled') return result;
       await hooks.record(route, attemptN, result);
       if (result.outcome === 'accepted' || result.outcome === 'unknown') return { outcome: result.outcome };

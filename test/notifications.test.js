@@ -77,7 +77,7 @@ function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
 }
 
-test('PaseoAdapter waits for the current boundary and sends awareness only', async () => {
+test('PaseoAdapter waits for the current boundary and sends supplied awareness only', async () => {
   const item = fixture();
   route(item, { agentId: 'exact-agent' });
   const registered = { ownerId: 'bob-owner', sessionId: 'exact-agent', kind: 'paseo', address: { agentId: 'exact-agent' }, updatedAt: Date.now() };
@@ -91,15 +91,13 @@ test('PaseoAdapter waits for the current boundary and sends awareness only', asy
     waitForBoundary: async () => { boundary = true; return true; },
     sendWake: (request) => { sent = request; },
   });
-  const outcome = await withRegistry(item.env, () => adapter.dispatch(registered, {
-    squarePath: item.squarePath, actIndex: 2, recipient: 'Bob', actor: 'Alice', route: 'mention',
-  }, async () => true));
+  const payload = '<system-reminder source="square">awareness</system-reminder>';
+  const outcome = await adapter.dispatch(registered.address, payload, async () => true);
 
   assert.deepEqual(outcome, { outcome: 'accepted' });
   assert.equal(boundary, true);
   assert.equal(sent.agentId, 'exact-agent');
-  assert.match(sent.prompt, /native adapter/);
-  assert.match(sent.prompt, /catch --now/);
+  assert.equal(sent.prompt, payload);
   assert.doesNotMatch(sent.prompt, /private payload/);
   assert.deepEqual(loadSquare(item.squarePath).runtime.deliveryReceipts, {});
   assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
@@ -110,7 +108,7 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
   const item = fixture();
   route(item);
   const registered = { ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, updatedAt: Date.now() };
-  const request = { squarePath: item.squarePath, actIndex: 2, recipient: 'Bob', actor: 'Alice', route: 'mention' };
+  const payload = '<system-reminder source="square">awareness</system-reminder>';
   const base = {
     discover: () => ({ agents: [{ id: 'bob-agent', name: 'Bob', status: 'idle' }] }),
     waitForBoundary: async () => true,
@@ -118,11 +116,11 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
   const failed = await withRegistry(item.env, () => new PaseoAdapter({
     ...base,
     sendWake: () => { throw new PaseoWakeSendError('refused', 'transient'); },
-  }).dispatch(registered, request, async () => true));
+  }).dispatch(registered.address, payload, async () => true));
   const unknown = await withRegistry(item.env, () => new PaseoAdapter({
     ...base,
     sendWake: () => { throw new PaseoWakeSendError('timeout', 'unknown'); },
-  }).dispatch(registered, request, async () => true));
+  }).dispatch(registered.address, payload, async () => true));
 
   assert.deepEqual(failed.outcome, 'failed');
   assert.deepEqual(failed.signature, 'send_pre_accept_transient');

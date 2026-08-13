@@ -55,7 +55,11 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
 
 export interface WakeAdapter {
   readonly kind: WakeRouteKind;
-  dispatch(route: WakeRoute, request: WakeRequest, beforeSend: () => Promise<boolean>): Promise<WakeDispatchResult>;
+  dispatch(
+    address: Readonly<Record<string, string>>,
+    payload: string,
+    beforeSend: () => Promise<boolean>,
+  ): Promise<WakeDispatchResult>;
 }
 
 export function isPendingNotification(notification: PlannedNotification): notification is PendingNotification {
