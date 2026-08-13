@@ -23,7 +23,7 @@ import {
   verifyOpenCodeRuntime,
 } from './harness-links.js';
 
-export type HarnessTargetName = 'skills' | 'claude' | 'codex' | 'opencode' | 'pi' | 'delivery';
+export type HarnessTargetName = 'claude' | 'codex' | 'opencode' | 'pi' | 'delivery';
 export type HarnessAction = 'install' | 'uninstall' | 'doctor';
 
 export interface HarnessTargetContext {
@@ -72,13 +72,6 @@ function readableSquarePath(squarePath: string | undefined): squarePath is strin
 
 const TARGETS: readonly HarnessTarget[] = [
   {
-    name: 'skills',
-    capabilities: ['install', 'uninstall', 'doctor'],
-    install: ({ homeDir, force }) => result(installHarnessLinks(skillLinks(homeDir), force)),
-    uninstall: ({ homeDir }) => result(uninstallHarnessLinks(skillLinks(homeDir))),
-    doctor: ({ homeDir }) => result(doctorHarnessLinks(skillLinks(homeDir))),
-  },
-  {
     name: 'claude',
     capabilities: ['install', 'uninstall', 'doctor'],
     async install({ homeDir }) {
@@ -95,7 +88,7 @@ const TARGETS: readonly HarnessTarget[] = [
     name: 'codex',
     capabilities: ['install', 'uninstall', 'doctor'],
     async install({ homeDir }) {
-      const installed = await installCodexPlugin(homeDir);
+      const installed = await installCodexPlugin(homeDir, undefined, process.env.CODEX_HOME);
       const lines = [
         installed.configPath,
         installed.marketplaceRoot,
@@ -105,10 +98,10 @@ const TARGETS: readonly HarnessTarget[] = [
       return result(lines, installed.notes);
     },
     async uninstall({ homeDir }) {
-      const removed = await uninstallCodexPlugin(homeDir);
+      const removed = await uninstallCodexPlugin(homeDir, undefined, process.env.CODEX_HOME);
       return result(removed.paths, removed.notes);
     },
-    async doctor({ homeDir }) { return doctorHost('Codex', () => doctorCodexPlugin(homeDir)); },
+    async doctor({ homeDir }) { return doctorHost('Codex', () => doctorCodexPlugin(homeDir, undefined, process.env.CODEX_HOME)); },
   },
   {
     name: 'opencode',

@@ -60,17 +60,17 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['install'], usage: 'install (--all | <target>...) [-f]', group: 'maintenance',
     summary: 'Install Square support for one or more agent hosts.',
-    details: ['Targets:', '  skills, claude, codex, opencode, pi', '', 'Options:', '  --all       Install every supported target.', '  -f, --force Replace existing managed links.'],
+    details: ['Targets:', '  claude, codex, opencode, pi', '', 'Options:', '  --all       Install every supported target.', '  -f, --force Replace existing managed links.'],
   },
   {
     names: ['uninstall'], usage: 'uninstall (--all | <target>...)', group: 'maintenance',
     summary: 'Remove Square support from one or more agent hosts.',
-    details: ['Targets:', '  skills, claude, codex, opencode, pi', '', 'Options:', '  --all  Remove every supported target.'],
+    details: ['Targets:', '  claude, codex, opencode, pi', '', 'Options:', '  --all  Remove every supported target.'],
   },
   {
-    names: ['harness'], usage: 'harness doctor [skills|claude|codex|opencode|pi|delivery]', usesSquare: true, group: 'maintenance', hiddenFromIndex: true,
+    names: ['harness'], usage: 'harness doctor [claude|codex|opencode|pi|delivery]', usesSquare: true, group: 'maintenance', hiddenFromIndex: true,
     summary: 'Diagnose installed agent-host support.',
-    details: ['Targets:', '  skills, claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                              Diagnose delivery for the selected square.'],
+    details: ['Targets:', '  claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                      Diagnose delivery for the selected square.'],
   },
   { names: ['compact'], usage: 'compact [--keep N]', usesSquare: true, group: 'host', summary: 'Move older activity out of the working artifact while keeping the latest N.' },
   {

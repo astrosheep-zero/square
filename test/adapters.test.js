@@ -262,6 +262,30 @@ test('Codex installation leaves a self-contained bundle with hooks enabled', asy
   }
 });
 
+test('Codex installation honors an explicit Codex home', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-explicit-home-'));
+  const codexHome = path.join(home, 'codex-for');
+  const observedHomes = [];
+  const runCodex = (_home, args, currentCodexHome) => {
+    observedHomes.push(currentCodexHome);
+    return {
+      status: 0,
+      stdout: args[0] === 'plugin' && args[1] === 'add'
+        ? JSON.stringify({ installedPath: '/tmp/square' })
+        : enabledPlugins(CODEX_PLUGIN_ID),
+      stderr: '',
+    };
+  };
+  try {
+    const installed = await installCodexPlugin(home, runCodex, codexHome);
+    assert.equal(installed.configPath, path.join(codexHome, 'config.toml'));
+    assert.equal(observedHomes.every((value) => value === codexHome), true);
+    assert.match(fs.readFileSync(installed.configPath, 'utf8'), /^hooks = true$/m);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('Codex installation refreshes the marketplace source already configured for its identity', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-existing-source-'));
   const existing = path.join(home, '.square', 'codex', 'marketplace');

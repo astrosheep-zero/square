@@ -12,13 +12,13 @@ export const CODEX_PLUGIN_ID = SQUARE_IDENTITY.pluginId;
 export const CODEX_MARKETPLACE_NAME = SQUARE_IDENTITY.marketplaceName;
 const LEGACY_MARKETPLACES = ['astrosheep-square'];
 export interface CodexCommandResult { status: number; stdout: string; stderr: string; }
-export type CodexCommandRunner = (homeDir: string, args: string[]) => CodexCommandResult;
+export type CodexCommandRunner = (homeDir: string, args: string[], codexHomeDir?: string) => CodexCommandResult;
 export interface CodexInstallResult { configPath: string; marketplaceRoot: string; pluginRoot: string; installedPath?: string; notes: string[]; }
 
 export function codexMarketplaceRoot(homeDir: string): string {
   return path.join(homeDir, '.square', 'codex', 'marketplaces', CODEX_MARKETPLACE_NAME);
 }
-function configuredMarketplaceRoot(homeDir: string, configText: string): string | undefined {
+function configuredMarketplaceRoot(homeDir: string, configText: string, codexHomeDir?: string): string | undefined {
   const lines = configText.split('\n');
   const header = `[marketplaces.${CODEX_MARKETPLACE_NAME}]`;
   const start = lines.findIndex((line) => line.trim() === header);
@@ -31,10 +31,10 @@ function configuredMarketplaceRoot(homeDir: string, configText: string): string 
   const match = source?.match(/^\s*source\s*=\s*("(?:\\.|[^"])*"|'[^']*')\s*$/);
   if (!match) return undefined;
   const value = match[1].startsWith('"') ? JSON.parse(match[1]) as string : match[1].slice(1, -1);
-  return path.isAbsolute(value) ? value : path.resolve(codexHome(homeDir), value);
+  return path.isAbsolute(value) ? value : path.resolve(codexHome(homeDir, codexHomeDir), value);
 }
-function activeMarketplaceRoot(homeDir: string, configText: string): string {
-  return configuredMarketplaceRoot(homeDir, configText) ?? codexMarketplaceRoot(homeDir);
+function activeMarketplaceRoot(homeDir: string, configText: string, codexHomeDir?: string): string {
+  return configuredMarketplaceRoot(homeDir, configText, codexHomeDir) ?? codexMarketplaceRoot(homeDir);
 }
 export function codexPluginRoot(homeDir: string, marketplaceRoot = codexMarketplaceRoot(homeDir)): string {
   return path.join(marketplaceRoot, 'plugins', SQUARE_IDENTITY.pluginName);
@@ -42,13 +42,16 @@ export function codexPluginRoot(homeDir: string, marketplaceRoot = codexMarketpl
 export function codexPluginHooksPath(homeDir: string, marketplaceRoot = codexMarketplaceRoot(homeDir)): string {
   return path.join(codexPluginRoot(homeDir, marketplaceRoot), 'hooks', 'hooks.json');
 }
-function codexHome(homeDir: string): string { return path.join(homeDir, '.codex'); }
-export function codexHomeHooksPath(homeDir: string): string { return path.join(codexHome(homeDir), 'hooks.json'); }
-export function codexConfigPath(homeDir: string): string { return path.join(codexHome(homeDir), 'config.toml'); }
+function codexHome(homeDir: string, codexHomeDir?: string): string {
+  const explicit = codexHomeDir?.trim();
+  return explicit ? path.resolve(explicit) : path.join(homeDir, '.codex');
+}
+export function codexHomeHooksPath(homeDir: string, codexHomeDir?: string): string { return path.join(codexHome(homeDir, codexHomeDir), 'hooks.json'); }
+export function codexConfigPath(homeDir: string, codexHomeDir?: string): string { return path.join(codexHome(homeDir, codexHomeDir), 'config.toml'); }
 
-function runCodex(homeDir: string, args: string[]): CodexCommandResult {
+function runCodex(homeDir: string, args: string[], codexHomeDir?: string): CodexCommandResult {
   const result = spawnSync(process.env.SQUARE_CODEX_BIN || 'codex', args, {
-    encoding: 'utf8', env: { ...process.env, HOME: homeDir, CODEX_HOME: codexHome(homeDir) }, timeout: 30_000,
+    encoding: 'utf8', env: { ...process.env, HOME: homeDir, CODEX_HOME: codexHome(homeDir, codexHomeDir) }, timeout: 30_000,
   });
   if (result.error) throw result.error;
   return { status: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '' };
@@ -79,10 +82,11 @@ function writeAtomic(file: string, text: string): void {
   fs.renameSync(temp, file);
 }
 
-export async function installCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex): Promise<CodexInstallResult> {
-  const config = codexConfigPath(homeDir);
+export async function installCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex, codexHomeDir?: string): Promise<CodexInstallResult> {
+  const resolvedCodexHome = codexHome(homeDir, codexHomeDir);
+  const config = codexConfigPath(homeDir, resolvedCodexHome);
   const current = fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '';
-  const root = activeMarketplaceRoot(homeDir, current);
+  const root = activeMarketplaceRoot(homeDir, current, resolvedCodexHome);
   const staged = stageReplacement(root, (stage) => {
     const plugin = path.join(stage, 'plugins', SQUARE_IDENTITY.pluginName);
     fs.cpSync(fileURLToPath(new URL('../codex-plugin/', import.meta.url)), plugin, { recursive: true });
@@ -94,16 +98,16 @@ export async function installCodexPlugin(homeDir: string, run: CodexCommandRunne
   const notes: string[] = [];
   try {
     writeAtomic(config, upsertTomlSectionKey(current, 'features', 'hooks', 'true'));
-    requireSuccess(run(homeDir, ['plugin', 'marketplace', 'add', root, '--json']), 'marketplace install', true);
-    const installed = run(homeDir, ['plugin', 'add', CODEX_PLUGIN_ID, '--json']);
+    requireSuccess(run(homeDir, ['plugin', 'marketplace', 'add', root, '--json'], resolvedCodexHome), 'marketplace install', true);
+    const installed = run(homeDir, ['plugin', 'add', CODEX_PLUGIN_ID, '--json'], resolvedCodexHome);
     requireSuccess(installed, 'plugin install');
     let installedPath: string | undefined;
     try { const value = JSON.parse(installed.stdout).installedPath; if (typeof value === 'string') installedPath = value; } catch { notes.push('Codex returned non-JSON installation output.'); }
     for (const marketplace of LEGACY_MARKETPLACES) {
       const pluginId = `${SQUARE_IDENTITY.pluginName}@${marketplace}`;
       if (!current.includes(`[marketplaces.${marketplace}]`) && !current.includes(`[plugins."${pluginId}"]`)) continue;
-      requireSuccess(run(homeDir, ['plugin', 'remove', pluginId, '--json']), 'legacy plugin removal', true);
-      requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', marketplace, '--json']), 'legacy marketplace removal', true);
+      requireSuccess(run(homeDir, ['plugin', 'remove', pluginId, '--json'], resolvedCodexHome), 'legacy plugin removal', true);
+      requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', marketplace, '--json'], resolvedCodexHome), 'legacy marketplace removal', true);
       notes.push(`retired ${pluginId}`);
     }
     staged.finalize();
@@ -114,26 +118,28 @@ export async function installCodexPlugin(homeDir: string, run: CodexCommandRunne
   }
 }
 
-export async function uninstallCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex): Promise<{ paths: string[]; notes: string[] }> {
-  const config = codexConfigPath(homeDir);
+export async function uninstallCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex, codexHomeDir?: string): Promise<{ paths: string[]; notes: string[] }> {
+  const resolvedCodexHome = codexHome(homeDir, codexHomeDir);
+  const config = codexConfigPath(homeDir, resolvedCodexHome);
   const current = fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '';
-  const root = activeMarketplaceRoot(homeDir, current);
-  requireSuccess(run(homeDir, ['plugin', 'remove', CODEX_PLUGIN_ID, '--json']), 'plugin removal', true);
-  requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', CODEX_MARKETPLACE_NAME, '--json']), 'marketplace removal', true);
+  const root = activeMarketplaceRoot(homeDir, current, resolvedCodexHome);
+  requireSuccess(run(homeDir, ['plugin', 'remove', CODEX_PLUGIN_ID, '--json'], resolvedCodexHome), 'plugin removal', true);
+  requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', CODEX_MARKETPLACE_NAME, '--json'], resolvedCodexHome), 'marketplace removal', true);
   for (const marketplace of LEGACY_MARKETPLACES) {
-    requireSuccess(run(homeDir, ['plugin', 'remove', `${SQUARE_IDENTITY.pluginName}@${marketplace}`, '--json']), 'legacy plugin removal', true);
-    requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', marketplace, '--json']), 'legacy marketplace removal', true);
+    requireSuccess(run(homeDir, ['plugin', 'remove', `${SQUARE_IDENTITY.pluginName}@${marketplace}`, '--json'], resolvedCodexHome), 'legacy plugin removal', true);
+    requireSuccess(run(homeDir, ['plugin', 'marketplace', 'remove', marketplace, '--json'], resolvedCodexHome), 'legacy marketplace removal', true);
   }
   fs.rmSync(root, { recursive: true, force: true });
-  fs.rmSync(codexHomeHooksPath(homeDir), { force: true });
-  return { paths: [root, codexConfigPath(homeDir), codexHomeHooksPath(homeDir)], notes: [] };
+  fs.rmSync(codexHomeHooksPath(homeDir, resolvedCodexHome), { force: true });
+  return { paths: [root, config, codexHomeHooksPath(homeDir, resolvedCodexHome)], notes: [] };
 }
 
-export async function doctorCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex): Promise<string[]> {
-  const config = codexConfigPath(homeDir);
+export async function doctorCodexPlugin(homeDir: string, run: CodexCommandRunner = runCodex, codexHomeDir?: string): Promise<string[]> {
+  const resolvedCodexHome = codexHome(homeDir, codexHomeDir);
+  const config = codexConfigPath(homeDir, resolvedCodexHome);
   const current = fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '';
-  const root = activeMarketplaceRoot(homeDir, current);
-  const listed = run(homeDir, ['plugin', 'list', '--json']);
+  const root = activeMarketplaceRoot(homeDir, current, resolvedCodexHome);
+  const listed = run(homeDir, ['plugin', 'list', '--json'], resolvedCodexHome);
   return [
     /^hooks\s*=\s*true$/m.test(current) ? `✓ features.hooks=true in ${config}` : `○ features.hooks missing in ${config}`,
     fs.existsSync(codexPluginHooksPath(homeDir, root)) ? `✓ Square plugin hooks ${codexPluginHooksPath(homeDir, root)}` : `○ Square plugin bundle missing ${root}`,

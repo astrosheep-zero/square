@@ -105,22 +105,34 @@ test('install and uninstall accept multiple explicit targets', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');
   try {
-    const result = run(['install', 'skills', 'opencode', 'pi'], {
+    const result = run(['install', 'opencode', 'pi'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(result.status, 0, result.stderr);
     const plugin = path.join(config, 'opencode', 'plugins', 'square.js');
-    const skill = path.join(home, '.agents', 'skills', 'square');
     assert.equal(fs.realpathSync(plugin), path.join(ROOT, 'extensions', 'square-opencode.js'));
-    assert.equal(fs.realpathSync(skill), path.join(ROOT, 'skills', 'square'));
     assert.equal(fs.realpathSync(path.join(home, '.pi', 'agent', 'extensions', 'square.js')), path.join(ROOT, 'extensions', 'square-pi.js'));
 
-    const removed = run(['uninstall', 'skills', 'opencode', 'pi'], {
+    const removed = run(['uninstall', 'opencode', 'pi'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(removed.status, 0, removed.stderr);
     assert.equal(fs.existsSync(plugin), false);
-    assert.equal(fs.existsSync(skill), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('standalone skills install target is removed; skills ship with plugins', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-removed-skills-'));
+  try {
+    const result = run(['install', 'skills'], { env: { HOME: home } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unknown install target: skills/);
+
+    const uninstall = run(['uninstall', 'skills'], { env: { HOME: home } });
+    assert.notEqual(uninstall.status, 0);
+    assert.match(uninstall.stderr, /Unknown uninstall target: skills/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

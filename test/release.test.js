@@ -27,7 +27,6 @@ test('generated release artifacts expose the current identity and supported host
   assert.deepEqual(
     harnessTargets().map(({ name, capabilities }) => [name, capabilities]),
     [
-      ['skills', ['install', 'uninstall', 'doctor']],
       ['claude', ['install', 'uninstall', 'doctor']],
       ['codex', ['install', 'uninstall', 'doctor']],
       ['opencode', ['install', 'uninstall', 'doctor']],
