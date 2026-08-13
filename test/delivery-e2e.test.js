@@ -9,11 +9,12 @@ import { loadSquare, parseSquare, renderSquareDoc, saveRuntimeSidecar } from '..
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
-import { processActNotificationsOnce, sweepPendingNotifications, wakeEvidence, wakeIsEligible } from '../dist/notifications.js';
+import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { presentOnce } from '../dist/presented.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
+import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');

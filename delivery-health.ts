@@ -4,10 +4,9 @@ import {
   wakeGraceMs,
   type DirectedNotificationRoute,
 } from './delivery.js';
-import { wakeEvidence } from './notifications.js';
-import { isCurrentlyJoined } from './runtime.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './wake-attempts.js';
+import { joinedRecipients, wakeEvidence } from './wake-evidence.js';
 
 export type DeliveryHealthKind =
   | 'awaiting'
@@ -47,10 +46,7 @@ export function classifyDeliveryHealth(
   const env = opts.env ?? process.env;
   const doc = loadSquare(squarePath);
   const model = deriveDeliveryModel(doc);
-  const recipients = [...new Set(doc.acts.filter((act) => act.kind === 'join').map((act) => act.actor))]
-    .filter((name) => isCurrentlyJoined(doc.acts, name));
-
-  return recipients.flatMap((recipient) => model.pendingFor(recipient).map((note) => {
+  return joinedRecipients(doc).flatMap((recipient) => model.pendingFor(recipient).map((note) => {
     const ageMs = Math.max(0, now - note.item.at);
     const evidence = wakeEvidence(squarePath, note.recipient, note.item.index, now, env);
     const kind: DeliveryHealthKind = evidence.presented

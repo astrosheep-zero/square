@@ -14,21 +14,17 @@ import {
 } from './delivery.js';
 import { hasPresentedAttention } from './presented.js';
 import { nameKey, SquareError, type NotifyLease } from './model.js';
-import { SLEEP_MS, isCurrentlyJoined, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
-import { lookupParticipant } from './registry.js';
-import { readWakeRoutes, type WakeRoute, type WakeRouteKind } from './routes.js';
+import { type WakeRouteKind } from './routes.js';
 import { execute } from './square-application.js';
 import {
   nextWakeAttemptNumber,
-  isWakeRouteAttemptable,
-  readWakeAttempts,
   recordRecoveredUnknown,
   recordWakeAttempt,
-  terminalWakeEvidence,
-  type WakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
+import { joinedRecipients, wakeEvidence, wakeIsEligible } from './wake-evidence.js';
 import { WakePort } from './wake-port.js';
 
 const NOTIFY_LEASE_MS = 5 * 60 * 1000;
@@ -43,48 +39,6 @@ function known(doc: ReturnType<typeof loadSquare>, name: string): string {
 }
 
 export { notificationMessageId } from './delivery.js';
-
-export interface WakeEvidence {
-  delivered: boolean;
-  presented: boolean;
-  attempts: WakeAttempt[];
-  terminal?: WakeAttempt;
-  attemptableRoutes: WakeRoute[];
-}
-
-/** Project every wake decision from the same primary evidence. */
-export function wakeEvidence(
-  squarePath: string,
-  recipient: string,
-  actIndex: number,
-  now: number,
-  env: NodeJS.ProcessEnv,
-): WakeEvidence {
-  const doc = loadSquare(squarePath);
-  const owners = new Set(
-    lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
-  );
-  const attempts = readWakeAttempts({ attention: { squarePath, recipient, actIndex }, env, now });
-  const terminal = terminalWakeEvidence(attempts);
-  const routes = readWakeRoutes({ freshOnly: true, now, env })
-    .filter((route) => owners.has(route.ownerId));
-  return {
-    delivered: isDeliveryDelivered(doc, recipient, actIndex),
-    presented: hasPresentedAttention(squarePath, recipient, actIndex, env, now),
-    attempts,
-    ...(terminal === undefined ? {} : { terminal }),
-    attemptableRoutes: terminal === undefined
-      ? routes.filter((route) => isWakeRouteAttemptable(route, attempts))
-      : [],
-  };
-}
-
-export function wakeIsEligible(evidence: WakeEvidence): boolean {
-  return !evidence.delivered
-    && !evidence.presented
-    && evidence.terminal === undefined
-    && evidence.attemptableRoutes.length > 0;
-}
 
 export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
   const doc = loadSquare(squarePath);
@@ -295,10 +249,8 @@ export function sweepPendingNotifications(
   const limit = opts.limit ?? 8;
   const doc = loadSquare(squarePath);
   const model = deriveDeliveryModel(doc);
-  const recipients = [...new Set(doc.acts.filter((act) => act.kind === 'join').map((act) => act.actor))]
-    .filter((recipient) => isCurrentlyJoined(doc.acts, recipient));
   const indexes = new Set<number>();
-  for (const recipient of recipients) {
+  for (const recipient of joinedRecipients(doc)) {
     for (const note of model.pendingFor(recipient)) {
       if (now - note.item.at <= wakeGraceMs(env)) continue;
       if (!wakeIsEligible(wakeEvidence(squarePath, recipient, note.item.index, now, env))) continue;

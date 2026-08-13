@@ -28,4 +28,19 @@ test('delivery evidence writers and health labels stay inside their owning modul
   for (const name of ['notifications.ts', 'routes.ts', 'wake-attempts.ts', 'wake-port.ts']) {
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, name), 'utf8'), /delivery-health/);
   }
+
+  const sourceByName = new Map(sources);
+  const closure = new Set();
+  const visit = (name) => {
+    if (closure.has(name)) return;
+    closure.add(name);
+    const source = sourceByName.get(name);
+    if (source === undefined) return;
+    for (const match of source.matchAll(/from ['"]\.\/(.+)\.js['"]/g)) visit(`${match[1]}.ts`);
+  };
+  visit('delivery-health.ts');
+  assert.equal(closure.has('notifications.ts'), false);
+  for (const name of closure) {
+    assert.doesNotMatch(sourceByName.get(name) ?? '', /node:child_process/, `${name} gives delivery health process effects`);
+  }
 });
