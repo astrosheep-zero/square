@@ -253,17 +253,10 @@ function commitPlan<Result>(squarePath: string, doc: SquareDoc, planned: CommitP
 
 /** The one mutation pipeline shared by package and CLI adapters. */
 export async function execute<Result = unknown>(squarePath: string, intent: Intent): Promise<Committed<Result>> {
-  const committed = await withSquareLock(squarePath, () => {
+  return withSquareLock(squarePath, () => {
     const doc = loadSquare(squarePath);
     return commitPlan(squarePath, doc, plan(doc, intent) as CommitPlan<Result>);
   });
-  for (const act of committed.acts) {
-    if (act.kind === 'say') {
-      const { dispatchActNotifications } = await import('./notifications.js');
-      await dispatchActNotifications(squarePath, act);
-    }
-  }
-  return committed;
 }
 
 /** Application-owned artifact creation; adapters provide validated options and stdin text only. */

@@ -23,7 +23,9 @@ export {
 
 import { loadSquare } from './artifact.js';
 import {
+  dispatchActNotifications,
   hasDeliveredNotification as hasDeliveredNotificationImpl,
+  sweepPendingNotifications,
   waitForDeliveredNotification as waitForDeliveredNotificationImpl,
 } from './notifications.js';
 import { type ReadCursor, type WatchLease } from './model.js';
@@ -34,7 +36,6 @@ import {
 } from './runtime.js';
 import { decideAct, resolveKnownName } from './decisions.js';
 import { execute } from './square-application.js';
-import { sweepPendingNotifications } from './notifications.js';
 
 export { WATCH_STALE_MS };
 
@@ -118,5 +119,7 @@ export async function express(squarePath: string, name: string, body: string, op
     now: Date.now(),
     ...(opts.reply === undefined ? {} : { reply: actRefIndex(opts.reply) }),
   });
+  const sayAct = committed.acts.find((act) => act.kind === 'say');
+  if (sayAct !== undefined) await dispatchActNotifications(squarePath, sayAct);
   if (committed.result.type !== 'sent') throw new Error(`Activity rejected: ${committed.result.type}`);
 }

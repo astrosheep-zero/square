@@ -16,6 +16,7 @@ import {
 } from './presentation.js';
 import { currentHold, inSquareCount, nowMs, SLEEP_MS, resolveRosterName } from './runtime.js';
 import { decideAct, resolveKnownName } from './decisions.js';
+import { dispatchActNotifications } from './notifications.js';
 import { execute } from './square-application.js';
 import { formatTimestamp } from './time.js';
 
@@ -113,6 +114,8 @@ export async function cmdActivity(
 
     switch (decision.type) {
       case 'sent': {
+        const sayAct = committed.acts.find((act) => act.kind === 'say');
+        if (sayAct !== undefined) await dispatchActNotifications(squarePath, sayAct);
         const hasPending = decision.pendingPublic.length > 0 || decision.pendingRoomChanges.length > 0;
         const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, decision.pendingPublic, decision.pendingRoomChanges)}` : '';
         const hint = expressHintLine(decision.ownActCount);
