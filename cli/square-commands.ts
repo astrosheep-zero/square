@@ -17,7 +17,7 @@ import {
   renderPublicTail,
   withPathOutput,
 } from '../presentation.js';
-import { hasAutomaticDeliveryIdentity, recordLocalDone, recordLocalJoin } from '../registry.js';
+import { hasAutomaticDeliveryIdentity, localParticipantOwner, recordLocalDone, recordLocalJoin } from '../registry.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, isCurrentlyJoined, nowMs, resolveRosterName } from '../runtime.js';
 import { createSquare, execute } from '../square-application.js';
@@ -44,6 +44,7 @@ interface BuildIntent {
 interface JoinIntent {
   name: string;
   lastN: number | null;
+  kick: boolean;
 }
 
 interface ActivityIntent {
@@ -114,17 +115,20 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
 
 function parseJoin(argv: string[], context: CommandContext): JoinIntent {
   let lastN: number | null = 10;
+  let kick = false;
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--last') {
       lastN = parsePositiveInteger(requireValue(argv, index, argv[index]), argv[index]);
       index += 1;
     } else if (argv[index] === '--all') {
       lastN = null;
+    } else if (argv[index] === '--kick') {
+      kick = true;
     } else {
       usage(context.command);
     }
   }
-  return { name: requireParticipant(context.name), lastN };
+  return { name: requireParticipant(context.name), lastN, kick };
 }
 
 export const joinCommand: CommandSpec<JoinIntent, string> = {
@@ -157,12 +161,26 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const doc = loadSquare(context.squarePath);
       const joinedName = resolveRosterName(doc, intent.name);
       if (joinedName === undefined || !isCurrentlyJoined(doc.acts, joinedName)) throw error;
+      const reconnect = localParticipantOwner(context.squarePath, joinedName) !== undefined;
+      if (!intent.kick && !reconnect) {
+        fail(
+          [
+            `✕ ${joinedName} shoos you out of the square`,
+            `  · a same-named participant stands here — the name is taken`,
+            `  · --kick banishes her and the name becomes yours`,
+            `» ${participantCommandPrefix(context.squarePath, joinedName)} join --kick`,
+          ].join('\n')
+        );
+      }
       recordLocalJoin(joinedName, context.squarePath);
       await sweepPendingNotifications(context.squarePath);
       const fallback = hasAutomaticDeliveryIdentity()
         ? ''
         : `\n» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m\n  no session delivery detected — keep this catch open for new activity`;
-      return withPathOutput(context.squarePath, `✕ you kicked out the original ${joinedName}${fallback}`, { participantCount: inSquareCount(doc) });
+      const line = reconnect && !intent.kick
+        ? `● you are already in the square`
+        : `✓ you banished the original ${joinedName} — the name is yours`;
+      return withPathOutput(context.squarePath, `${line}${fallback}`, { participantCount: inSquareCount(doc) });
     }
   },
   present: (result) => process.stdout.write(result),

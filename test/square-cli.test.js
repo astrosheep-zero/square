@@ -308,8 +308,18 @@ test('join and catch only show fallback catch hints without automatic session de
 
   const rebound = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
   assert.equal(rebound.status, 0, rebound.stderr);
-  assert.match(rebound.stdout, /you kicked out the original Bob/);
+  assert.match(rebound.stdout, /you are already in the square/);
   assert.doesNotMatch(rebound.stdout, /catch --/);
+
+  const imposter = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  assert.equal(imposter.status, 2, imposter.stderr);
+  assert.match(imposter.stderr, /Bob shoos you out of the square/);
+  assert.match(imposter.stderr, /join --kick/);
+
+  const reclaimed = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  assert.equal(reclaimed.status, 0, reclaimed.stderr);
+  assert.match(reclaimed.stdout, /you banished the original Bob/);
+  assert.doesNotMatch(reclaimed.stdout, /catch --/);
   assert.equal(loadSquare(file).acts.filter((act) => act.kind === 'join' && act.actor === 'Bob').length, 1);
 });
 

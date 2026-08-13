@@ -21,7 +21,7 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --depth <N>  Descend through at most N directory levels (default 4; 0 scans only the current directory).'],
   },
   {
-    names: ['join'], usage: '--as <name> join [--last N | --all]', usesSquare: true, group: 'participant',
+    names: ['join'], usage: '--as <name> join [--last N | --all] [--kick]', usesSquare: true, group: 'participant',
     summary: 'Step into the square and read its current context.',
     details: ['Options:', '  --last <N>  Show the last N public activities (default 10).', '  --all       Show the complete history.'],
   },

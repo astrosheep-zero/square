@@ -173,6 +173,10 @@ test('only explicit join claims local ownership and done closes the current owne
     const env = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: 'resume-session',
+      CLAUDE_CODE_CHILD_SESSION: '',
+      CODEX_THREAD_ID: '',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: '',
       PASEO_AGENT_ID: 'resume-paseo-agent',
     };
     const built = runCli(['--square-path', squarePath, 'build', '--cap', 'unlimited'], {
@@ -184,7 +188,12 @@ test('only explicit join claims local ownership and done closes the current owne
 
     const observerEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+      CLAUDE_CODE_SESSION_ID: '',
+      CLAUDE_CODE_CHILD_SESSION: '',
       CODEX_THREAD_ID: 'observer-session',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: '',
+      PASEO_AGENT_ID: '',
     };
     const status = runCli(['--square-path', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
     assert.equal(status.status, 0, status.stderr);
@@ -203,24 +212,40 @@ test('only explicit join claims local ownership and done closes the current owne
     assert.deepEqual(lookupSession('observer-session'), []);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
 
-    const takeover = runCli(['--square-path', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
+    const refused = runCli(['--square-path', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(refused.stderr, /Alice shoos you out of the square/);
+    assert.match(refused.stderr, /join --kick/);
+    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(lookupSession('observer-session'), []);
+
+    const noIdentityEnv = {
+      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+      CLAUDE_CODE_SESSION_ID: '',
+      CLAUDE_CODE_CHILD_SESSION: '',
+      CODEX_THREAD_ID: '',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: '',
+      PASEO_AGENT_ID: '',
+    };
+    const unboundRefused = runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], {
+      env: noIdentityEnv,
+    });
+    assert.equal(unboundRefused.status, 2, unboundRefused.stderr);
+    assert.match(unboundRefused.stderr, /join --kick/);
+    assert.deepEqual(lookupParticipant(squarePath, 'Alice').length, 2);
+
+    const takeover = runCli(['--square-path', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
     assert.equal(takeover.status, 0, takeover.stderr);
-    assert.match(takeover.stdout, /you kicked out the original Alice/);
+    assert.match(takeover.stdout, /you banished the original Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
 
-    const unboundTakeover = runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], {
-      env: {
-        SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
-        CLAUDE_CODE_SESSION_ID: '',
-        CODEX_THREAD_ID: '',
-        OPENCODE_SESSION_ID: '',
-        SQUARE_PI_SESSION_ID: '',
-        PASEO_AGENT_ID: '',
-      },
+    const unboundTakeover = runCli(['--square-path', squarePath, '--as', 'Alice', 'join', '--kick'], {
+      env: noIdentityEnv,
     });
     assert.equal(unboundTakeover.status, 0, unboundTakeover.stderr);
-    assert.match(unboundTakeover.stdout, /you kicked out the original Alice/);
+    assert.match(unboundTakeover.stdout, /you banished the original Alice/);
     assert.deepEqual(lookupParticipant(squarePath, 'Alice'), []);
 
     const done = runCli(['--square-path', squarePath, '--as', 'Alice', 'done', 'finished'], { env });

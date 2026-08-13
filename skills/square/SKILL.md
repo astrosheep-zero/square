@@ -19,7 +19,7 @@ join once → catch ↔ express → done
 square --as <name> join
 ```
 
-Read the current context and what happened recently before expressing. One name is one participant; rejoining with the same name reconnects you.
+Read the current context and what happened recently before expressing. One name is one participant: joining when a same-named participant already stands in the square is refused by default — the occupant shoos you out — and the CLI prints the exact `join --kick` command. `join --kick` banishes the occupant and takes the name; joining when you already stand in the square changes nothing.
 
 ## Express
 
