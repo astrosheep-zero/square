@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { withFileLockSync } from './file-lock.js';
 import { isWakeRouteKind, nameKey, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
 
@@ -38,8 +39,8 @@ interface WakeAttemptRow {
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5 * 60 * 1000;
+const LOCK_RETRY_MS = 10;
 const VALID_OUTCOMES = new Set<WakeOutcome>(['accepted', 'unknown', 'failed']);
-const lockWait = new Int32Array(new SharedArrayBuffer(4));
 
 export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_WAKE_ATTEMPTS || path.join(os.homedir(), '.square', 'wake-attempts.ndjsonl');
@@ -69,14 +70,27 @@ function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
   return row as WakeAttemptRow;
 }
 
-function readRows(env: NodeJS.ProcessEnv, now: number): WakeAttemptRow[] {
+function readRowsFromFile(filePath: string, now: number): WakeAttemptRow[] {
   let raw: string;
-  try { raw = fs.readFileSync(wakeAttemptsPath(env), 'utf8'); }
+  try { raw = fs.readFileSync(filePath, 'utf8'); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
   return raw.split('\n').filter(Boolean).map((line) => parseRow(line, now)).filter((row): row is WakeAttemptRow => row !== undefined);
+}
+
+function readRows(env: NodeJS.ProcessEnv, now: number): WakeAttemptRow[] {
+  return readRowsFromFile(wakeAttemptsPath(env), now);
+}
+
+function writeRows(filePath: string, rows: WakeAttemptRow[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
+    mode: 0o600,
+  });
+  fs.renameSync(temporary, filePath);
 }
 
 function fromRow(row: WakeAttemptRow): WakeAttempt {
@@ -154,29 +168,6 @@ function redact(value: unknown, secret: string | undefined): unknown {
   return value;
 }
 
-function withLedgerLock<T>(file: string, fn: () => T): T {
-  const lock = `${file}.lock`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  while (true) {
-    try {
-      const fd = fs.openSync(lock, 'wx', 0o600);
-      try { fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`); }
-      finally { fs.closeSync(fd); }
-      try { return fn(); }
-      finally { try { fs.unlinkSync(lock); } catch {} }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lock);
-          continue;
-        }
-      } catch {}
-      Atomics.wait(lockWait, 0, 0, 10);
-    }
-  }
-}
-
 function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
   const safe = redact(attempt, env.PASEO_PASSWORD) as WakeAttempt;
   return {
@@ -206,7 +197,9 @@ export function recordWakeAttempt(
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
   const file = wakeAttemptsPath(env);
-  withLedgerLock(file, () => fs.appendFileSync(file, `${JSON.stringify(toRow(value, env))}\n`, { mode: 0o600 }));
+  withFileLockSync(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
+    writeRows(file, [...readRowsFromFile(file, value.at), toRow(value, env)]);
+  });
   return value;
 }
 
@@ -219,8 +212,9 @@ export function recordRecoveredUnknown(
   const routeKind = lease.routeKind;
   if (lease.attemptN === undefined || !isWakeRouteKind(routeKind)) return undefined;
   const file = wakeAttemptsPath(env);
-  return withLedgerLock(file, () => {
-    const attempts = readRows(env, at).map(fromRow).filter(
+  return withFileLockSync(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
+    const rows = readRowsFromFile(file, at);
+    const attempts = rows.map(fromRow).filter(
       (attempt) => wakeAttentionKey(attempt.attention) === wakeAttentionKey(attention),
     );
     const terminal = terminalWakeEvidence(attempts);
@@ -234,7 +228,7 @@ export function recordRecoveredUnknown(
       attemptN: lease.attemptN!,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
-    fs.appendFileSync(file, `${JSON.stringify(toRow(value, env))}\n`, { mode: 0o600 });
+    writeRows(file, [...rows, toRow(value, env)]);
     return value;
   });
 }

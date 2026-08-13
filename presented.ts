@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
+import { withFileLockSync } from './file-lock.js';
 import { canonicalSquarePath, lookupParticipant, lookupSessionBindings } from './registry.js';
 import { sameName, type InboxMembership } from './model.js';
 
@@ -23,8 +24,6 @@ interface SelectedMembership {
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5 * 60_000;
 const LOCK_RETRY_MS = 10;
-const lockWait = new Int32Array(new SharedArrayBuffer(4));
-const heldLocks = new Set<string>();
 
 export function presentedPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_PRESENTED || path.join(os.homedir(), '.square', 'presented.ndjsonl');
@@ -77,60 +76,6 @@ function writeRows(filePath: string, rows: PresentedRow[]): void {
   fs.renameSync(temp, filePath);
 }
 
-function lockOwnerState(lockPath: string): 'alive' | 'dead' | 'unknown' {
-  let pid: number;
-  try {
-    pid = Number.parseInt(fs.readFileSync(lockPath, 'utf8').split('\n')[0], 10);
-  } catch {
-    return 'unknown';
-  }
-  if (!Number.isSafeInteger(pid) || pid <= 0) return 'unknown';
-  try {
-    process.kill(pid, 0);
-    return 'alive';
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'alive';
-  }
-}
-
-function withFileLock<T>(lockPath: string, fn: () => T): T {
-  if (heldLocks.has(lockPath)) throw new Error(`Reentrant presented lock: ${lockPath}`);
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-
-  while (true) {
-    let acquired = false;
-    try {
-      const fd = fs.openSync(lockPath, 'wx', 0o600);
-      try {
-        fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`, 'utf8');
-      } finally {
-        fs.closeSync(fd);
-      }
-      acquired = true;
-      heldLocks.add(lockPath);
-      return fn();
-    } catch (error) {
-      const errno = error as NodeJS.ErrnoException;
-      if (acquired || errno.code !== 'EEXIST') throw error;
-      try {
-        const stat = fs.statSync(lockPath);
-        if (lockOwnerState(lockPath) === 'dead' || Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch {}
-      Atomics.wait(lockWait, 0, 0, LOCK_RETRY_MS);
-    } finally {
-      if (acquired) {
-        heldLocks.delete(lockPath);
-        try {
-          fs.unlinkSync(lockPath);
-        } catch {}
-      }
-    }
-  }
-}
-
 function membershipKey(membership: Pick<InboxMembership, 'squarePath' | 'name'>): string {
   return `${canonicalSquarePath(membership.squarePath)}\u0000${membership.name.toLocaleLowerCase()}`;
 }
@@ -144,7 +89,11 @@ function withAttentionLocks<T>(filePath: string, inbox: InboxMembership[], fn: (
   const lockPaths = [...new Set(inbox.map((membership) => attentionLockPath(filePath, membership)))].sort();
   function acquire(index: number): T {
     if (index >= lockPaths.length) return fn();
-    return withFileLock(lockPaths[index], () => acquire(index + 1));
+    return withFileLockSync(
+      lockPaths[index],
+      { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
+      () => acquire(index + 1),
+    );
   }
   return acquire(0);
 }
@@ -236,7 +185,7 @@ export function presentOnce<T>(
     if (selected.length === 0) return undefined;
 
     const result = deliver(selected.map(({ membership }) => membership));
-    withFileLock(`${filePath}.lock`, () => {
+    withFileLockSync(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
       const rows = readRows(filePath, at);
       const known = new Set(rows.map(rowKey));
       for (const { membership, ownerId } of selected) {

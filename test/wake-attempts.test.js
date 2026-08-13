@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,6 +75,55 @@ test('wake attempt persistence redacts transport credentials recursively', () =>
   const raw = fs.readFileSync(item.env.SQUARE_WAKE_ATTEMPTS, 'utf8');
   assert.doesNotMatch(raw, /very-secret|query-secret|another-secret/);
   assert.match(raw, /\[redacted\]/);
+  fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('a wake attempt write drops expired and malformed ledger rows', () => {
+  const item = fixture();
+  const now = 8 * DAY_MS;
+  fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
+    '{bad json',
+    JSON.stringify(row(item, { ts: now - 7 * DAY_MS - 1 })),
+    JSON.stringify(row(item, { ts: now - DAY_MS, attempt_n: 2 })),
+  ].join('\n'));
+
+  recordWakeAttempt({
+    at: now,
+    attention: item.attention,
+    routeKind: 'paseo',
+    outcome: 'failed',
+    signature: 'new_route_failure',
+    attemptN: 3,
+  }, item.env);
+
+  const rows = fs.readFileSync(item.env.SQUARE_WAKE_ATTEMPTS, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.map((entry) => entry.attempt_n), [2, 3]);
+  fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('a wake attempt write immediately recovers a lock abandoned by a dead process', () => {
+  const item = fixture();
+  const exited = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
+  assert.equal(exited.status, 0, exited.stderr);
+  fs.writeFileSync(`${item.env.SQUARE_WAKE_ATTEMPTS}.lock`, `${exited.pid}\n${Date.now()}\n`);
+
+  const moduleUrl = new URL('../dist/wake-attempts.js', import.meta.url).href;
+  const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { recordWakeAttempt } from ${JSON.stringify(moduleUrl)};
+    recordWakeAttempt({
+      attention: { squarePath: process.env.TEST_SQUARE_PATH, actIndex: 4, recipient: 'Faye' },
+      routeKind: 'paseo',
+      outcome: 'accepted',
+      attemptN: 1,
+    });
+  `], {
+    encoding: 'utf8',
+    env: { ...process.env, ...item.env, TEST_SQUARE_PATH: item.attention.squarePath },
+    timeout: 2_000,
+  });
+
+  assert.equal(writer.status, 0, writer.stderr);
+  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['accepted']);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 

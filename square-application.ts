@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 
 import { emptyRuntimeState, loadRuntimeSidecar, loadSquare, mergeRuntimeState, renderArtifactAct, renderSquare, renderSquareDoc, saveRuntimeSidecar } from './artifact.js';
 import { type Act } from './square-core.js';
 import { coreCompact, coreDone, coreHold, coreResume, decideAct, decideJoin, resolveKnownName } from './decisions.js';
 import { planRepair, type PlanRepairResult } from './doctor.js';
+import { withFileLock } from './file-lock.js';
 import { stageReplacement, type StagedReplacement } from './harness-stage.js';
 import { SquareError, type BuildOptions, type HardCap, type Reach, type SquareDoc, type StoredAct, type WakeRouteKind } from './model.js';
 import { advanceCursor, freshWatchLease, LOCK_RETRY_MS, LOCK_STALE_MS, removeWatchLease, touchPresenceCursor, watchLease, writeWatchLease } from './runtime.js';
@@ -40,28 +40,11 @@ export interface Committed<Result> {
 
 /** The only persistence primitive: one per-square lock, one Markdown write, one sidecar write. */
 export async function withSquareLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
-  const lockPath = `${squarePath}.lock`;
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  while (true) {
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(lockPath, 'wx');
-      fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`, 'utf8');
-    } catch (error) {
-      if (fd !== undefined) {
-        try { fs.closeSync(fd); } catch {}
-        try { fs.unlinkSync(lockPath); } catch {}
-      }
-      const errno = error as NodeJS.ErrnoException;
-      if (errno.code !== 'EEXIST') throw error;
-      try { if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lockPath); } catch {}
-      await sleep(LOCK_RETRY_MS);
-      continue;
-    }
-    fs.closeSync(fd);
-    try { return await fn(); }
-    finally { try { fs.unlinkSync(lockPath); } catch {} }
-  }
+  return withFileLock(
+    `${squarePath}.lock`,
+    { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
+    fn,
+  );
 }
 
 export function writeSquareDoc(squarePath: string, doc: SquareDoc): void {
