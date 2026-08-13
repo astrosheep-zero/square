@@ -26,6 +26,13 @@ import {
   installCodexPlugin,
   uninstallCodexPlugin,
 } from '../dist/harness-codex.js';
+import {
+  doctorPiPackage,
+  installPiPackage,
+  piPackageRoot,
+  piPackageSource,
+  uninstallPiPackage,
+} from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
 import { done, express, hold, join, resume } from '../dist/index.js';
 import { execute } from '../dist/square-application.js';
@@ -131,6 +138,37 @@ test('OpenCode doctor runs debug config through its runtime boundary', () => {
     verifyOpenCodeRuntime(home, () => ({ status: 1, stdout: '', stderr: 'extension failed' })),
     /OpenCode debug config failed: extension failed/
   );
+});
+
+test('Pi package lifecycle uses Pi installation as the single extension owner', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-package-'));
+  const calls = [];
+  const runPi = (_home, args) => {
+    calls.push(args);
+    return { status: 0, stdout: args[0] === 'list' ? `  ${SQUARE_IDENTITY.packageName}\n` : '', stderr: '' };
+  };
+  const root = piPackageRoot(home);
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    version: SQUARE_IDENTITY.packageVersion,
+    pi: { extensions: ['./extensions/square-pi.js'] },
+  }));
+  try {
+    assert.deepEqual(installPiPackage(home, runPi), [root]);
+    assert.deepEqual(doctorPiPackage(home, runPi), [
+      `✓ Pi package ${SQUARE_IDENTITY.packageName} configured`,
+      `✓ Pi package ${SQUARE_IDENTITY.packageVersion} installed at ${root}`,
+      '✓ Pi Square extension declared',
+    ]);
+    assert.deepEqual(uninstallPiPackage(home, runPi), [root]);
+    assert.deepEqual(calls, [
+      ['install', piPackageSource()],
+      ['list'],
+      ['remove', piPackageSource()],
+    ]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('package participant intents persist through the shared application pipeline', async () => {

@@ -14,10 +14,14 @@ import {
   uninstallCodexPlugin,
 } from './harness-codex.js';
 import {
+  doctorPiPackage,
+  installPiPackage,
+  uninstallPiPackage,
+} from './harness-pi.js';
+import {
   doctorHarnessLinks,
   installHarnessLinks,
   opencodeExtensionLink,
-  piExtensionLink,
   skillLinks,
   uninstallHarnessLinks,
   verifyOpenCodeRuntime,
@@ -113,9 +117,9 @@ const TARGETS: readonly HarnessTarget[] = [
   {
     name: 'pi',
     capabilities: ['install', 'uninstall', 'doctor'],
-    install: ({ homeDir, force }) => result(installHarnessLinks([piExtensionLink(homeDir)], force)),
-    uninstall: ({ homeDir }) => result(uninstallHarnessLinks([piExtensionLink(homeDir)])),
-    doctor: ({ homeDir }) => result(doctorHarnessLinks([piExtensionLink(homeDir)])),
+    install: ({ homeDir }) => result(installPiPackage(homeDir)),
+    uninstall: ({ homeDir }) => result(uninstallPiPackage(homeDir)),
+    doctor: ({ homeDir }) => result(doctorPiPackage(homeDir)),
   },
   {
     name: 'delivery',

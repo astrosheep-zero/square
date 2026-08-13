@@ -101,19 +101,18 @@ function runtimeState(text, file) {
   return sidecar;
 }
 
-test('install and uninstall accept multiple explicit targets', () => {
+test('install and uninstall manage an explicit OpenCode target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');
   try {
-    const result = run(['install', 'opencode', 'pi'], {
+    const result = run(['install', 'opencode'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(result.status, 0, result.stderr);
     const plugin = path.join(config, 'opencode', 'plugins', 'square.js');
     assert.equal(fs.realpathSync(plugin), path.join(ROOT, 'extensions', 'square-opencode.js'));
-    assert.equal(fs.realpathSync(path.join(home, '.pi', 'agent', 'extensions', 'square.js')), path.join(ROOT, 'extensions', 'square-pi.js'));
 
-    const removed = run(['uninstall', 'opencode', 'pi'], {
+    const removed = run(['uninstall', 'opencode'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(removed.status, 0, removed.stderr);

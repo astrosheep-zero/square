@@ -129,7 +129,3 @@ export function opencodeExtensionLink(homeDir = os.homedir()): HarnessLink {
     kind: 'extension',
   };
 }
-
-export function piExtensionLink(homeDir = os.homedir()): HarnessLink {
-  return { source: path.join(packageRoot(), 'extensions', 'square-pi.js'), target: path.join(homeDir, '.pi', 'agent', 'extensions', 'square.js'), kind: 'extension' };
-}
