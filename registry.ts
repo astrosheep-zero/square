@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { loadSquare } from './artifact.js';
 import { nameKey, sameName } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
-import { refreshJoinEnvRoutes, retireOwnerWakeRoutes } from './routes.js';
+import { refreshPaseoRoute, retireOwnerWakeRoutes } from './routes.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 
@@ -374,26 +374,9 @@ export function hasAutomaticDeliveryIdentity(env: NodeJS.ProcessEnv = process.en
 export function recordLocalJoin(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): void {
   const at = Date.now();
   const identities = localSessionIdentities(env);
-  const identityIds = new Set(identities.map((identity) => identity.sessionId));
   const current = lookupParticipant(squarePath, name, at);
-  const ownerId = current.find((binding) => identityIds.has(binding.sessionId))?.ownerId ?? nextOwnerId();
-  for (const identity of identities) {
-    recordJoin(identity.sessionId, name, squarePath, { ...identity, at, ownerId });
-  }
-  refreshJoinEnvRoutes(ownerId, env, at);
-}
-
-export function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): void {
-  const at = Date.now();
-  const identities = localSessionIdentities(env);
-  const identityIds = new Set(identities.map((identity) => identity.sessionId));
-  const current = lookupParticipant(squarePath, name, at);
-  const ownerId = current.find((binding) => identityIds.has(binding.sessionId))?.ownerId;
-  if (ownerId === undefined) {
-    for (const identity of identities) recordDone(identity.sessionId, name, squarePath, { ...identity, at });
-    return;
-  }
-  for (const binding of current.filter((candidate) => candidate.ownerId === ownerId)) {
+  const ownerId = nextOwnerId();
+  for (const binding of current) {
     recordDone(binding.sessionId, binding.name, binding.squarePath, {
       channel: binding.channel,
       child: binding.child,
@@ -401,5 +384,27 @@ export function recordLocalDone(name: string, squarePath: string, env: NodeJS.Pr
       at,
     });
   }
-  retireOwnerWakeRoutes(ownerId, { at, env });
+  for (const identity of identities) {
+    recordJoin(identity.sessionId, name, squarePath, { ...identity, at, ownerId });
+  }
+  refreshPaseoRoute(ownerId, env, at);
+  for (const previousOwnerId of new Set(current.map((binding) => binding.ownerId))) {
+    if (previousOwnerId !== ownerId) retireOwnerWakeRoutes(previousOwnerId, { at, env });
+  }
+}
+
+export function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): void {
+  const at = Date.now();
+  const current = lookupParticipant(squarePath, name, at);
+  for (const binding of current) {
+    recordDone(binding.sessionId, binding.name, binding.squarePath, {
+      channel: binding.channel,
+      child: binding.child,
+      ...(binding.paseoAgentId ? { paseoAgentId: binding.paseoAgentId } : {}),
+      at,
+    });
+  }
+  for (const ownerId of new Set(current.map((binding) => binding.ownerId))) {
+    retireOwnerWakeRoutes(ownerId, { at, env });
+  }
 }

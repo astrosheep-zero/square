@@ -308,7 +308,7 @@ test('join and catch only show fallback catch hints without automatic session de
 
   const rebound = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
   assert.equal(rebound.status, 0, rebound.stderr);
-  assert.match(rebound.stdout, /already in the square/);
+  assert.match(rebound.stdout, /you kicked out the original Bob/);
   assert.doesNotMatch(rebound.stdout, /catch --/);
   assert.equal(loadSquare(file).acts.filter((act) => act.kind === 'join' && act.actor === 'Bob').length, 1);
 });

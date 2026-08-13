@@ -18,6 +18,7 @@ import {
   withPathOutput,
 } from '../presentation.js';
 import { hasAutomaticDeliveryIdentity, recordLocalDone, recordLocalJoin } from '../registry.js';
+import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, isCurrentlyJoined, nowMs, resolveRosterName } from '../runtime.js';
 import { createSquare, execute } from '../square-application.js';
 
@@ -137,6 +138,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const after = loadSquare(context.squarePath);
       const preamble = after.preamble.at(-1) === '---' ? after.preamble.slice(0, -1) : after.preamble;
       recordLocalJoin(joinedName, context.squarePath);
+      await sweepPendingNotifications(context.squarePath);
       const activities = renderPublicTail(after.acts, intent.lastN, nowMs(), joinedName);
       const contextText = preamble.join('\n').trim();
       const fallback = hasAutomaticDeliveryIdentity()
@@ -156,10 +158,11 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const joinedName = resolveRosterName(doc, intent.name);
       if (joinedName === undefined || !isCurrentlyJoined(doc.acts, joinedName)) throw error;
       recordLocalJoin(joinedName, context.squarePath);
+      await sweepPendingNotifications(context.squarePath);
       const fallback = hasAutomaticDeliveryIdentity()
         ? ''
         : `\n» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m\n  no session delivery detected — keep this catch open for new activity`;
-      return withPathOutput(context.squarePath, `● ${joinedName} is already in the square${fallback}`, { participantCount: inSquareCount(doc) });
+      return withPathOutput(context.squarePath, `✕ you kicked out the original ${joinedName}${fallback}`, { participantCount: inSquareCount(doc) });
     }
   },
   present: (result) => process.stdout.write(result),
@@ -203,6 +206,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
 export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
+    await sweepPendingNotifications(context.squarePath);
     const reachArg = intent.reach === 'bell' ? ' --bell' : intent.reach === undefined ? '' : ` --beside ${quoteShell(intent.reach.beside)}`;
     await cmdActivity(context.squarePath, intent.name, intent.activity, resolveBody, {
       force: intent.force,

@@ -153,7 +153,8 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
       'parent-codex',
       'paseo-agent',
     ]);
-    assert.deepEqual(new Set(refreshed.map((binding) => binding.ownerId)), new Set([parentOwner]));
+    assert.equal(new Set(refreshed.map((binding) => binding.ownerId)).size, 1);
+    assert.notEqual(refreshed[0].ownerId, parentOwner);
 
     recordLocalDone('root', squarePath, parentEnv);
     assert.deepEqual(lookupParticipant(squarePath, 'root'), []);
@@ -163,7 +164,7 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
   }
 });
 
-test('only participant actions refresh local registration and done closes it', () => {
+test('only explicit join claims local ownership and done closes the current owner', () => {
   const cleanup = withRegistry();
   try {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-cli-'));
@@ -189,18 +190,37 @@ test('only participant actions refresh local registration and done closes it', (
     assert.deepEqual(lookupSession('observer-session'), []);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
 
-    fs.writeFileSync(process.env.SQUARE_REGISTRY, '');
     const catchNow = runCli(['--square-path', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
     assert.equal(catchNow.status, 0, catchNow.stderr);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
     assert.equal(lookupParticipant(squarePath, 'Alice')[0].paseoAgentId, 'resume-paseo-agent');
 
-    const takeover = runCli(['--square-path', squarePath, '--as', 'alice', 'express', 'taking over'], {
+    const expressed = runCli(['--square-path', squarePath, '--as', 'alice', 'express', 'still not an owner'], {
       env: observerEnv,
     });
+    assert.equal(expressed.status, 0, expressed.stderr);
+    assert.deepEqual(lookupSession('observer-session'), []);
+    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+
+    const takeover = runCli(['--square-path', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.equal(takeover.status, 0, takeover.stderr);
+    assert.match(takeover.stdout, /you kicked out the original Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
+
+    const unboundTakeover = runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], {
+      env: {
+        SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+        CLAUDE_CODE_SESSION_ID: '',
+        CODEX_THREAD_ID: '',
+        OPENCODE_SESSION_ID: '',
+        SQUARE_PI_SESSION_ID: '',
+        PASEO_AGENT_ID: '',
+      },
+    });
+    assert.equal(unboundTakeover.status, 0, unboundTakeover.stderr);
+    assert.match(unboundTakeover.stdout, /you kicked out the original Alice/);
+    assert.deepEqual(lookupParticipant(squarePath, 'Alice'), []);
 
     const done = runCli(['--square-path', squarePath, '--as', 'Alice', 'done', 'finished'], { env });
     assert.equal(done.status, 0, done.stderr);

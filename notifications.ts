@@ -5,25 +5,28 @@ import { fileURLToPath } from 'node:url';
 
 import { loadSquare } from './artifact.js';
 import {
+  deriveDeliveryModel,
   isDeliveryDelivered,
   isPendingNotification,
   planActNotifications,
+  wakeGraceMs,
   type WakeAdapter,
 } from './delivery.js';
 import { hasPresentedAttention } from './presented.js';
 import { nameKey, SquareError, type NotifyLease } from './model.js';
-import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { SLEEP_MS, isCurrentlyJoined, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
 import { lookupParticipant } from './registry.js';
-import type { WakeRouteKind } from './routes.js';
+import { readWakeRoutes, type WakeRoute, type WakeRouteKind } from './routes.js';
 import { execute } from './square-application.js';
 import {
-  isWakeRouteAttemptable,
   nextWakeAttemptNumber,
+  isWakeRouteAttemptable,
   readWakeAttempts,
   recordRecoveredUnknown,
   recordWakeAttempt,
-  terminalWakeAttempt,
+  terminalWakeEvidence,
+  type WakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
 import { WakePort } from './wake-port.js';
@@ -40,6 +43,48 @@ function known(doc: ReturnType<typeof loadSquare>, name: string): string {
 }
 
 export { notificationMessageId } from './delivery.js';
+
+export interface WakeEvidence {
+  delivered: boolean;
+  presented: boolean;
+  attempts: WakeAttempt[];
+  terminal?: WakeAttempt;
+  attemptableRoutes: WakeRoute[];
+}
+
+/** Project every wake decision from the same primary evidence. */
+export function wakeEvidence(
+  squarePath: string,
+  recipient: string,
+  actIndex: number,
+  now: number,
+  env: NodeJS.ProcessEnv,
+): WakeEvidence {
+  const doc = loadSquare(squarePath);
+  const owners = new Set(
+    lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
+  );
+  const attempts = readWakeAttempts({ attention: { squarePath, recipient, actIndex }, env, now });
+  const terminal = terminalWakeEvidence(attempts);
+  const routes = readWakeRoutes({ freshOnly: true, now, env })
+    .filter((route) => owners.has(route.ownerId));
+  return {
+    delivered: isDeliveryDelivered(doc, recipient, actIndex),
+    presented: hasPresentedAttention(squarePath, recipient, actIndex, env, now),
+    attempts,
+    ...(terminal === undefined ? {} : { terminal }),
+    attemptableRoutes: terminal === undefined
+      ? routes.filter((route) => isWakeRouteAttemptable(route, attempts))
+      : [],
+  };
+}
+
+export function wakeIsEligible(evidence: WakeEvidence): boolean {
+  return !evidence.delivered
+    && !evidence.presented
+    && evidence.terminal === undefined
+    && evidence.attemptableRoutes.length > 0;
+}
 
 export function hasDeliveredNotification(squarePath: string, name: string, ref: number | `act_${number}`): boolean {
   const doc = loadSquare(squarePath);
@@ -132,9 +177,7 @@ async function processNotification(
     recipient: notification.recipient,
   };
   const initialAt = now();
-  if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
-  if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, initialAt)) return;
-  if (terminalWakeAttempt(attention, { env, now: initialAt }) !== undefined) return;
+  if (!wakeIsEligible(wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
 
   const claim = await claimNotifyLease(squarePath, notification.recipient, notification.item.index);
   if (claim.type === 'busy') return;
@@ -150,15 +193,11 @@ async function processNotification(
   let releaseLease = true;
   try {
     const dispatchAt = now();
-    if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
-    if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, dispatchAt)) return;
-    if (terminalWakeAttempt(attention, { env, now: dispatchAt }) !== undefined) return;
-    const owners = new Set(
-      lookupParticipant(squarePath, notification.recipient, dispatchAt).map((binding) => binding.ownerId),
-    );
-    const port = new WakePort(opts.adapters ?? [new PaseoAdapter()], env);
+    const evidence = wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
+    if (!wakeIsEligible(evidence)) return;
+    const port = new WakePort(opts.adapters ?? [new PaseoAdapter()]);
     await port.dispatch(
-      owners,
+      evidence.attemptableRoutes,
       {
         squarePath,
         actIndex: notification.item.index,
@@ -168,15 +207,13 @@ async function processNotification(
       },
       {
         nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
-        canAttempt: (route) => isWakeRouteAttemptable(
-          route,
-          readWakeAttempts({ attention, env, now: now() }),
-        ),
         beforeSend: async (route, attemptN) => {
           const currentAt = now();
-          if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return false;
-          if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, currentAt)) return false;
-          if (terminalWakeAttempt(attention, { env, now: currentAt }) !== undefined) return false;
+          const current = wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
+          if (!wakeIsEligible(current)) return false;
+          if (!current.attemptableRoutes.some((candidate) =>
+            candidate.ownerId === route.ownerId && candidate.kind === route.kind && candidate.sessionId === route.sessionId
+          )) return false;
           const dispatching = await transitionNotifyLease(
             squarePath,
             notification.recipient,
@@ -207,7 +244,6 @@ async function processNotification(
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
       },
-      dispatchAt,
     );
   } finally {
     if (releaseLease) {
@@ -226,6 +262,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
 
 export interface DispatchActNotificationsOptions {
   launchWorker?: (workerPath: string, args: string[]) => void;
+  env?: NodeJS.ProcessEnv;
 }
 
 function launchWorker(workerPath: string, args: string[]): void {
@@ -235,8 +272,43 @@ function launchWorker(workerPath: string, args: string[]): void {
 
 /** Start one detached worker only when this act contains directed attention. */
 export async function dispatchActNotifications(squarePath: string, item: import('./model.js').StoredAct, opts: DispatchActNotificationsOptions = {}): Promise<void> {
-  if (process.env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
+  const env = opts.env ?? process.env;
+  if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
   const doc = loadSquare(squarePath);
   if (!planActNotifications(doc, item).some(isPendingNotification)) return;
   (opts.launchWorker ?? launchWorker)(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--square-path', squarePath, '--act-index', String(item.index)]);
+}
+
+export interface SweepPendingNotificationsOptions extends DispatchActNotificationsOptions {
+  now?: number;
+  limit?: number;
+}
+
+/** Reconsider old pending attention at a bounded action boundary using the existing worker. */
+export function sweepPendingNotifications(
+  squarePath: string,
+  opts: SweepPendingNotificationsOptions = {},
+): number[] {
+  const env = opts.env ?? process.env;
+  if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
+  const now = opts.now ?? Date.now();
+  const limit = opts.limit ?? 8;
+  const doc = loadSquare(squarePath);
+  const model = deriveDeliveryModel(doc);
+  const recipients = [...new Set(doc.acts.filter((act) => act.kind === 'join').map((act) => act.actor))]
+    .filter((recipient) => isCurrentlyJoined(doc.acts, recipient));
+  const indexes = new Set<number>();
+  for (const recipient of recipients) {
+    for (const note of model.pendingFor(recipient)) {
+      if (now - note.item.at <= wakeGraceMs(env)) continue;
+      if (!wakeIsEligible(wakeEvidence(squarePath, recipient, note.item.index, now, env))) continue;
+      indexes.add(note.item.index);
+    }
+  }
+  const selected = [...indexes].sort((a, b) => a - b).slice(0, Math.max(0, limit));
+  const workerPath = fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url));
+  for (const actIndex of selected) {
+    (opts.launchWorker ?? launchWorker)(workerPath, ['--square-path', squarePath, '--act-index', String(actIndex)]);
+  }
+  return selected;
 }

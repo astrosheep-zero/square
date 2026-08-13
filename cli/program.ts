@@ -2,7 +2,6 @@ import { helpRequest } from '../help.js';
 import { SquareError } from '../model.js';
 
 import { defaultContext, parseGlobalArgs } from './context.js';
-import { refreshLocalRegistration } from './observation-commands.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
 function isMutatingCommand(command: string, argv: string[]): boolean {
@@ -40,9 +39,6 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
     if (!parsed.explicitSquarePath && parsed.multipleSquares && isMutatingCommand(command, parsed.args.slice(1))) {
       process.stderr.write('✕ more than one square is active here; choose the path before changing or consuming activity.\n» square list\n');
       process.exit(2);
-    }
-    if (['express', 'catch', 'done', 'hold', 'resume'].includes(command)) {
-      refreshLocalRegistration(parsed.squarePath, parsed.name);
     }
     await executeRegisteredCommand(command, parsed.args.slice(1), defaultContext(command, parsed.squarePath, parsed.name));
   } catch (error) {

@@ -2,9 +2,6 @@ import { leaseOwnsNotification, notificationMessageId } from './delivery.js';
 import { sessionInbox, type InboxMembership } from './inbox.js';
 import { participantCommandPrefix } from './presentation.js';
 import { presentOnce } from './presented.js';
-import { recordAdapterHeartbeat } from './heartbeats.js';
-import { lookupSessionBindings } from './registry.js';
-import { routeKindForChannel, upsertWakeRoute } from './routes.js';
 
 const BODY_MAX = 200;
 const CONTEXT_MAX = 1200;
@@ -91,19 +88,6 @@ export function presentPendingAtBoundary<T>(
   lookup: (sessionId: string) => InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
 ): T | undefined {
-  const at = Date.now();
-  for (const binding of lookupSessionBindings(sessionId, at)) {
-    const kind = routeKindForChannel(binding.channel);
-    if (kind === undefined) continue;
-    upsertWakeRoute({
-      ownerId: binding.ownerId,
-      sessionId,
-      kind,
-      address: { sessionId },
-      source: 'boundary-adapter',
-    }, { at, env });
-    recordAdapterHeartbeat({ ownerId: binding.ownerId, sessionId, channel: binding.channel }, { at, env });
-  }
   return presentOnce(
     sessionId,
     (id) => pendingAtBoundary(lookup(id)),

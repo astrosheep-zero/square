@@ -34,6 +34,7 @@ import {
 } from './runtime.js';
 import { decideAct, resolveKnownName } from './decisions.js';
 import { execute } from './square-application.js';
+import { sweepPendingNotifications } from './notifications.js';
 
 export { WATCH_STALE_MS };
 
@@ -108,6 +109,7 @@ export async function resume(squarePath: string, actor: string): Promise<void> {
 }
 
 export async function express(squarePath: string, name: string, body: string, opts: ExpressOptions = {}): Promise<void> {
+  await sweepPendingNotifications(squarePath);
   const committed = await execute<ReturnType<typeof decideAct>>(squarePath, {
     type: 'say',
     name,

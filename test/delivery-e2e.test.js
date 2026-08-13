@@ -7,9 +7,9 @@ import test from 'node:test';
 
 import { loadSquare, parseSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { classifyDeliveryHealth } from '../dist/delivery-health.js';
+import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
-import { processActNotificationsOnce } from '../dist/notifications.js';
+import { processActNotificationsOnce, sweepPendingNotifications, wakeEvidence, wakeIsEligible } from '../dist/notifications.js';
 import { presentOnce } from '../dist/presented.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
@@ -34,7 +34,6 @@ function workshop() {
     SQUARE_DISABLE_PASEO_WAKE: '1',
     SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
-    SQUARE_HEARTBEATS: path.join(root, 'heartbeats.ndjsonl'),
     SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
   };
@@ -97,7 +96,6 @@ function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-session', a
     sessionId,
     kind: 'paseo',
     address: { agentId: sessionId },
-    source: 'join-env',
   }, { env: item.env, at });
 }
 
@@ -120,6 +118,13 @@ function acceptedAdapter(onBeforeSend) {
       return { outcome: 'accepted' };
     },
   };
+}
+
+function snapshotFiles(root) {
+  return Object.fromEntries(fs.readdirSync(root).sort().map((name) => {
+    const file = path.join(root, name);
+    return [name, fs.statSync(file).isFile() ? fs.readFileSync(file) : '<directory>'];
+  }));
 }
 
 function runWorker(item, actIndex, mode = 'accepted', callLog = path.join(item.root, 'worker-calls.log')) {
@@ -333,7 +338,7 @@ test('presented evidence is scoped to the current participant owner', async () =
       recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', ownerId: 'new-owner', at: Date.now() - 1 });
     });
     upsertWakeRoute({
-      ownerId: 'new-owner', sessionId: 'new-session', kind: 'paseo', address: { agentId: 'new-session' }, source: 'join-env',
+      ownerId: 'new-owner', sessionId: 'new-session', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env });
     const adapter = acceptedAdapter();
 
@@ -342,6 +347,94 @@ test('presented evidence is scoped to the current participant owner', async () =
 
     assert.equal(adapter.calls, 1);
     assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('new route evidence lets the bounded sweep recover old failed attention', async () => {
+  const item = workshop();
+  try {
+    item.cli('Alice', ['express', '--force', 'recover this @Bob'], 30);
+    const act = loadSquare(item.squarePath).acts.at(-1);
+    const firstAttemptAt = Date.now() - 2_000;
+    registerRoute(item, 'bob-owner', 'bob-session', firstAttemptAt - 1_000);
+    const failed = {
+      kind: 'paseo',
+      async dispatch(_route, _request, beforeSend) {
+        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        return { outcome: 'failed', signature: 'address_not_found', message: 'not found' };
+      },
+    };
+
+    await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
+      env: item.env,
+      adapters: [failed],
+      now: () => firstAttemptAt,
+    }));
+    const unreachable = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      now: firstAttemptAt + 500,
+      env: item.env,
+    }));
+    assert.equal(unreachable.find((item) => item.actIndex === act.index).kind, 'unreachable');
+
+    upsertWakeRoute({
+      ownerId: 'bob-owner', sessionId: 'bob-session', kind: 'paseo', address: { agentId: 'bob-session' },
+    }, { env: item.env, at: firstAttemptAt + 1_000 });
+    const launched = [];
+    const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+      now: firstAttemptAt + 1_500,
+      launchWorker: (_workerPath, args) => launched.push(args),
+    }));
+    assert.deepEqual(selected, [act.index]);
+    assert.deepEqual(launched.map((args) => Number(args.at(-1))), [act.index]);
+
+    const worker = await runWorker(item, act.index);
+    assert.equal(worker.code, 0, worker.stderr);
+    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['failed', 'accepted']);
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('worker, sweep, and doctor derive the same wake eligibility without diagnostic writes', async () => {
+  const item = workshop();
+  try {
+    item.cli('Alice', ['express', '--force', 'shared evidence @Bob'], 30);
+    const act = loadSquare(item.squarePath).acts.at(-1);
+    const now = Date.now();
+    registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
+
+    const before = snapshotFiles(item.root);
+    const evidence = withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env));
+    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { now, env: item.env }));
+    const doctor = withRegistry(item.env, () => doctorDeliveryHealth(item.squarePath, now, item.env));
+    const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+      now,
+      launchWorker: () => {},
+    }));
+
+    assert.equal(wakeIsEligible(evidence), true);
+    assert.equal(health.find((item) => item.actIndex === act.index).kind, 'awaiting');
+    assert.match(doctor.join('\n'), /○ awaiting: 1/);
+    assert.deepEqual(selected, [act.index]);
+    assert.deepEqual(snapshotFiles(item.root), before);
+
+    const adapter = acceptedAdapter();
+    await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
+      env: item.env,
+      adapters: [adapter],
+    }));
+    assert.equal(adapter.calls, 1);
+    assert.equal(wakeIsEligible(withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env))), false);
+    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { env: item.env }))
+      .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
+    assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+      launchWorker: () => { throw new Error('terminal attention must not launch'); },
+    })), []);
   } finally {
     item.cleanup();
   }

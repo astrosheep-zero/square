@@ -3,6 +3,7 @@ import { runClaudeHook } from '../claude-hook.js';
 import { runCodexHook } from '../codex-hook.js';
 import { coreActivities, coreParticipants, coreStatus } from '../decisions.js';
 import { sessionInbox } from '../inbox.js';
+import { sweepPendingNotifications } from '../notifications.js';
 import { cmdListSquares } from '../list.js';
 import { type ActivitiesOptions, type WatchOptions, sameName } from '../model.js';
 import {
@@ -13,15 +14,7 @@ import {
   renderVisibleEvent,
   withPathOutput,
 } from '../presentation.js';
-import { recordLocalJoin } from '../registry.js';
-import {
-  actId,
-  inSquareCount,
-  isCurrentlyJoined,
-  nowMs,
-  resolveRosterName,
-  sayNumberFor,
-} from '../runtime.js';
+import { actId, inSquareCount, nowMs, sayNumberFor } from '../runtime.js';
 import { cmdStream, cmdStreamNdjson } from '../stream.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { cmdWatch } from '../watch.js';
@@ -109,6 +102,7 @@ export const catchCommand: CommandSpec<WatchOptions> = {
   },
   async execute(intent, context) {
     await cmdWatch(context.squarePath, requireParticipant(context.name), intent);
+    await sweepPendingNotifications(context.squarePath);
   },
   present: () => {},
 };
@@ -429,15 +423,3 @@ function hookCommand(runHook: (input: string) => string): CommandSpec<undefined,
 
 export const claudeHookCommand = hookCommand(runClaudeHook);
 export const codexHookCommand = hookCommand(runCodexHook);
-
-/** Maintain the local discovery cache before participant-facing adapters run. */
-export function refreshLocalRegistration(squarePath: string, name: string | undefined): void {
-  if (name === undefined) return;
-  try {
-    const doc = loadSquare(squarePath);
-    const known = resolveRosterName(doc, name);
-    if (known !== undefined && isCurrentlyJoined(doc.acts, known)) recordLocalJoin(known, squarePath);
-  } catch {
-    // The machine-local discovery cache never makes a Square command fail.
-  }
-}

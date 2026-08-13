@@ -11,7 +11,6 @@ import { recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
-import { WakePort } from '../dist/wake-port.js';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
@@ -71,7 +70,6 @@ function route(item, options = {}) {
     sessionId,
     kind: 'paseo',
     address: { agentId },
-    source: 'join-env',
   }, { env: item.env, at: options.at });
 }
 
@@ -79,44 +77,10 @@ function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
 }
 
-test('WakePort tries each eligible route once and stops globally on unknown', async () => {
-  const item = fixture();
-  const now = Date.now();
-  for (const [kind, sessionId] of [['opencode-server', 'opencode'], ['paseo', 'paseo']]) {
-    upsertWakeRoute({
-      ownerId: 'bob-owner', sessionId, kind, address: { sessionId, agentId: sessionId }, source: 'join-env',
-    }, { env: item.env, at: now });
-  }
-  const calls = [];
-  const port = new WakePort([
-    fakeAdapter('opencode-server', async () => {
-      calls.push('opencode-server');
-      return { outcome: 'failed', signature: 'refused', message: 'refused' };
-    }),
-    fakeAdapter('paseo', async () => {
-      calls.push('paseo');
-      return { outcome: 'unknown', signature: 'timeout', message: 'timeout' };
-    }),
-  ], item.env);
-
-  const result = await port.dispatch(new Set(['bob-owner']), {
-    squarePath: item.squarePath, actIndex: 2, recipient: 'Bob', actor: 'Alice', route: 'mention',
-  }, {
-    nextAttemptN: () => calls.length + 1,
-    canAttempt: () => true,
-    beforeSend: async () => true,
-    record: async () => {},
-  }, now);
-
-  assert.deepEqual(result, { outcome: 'unknown' });
-  assert.deepEqual(calls, ['opencode-server', 'paseo']);
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
 test('PaseoAdapter waits for the current boundary and sends awareness only', async () => {
   const item = fixture();
   route(item, { agentId: 'exact-agent' });
-  const registered = { ownerId: 'bob-owner', sessionId: 'exact-agent', kind: 'paseo', address: { agentId: 'exact-agent' }, source: 'join-env', updatedAt: Date.now() };
+  const registered = { ownerId: 'bob-owner', sessionId: 'exact-agent', kind: 'paseo', address: { agentId: 'exact-agent' }, updatedAt: Date.now() };
   let boundary = false;
   let sent;
   const adapter = new PaseoAdapter({
@@ -145,7 +109,7 @@ test('PaseoAdapter waits for the current boundary and sends awareness only', asy
 test('PaseoAdapter records transport certainty without leaking retry policy', async () => {
   const item = fixture();
   route(item);
-  const registered = { ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, source: 'join-env', updatedAt: Date.now() };
+  const registered = { ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, updatedAt: Date.now() };
   const request = { squarePath: item.squarePath, actIndex: 2, recipient: 'Bob', actor: 'Alice', route: 'mention' };
   const base = {
     discover: () => ({ agents: [{ id: 'bob-agent', name: 'Bob', status: 'idle' }] }),
@@ -176,32 +140,5 @@ test('a worker with no route writes no synthetic attempt', async () => {
 
   assert.deepEqual(readWakeAttempts({ env: item.env }), []);
   assert.deepEqual(loadSquare(item.squarePath).runtime.notifyLeases, {});
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('a failed route is retried only after its route fact is refreshed', async () => {
-  const item = fixture();
-  route(item);
-  let sends = 0;
-  const adapters = [fakeAdapter('paseo', async (_route, _request, beforeSend) => {
-    if (!(await beforeSend())) return { outcome: 'cancelled' };
-    sends += 1;
-    return sends === 1
-      ? { outcome: 'failed', signature: 'address_not_found', message: 'not found' }
-      : { outcome: 'accepted' };
-  })];
-
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
-  assert.equal(sends, 1);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['failed']);
-
-  upsertWakeRoute({
-    ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, source: 'join-env',
-  }, { env: item.env, at: readWakeAttempts({ env: item.env })[0].at + 1 });
-  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, { env: item.env, adapters }));
-
-  assert.equal(sends, 2);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['failed', 'accepted']);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
