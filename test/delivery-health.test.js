@@ -10,7 +10,7 @@ import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-h
 import { presentOnce } from '../dist/presented.js';
 import { recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
-import { recordWakeAttempt, WAKE_ACK_ESCALATION_MS } from '../dist/wake-attempts.js';
+import { recordWakeAttempt } from '../dist/wake-attempts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,7 +24,7 @@ function fixture() {
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
   };
-  const recipients = ['Bob', 'Cara', 'Dana', 'Eli', 'Faye', 'Gina', 'Hana'];
+  const recipients = ['Bob', 'Cara', 'Dana', 'Eli', 'Faye', 'Gina'];
   const acts = [
     { kind: 'join', actor: 'Alice', at: now - 180_000, body: '' },
     ...recipients.map((actor, index) => ({ kind: 'join', actor, at: now - 170_000 + index, body: '' })),
@@ -33,7 +33,6 @@ function fixture() {
       actor: 'Alice',
       at: now - 120_000 + index,
       body: `attention @${recipient}`,
-      ...(recipient === 'Hana' ? { requiresAck: true } : {}),
     })),
   ].map((act, index) => ({ ...act, index }));
   const runtime = emptyRuntimeState(acts.length);
@@ -70,7 +69,6 @@ test('doctor is a pure classification of current primary evidence', () => {
   const bob = actFor(item, 'Bob');
   const cara = actFor(item, 'Cara');
   const dana = actFor(item, 'Dana');
-  const hana = actFor(item, 'Hana');
 
   withRegistry(item.env, () => {
     recordJoin('bob-session', 'Bob', item.squarePath, { ownerId: 'bob-owner', at: item.now - 5_000 });
@@ -80,15 +78,6 @@ test('doctor is a pure classification of current primary evidence', () => {
       notifications: [{ actIndex: bob.index, actor: 'Alice', at: bob.at, route: 'mention', body: bob.body }],
     }], () => true, item.env, item.now - 4_000);
     recordJoin('faye-session', 'Faye', item.squarePath, { ownerId: 'faye-owner', at: item.now - 3_000 });
-    recordJoin('hana-session', 'Hana', item.squarePath, {
-      ownerId: 'hana-owner',
-      at: item.now - WAKE_ACK_ESCALATION_MS - 2_000,
-    });
-    presentOnce('hana-session', () => [{
-      name: 'Hana',
-      squarePath: item.squarePath,
-      notifications: [{ actIndex: hana.index, actor: 'Alice', at: hana.at, route: 'mention', body: hana.body }],
-    }], () => true, item.env, item.now - WAKE_ACK_ESCALATION_MS - 1);
   });
   upsertWakeRoute({
     ownerId: 'faye-owner',
@@ -99,11 +88,11 @@ test('doctor is a pure classification of current primary evidence', () => {
   }, { env: item.env, at: item.now - 2_000 });
   recordWakeAttempt({
     attention: { squarePath: item.squarePath, actIndex: cara.index, recipient: 'Cara' },
-    routeKind: 'paseo', outcome: 'accepted', attemptN: 1, obligationN: 1, at: item.now - 1_500,
+    routeKind: 'paseo', outcome: 'accepted', attemptN: 1, at: item.now - 1_500,
   }, item.env);
   recordWakeAttempt({
     attention: { squarePath: item.squarePath, actIndex: dana.index, recipient: 'Dana' },
-    routeKind: 'paseo', outcome: 'unknown', signature: 'send_unknown', attemptN: 1, obligationN: 1, at: item.now - 1_000,
+    routeKind: 'paseo', outcome: 'unknown', signature: 'send_unknown', attemptN: 1, at: item.now - 1_000,
   }, item.env);
 
   const before = snapshot(item.root);
@@ -118,13 +107,11 @@ test('doctor is a pure classification of current primary evidence', () => {
     ['Dana', 'wake-unknown'],
     ['Eli', 'unreachable'],
     ['Faye', 'awaiting'],
-    ['Hana', 'unacknowledged'],
   ]);
   assert.equal(first.some(({ recipient }) => recipient === 'Gina'), false);
   assert.match(output, /○ wake-accepted: 1/);
   assert.match(output, /✕ wake-unknown: 1/);
   assert.match(output, /✕ unreachable: 1/);
-  assert.match(output, /✕ unacknowledged: 1/);
   assert.deepEqual(snapshot(item.root), before);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -142,9 +129,8 @@ test('delivery evidence writers and health labels stay inside their owning modul
   assert.deepEqual(externalUsers('markDeliveredNotifications', 'delivery.ts'), ['watch.ts']);
   assert.deepEqual(externalUsers('recordWakeAttempt', 'wake-attempts.ts'), ['notifications.ts']);
   assert.deepEqual(externalUsers('recordRecoveredUnknown', 'wake-attempts.ts'), ['notifications.ts']);
-  assert.deepEqual(externalUsers('deriveWakeObligation', 'wake-attempts.ts'), ['delivery-health.ts', 'notifications.ts']);
 
-  const labels = ['wake-accepted', 'wake-unknown', 'presented-not-delivered', 'unreachable', 'unacknowledged'];
+  const labels = ['wake-accepted', 'wake-unknown', 'presented-not-delivered', 'unreachable'];
   for (const [name, source] of sources) {
     if (name === 'delivery-health.ts') continue;
     for (const label of labels) assert.equal(source.includes(label), false, `${label} leaked into ${name}`);

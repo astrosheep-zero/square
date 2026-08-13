@@ -19,7 +19,6 @@ import {
   type HardCap,
   SquareError,
   CURRENT_FORMAT_VERSION,
-  MAX_WAKE_OBLIGATIONS,
   formatHardCap,
   sameName,
 } from './model.js';
@@ -67,7 +66,6 @@ function renderActMarker(act: StoredAct): string {
     at: act.at,
     ...(act.kind === 'say' && act.reach !== undefined ? { reach: act.reach } : {}),
     ...(act.kind === 'say' && act.reply !== undefined ? { reply: act.reply } : {}),
-    ...(act.kind === 'say' && act.requiresAck === true ? { requires_ack: true } : {}),
   };
   return `${ACT_MARKER_PREFIX} ${JSON.stringify(marker)} -->`;
 }
@@ -312,9 +310,8 @@ export function isNotifyLease(value: unknown): boolean {
   if (typeof value.expiresAt !== 'number' || !Number.isFinite(value.expiresAt)) return false;
   if (value.phase !== 'claimed' && value.phase !== 'dispatching') return false;
   if (value.attemptN !== undefined && (typeof value.attemptN !== 'number' || !Number.isInteger(value.attemptN) || value.attemptN <= 0)) return false;
-  if (value.obligationN !== undefined && (typeof value.obligationN !== 'number' || !Number.isInteger(value.obligationN) || value.obligationN <= 0 || value.obligationN > MAX_WAKE_OBLIGATIONS)) return false;
   if (value.routeKind !== undefined && !isWakeRouteKind(value.routeKind)) return false;
-  return value.phase !== 'dispatching' || (value.attemptN !== undefined && value.obligationN !== undefined && value.routeKind !== undefined);
+  return value.phase !== 'dispatching' || (value.attemptN !== undefined && value.routeKind !== undefined);
 }
 
 function invalidVersionGuidance(reason: string): SquareError {
@@ -424,7 +421,6 @@ export interface ParsedActMarker {
   at?: number;
   reach?: Reach;
   reply?: number;
-  requiresAck?: true;
 }
 
 function parseReach(value: unknown): Reach | undefined {
@@ -456,15 +452,7 @@ export function parseActMarker(line: string | undefined): ParsedActMarker | null
     ...(typeof parsed.at === 'number' && Number.isFinite(parsed.at) ? { at: parsed.at } : {}),
     ...(parsed.reach !== undefined ? { reach: parseReach(parsed.reach) } : {}),
     ...(parsed.reply !== undefined ? { reply: parseReply(parsed.reply) } : {}),
-    ...(parsed.requires_ack !== undefined ? { requiresAck: parseRequiresAck(parsed.requires_ack) } : {}),
   };
-}
-
-function parseRequiresAck(value: unknown): true {
-  if (value !== true) {
-    throw new SquareError('invalid_args', 'Invalid square: malformed act requires_ack metadata.');
-  }
-  return true;
 }
 
 function parseReply(value: unknown): number {
@@ -474,7 +462,7 @@ function parseReply(value: unknown): number {
   return value;
 }
 
-function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, head: StoredActHead): { index: number; reach?: Reach; reply?: number; requiresAck?: true } {
+function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, head: StoredActHead): { index: number; reach?: Reach; reply?: number } {
   if (marker.kind === undefined || marker.actor === undefined) {
     throw new SquareError('invalid_args', 'Invalid square: act marker is missing kind/actor metadata.');
   }
@@ -493,14 +481,10 @@ function normalizeActMeta(marker: ParsedActMarker, kind: string, actor: string, 
   if (marker.reply !== undefined && kind !== 'say') {
     throw new SquareError('invalid_args', 'Invalid square: only say acts may reply to another activity.');
   }
-  if (marker.requiresAck !== undefined && kind !== 'say') {
-    throw new SquareError('invalid_args', 'Invalid square: only say acts may require acknowledgement.');
-  }
   return {
     index: marker.index,
     ...(marker.reach !== undefined ? { reach: marker.reach } : {}),
     ...(marker.reply !== undefined ? { reply: marker.reply } : {}),
-    ...(marker.requiresAck !== undefined ? { requiresAck: marker.requiresAck } : {}),
   };
 }
 
@@ -557,7 +541,6 @@ function parseActBlock(blockLines: string[]): StoredAct {
     index: meta.index,
     ...(meta.reach !== undefined ? { reach: meta.reach } : {}),
     ...(meta.reply !== undefined ? { reply: meta.reply } : {}),
-    ...(meta.requiresAck !== undefined ? { requiresAck: meta.requiresAck } : {}),
   } as StoredAct;
 }
 

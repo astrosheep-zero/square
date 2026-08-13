@@ -85,7 +85,7 @@ test('loadSquare rejects malformed runtime sidecar fields', () => {
     ['leases', (runtime) => ({ ...runtime, leases: { Alice: { leaseId: '' } } })],
     ['notifyLeases', (runtime) => ({
       ...runtime,
-      notifyLeases: { attention: { leaseId: 'lease', expiresAt: 1, phase: 'dispatching', attemptN: 1, obligationN: 1, routeKind: 'invalid' } },
+      notifyLeases: { attention: { leaseId: 'lease', expiresAt: 1, phase: 'dispatching', attemptN: 1, routeKind: 'invalid' } },
     })],
   ];
 
@@ -211,24 +211,18 @@ test('say metadata roundtrips through the artifact boundary', () => {
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
       { kind: 'say', actor: 'Alice', at: 3, body: 'center' },
       { kind: 'say', actor: 'Alice', at: 4, body: 'aside', reach: { beside: 'Bob' } },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'bell', reach: 'bell', reply: 2, requiresAck: true },
+      { kind: 'say', actor: 'Alice', at: 5, body: 'bell', reach: 'bell', reply: 2 },
     ],
   });
 
   const rendered = renderSquareDoc(doc);
   assert.match(rendered, /<!-- square:act \{"index":2,"kind":"say","actor":"Alice","at":3\} -->/);
   assert.match(rendered, /<!-- square:act \{"index":3,"kind":"say","actor":"Alice","at":4,"reach":\{"beside":"Bob"\}\} -->/);
-  assert.match(rendered, /<!-- square:act \{"index":4,"kind":"say","actor":"Alice","at":5,"reach":"bell","reply":2,"requires_ack":true\} -->/);
+  assert.match(rendered, /<!-- square:act \{"index":4,"kind":"say","actor":"Alice","at":5,"reach":"bell","reply":2\} -->/);
 
   const parsed = parseSquare(rendered);
   assert.equal(parsed.acts[2].reach, undefined);
   assert.deepEqual(parsed.acts[3].reach, { beside: 'Bob' });
   assert.equal(parsed.acts[4].reach, 'bell');
   assert.equal(parsed.acts[4].reply, 2);
-  assert.equal(parsed.acts[4].requiresAck, true);
-
-  assert.throws(
-    () => parseSquare(rendered.replace('"requires_ack":true', '"requires_ack":false')),
-    /malformed act requires_ack metadata/,
-  );
 });

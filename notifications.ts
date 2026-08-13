@@ -10,7 +10,7 @@ import {
   planActNotifications,
   type WakeAdapter,
 } from './delivery.js';
-import { hasPresentedAttention, presentedAttentionAt } from './presented.js';
+import { hasPresentedAttention } from './presented.js';
 import { nameKey, SquareError, type NotifyLease } from './model.js';
 import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 import { PaseoAdapter } from './paseo-delivery.js';
@@ -18,12 +18,12 @@ import { lookupParticipant } from './registry.js';
 import type { WakeRouteKind } from './routes.js';
 import { execute } from './square-application.js';
 import {
-  deriveWakeObligation,
   isWakeRouteAttemptable,
   nextWakeAttemptNumber,
   readWakeAttempts,
   recordRecoveredUnknown,
   recordWakeAttempt,
+  terminalWakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
 import { WakePort } from './wake-port.js';
@@ -97,7 +97,6 @@ async function transitionNotifyLease(
   phase: 'claimed' | 'dispatching',
   routeKind?: WakeRouteKind,
   attemptN?: number,
-  obligationN?: number,
 ): Promise<boolean> {
   const at = Date.now();
   const committed = await execute<{ updated: boolean }>(squarePath, {
@@ -108,7 +107,6 @@ async function transitionNotifyLease(
     phase,
     ...(routeKind === undefined ? {} : { routeKind }),
     ...(attemptN === undefined ? {} : { attemptN }),
-    ...(obligationN === undefined ? {} : { obligationN }),
   });
   return committed.result.updated;
 }
@@ -133,16 +131,10 @@ async function processNotification(
     actIndex: notification.item.index,
     recipient: notification.recipient,
   };
-  const requiresAck = notification.item.kind === 'say' && notification.item.requiresAck === true;
-  if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
   const initialAt = now();
-  const initialObligation = deriveWakeObligation(
-    requiresAck,
-    readWakeAttempts({ attention, env, now: initialAt }),
-    initialAt,
-    presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, initialAt),
-  );
-  if (initialObligation.type !== 'open') return;
+  if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
+  if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, initialAt)) return;
+  if (terminalWakeAttempt(attention, { env, now: initialAt }) !== undefined) return;
 
   const claim = await claimNotifyLease(squarePath, notification.recipient, notification.item.index);
   if (claim.type === 'busy') return;
@@ -157,18 +149,12 @@ async function processNotification(
   const { leaseId } = claim;
   let releaseLease = true;
   try {
+    const dispatchAt = now();
     if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return;
-    const obligationAt = now();
-    const obligation = deriveWakeObligation(
-      requiresAck,
-      readWakeAttempts({ attention, env, now: obligationAt }),
-      obligationAt,
-      presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, obligationAt),
-    );
-    if (obligation.type !== 'open') return;
-    const obligationN = obligation.obligationN;
+    if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, dispatchAt)) return;
+    if (terminalWakeAttempt(attention, { env, now: dispatchAt }) !== undefined) return;
     const owners = new Set(
-      lookupParticipant(squarePath, notification.recipient, obligationAt).map((binding) => binding.ownerId),
+      lookupParticipant(squarePath, notification.recipient, dispatchAt).map((binding) => binding.ownerId),
     );
     const port = new WakePort(opts.adapters ?? [new PaseoAdapter()], env);
     await port.dispatch(
@@ -185,18 +171,12 @@ async function processNotification(
         canAttempt: (route) => isWakeRouteAttemptable(
           route,
           readWakeAttempts({ attention, env, now: now() }),
-          obligationN,
         ),
         beforeSend: async (route, attemptN) => {
-          if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return false;
           const currentAt = now();
-          const current = deriveWakeObligation(
-            requiresAck,
-            readWakeAttempts({ attention, env, now: currentAt }),
-            currentAt,
-            presentedAttentionAt(squarePath, notification.recipient, notification.item.index, env, currentAt),
-          );
-          if (current.type !== 'open' || current.obligationN !== obligationN) return false;
+          if (hasDeliveredNotification(squarePath, notification.recipient, notification.item.index)) return false;
+          if (hasPresentedAttention(squarePath, notification.recipient, notification.item.index, env, currentAt)) return false;
+          if (terminalWakeAttempt(attention, { env, now: currentAt }) !== undefined) return false;
           const dispatching = await transitionNotifyLease(
             squarePath,
             notification.recipient,
@@ -205,7 +185,6 @@ async function processNotification(
             'dispatching',
             route.kind,
             attemptN,
-            obligationN,
           );
           if (dispatching) releaseLease = false;
           return dispatching;
@@ -220,7 +199,6 @@ async function processNotification(
             routeKind: route.kind,
             outcome: outcome.outcome,
             attemptN,
-            obligationN,
             at: now(),
             ...('signature' in outcome ? { signature: outcome.signature } : {}),
             ...('message' in outcome ? { message: outcome.message } : {}),
@@ -229,7 +207,7 @@ async function processNotification(
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
       },
-      obligationAt,
+      dispatchAt,
     );
   } finally {
     if (releaseLease) {

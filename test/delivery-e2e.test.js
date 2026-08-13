@@ -13,7 +13,7 @@ import { processActNotificationsOnce } from '../dist/notifications.js';
 import { presentOnce } from '../dist/presented.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
-import { readWakeAttempts, WAKE_ACK_ESCALATION_MS } from '../dist/wake-attempts.js';
+import { readWakeAttempts } from '../dist/wake-attempts.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -162,17 +162,15 @@ function callCount(file) {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).length : 0;
 }
 
-test('artifact roundtrip preserves acknowledgement intent and derives only directed pending attention', () => {
+test('artifact roundtrip derives only directed pending attention', () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', '--require-ack', 'please review @Bob'], 30);
+    item.cli('Alice', ['express', '--force', 'please review @Bob'], 30);
     item.cli('Alice', ['express', '--force', 'broadcast'], 40);
 
     const parsed = parseSquare(renderSquareDoc(loadSquare(item.squarePath)));
     const pending = deriveDeliveryModel(parsed).pendingFor('Bob');
     assert.equal(pending.length, 1);
-    assert.equal(pending[0].item.requiresAck, true);
-    assert.match(fs.readFileSync(item.squarePath, 'utf8'), /"requires_ack":true/);
     assert.equal(deriveDeliveryModel(parsed).plan(parsed.acts.at(-1))[0].route, 'broadcast');
   } finally {
     item.cleanup();
@@ -346,97 +344,5 @@ test('presented evidence is scoped to the current participant owner', async () =
     assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();
-  }
-});
-
-test('requires-ack uses three informedness windows while failed, delivered, and presented evidence keep their meanings', async () => {
-  const item = workshop();
-  const delivered = workshop();
-  const presented = workshop();
-  try {
-    const base = Date.now();
-    item.cli('Alice', ['express', '--force', '--require-ack', 'ack ladder @Bob'], base);
-    const act = loadSquare(item.squarePath).acts.at(-1);
-    registerRoute(item, 'bob-owner', 'bob-session', base);
-    let current = base;
-    const outcomes = ['accepted', 'failed', 'accepted', 'accepted'];
-    const adapter = {
-      kind: 'paseo',
-      calls: 0,
-      async dispatch(_route, _request, beforeSend) {
-        if (!(await beforeSend())) return { outcome: 'cancelled' };
-        const outcome = outcomes[this.calls++];
-        return outcome === 'failed'
-          ? { outcome, signature: 'address_not_found', message: 'gone' }
-          : { outcome };
-      },
-    };
-    const process = () => withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
-      env: item.env,
-      adapters: [adapter],
-      now: () => current,
-    }));
-
-    await process();
-    current = base + WAKE_ACK_ESCALATION_MS;
-    await process();
-    current += 1;
-    await process();
-    upsertWakeRoute({
-      ownerId: 'bob-owner', sessionId: 'bob-session', kind: 'paseo', address: { agentId: 'bob-session' }, source: 'join-env',
-    }, { env: item.env, at: current + 1 });
-    current += 2;
-    await process();
-    current += WAKE_ACK_ESCALATION_MS + 1;
-    await process();
-
-    const attempts = readWakeAttempts({ env: item.env, now: current });
-    assert.deepEqual(attempts.map(({ outcome, obligationN }) => [outcome, obligationN]), [
-      ['accepted', 1], ['failed', 2], ['accepted', 2], ['accepted', 3],
-    ]);
-    assert.equal(adapter.calls, 4);
-    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { now: current, env: item.env }))[0].kind, 'wake-accepted');
-    current += WAKE_ACK_ESCALATION_MS + 1;
-    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { now: current, env: item.env }))[0].kind, 'unacknowledged');
-    await process();
-    assert.equal(adapter.calls, 4);
-
-    delivered.cli('Alice', ['express', '--force', '--require-ack', 'delivered branch @Bob'], base);
-    const deliveredAct = loadSquare(delivered.squarePath).acts.at(-1);
-    registerRoute(delivered, 'delivered-owner', 'delivered-session', base);
-    const deliveredAdapter = acceptedAdapter();
-    await withRegistry(delivered.env, () => processActNotificationsOnce(delivered.squarePath, deliveredAct.index, {
-      env: delivered.env, adapters: [deliveredAdapter], now: () => base,
-    }));
-    delivered.cli('Bob', ['catch', '--now'], base + 1);
-    await withRegistry(delivered.env, () => processActNotificationsOnce(delivered.squarePath, deliveredAct.index, {
-      env: delivered.env, adapters: [deliveredAdapter], now: () => base + WAKE_ACK_ESCALATION_MS + 2,
-    }));
-    assert.equal(deliveredAdapter.calls, 1);
-
-    presented.cli('Alice', ['express', '--force', '--require-ack', 'presented branch @Bob'], base);
-    const presentedAct = loadSquare(presented.squarePath).acts.at(-1);
-    registerRoute(presented, 'presented-owner', 'presented-session', base);
-    const presentedAdapter = acceptedAdapter();
-    await withRegistry(presented.env, () => processActNotificationsOnce(presented.squarePath, presentedAct.index, {
-      env: presented.env, adapters: [presentedAdapter], now: () => base,
-    }));
-    withRegistry(presented.env, () => presentOnce(
-      'presented-session',
-      () => inboxFor(presented, presentedAct),
-      () => true,
-      presented.env,
-      base + WAKE_ACK_ESCALATION_MS + 1,
-    ));
-    await withRegistry(presented.env, () => processActNotificationsOnce(presented.squarePath, presentedAct.index, {
-      env: presented.env,
-      adapters: [presentedAdapter],
-      now: () => base + WAKE_ACK_ESCALATION_MS + 2,
-    }));
-    assert.equal(presentedAdapter.calls, 1);
-  } finally {
-    item.cleanup();
-    delivered.cleanup();
-    presented.cleanup();
   }
 });

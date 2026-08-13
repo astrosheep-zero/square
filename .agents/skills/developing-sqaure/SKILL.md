@@ -43,7 +43,7 @@ Treat tests as evidence about the product model, not as a scenario archive.
 
 - Name the invariant before writing or retaining a test. If the invariant cannot be stated independently of the implementation sequence, the test is probably too low quality.
 - Prefer one focused test class per invariant over Cartesian scenario matrices.
-- Test authoritative boundaries: exclusive writers, parser/render roundtrips, monotonic stop evidence, retry eligibility, bounded obligations, awareness-only payloads, pure derivation, and ownership scope.
+- Test authoritative boundaries: exclusive writers, parser/render roundtrips, monotonic stop evidence, retry eligibility, awareness-only payloads, pure derivation, and ownership scope.
 - Exercise time boundaries with an injected clock or explicit timestamps. Do not add sleeps or production configuration solely to make tests advance.
 - Keep crash-recovery tests only when they prove a durable safety property that ordinary success tests cannot prove.
 - Delete tests for removed mechanisms, heuristics, compatibility formats, duplicated state, or incidental call sequences. Do not leave tombstone tests.

@@ -21,14 +21,14 @@ export interface CommitPlan<Result> {
 
 export type Intent =
   | { type: 'join'; name: string; now: number }
-  | { type: 'say'; name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number; requiresAck?: true }
+  | { type: 'say'; name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
   | { type: 'hold'; actor: string; body: string; now: number }
   | { type: 'resume'; actor: string; now: number }
   | { type: 'done'; name: string; body: string; now: number }
   | { type: 'lease'; name: string; leaseId: string; at: number; expiresAt: number; ownerId?: string; force?: boolean; filter?: { participants?: string[]; mention?: string } }
   | { type: 'release-lease'; name: string; leaseId: string }
   | { type: 'claim-notify'; key: string; leaseId: string; at: number; expiresAt: number }
-  | { type: 'transition-notify'; key: string; leaseId: string; expiresAt: number; phase: 'claimed' | 'dispatching'; attemptN?: number; obligationN?: number; routeKind?: WakeRouteKind }
+  | { type: 'transition-notify'; key: string; leaseId: string; expiresAt: number; phase: 'claimed' | 'dispatching'; attemptN?: number; routeKind?: WakeRouteKind }
   | { type: 'release-notify'; key: string; leaseId: string }
   | { type: 'consume'; name: string; throughIndex: number; at: number }
   | { type: 'compact'; keep: number; archivePath: string }
@@ -179,7 +179,6 @@ function plan(doc: SquareDoc, intent: Intent): CommitPlan<unknown> {
             expiresAt: intent.expiresAt,
             phase: intent.phase,
             ...(intent.attemptN === undefined ? {} : { attemptN: intent.attemptN }),
-            ...(intent.obligationN === undefined ? {} : { obligationN: intent.obligationN }),
             ...(intent.routeKind === undefined ? {} : { routeKind: intent.routeKind }),
           };
         },
