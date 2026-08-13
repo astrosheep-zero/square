@@ -137,7 +137,7 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
   let requestedPath: string | undefined;
   let name: string | undefined;
   for (let index = 0; index < args.length; index++) {
-    if (args[index] === '--square-path') {
+    if (args[index] === '--location') {
       requestedPath = requireValue(args, index, args[index]);
       args.splice(index, 2);
       index -= 1;

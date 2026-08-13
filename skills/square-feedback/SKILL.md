@@ -38,8 +38,8 @@ Use this template:
 Run a nonblocking catch before expressing so the report does not land over unseen activity:
 
 ```bash
-square --square-path /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' catch --now
-square --square-path /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' express - <<'EOF'
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' catch --now
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' express - <<'EOF'
 **Square feedback**
 - Area: `catch --now`
 - Square identity: `/absolute/path/to/project/.square/SQUARE-main.md (@participant)`

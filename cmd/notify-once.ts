@@ -9,11 +9,11 @@ function args(argv: string[]): { squarePath: string; actIndex: number } {
   let squarePath: string | undefined;
   let actIndex: number | undefined;
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === '--square-path' && argv[index + 1] !== undefined) squarePath = resolve(argv[++index]);
+    if (argv[index] === '--location' && argv[index + 1] !== undefined) squarePath = resolve(argv[++index]);
     else if (argv[index] === '--act-index' && /^\d+$/.test(argv[index + 1] ?? '')) actIndex = Number(argv[++index]);
     else throw new Error(`Unknown notify-once argument: ${argv[index]}`);
   }
-  if (squarePath === undefined || actIndex === undefined) throw new Error('notify-once requires --square-path and --act-index.');
+  if (squarePath === undefined || actIndex === undefined) throw new Error('notify-once requires --location and --act-index.');
   return { squarePath, actIndex };
 }
 

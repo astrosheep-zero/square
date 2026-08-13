@@ -47,6 +47,6 @@ export async function cmdStreamNdjson(squarePath: string, recipient?: string): P
 
 export async function cmdStream(squarePath: string): Promise<void> {
   process.stderr.write('✕ interactive stream was removed\n');
-  process.stderr.write(`» square --square-path ${quoteShell(path.resolve(squarePath))} stream --ndjson\n`);
+  process.stderr.write(`» square --location ${quoteShell(path.resolve(squarePath))} stream --ndjson\n`);
   process.exitCode = 2;
 }

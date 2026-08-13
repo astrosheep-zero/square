@@ -54,7 +54,7 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 function catchCommand(squarePath: string, recipient: string): string {
-  return `square --as ${quoteShell(recipient)} --square-path ${quoteShell(squarePath)} catch --now`;
+  return `square --as ${quoteShell(recipient)} --location ${quoteShell(squarePath)} catch --now`;
 }
 
 function renderWakePayload(request: WakeRequest): string {
@@ -290,7 +290,7 @@ export async function dispatchActNotifications(squarePath: string, item: import(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
   const doc = loadSquare(squarePath);
   if (!planActNotifications(doc, item).some(isPendingNotification)) return;
-  (opts.launchWorker ?? launchWorker)(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--square-path', squarePath, '--act-index', String(item.index)]);
+  (opts.launchWorker ?? launchWorker)(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(item.index)]);
 }
 
 export interface SweepPendingNotificationsOptions extends DispatchActNotificationsOptions {
@@ -320,7 +320,7 @@ export function sweepPendingNotifications(
   const selected = [...indexes].sort((a, b) => a - b).slice(0, Math.max(0, limit));
   const workerPath = fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url));
   for (const actIndex of selected) {
-    (opts.launchWorker ?? launchWorker)(workerPath, ['--square-path', squarePath, '--act-index', String(actIndex)]);
+    (opts.launchWorker ?? launchWorker)(workerPath, ['--location', squarePath, '--act-index', String(actIndex)]);
   }
   return selected;
 }

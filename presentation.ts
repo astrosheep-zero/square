@@ -81,11 +81,11 @@ export function quoteShell(value: string): string {
 }
 
 export function commandPrefix(squarePath: string): string {
-  return `square --square-path ${quoteShell(squarePath)}`;
+  return `square --location ${quoteShell(squarePath)}`;
 }
 
 export function participantCommandPrefix(squarePath: string, name: string): string {
-  return `square --square-path ${quoteShell(path.resolve(squarePath))} --as ${quoteShell(name)}`;
+  return `square --location ${quoteShell(path.resolve(squarePath))} --as ${quoteShell(name)}`;
 }
 
 function formatAge(ms: number | undefined): string {

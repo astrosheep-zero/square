@@ -179,12 +179,12 @@ test('only explicit join claims local ownership and done closes the current owne
       SQUARE_PI_SESSION_ID: '',
       PASEO_AGENT_ID: 'resume-paseo-agent',
     };
-    const built = runCli(['--square-path', squarePath, 'build', '--cap', 'unlimited'], {
+    const built = runCli(['--location', squarePath, 'build', '--cap', 'unlimited'], {
       input: '## Topic\n\nRegistry refresh\n',
       env,
     });
     assert.equal(built.status, 0, built.stderr);
-    assert.equal(runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], { env }).status, 0);
+    assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env }).status, 0);
 
     const observerEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
@@ -195,24 +195,24 @@ test('only explicit join claims local ownership and done closes the current owne
       SQUARE_PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
-    const status = runCli(['--square-path', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
+    const status = runCli(['--location', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
     assert.equal(status.status, 0, status.stderr);
     assert.deepEqual(lookupSession('observer-session'), []);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
 
-    const catchNow = runCli(['--square-path', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
+    const catchNow = runCli(['--location', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
     assert.equal(catchNow.status, 0, catchNow.stderr);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
     assert.equal(lookupParticipant(squarePath, 'Alice')[0].paseoAgentId, 'resume-paseo-agent');
 
-    const expressed = runCli(['--square-path', squarePath, '--as', 'alice', 'express', 'still not an owner'], {
+    const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner'], {
       env: observerEnv,
     });
     assert.equal(expressed.status, 0, expressed.stderr);
     assert.deepEqual(lookupSession('observer-session'), []);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
 
-    const refused = runCli(['--square-path', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
+    const refused = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.equal(refused.status, 2, refused.stderr);
     assert.match(refused.stderr, /Alice shoos you out of the square/);
     assert.match(refused.stderr, /join --kick/);
@@ -222,33 +222,32 @@ test('only explicit join claims local ownership and done closes the current owne
     const noIdentityEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
-      CLAUDE_CODE_CHILD_SESSION: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
       SQUARE_PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
-    const unboundRefused = runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], {
+    const unboundRefused = runCli(['--location', squarePath, '--as', 'Alice', 'join'], {
       env: noIdentityEnv,
     });
     assert.equal(unboundRefused.status, 2, unboundRefused.stderr);
     assert.match(unboundRefused.stderr, /join --kick/);
     assert.deepEqual(lookupParticipant(squarePath, 'Alice').length, 2);
 
-    const takeover = runCli(['--square-path', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
+    const takeover = runCli(['--location', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
     assert.equal(takeover.status, 0, takeover.stderr);
     assert.match(takeover.stdout, /you banished the original Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
 
-    const unboundTakeover = runCli(['--square-path', squarePath, '--as', 'Alice', 'join', '--kick'], {
+    const unboundTakeover = runCli(['--location', squarePath, '--as', 'Alice', 'join', '--kick'], {
       env: noIdentityEnv,
     });
     assert.equal(unboundTakeover.status, 0, unboundTakeover.stderr);
     assert.match(unboundTakeover.stdout, /you banished the original Alice/);
     assert.deepEqual(lookupParticipant(squarePath, 'Alice'), []);
 
-    const done = runCli(['--square-path', squarePath, '--as', 'Alice', 'done', 'finished'], { env });
+    const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], { env });
     assert.equal(done.status, 0, done.stderr);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session'), []);
@@ -286,8 +285,8 @@ test('registry pruning removes only bindings disproved by their square artifacts
       SQUARE_PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
-    assert.equal(runCli(['--square-path', squarePath, 'build', '--cap', '3'], { input: 'prune\n', env: isolatedEnv }).status, 0);
-    assert.equal(runCli(['--square-path', squarePath, '--as', 'Alice', 'join'], { env: isolatedEnv }).status, 0);
+    assert.equal(runCli(['--location', squarePath, 'build', '--cap', '3'], { input: 'prune\n', env: isolatedEnv }).status, 0);
+    assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env: isolatedEnv }).status, 0);
     fs.writeFileSync(brokenPath, 'not a square\n');
 
     recordJoin('valid-session', 'Alice', squarePath);

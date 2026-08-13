@@ -103,7 +103,7 @@ export function renderGlobalHelp(): string {
     '',
   ]);
   return [
-    'Usage: square [--square-path <path>] [--as <name>] <command> [args...]',
+    'Usage: square [--location <path>] [--as <name>] <command> [args...]',
     '',
     ...commandLines,
     "Run 'square <command> --help' for command options.",
@@ -117,7 +117,7 @@ export function renderSubcommandHelp(command: string): string | undefined {
   const aliases = definition.names.filter((name) => name !== command);
   const usage = definition.usage.replace('{command}', command);
   return [
-    `Usage: square ${definition.usesSquare ? '[--square-path <path>] ' : ''}${usage}`,
+    `Usage: square ${definition.usesSquare ? '[--location <path>] ' : ''}${usage}`,
     ...(aliases.length > 0 ? [`Aliases: ${aliases.join(', ')}`] : []),
     '',
     definition.summary,
@@ -135,7 +135,7 @@ export function helpRequest(rawArgs: string[]): { command?: string } | undefined
   const args: string[] = [];
   for (let index = 0; index < rawArgs.length; index++) {
     const arg = rawArgs[index];
-    if (arg === '--square-path' || arg === '--as') {
+    if (arg === '--location' || arg === '--as') {
       const value = rawArgs[index + 1];
       if (value === undefined || value.startsWith('--')) return undefined;
       index++;

@@ -41,7 +41,7 @@ function workshop() {
   };
 
   function cli(name, args, at = Date.now(), input) {
-    const command = ['--square-path', squarePath, ...(name ? ['--as', name] : []), ...args];
+    const command = ['--location', squarePath, ...(name ? ['--as', name] : []), ...args];
     const result = spawnSync(process.execPath, [CLI, ...command], {
       cwd: ROOT,
       encoding: 'utf8',
@@ -209,7 +209,7 @@ test('a native boundary presents bounded awareness once and records the current 
     assert.equal(first, 'presented');
     assert.equal(second, undefined);
     assert.match(payload, /@Bob x{195}\n… \[truncated; run catch --now\]/);
-    assert.match(payload, /square --square-path .* --as 'Bob' catch --now/);
+    assert.match(payload, /square --location .* --as 'Bob' catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(item.env.SQUARE_PRESENTED, 'utf8').trim().split('\n').map(JSON.parse);

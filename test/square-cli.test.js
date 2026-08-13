@@ -51,7 +51,7 @@ function tempSquare() {
 }
 
 function withPath(file, args = []) {
-  return ['--square-path', file, ...args];
+  return ['--location', file, ...args];
 }
 
 function withName(file, name, args = []) {
@@ -59,7 +59,7 @@ function withName(file, name, args = []) {
 }
 
 function build(file, extraArgs = []) {
-  const result = run(['build', '--square-path', file, '--cap', '3', '--force', ...extraArgs], {
+  const result = run(['build', '--location', file, '--cap', '3', '--force', ...extraArgs], {
     input: '## Topic\n\nTesting v2\n',
   });
   return result;
@@ -92,7 +92,7 @@ function assertDraftRecovery(result, file, name, body, command) {
   assert.equal(result.status, 1, result.stderr);
   const draftPath = draftPathFrom(result.stdout + result.stderr);
   assert.equal(fs.readFileSync(draftPath, 'utf8'), body);
-  assert.match(result.stdout + result.stderr, new RegExp(`» square --square-path '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' --as '${name}' ${command}`));
+  assert.match(result.stdout + result.stderr, new RegExp(`» square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' --as '${name}' ${command}`));
   assert.match(result.stdout + result.stderr, new RegExp(`< '${draftPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
 }
 
@@ -182,9 +182,13 @@ test('every public subcommand exposes scoped help without a square', () => {
   assert.doesNotMatch(index.stdout, /^  ls,/m);
 
   const missingSquare = path.join(cwd, 'missing.md');
-  const withGlobals = run(['--as', 'Alice', '--square-path', missingSquare, 'catch', '-h'], { cwd });
+  const withGlobals = run(['--as', 'Alice', '--location', missingSquare, 'catch', '-h'], { cwd });
   assert.equal(withGlobals.status, 0, withGlobals.stderr);
-  assert.match(withGlobals.stdout, /Usage: square \[--square-path <path>\] --as <name> catch/);
+  assert.match(withGlobals.stdout, /Usage: square \[--location <path>\] --as <name> catch/);
+
+  const retiredLocationFlag = run(['--square-path', missingSquare, 'catch', '--help'], { cwd });
+  assert.equal(retiredLocationFlag.status, 2);
+  assert.match(retiredLocationFlag.stderr, /unknown command: --square-path/);
 });
 
 test('help command resolves aliases and rejects unknown commands', () => {
@@ -239,16 +243,16 @@ test('build rejects removed --participants flag', () => {
 
 test('build defaults to unlimited, accepts its explicit spelling, and rejects the removed -1 sentinel', () => {
   const defaulted = tempSquare();
-  const withoutCap = run(['--square-path', defaulted, 'build'], { input: 'default unlimited\n' });
+  const withoutCap = run(['--location', defaulted, 'build'], { input: 'default unlimited\n' });
   assert.equal(withoutCap.status, 0, withoutCap.stderr);
   assert.equal(loadSquare(defaulted).hardCap, null);
 
   const unlimited = tempSquare();
-  const accepted = run(['--square-path', unlimited, 'build', '--cap', 'unlimited'], { input: 'unlimited\n' });
+  const accepted = run(['--location', unlimited, 'build', '--cap', 'unlimited'], { input: 'unlimited\n' });
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(loadSquare(unlimited).hardCap, null);
 
-  const removed = run(['--square-path', tempSquare(), 'build', '--cap', '-1'], { input: 'removed\n' });
+  const removed = run(['--location', tempSquare(), 'build', '--cap', '-1'], { input: 'removed\n' });
   assert.notEqual(removed.status, 0);
   assert.match(removed.stderr, /positive integer or unlimited/);
 });
@@ -343,7 +347,7 @@ test('hold and resume persist the real actor, never system', () => {
 
 test('status stays compact and focuses on the current square', () => {
   const file = tempSquare();
-  const built = run(['build', '--square-path', file, '--cap', '100', '--force'], { input: '## Topic\\n\\nTesting status\\n' });
+  const built = run(['build', '--location', file, '--cap', '100', '--force'], { input: '## Topic\\n\\nTesting status\\n' });
   assert.equal(built.status, 0, built.stderr);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
@@ -950,8 +954,8 @@ test('implicit writes refuse when more than one square is available', () => {
   const first = path.join(cwd, '.square', 'first.md');
   const second = path.join(cwd, '.square', 'second.md');
   fs.mkdirSync(path.dirname(first), { recursive: true });
-  assert.equal(run(['--square-path', first, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'first' }).status, 0);
-  assert.equal(run(['--square-path', second, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'second' }).status, 0);
+  assert.equal(run(['--location', first, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'first' }).status, 0);
+  assert.equal(run(['--location', second, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'second' }).status, 0);
   const refused = run(['--as', 'Alice', 'express', '--force', 'ambiguous'], { cwd });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /more than one square/);
@@ -1011,7 +1015,7 @@ test('headers shorten absolute square paths inside the working directory', () =>
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-short-path-'));
   const file = path.join(cwd, '.square', 'review.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const built = run(['--square-path', file, 'build', '--cap', 'unlimited', '--force'], {
+  const built = run(['--location', file, 'build', '--cap', 'unlimited', '--force'], {
     cwd,
     input: '## Topic\n\nShort paths\n',
   });
@@ -1092,12 +1096,12 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
 
 test('join is bounded and points to the complete warmup', () => {
   const file = tempSquare();
-  assert.equal(run(['build', '--square-path', file, '--cap', '3', '--template', 'brainstorm', '--force'], { input: '## Topic\n\nBounded join\n' }).status, 0);
+  assert.equal(run(['build', '--location', file, '--cap', '3', '--template', 'brainstorm', '--force'], { input: '## Topic\n\nBounded join\n' }).status, 0);
   const joined = run(withName(file, 'Alice', ['join']));
   assert.equal(joined.status, 0, joined.stderr);
   assert.ok(joined.stdout.length < 6000, `${joined.stdout.length} bytes`);
   assert.match(joined.stdout, /context/);
-  assert.match(joined.stdout, /» square --square-path '.*' --as 'Alice' warmup/);
+  assert.match(joined.stdout, /» square --location '.*' --as 'Alice' warmup/);
   assert.doesNotMatch(joined.stdout, /### Warmup/);
 });
 
@@ -1108,8 +1112,8 @@ test('list bounds recursive discovery by default and accepts an explicit depth',
   fs.mkdirSync(path.dirname(visible), { recursive: true });
   fs.mkdirSync(path.dirname(deeper), { recursive: true });
 
-  assert.equal(run(['build', '--square-path', visible, '--cap', '3', '--force'], { cwd, input: 'visible\n' }).status, 0);
-  assert.equal(run(['build', '--square-path', deeper, '--cap', '3', '--force'], { cwd, input: 'deeper\n' }).status, 0);
+  assert.equal(run(['build', '--location', visible, '--cap', '3', '--force'], { cwd, input: 'visible\n' }).status, 0);
+  assert.equal(run(['build', '--location', deeper, '--cap', '3', '--force'], { cwd, input: 'deeper\n' }).status, 0);
 
   const bounded = run(['list'], { cwd });
   assert.equal(bounded.status, 0, bounded.stderr);
@@ -1130,7 +1134,7 @@ test('list, participants, and clipped status use current state and executable hi
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-current-state-'));
   const file = path.join(cwd, '.square', 'state.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  assert.equal(run(['build', '--square-path', file, '--cap', '10', '--throttle', '2', '--force'], { cwd, input: '## Topic\n\nCurrent state\n' }).status, 0);
+  assert.equal(run(['build', '--location', file, '--cap', '10', '--throttle', '2', '--force'], { cwd, input: '## Topic\n\nCurrent state\n' }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { cwd }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { cwd }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['done', 'finished']), { cwd }).status, 0);
@@ -1147,7 +1151,7 @@ test('list, participants, and clipped status use current state and executable hi
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);
-  assert.match(status.stdout, /» square --square-path '.*' --as 'Alice' history --at act_\d+ -C 2 --full/);
+  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act_\d+ -C 2 --full/);
   assert.match(status.stdout, /throttle 2\/min/);
 });
 

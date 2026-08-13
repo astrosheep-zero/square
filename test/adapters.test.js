@@ -366,7 +366,7 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.deepEqual(inboxKeys(inbox), ['/tmp/square.md\u0000bob\u00007']);
   assert.match(renderPiInbox(inbox), /1 unread Square notification/);
   assert.match(renderPiInbox(inbox), /square:\/tmp\/square\.md#act_7/);
-  assert.match(renderPiInbox(inbox), /square --square-path '\/tmp\/square\.md' --as 'Bob' catch --now/);
+  assert.match(renderPiInbox(inbox), /square --location '\/tmp\/square\.md' --as 'Bob' catch --now/);
 });
 
 function piFixture(sessionId) {

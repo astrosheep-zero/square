@@ -7,7 +7,7 @@ allowed-tools: Bash(square *), Skill(square)
 # Square Brainstorm
 
 Use this skill when you are coordinating a brainstorm. Your job is to create the square, send participant agents into it, observe the conversation, and collect the result. Do not steer the conversation on your own unless the human explicitly asks for public direction.
-Commands default to `.square/SQUARE.md`; use `--square-path <path>` when you want a different file.
+Commands default to `.square/SQUARE.md`; use `--location <path>` when you want a different file.
 
 ## Build
 
@@ -37,27 +37,27 @@ Send each participant agent this prompt. Replace `<name>` and `<path>`, but do n
 You are <name>, participating in a brainstorm. The square file is at <path>.
 
 First action: enter the square. Read the context, warmup, and recent activity printed by this command before expressing:
-square --square-path <path> --as <name> join
+square --location <path> --as <name> join
 
 Then follow the Happy Path from the join output. Core commands:
-square --square-path <path> --as <name> express - <<'EOF'
+square --location <path> --as <name> express - <<'EOF'
 ...
 EOF
-square --square-path <path> --as <name> catch --mention --idle 10m
-square --square-path <path> --as <name> catch --now
-square --square-path <path> --as <name> catch --idle 10m
-square --square-path <path> history --limit 80
-square --square-path <path> history --from <name> --limit 80
-square --square-path <path> status
-square --square-path <path> --as <name> done - <<'EOF'
+square --location <path> --as <name> catch --mention --idle 10m
+square --location <path> --as <name> catch --now
+square --location <path> --as <name> catch --idle 10m
+square --location <path> history --limit 80
+square --location <path> history --from <name> --limit 80
+square --location <path> status
+square --location <path> --as <name> done - <<'EOF'
 ...
 EOF
 
-For complete history: square --square-path <path> history --all --full
+For complete history: square --location <path> history --all --full
 
 If you are addressing a specific participant, write @name. Without any @name, the activity broadcasts to all participants — everyone catching with `--mention` will receive it.
 
-If an activity is refused because something happened while the participant was not looking, run `square --square-path <path> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
+If an activity is refused because something happened while the participant was not looking, run `square --location <path> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```
 
 Need another voice later? Spawn another participant agent with a new `<name>` and give it the same participant prompt.
@@ -67,12 +67,12 @@ Need another voice later? Spawn another participant agent with a new `<name>` an
 If you or the human want to participate, choose a participant name and use the participant loop:
 
 ```bash
-square --square-path <path> --as <name> join
-square --square-path <path> --as <name> express - <<'EOF'
+square --location <path> --as <name> join
+square --location <path> --as <name> express - <<'EOF'
 your view
 EOF
-square --square-path <path> --as <name> catch --idle 10m
-square --square-path <path> --as <name> done - <<'EOF'
+square --location <path> --as <name> catch --idle 10m
+square --location <path> --as <name> done - <<'EOF'
 final note
 EOF
 ```
@@ -82,9 +82,9 @@ EOF
 Use these to check progress:
 
 ```bash
-square --square-path <path> history --limit 50
-square --square-path <path> history --from <name>
-square --square-path <path> status
+square --location <path> history --limit 50
+square --location <path> history --from <name>
+square --location <path> status
 ```
 
 `history` reads past public activity without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest public activity.
@@ -96,7 +96,7 @@ When addressing a specific participant, use `@name`; without any `@name`, the ac
 If the human wants to refocus the square, add a constraint, ask a convergence question, or correct its direction, write that direction publicly with a participant name:
 
 ```bash
-square --square-path <path> --as <name> express - <<'EOF'
+square --location <path> --as <name> express - <<'EOF'
 Refocus on <specific direction, constraint, question, or decision needed>.
 EOF
 ```
@@ -106,8 +106,8 @@ Do not add direction on your own. If you notice the square drifting or stuck, re
 Pause the participant loop when a human needs time to read, think, or add another voice:
 
 ```bash
-square --square-path <path> hold "human reading"
-square --square-path <path> resume
+square --location <path> hold "human reading"
+square --location <path> resume
 ```
 
 While held, participant expression and catch pause. Join, done, status, and history still work.
@@ -117,8 +117,8 @@ While held, participant expression and catch pause. Join, done, status, and hist
 When participants are done, collect the public activities:
 
 ```bash
-square --square-path <path> history --all --full        # complete public history
-square --square-path <path> status
+square --location <path> history --all --full        # complete public history
+square --location <path> status
 ```
 
 ## Boundaries
