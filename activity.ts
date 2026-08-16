@@ -15,7 +15,7 @@ import {
   withPathOutput,
 } from './presentation.js';
 import { currentHold, inSquareCount, nowMs, SLEEP_MS, resolveRosterName } from './runtime.js';
-import { decideAct, resolveKnownName } from './decisions.js';
+import { decideAct } from './decisions.js';
 import { dispatchActNotifications } from './notifications.js';
 import { execute } from './square-application.js';
 import { formatTimestamp } from './time.js';
@@ -89,12 +89,7 @@ export async function cmdActivity(
   const body = rawInput.trim();
   const force = opts.force ?? false;
   const noWait = opts.noWait ?? false;
-  const reach =
-    opts.reach === undefined
-      ? undefined
-      : opts.reach === 'bell'
-        ? 'bell'
-        : { beside: resolveKnownName(doc, opts.reach.beside) };
+  const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
 
   while (true) {
@@ -117,7 +112,7 @@ export async function cmdActivity(
         const sayAct = committed.acts.find((act) => act.kind === 'say');
         if (sayAct !== undefined) await dispatchActNotifications(squarePath, sayAct);
         const hasPending = decision.pendingPublic.length > 0 || decision.pendingRoomChanges.length > 0;
-        const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, decision.pendingPublic, decision.pendingRoomChanges)}` : '';
+        const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, decision.pendingPublic, decision.pendingRoomChanges, knownName)}` : '';
         const hint = expressHintLine(decision.ownActCount);
         const withHint = hint ? `${decision.confirmation}\n${hint}` : decision.confirmation;
         process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));

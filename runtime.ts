@@ -1,17 +1,15 @@
-import { fold } from './square-core.js';
+import { audienceIncludes, audienceOf, fold, type Reach } from './square-core.js';
 import {
   SquareError,
   type StoredAct,
   type SquareDoc,
   type HoldState,
   type ReadCursor,
-  type Reach,
   type WatchLease,
   findParticipantName,
   nameKey,
   sameName,
 } from './model.js';
-
 
 function parseIntegerEnvValue(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
@@ -75,24 +73,11 @@ export function nowMs(): number {
   return value;
 }
 
-export function extractMentions(body: string): string[] {
-  const matches = [];
-  const re = /@([\p{L}\p{N}_-]+)/gu;
-  let match;
-  while ((match = re.exec(body)) !== null) matches.push(match[1]);
-  return matches;
-}
-
-/** Pure directed-activity filter. Broadcast bodies (no @) match any named viewer. */
+/** Pure directed-activity filter. Bell matches every viewer; mentions match by audience. */
 export function matchesMentionTarget(act: { body: string; reach?: Reach }, mention: string | true): boolean {
-  if (act.reach === 'bell') return true;
-  if (act.reach !== undefined) {
-    return mention === true || sameName(act.reach.beside, mention);
-  }
-  const mentions = extractMentions(act.body);
-  if (mention === true) return mentions.length > 0;
-  if (mentions.length === 0) return true;
-  return mentions.some((name) => sameName(name, mention));
+  const audience = audienceOf(act);
+  if (mention === true) return audience.kind === 'bell' || audience.names.length > 0;
+  return audienceIncludes(audience, mention);
 }
 
 export function foldedState(doc: SquareDoc) {

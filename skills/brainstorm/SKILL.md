@@ -55,7 +55,7 @@ EOF
 
 For complete history: square --location <path> history --all --full
 
-Every activity must address at least one participant with @name. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it.
+Every activity must address at least one participant with @name. Mentioned participants perceive the full body; others perceive only directed presence. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it. Precise history queries may still read original archive bodies.
 
 If an activity is refused because something happened while the participant was not looking, run `square --location <path> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```
@@ -87,7 +87,7 @@ square --location <path> history --from <name>
 square --location <path> status
 ```
 
-`history` reads past public activity without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest public activity.
+`history` reads the archive without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest ambient activity.
 
 Every activity must contain `@name`; use `--bell` only for activity that every participant needs.
 

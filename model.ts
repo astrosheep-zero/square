@@ -1,7 +1,7 @@
 // Shared model and constants for Square.
 
 import type { Act } from './square-core.js';
-export type { Act, Reach } from './square-core.js';
+export type { Act, Audience, Reach } from './square-core.js';
 
 export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-app-server', 'claude-native', 'pi-extension', 'paseo'] as const;
 export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
@@ -81,7 +81,7 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
-export type DirectedNotificationRoute = 'mention' | 'beside' | 'bell';
+export type DirectedNotificationRoute = 'mention' | 'bell';
 
 export interface InboxNotification {
   actIndex: number;

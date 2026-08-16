@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { emptyRuntimeState, loadSquare, parseSquare, renderSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
+import { diagnoseSquare, emptyRuntimeState, loadSquare, parseSquare, renderSquare, renderSquareDoc, saveRuntimeSidecar } from '../dist/artifact.js';
 import { planRepair } from '../dist/doctor.js';
 import { repairSquare } from '../dist/square-application.js';
 import { appendAct } from '../dist/square-application.js';
@@ -108,7 +108,7 @@ test('doctor repair preserves compacted stable indexes', () => {
     ],
     runtime: { ...emptyRuntimeState(7), nextActIndex: 7 },
   };
-  const repaired = planRepair(renderSquareDoc(doc)).repaired;
+  const repaired = planRepair(diagnoseSquare(renderSquareDoc(doc))).repaired;
   assert.deepEqual(repaired.doc.acts.map((act) => act.index), [5, 6]);
   assert.equal(repaired.doc.runtime.nextActIndex, 7);
   assert.doesNotMatch(repaired.actions.map((action) => action.message).join('\n'), /renumbered/);
@@ -209,20 +209,24 @@ test('say metadata roundtrips through the artifact boundary', () => {
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'center' },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'aside', reach: { beside: 'Bob' } },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'bell', reach: 'bell', reply: 2 },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'center @Bob' },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'bell', reach: 'bell', reply: 2 },
     ],
   });
 
   const rendered = renderSquareDoc(doc);
   assert.match(rendered, /<!-- square:act \{"index":2,"kind":"say","actor":"Alice","at":3\} -->/);
-  assert.match(rendered, /<!-- square:act \{"index":3,"kind":"say","actor":"Alice","at":4,"reach":\{"beside":"Bob"\}\} -->/);
-  assert.match(rendered, /<!-- square:act \{"index":4,"kind":"say","actor":"Alice","at":5,"reach":"bell","reply":2\} -->/);
+  assert.match(rendered, /<!-- square:act \{"index":3,"kind":"say","actor":"Alice","at":4,"reach":"bell","reply":2\} -->/);
+  assert.doesNotMatch(rendered, /beside/);
 
   const parsed = parseSquare(rendered);
   assert.equal(parsed.acts[2].reach, undefined);
-  assert.deepEqual(parsed.acts[3].reach, { beside: 'Bob' });
-  assert.equal(parsed.acts[4].reach, 'bell');
-  assert.equal(parsed.acts[4].reply, 2);
+  assert.equal(parsed.acts[3].reach, 'bell');
+  assert.equal(parsed.acts[3].reply, 2);
+
+  const beside = rendered.replace(
+    '<!-- square:act {"index":2,"kind":"say","actor":"Alice","at":3} -->',
+    '<!-- square:act {"index":2,"kind":"say","actor":"Alice","at":3,"reach":{"beside":"Bob"}} -->'
+  );
+  assert.throws(() => parseSquare(beside), /malformed act reach metadata/);
 });

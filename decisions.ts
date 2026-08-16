@@ -13,7 +13,6 @@ import {
   UNREAD_BLOCK_GRACE_MS,
   actId,
   actStableIndex,
-  extractMentions,
   foldedState,
   freshWatchLease,
   getReadState,
@@ -25,7 +24,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
-import { validate, type SquareState } from './square-core.js';
+import { extractMentions, validate, type SquareState } from './square-core.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 

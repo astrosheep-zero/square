@@ -381,11 +381,11 @@ test('stream recipient filtering matches the addressed participant', () => {
     runtime,
   };
   const bobMention = { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', index: 3 };
-  const broadcast = { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 };
+  const undirected = { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 };
   const bell = { kind: 'say', actor: 'Alice', at: 6, body: 'attention', reach: 'bell', index: 5 };
 
   assert.equal(streamNotificationFor(doc, bobMention, 'Bob').route, 'mention');
-  assert.equal(streamNotificationFor(doc, broadcast, 'Bob').route, 'broadcast');
+  assert.equal(streamNotificationFor(doc, undirected, 'Bob'), undefined);
   assert.equal(streamNotificationFor(doc, bell, 'Bob').route, 'bell');
   assert.equal(streamNotificationFor(doc, bell, 'Cara').route, 'bell');
   assert.equal(streamNotificationFor(doc, bell, 'Alice'), undefined);

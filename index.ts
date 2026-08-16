@@ -10,9 +10,9 @@ export type {
   WatchOptions,
 } from './model.js';
 export type { Act, Reach } from './square-core.js';
+export { extractMentions } from './square-core.js';
 export { loadSquare } from './artifact.js';
 export {
-  extractMentions,
   countSays,
   joinedNames,
   doneNames,

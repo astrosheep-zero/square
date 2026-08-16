@@ -1,5 +1,8 @@
 export type Participant = string;
-export type Reach = { beside: Participant } | 'bell';
+export type Reach = 'bell';
+export type Audience =
+  | { readonly kind: 'bell' }
+  | { readonly kind: 'mentions'; readonly names: readonly string[] };
 
 export interface Hold {
   active: boolean;
@@ -22,7 +25,7 @@ export interface SquareValidationOptions {
   throttleWindowMs?: number;
 }
 
-export type Perception = 'full' | 'presence' | 'none';
+export type Perception = 'full' | 'presence';
 
 interface ParticipantSnapshot {
   name: Participant;
@@ -61,6 +64,45 @@ function nameKey(name: string): string {
 
 function sameName(a: string, b: string): boolean {
   return nameKey(a) === nameKey(b);
+}
+
+export function extractMentions(body: string): string[] {
+  const matches = [];
+  const re = /@([\p{L}\p{N}_-]+)/gu;
+  let match;
+  while ((match = re.exec(body)) !== null) matches.push(match[1]);
+  return matches;
+}
+
+function uniqueMentionNames(names: readonly string[]): string[] {
+  const unique: string[] = [];
+  for (const name of names) {
+    if (unique.some((existing) => sameName(existing, name))) continue;
+    unique.push(name);
+  }
+  return unique;
+}
+
+export function audienceOf(say: { body: string; reach?: Reach }): Audience {
+  if (say.reach === 'bell') return { kind: 'bell' };
+  return { kind: 'mentions', names: uniqueMentionNames(extractMentions(say.body)) };
+}
+
+export function audienceIncludes(audience: Audience, name: string): boolean {
+  if (audience.kind === 'bell') return true;
+  return audience.names.some((mentioned) => sameName(mentioned, name));
+}
+
+export function resolveAudience(audience: Audience, candidateNames: readonly string[]): string[] {
+  if (audience.kind === 'bell') return [...candidateNames];
+  const resolved: string[] = [];
+  for (const mention of audience.names) {
+    const known = candidateNames.find((candidate) => sameName(candidate, mention));
+    if (known !== undefined && !resolved.some((existing) => sameName(existing, known))) {
+      resolved.push(known);
+    }
+  }
+  return resolved;
 }
 
 function actorOf(act: Act): Participant | undefined {
@@ -225,16 +267,8 @@ export function validate(state: SquareState, act: Act, options: SquareValidation
   }
 }
 
-export function perceive(
-  state: SquareState,
-  act: Act,
-  viewer: Participant | string
-): Perception {
-  void state;
+export function perceive(act: Act, viewer: Participant | string): Perception {
   if (act.kind !== 'say') return 'full';
-  const actor = act.actor;
-  if (sameName(actor, viewer)) return 'full';
-  if (act.reach === undefined || act.reach === 'bell') return 'full';
-  if (sameName(act.reach.beside, viewer)) return 'full';
-  return 'presence';
+  if (sameName(act.actor, viewer)) return 'full';
+  return audienceIncludes(audienceOf(act), viewer) ? 'full' : 'presence';
 }

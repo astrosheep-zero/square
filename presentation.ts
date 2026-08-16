@@ -1,8 +1,8 @@
 import { type StoredAct, type SquareDoc, type PublicAct, type RoomChangeAct, sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fold, perceive, type Perception } from './square-core.js';
-import { actId, actStableIndex, extractMentions, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
+import { audienceIncludes, audienceOf, perceive } from './square-core.js';
+import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { grepSnippet } from './search.js';
@@ -211,7 +211,7 @@ export function renderEventCli(
       const body = renderedBody(event.body, maxBody);
       const mention = opts.mention;
       const mentionSuffix =
-        mention !== undefined && extractMentions(event.body).some((name) => sameName(name, mention))
+        mention !== undefined && audienceIncludes(audienceOf(event), mention)
           ? ` · calls your name across the square — @${mention}`
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
@@ -226,26 +226,20 @@ export function renderEventCli(
   }
 }
 
-function renderPresenceOnlySay(event: StoredAct): string {
-  if (event.kind !== 'say' || event.reach === undefined || event.reach === 'bell') return '';
-  return `*walks over to @${event.reach.beside}*`;
+function renderPresenceOnlySay(event: Extract<StoredAct, { kind: 'say' }>): string {
+  const audience = audienceOf(event);
+  const targets = audience.kind === 'bell' ? [] : audience.names;
+  const dest = targets.length === 0 ? '' : ` to ${targets.map((name) => `@${name}`).join(' and ')}`;
+  return `*${event.actor} walks over${dest}*`;
 }
 
-function perceptionFor(history: StoredAct[], event: StoredAct, viewer: string): Perception {
-  const cutoff = history.findIndex((item) => actStableIndex(item) === actStableIndex(event));
-  const acts = cutoff >= 0 ? history.slice(0, cutoff) : history;
-  return perceive(fold(acts), event, viewer);
-}
-
-export function renderVisibleEvent(
-  history: StoredAct[],
+export function renderAmbientEvent(
   event: StoredAct,
   viewer: string,
   opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
 ): string {
   if (event.kind !== 'say') return renderEventCli(event, opts);
-  const seen = perceptionFor(history, event, viewer);
-  if (seen === 'none') return '';
+  const seen = perceive(event, viewer);
   if (seen === 'presence') return renderPresenceOnlySay(event);
   return renderEventCli(event, opts);
 }
@@ -262,7 +256,7 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
   return [
     ...opts.activitySummaries.flatMap((item) => [
       ...item.previews.slice(-1).map((preview) => {
-        const rendered = renderVisibleEvent([preview.act], preview.act, opts.viewer, { actNumber: preview.number });
+        const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number });
         if (rendered === '') return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
         if (rendered.startsWith('*')) return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered}`;
         return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
@@ -280,7 +274,7 @@ export function renderPendingFeed(
 ): string {
   const lines: string[] = [];
   for (const act of publicItems) {
-    const rendered = renderVisibleEvent(history, act, viewer, {
+    const rendered = renderAmbientEvent(act, viewer, {
       actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
     });
     if (rendered !== '') lines.push(rendered);
@@ -341,7 +335,7 @@ export function renderPublicTail(events: StoredAct[], lastN: number | null | und
   const selected = lastN == null ? publicItems : publicItems.slice(-lastN);
   const preview = lastN == null ? undefined : BODY_PREVIEW_LENGTH;
   return selected
-    .map((event) => renderVisibleEvent(events, event, viewer, { now, preview, actNumber: event.kind === 'say' ? sayNumberFor(events, event) : undefined }))
+    .map((event) => renderAmbientEvent(event, viewer, { now, preview, actNumber: event.kind === 'say' ? sayNumberFor(events, event) : undefined }))
     .filter(Boolean)
     .join('\n\n');
 }
@@ -350,7 +344,7 @@ function lastPresenceAnchor(doc: SquareDoc, name: string): number {
   const cursor = readCursor(doc, name);
   for (let i = doc.acts.length - 1; i >= 0; i--) {
     const event = doc.acts[i];
-    const index = actStableIndex(event);
+    const index = event.index;
     if (index > cursor) continue;
     if (event.kind === 'say' || event.kind === 'done') return index;
   }
@@ -367,7 +361,8 @@ export function renderActivitiesView(
   lastN: number | null | undefined,
   full: boolean | undefined,
   squarePath: string,
-  viewer = ''
+  viewer = '',
+  mode: 'ambient' | 'archive' = 'ambient'
 ): string {
   const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
   const shown = lastN == null ? publicVisible : publicVisible.slice(-lastN);
@@ -381,10 +376,13 @@ export function renderActivitiesView(
 
   const chunks: string[] = [];
   for (const act of shown) {
-    const rendered = renderVisibleEvent(doc.acts, act, viewer, {
+    const opts = {
       preview: previewLen,
       actNumber: act.kind === 'say' ? sayNumberFor(doc.acts, act) : undefined,
-    });
+    };
+    const rendered = mode === 'archive'
+      ? renderEventCli(act, opts)
+      : renderAmbientEvent(act, viewer, opts);
     if (rendered !== '') chunks.push(rendered);
     for (const participant of markers.get(act.index) ?? []) {
       chunks.push(renderLastPresenceMarker(participant));
@@ -394,7 +392,9 @@ export function renderActivitiesView(
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
 
   if (previewLen !== undefined) {
-    const truncated = shown.some((act) => act.kind === 'say' && act.body.length > previewLen);
+    const truncated = shown.some((act) =>
+      act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceive(act, viewer) === 'full')
+    );
     if (truncated) chunks.push(`» ${commandPrefix(squarePath)} history --full`);
   }
 
@@ -567,7 +567,7 @@ export function renderWatchOutput(
   if (publicItems.length > 0) {
     const rendered = publicItems
       .map((act) =>
-        renderVisibleEvent(history, act, opts.viewer, {
+        renderAmbientEvent(act, opts.viewer, {
           actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
           mention: opts.mention,
         })

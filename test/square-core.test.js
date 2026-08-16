@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fold, perceive, validate } from '../dist/square-core.js';
+import { audienceIncludes, audienceOf, fold, perceive, resolveAudience, validate } from '../dist/square-core.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -59,16 +59,29 @@ test('validation makes held, capped, and throttled activity uncommittable', () =
   }
 });
 
-test('perception preserves private bodies while retaining third-party presence', () => {
-  const state = fold([{ kind: 'join', actor: 'Alice', at: T0 }]);
-  const center = { kind: 'say', actor: 'Alice', at: T0 + 1, body: 'hello' };
-  const beside = { kind: 'say', actor: 'Alice', at: T0 + 2, body: 'psst', reach: { beside: 'Bob' } };
-  const bell = { kind: 'say', actor: 'Alice', at: T0 + 3, body: 'listen', reach: 'bell' };
+test('audience parsing keeps first-appearance spelling and case-insensitive uniqueness', () => {
+  assert.deepEqual(audienceOf({ body: 'hey @Bob and @cara then @BOB @Missing' }), {
+    kind: 'mentions',
+    names: ['Bob', 'cara', 'Missing'],
+  });
+  assert.deepEqual(audienceOf({ body: 'ignore @Bob', reach: 'bell' }), { kind: 'bell' });
+  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob' }), 'bob'), true);
+  assert.deepEqual(resolveAudience(audienceOf({ body: '@cara then @BOB' }), ['Alice', 'Bob', 'Cara']), ['Cara', 'Bob']);
+  assert.deepEqual(resolveAudience({ kind: 'bell' }, ['Alice', 'Bob']), ['Alice', 'Bob']);
+});
 
-  assert.equal(perceive(state, center, 'Cara'), 'full');
-  assert.equal(perceive(state, beside, 'Bob'), 'full');
-  assert.equal(perceive(state, beside, 'Cara'), 'presence');
-  assert.equal(perceive(state, bell, 'Cara'), 'full');
+test('perception is full for author, mentioned viewers, and every bell viewer', () => {
+  const directed = { kind: 'say', actor: 'Alice', at: T0 + 2, body: 'psst @Bob' };
+  const selfMention = { kind: 'say', actor: 'Alice', at: T0 + 3, body: 'note @Alice' };
+  const bell = { kind: 'say', actor: 'Alice', at: T0 + 4, body: 'listen @Bob', reach: 'bell' };
+
+  assert.equal(perceive(directed, 'Alice'), 'full');
+  assert.equal(perceive(directed, 'Bob'), 'full');
+  assert.equal(perceive(directed, 'Cara'), 'presence');
+  assert.equal(perceive(selfMention, 'Alice'), 'full');
+  assert.equal(perceive(selfMention, 'Bob'), 'presence');
+  assert.equal(perceive(bell, 'Cara'), 'full');
+  assert.equal(perceive(bell, 'Bob'), 'full');
 });
 
 test('a bell becomes eligible again exactly at the end of its quota window', () => {

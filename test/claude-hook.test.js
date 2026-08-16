@@ -42,7 +42,7 @@ function fixture() {
     { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
     { kind: 'say', actor: 'Alice', at: 4, body: 'attention', reach: 'bell', index: 3 },
-    { kind: 'say', actor: 'Alice', at: 5, body: 'broadcast', index: 4 },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'ambient', index: 4 },
   ];
   const runtime = { ...emptyRuntimeState(5), nextActIndex: 5 };
   const doc = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };

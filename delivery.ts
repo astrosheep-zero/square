@@ -12,9 +12,9 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
-import { actId, extractMentions, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { audienceOf, resolveAudience } from './square-core.js';
+import { actId, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 
-export type NotificationRoute = DirectedNotificationRoute | 'broadcast';
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
 
@@ -25,10 +25,6 @@ export function notificationMessageId(squarePath: string, actIndex: number): str
 export interface PlannedNotification {
   item: SayItem;
   recipient: string;
-  route: NotificationRoute;
-}
-
-export interface PendingNotification extends PlannedNotification {
   route: DirectedNotificationRoute;
 }
 
@@ -55,15 +51,10 @@ export interface WakeAdapter {
   ): Promise<WakeDispatchResult>;
 }
 
-export function isPendingNotification(notification: PlannedNotification): notification is PendingNotification {
-  return notification.route !== 'broadcast';
-}
-
 export interface RoutedNotification {
   actor: string;
   body: string;
   route: DirectedNotificationRoute;
-  recipient?: string;
 }
 
 export interface CatchFilterShape {
@@ -74,7 +65,7 @@ export interface CatchFilterShape {
 
 export interface DeliveryModel {
   plan(item: StoredAct): PlannedNotification[];
-  pendingFor(recipient: string): PendingNotification[];
+  pendingFor(recipient: string): PlannedNotification[];
 }
 
 function canonicalRecipient(doc: SquareDoc, name: string): string {
@@ -109,51 +100,24 @@ export function markDeliveredDelivery(doc: SquareDoc, name: string, actOrIndex: 
   return recordDeliveredDelivery(doc, name, actOrIndex, { at });
 }
 
-function uniqueKnownMentions(body: string, roster: string[]): string[] {
-  const recipients: string[] = [];
-  for (const mention of extractMentions(body)) {
-    const known = findParticipantName(roster, mention);
-    if (known !== undefined && !recipients.some((recipient) => sameName(recipient, known))) {
-      recipients.push(known);
-    }
-  }
-  return recipients;
-}
-
 /**
  * Derive delivery behavior once from the parsed Square document.
  * All consumers share these targets instead of reinterpreting artifact text or cursor state.
  */
 export function deriveDeliveryModel(doc: SquareDoc): DeliveryModel {
   const roster = rosterNames(doc).filter((name) => isCurrentlyJoined(doc.acts, name));
-  let pendingByRecipient: Map<string, PendingNotification[]> | undefined;
+  let pendingByRecipient: Map<string, PlannedNotification[]> | undefined;
 
   function plan(item: StoredAct): PlannedNotification[] {
     if (item.kind !== 'say') return [];
     const sayItem = item as SayItem;
-    const actor = sayItem.actor;
-    if (sayItem.reach === 'bell') {
-      return roster
-        .filter((recipient) => !sameName(recipient, actor))
-        .map((recipient) => ({ item: sayItem, recipient, route: 'bell' }));
-    }
-    if (sayItem.reach !== undefined) {
-      const recipient = findParticipantName(roster, sayItem.reach.beside);
-      return recipient === undefined || sameName(recipient, actor)
-        ? []
-        : [{ item: sayItem, recipient, route: 'beside' }];
-    }
-    const mentions = uniqueKnownMentions(sayItem.body, roster).filter(
-      (recipient) => !sameName(recipient, actor)
-    );
-    const recipients = mentions.length > 0
-      ? mentions
-      : roster.filter((recipient) => !sameName(recipient, actor));
-    const route: NotificationRoute = mentions.length > 0 ? 'mention' : 'broadcast';
+    const audience = audienceOf(sayItem);
+    const recipients = resolveAudience(audience, roster).filter((recipient) => !sameName(recipient, sayItem.actor));
+    const route = audience.kind === 'bell' ? 'bell' : 'mention';
     return recipients.map((recipient) => ({ item: sayItem, recipient, route }));
   }
 
-  function pendingFor(requestedRecipient: string): PendingNotification[] {
+  function pendingFor(requestedRecipient: string): PlannedNotification[] {
     const recipient = findParticipantName(roster, requestedRecipient);
     if (recipient === undefined) return [];
     if (pendingByRecipient === undefined) {
@@ -162,15 +126,13 @@ export function deriveDeliveryModel(doc: SquareDoc): DeliveryModel {
 
       for (const act of doc.acts) {
         if (act.kind !== 'say') continue;
-        // Broadcasts can never be pending directed notifications. Skipping them here
-        // avoids allocating one planned notification per participant per activity.
-        if (act.reach === undefined && extractMentions(act.body).length === 0) continue;
+        const audience = audienceOf(act);
+        if (audience.kind === 'mentions' && audience.names.length === 0) continue;
         for (const planned of plan(act)) {
-          if (planned.route === 'broadcast') continue;
           const joinedAt = joinedAfter.get(planned.recipient);
           if (joinedAt === undefined || act.index <= joinedAt) continue;
           if (isDeliveryDelivered(doc, planned.recipient, act.index)) continue;
-          pendingByRecipient.get(planned.recipient)?.push({ ...planned, route: planned.route });
+          pendingByRecipient.get(planned.recipient)?.push(planned);
         }
       }
     }
@@ -197,7 +159,7 @@ export function markDeliveredNotifications(doc: SquareDoc, recipient: string, de
 
 /** Canonical say-activity filter shared by catch selection and hook ownership. */
 export function matchesCatchFilter(activity: CatchFilterShape, filter: WatchLeaseFilter): boolean {
-  if (activity.reach === 'bell') return true;
+  if (audienceOf(activity).kind === 'bell') return true;
   if (
     filter.participants !== undefined &&
     !filter.participants.some((participant) => sameName(participant, activity.actor))
@@ -209,17 +171,11 @@ export function matchesCatchFilter(activity: CatchFilterShape, filter: WatchLeas
 
 /** True only when the live catch's own filters would deliver this notification. */
 export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNotification): boolean {
-  const recipient = notification.recipient;
-  if (notification.route === 'beside' && recipient === undefined) return false;
   return matchesCatchFilter(
     {
       actor: notification.actor,
       body: notification.body,
-      reach: notification.route === 'bell'
-        ? 'bell'
-        : notification.route === 'beside'
-          ? { beside: recipient! }
-          : undefined,
+      ...(notification.route === 'bell' ? { reach: 'bell' as const } : {}),
     },
     lease.filter ?? {}
   );

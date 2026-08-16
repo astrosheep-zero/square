@@ -8,7 +8,6 @@ import { loadSquare } from './artifact.js';
 import {
   deriveDeliveryModel,
   isDeliveryDelivered,
-  isPendingNotification,
   leaseOwnsNotification,
   planActNotifications,
   type WakeAdapter,
@@ -34,7 +33,7 @@ import { WakePort } from './wake-port.js';
 
 const NOTIFY_LEASE_MS = 5 * 60 * 1000;
 
-export type { PendingNotification, PlannedNotification } from './delivery.js';
+export type { PlannedNotification } from './delivery.js';
 export { planActNotifications, matchesMentionTarget };
 
 function known(doc: ReturnType<typeof loadSquare>, name: string): string {
@@ -63,7 +62,7 @@ function renderWakePayload(request: WakeRequest): string {
     : request.squarePath;
   return [
     '<system-reminder source="square">',
-    `${request.route === 'bell' ? 'Bell' : request.route === 'beside' ? 'Beside' : 'Mention'} from @${request.actor} in \`${display}\``,
+    `${request.route === 'bell' ? 'Bell' : 'Mention'} from @${request.actor} in \`${display}\``,
     'The native adapter will present it at the next boundary. If no native wake is available, pull from the square yourself.',
     `\`${catchCommand(request.squarePath, request.recipient)}\``,
     '</system-reminder>',
@@ -79,7 +78,6 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
     actor: request.actor,
     body,
     route: request.route,
-    recipient: request.recipient,
   })) return false;
 
   const deadline = Date.now() + 180_000;
@@ -176,7 +174,7 @@ function releaseNotifyLease(squarePath: string, recipient: string, actIndex: num
 
 async function processNotification(
   squarePath: string,
-  notification: import('./delivery.js').PendingNotification,
+  notification: import('./delivery.js').PlannedNotification,
   opts: ProcessNotificationOptions
 ): Promise<void> {
   const env = opts.env ?? process.env;
@@ -270,7 +268,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   const doc = loadSquare(squarePath);
   const item = doc.acts.find((candidate) => candidate.index === actIndex);
   if (item === undefined) return;
-  const notifications = planActNotifications(doc, item).filter(isPendingNotification);
+  const notifications = planActNotifications(doc, item);
   await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
 }
 
@@ -289,7 +287,7 @@ export async function dispatchActNotifications(squarePath: string, item: import(
   const env = opts.env ?? process.env;
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
   const doc = loadSquare(squarePath);
-  if (!planActNotifications(doc, item).some(isPendingNotification)) return;
+  if (planActNotifications(doc, item).length === 0) return;
   (opts.launchWorker ?? launchWorker)(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(item.index)]);
 }
 

@@ -365,17 +365,19 @@ export function parseSquare(text: string): SquareDoc {
   };
 }
 
-export function loadSquare(squarePath: string): SquareDoc {
-  let text: string;
+function readSquareText(squarePath: string): string {
   try {
-    text = fs.readFileSync(squarePath, 'utf8');
+    return fs.readFileSync(squarePath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new SquareError('not_found', `square file not found: ${squarePath}`);
     }
     throw err;
   }
-  const doc = parseSquare(text);
+}
+
+export function loadSquare(squarePath: string): SquareDoc {
+  const doc = parseSquare(readSquareText(squarePath));
   const markdownRuntime = doc.runtime;
   const sidecar = loadRuntimeSidecar(squarePath, markdownRuntime);
   // Markdown owns the activity history; runtime state owns delivery metadata.
@@ -383,6 +385,32 @@ export function loadSquare(squarePath: string): SquareDoc {
   // stale sidecar can never cause an index to be reused.
   doc.runtime = mergeRuntimeState(markdownRuntime, sidecar);
   return doc;
+}
+
+/** Cheap discovery boundary: reject obvious non-squares before parsing a full artifact. */
+export function probeSquare(squarePath: string): SquareDoc | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(squarePath, 'r');
+    const buffer = Buffer.allocUnsafe(4096);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const prefix = buffer.toString('utf8', 0, bytesRead);
+    if (!prefix.startsWith('---\n')) return undefined;
+    const frontmatter = prefix.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
+    if (frontmatter === undefined) return undefined;
+    if (!new RegExp(`^format_version:\\s*${CURRENT_FORMAT_VERSION}\\s*$`, 'm').test(frontmatter)) return undefined;
+    if (!/^hard_cap:\s*(-1|\d+)\s*$/m.test(frontmatter)) return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+
+  try {
+    return parseSquare(readSquareText(squarePath));
+  } catch {
+    return undefined;
+  }
 }
 
 function isSquareMarker(line: string): boolean {
@@ -426,7 +454,6 @@ export interface ParsedActMarker {
 function parseReach(value: unknown): Reach | undefined {
   if (value === undefined) return undefined;
   if (value === 'bell') return 'bell';
-  if (isObject(value) && typeof value.beside === 'string') return { beside: value.beside };
   throw new SquareError('invalid_args', 'Invalid square: malformed act reach metadata.');
 }
 
@@ -747,4 +774,8 @@ export function diagnoseSquare(text: string): DiagnoseResult {
     acts,
     quarantined,
   };
+}
+
+export function diagnoseSquareFile(squarePath: string): DiagnoseResult {
+  return diagnoseSquare(readSquareText(squarePath));
 }

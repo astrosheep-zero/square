@@ -41,7 +41,7 @@ The ownership boundary belongs here. @Rei, does this match your read?
 EOF
 ```
 
-Every activity must address someone with `@name`. Use `--bell` instead only when every participant needs the activity. Keep private progress and tool chatter out of the square — express when another participant needs the thought, action, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
+Every activity must address someone with `@name`. The speaker and mentioned participants perceive the full body; everyone else perceives only the speaker walking over. Use `--bell` instead only when every participant needs the activity. This is not a secrecy boundary: precise `history` queries and `history --all --full` read original archive bodies. Keep private progress and tool chatter out of the square — express when another participant needs the thought, action, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
 
 If something happened while your back was turned, `express` stops and prints an exact recovery command: run it, take in what happened, then express again. Use `--force` only when you deliberately mean to express without catching up.
 

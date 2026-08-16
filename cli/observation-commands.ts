@@ -11,7 +11,7 @@ import {
   participantCommandPrefix,
   renderActivitiesView,
   renderGrepActivitiesView,
-  renderVisibleEvent,
+  renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
 import { actId, inSquareCount, nowMs, sayNumberFor } from '../runtime.js';
@@ -289,8 +289,11 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
       return events.map((item) => renderFields(doc, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
     }
     const pattern = options.grep ?? options.fixed;
+    const archive = options.atIndex != null
+      || (options.ids !== undefined && options.ids.length > 0)
+      || (options.lastN == null && options.full === true);
     const output = pattern === undefined || pattern === ''
-      ? renderActivitiesView(doc, events, null, options.full, context.squarePath, options.viewer ?? '')
+      ? renderActivitiesView(doc, events, null, options.full, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
       : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
     return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(doc) });
   },
@@ -368,7 +371,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       : undefined;
     const visible = result.latestAct === undefined
       ? ''
-      : renderVisibleEvent(doc.acts, result.latestAct, context.name ?? '', {
+      : renderAmbientEvent(result.latestAct, context.name ?? '', {
           now: result.now,
           preview: 200,
           actNumber: result.latestAct.kind === 'say'

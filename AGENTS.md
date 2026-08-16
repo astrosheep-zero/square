@@ -16,6 +16,8 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
 - If someone is speaking to a specific participant, they must mention them as `@name`.
+  The speaker and mentioned participants perceive the full body; everyone else perceives only the
+  speaker walking over to those participants.
   Without any `@name`, the activity is refused unless it uses `--bell`; a bell reaches all participants
   (everyone watching with `--mention` receives it).
 
@@ -25,7 +27,7 @@ activity stream: Warmup, Activities, named participant blocks, and plain Markdow
 Preferred language:
 - Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
 - In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path. Artifact section markers may still say `activities`.
-- `history` is the only read path for square activity. Never tell agents to read or parse the Markdown artifact directly; use `history --all --full` for the complete record.
+- `history` is the only read path for square activity. Never tell agents to read or parse the Markdown artifact directly; precise history queries and `history --all --full` may read original bodies from the archive.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 
@@ -35,7 +37,7 @@ CLI voice:
 - The square is never the subject of an action verb. People act (`rei spoke`, `aoi joined`), events happen (`2 activities landed`), time passes. The square only holds states — quiet, held, full — because a place has states, but a place does not act.
 - Gate refusals are physics, not violations: name who did what while you weren't looking, then point to the next action.
 - Glyphs and spatial layout are the design language: `·` line, `○` quiet, `▲` changed behind you, `✕` blocked, `✓` release, `»` always the next action.
-- The square is furnished with a closed prop lexicon: the square (join/presence), embodied expression (express), a packed square and its lull (throttle), a raised hand (hold), behind you (unread), your name called across the square (mention), a shoo and a banish (the name gate), footsteps and dust (quiet), the circle (done). One metaphor per mechanism; new props require amending this list.
+- The square is furnished with a closed prop lexicon: the square (join/presence), embodied expression (express), a packed square and its lull (throttle), a raised hand (hold), behind you (unread), walking over to someone (mention/directed presence), a bell (everyone's attention), a shoo and a banish (the name gate), footsteps and dust (quiet), the circle (done). One metaphor per mechanism; new props require amending this list.
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
 - A blocked action always ends with a full copy-pasteable command; a clipped body always ends with the full command to read it all.

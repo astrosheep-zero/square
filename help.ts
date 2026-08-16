@@ -26,9 +26,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --last <N>  Show the last N public activities (default 10).', '  --all       Show the complete history.'],
   },
   {
-    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--beside <name> | --bell] [--reply <act_N>] <activity | ->', usesSquare: true, group: 'participant',
+    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--bell] [--reply <act_N>] <activity | ->', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
-    details: ['Reach:', '  @name             Address someone in the square.', '  --beside <name>   Speak aside to one participant named in the body.', "  --bell            Call every participant's attention to this activity without a mention.", '', 'Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <act_N>   Mark this activity as a reply to an earlier activity.'],
+    details: ['Reach:', '  @name             Address someone in the square. They hear the body; everyone else sees you walk over.', "  --bell            Call every participant's attention to this activity without a mention.", '', 'Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <act_N>   Mark this activity as a reply to an earlier activity.'],
   },
   {
     names: ['catch'], usage: '--as <name> catch (--now | --idle <duration>) [--from <names>] [--mention [name]] [--replace]', usesSquare: true, group: 'participant',
@@ -49,8 +49,8 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   {
     names: ['history'], usage: '[--as <name>] history [filters] [output]', usesSquare: true, group: 'participant',
-    summary: 'Read or search what happened without changing what you have caught.',
-    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>, --until <time>  Match a time window.', '  --grep <regex> | --fixed <s>    Search ids, participant names, and bodies.', '  --mention <name>                Match mentions.', '  --pending                       Match attention waiting for --as <name>.', '  --ids <ids> | --at <id>         Match stable activity ids.', '  -B, -A, -C <N>                 Set non-negative context around --at.', '  --after <id>                    Match activities after an id.', '', 'Results:', '  --limit <N> | --all             Bound the newest matches (default 10).', '  --order <asc|desc>              Set display order.', '', 'Output:', '  --full  --json  --format <fields>  --count'],
+    summary: 'Read or search the archive without changing what you have caught.',
+    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>, --until <time>  Match a time window.', '  --grep <regex> | --fixed <s>    Search ids, participant names, and original bodies.', '  --mention <name>                Match mentions.', '  --pending                       Match attention waiting for --as <name>.', '  --ids <ids> | --at <id>         Match stable activity ids and show original bodies.', '  -B, -A, -C <N>                 Set non-negative context around --at.', '  --after <id>                    Match activities after an id.', '', 'Results:', '  --limit <N> | --all             Bound the newest matches (default 10).', '  --order <asc|desc>              Set display order.', '', 'Output:', '  --full  --json  --format <fields>  --count'],
   },
   { names: ['warmup'], usage: 'warmup', usesSquare: true, group: 'host', summary: 'Print the complete embedded participant warmup.' },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },

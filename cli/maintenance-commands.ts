@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 
-import { diagnoseSquare, loadSquare } from '../artifact.js';
+import { diagnoseSquareFile, loadSquare } from '../artifact.js';
 import {
   renderDoctorClean,
   renderDoctorProblems,
@@ -10,7 +10,6 @@ import {
 } from '../presentation.js';
 import { inSquareCount } from '../runtime.js';
 import { repairSquare } from '../square-application.js';
-import { SquareError } from '../model.js';
 import { pruneRegistry } from '../registry.js';
 
 import { type CommandSpec, usage } from './context.js';
@@ -22,15 +21,6 @@ interface DoctorIntent {
 interface DoctorResult {
   output: string;
   exitCode?: number;
-}
-
-function readSquareText(squarePath: string): string {
-  try {
-    return fs.readFileSync(squarePath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new SquareError('not_found', `square file not found: ${squarePath}`);
-    throw error;
-  }
 }
 
 function quarantinePath(squarePath: string): string {
@@ -62,7 +52,7 @@ export const doctorCommand: CommandSpec<DoctorIntent, DoctorResult> = {
   },
   async execute(intent, context) {
     if (!intent.fix) {
-      const diagnosis = diagnoseSquare(readSquareText(context.squarePath));
+      const diagnosis = diagnoseSquareFile(context.squarePath);
       if (diagnosis.unfixable) {
         return {
           output: withPathOutput(context.squarePath, renderDoctorUnfixable(diagnosis.unfixable), { participantCount: inSquareCount(loadSquare(context.squarePath)) }),

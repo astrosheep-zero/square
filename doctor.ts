@@ -1,7 +1,4 @@
-import {
-  diagnoseSquare,
-  type DiagnoseResult,
-} from './artifact.js';
+import type { DiagnoseResult } from './artifact.js';
 import {
   type StoredAct,
   type SquareDoc,
@@ -22,8 +19,7 @@ export interface PlanRepairResult {
   repaired?: RepairResult;
 }
 
-export function planRepair(text: string): PlanRepairResult {
-  const diagnosis = diagnoseSquare(text);
+export function planRepair(diagnosis: DiagnoseResult): PlanRepairResult {
   if (diagnosis.unfixable) return { diagnosis };
 
   const actions: RepairAction[] = [];

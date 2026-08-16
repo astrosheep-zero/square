@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { emptyRuntimeState, loadRuntimeSidecar, loadSquare, mergeRuntimeState, renderArtifactAct, renderSquare, renderSquareDoc, saveRuntimeSidecar } from './artifact.js';
+import { diagnoseSquareFile, emptyRuntimeState, loadRuntimeSidecar, loadSquare, mergeRuntimeState, renderArtifactAct, renderSquare, renderSquareDoc, saveRuntimeSidecar } from './artifact.js';
 import { type Act } from './square-core.js';
 import { coreCompact, coreDone, coreHold, coreResume, decideAct, decideJoin, resolveKnownName } from './decisions.js';
 import { planRepair, type PlanRepairResult } from './doctor.js';
@@ -262,13 +262,7 @@ export async function createSquare(
 /** Keep artifact repair planning and dependent quarantine persistence inside the application boundary. */
 export async function repairSquare(squarePath: string): Promise<PlanRepairResult> {
   const result = await withSquareLock(squarePath, () => {
-    let text: string;
-    try { text = fs.readFileSync(squarePath, 'utf8'); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new SquareError('not_found', `square file not found: ${squarePath}`);
-      throw error;
-    }
-    const repair = planRepair(text);
+    const repair = planRepair(diagnoseSquareFile(squarePath));
     if (repair.diagnosis.unfixable || repair.repaired === undefined) return { repair };
     // Repair changes Markdown only. Keep the sidecar's runtime metadata and
     // merge history boundaries so a doctor run cannot erase delivery state or

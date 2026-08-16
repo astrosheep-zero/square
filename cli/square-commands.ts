@@ -189,7 +189,6 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
 function parseActivity(argv: string[], context: CommandContext): ActivityIntent {
   let force = false;
   let noWait = false;
-  let beside: string | undefined;
   let bell = false;
   let reply: number | undefined;
   const bodyArgs: string[] = [];
@@ -197,10 +196,8 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     const argument = argv[index];
     if (argument === '-f' || argument === '--force') force = true;
     else if (argument === '--no-wait') noWait = true;
-    else if (argument === '--beside') {
-      beside = requireValue(argv, index, argument);
-      index += 1;
-    } else if (argument === '--bell') bell = true;
+    else if (argument === '--beside') fail('✕ express does not know --beside\n» square express --help');
+    else if (argument === '--bell') bell = true;
     else if (argument === '--reply') {
       const value = requireValue(argv, index, argument).trim().match(/^(?:act_)?(\d+)$/i);
       if (!value || !Number.isSafeInteger(Number(value[1]))) fail('Invalid --reply: expected an activity id like act_12 or 12.');
@@ -209,8 +206,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     }
     else bodyArgs.push(argument);
   }
-  if (bell && beside !== undefined) fail('Invalid express options: --beside and --bell are mutually exclusive.');
-  const reach = bell ? 'bell' : beside === undefined ? undefined : { beside };
+  const reach = bell ? 'bell' : undefined;
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
       const piped = readPipedBodyFallback();
@@ -225,7 +221,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
     await sweepPendingNotifications(context.squarePath);
-    const reachArg = intent.reach === 'bell' ? ' --bell' : intent.reach === undefined ? '' : ` --beside ${quoteShell(intent.reach.beside)}`;
+    const reachArg = intent.reach === 'bell' ? ' --bell' : '';
     await cmdActivity(context.squarePath, intent.name, intent.activity, resolveBody, {
       force: intent.force,
       noWait: intent.noWait,

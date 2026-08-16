@@ -30,14 +30,14 @@ test('joining contributes one canonical lifecycle activity for an unknown partic
   assert.equal(result.joinAct.actor, 'Alice');
 });
 
-test('pending activities begin after the recipient joined and include directed reach', () => {
+test('pending activities begin after the recipient joined and include directed mentions', () => {
   const doc = makeDoc({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'say', actor: 'Alice', at: 2, body: 'too early @Bob' },
       { kind: 'join', actor: 'Bob', at: 3, body: '' },
       { kind: 'say', actor: 'Alice', at: 4, body: 'live @Bob' },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'private', reach: { beside: 'Bob' } },
+      { kind: 'say', actor: 'Alice', at: 5, body: 'also @Bob' },
     ],
   });
 
@@ -47,13 +47,13 @@ test('pending activities begin after the recipient joined and include directed r
   );
 });
 
-test('mention history follows the same recipient boundary as beside delivery', () => {
+test('mention history selects directed says for the addressed participant', () => {
   const doc = makeDoc({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
       { kind: 'join', actor: 'Cara', at: 3, body: '' },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'private', reach: { beside: 'Bob' } },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'private @Bob' },
     ],
   });
 
@@ -120,7 +120,6 @@ test('a valid expression emits the caller as actor and preserves its body, reach
   const decision = decideAct(doc, {
     name: 'Alice',
     body: 'hi @Bob',
-    reach: { beside: 'Bob' },
     reply: 1,
     force: true,
     now: 3,
@@ -130,7 +129,7 @@ test('a valid expression emits the caller as actor and preserves its body, reach
   if (decision.type === 'sent') {
     assert.deepEqual(
       { kind: decision.act.kind, actor: decision.act.actor, body: decision.act.body, reach: decision.act.reach, reply: decision.act.reply },
-      { kind: 'say', actor: 'Alice', body: 'hi @Bob', reach: { beside: 'Bob' }, reply: 1 }
+      { kind: 'say', actor: 'Alice', body: 'hi @Bob', reach: undefined, reply: 1 }
     );
   }
 });
@@ -149,7 +148,7 @@ test('an expression without a mention or bell is invalid', () => {
   );
 
   assert.throws(
-    () => decideAct(doc, { name: 'Alice', body: 'aside', reach: { beside: 'Bob' }, force: true, now: 3 }),
+    () => decideAct(doc, { name: 'Alice', body: 'aside', force: true, now: 3 }),
     (error) => error.code === 'invalid_args'
   );
 });
