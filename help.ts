@@ -28,7 +28,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--beside <name> | --bell] [--reply <act_N>] <activity | ->', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
-    details: ['Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --beside <name>   Speak aside to one participant.', "  --bell            Call every participant's attention to this activity.", '  --reply <act_N>   Mark this activity as a reply to an earlier activity.'],
+    details: ['Reach:', '  @name             Address someone in the square.', '  --beside <name>   Speak aside to one participant named in the body.', "  --bell            Call every participant's attention to this activity without a mention.", '', 'Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <act_N>   Mark this activity as a reply to an earlier activity.'],
   },
   {
     names: ['catch'], usage: '--as <name> catch (--now | --idle <duration>) [--from <names>] [--mention [name]] [--replace]', usesSquare: true, group: 'participant',

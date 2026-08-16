@@ -302,7 +302,7 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.equal(bobJoin.status, 0, bobJoin.stderr);
   assert.doesNotMatch(bobJoin.stdout, /catch --/);
 
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello Alice']), { env: codexDelivery }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello Alice @Alice']), { env: codexDelivery }).status, 0);
   const aliceCatch = run(withName(file, 'Alice', ['catch', '--now']), { env: noDelivery });
   assert.equal(aliceCatch.status, 0, aliceCatch.stderr);
   assert.match(aliceCatch.stdout, /hello Alice/);
@@ -312,7 +312,7 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.match(aliceQuiet.stdout, /only footsteps/);
   assert.match(aliceQuiet.stdout, /catch --idle 30m/);
 
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello Bob']), { env: noDelivery }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello Bob @Bob']), { env: noDelivery }).status, 0);
   const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: codexDelivery });
   assert.equal(bobCatch.status, 0, bobCatch.stderr);
   assert.match(bobCatch.stdout, /hello Bob/);
@@ -363,10 +363,10 @@ test('status stays compact and focuses on the current square', () => {
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   for (let i = 0; i < 12; i++) {
-    assert.equal(run(withName(file, 'Alice', ['express', '--force', `activity ${i}`]), { env: { SQUARE_NOW_MS: String(3000 + i) } }).status, 0);
+    assert.equal(run(withName(file, 'Alice', ['express', '--force', `activity ${i} @Bob`]), { env: { SQUARE_NOW_MS: String(3000 + i) } }).status, 0);
   }
   assert.equal(run(withName(file, 'Bob', ['done', 'leaving']), { env: { SQUARE_NOW_MS: '20000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'last activity']), { env: { SQUARE_NOW_MS: '21000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'last activity @Alice']), { env: { SQUARE_NOW_MS: '21000' } }).status, 0);
 
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
   assert.equal(status.status, 0, status.stderr);
@@ -382,7 +382,7 @@ test('actor cursor advances on any self activity', () => {
   assert.equal(run(withName(file, 'Alice', ['join'])).status, 0);
   let doc = loadSquare(file);
   assert.equal(doc.runtime.cursors.Alice.consumedThroughIndex, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello @Alice'])).status, 0);
   doc = loadSquare(file);
   assert.equal(doc.runtime.cursors.Alice.consumedThroughIndex, 1);
   assert.equal(run(withName(file, 'Alice', ['done', 'bye'])).status, 0);
@@ -397,7 +397,7 @@ test('express does not surface delivery-health diagnostics during normal use', (
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hey @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
-  const acted = run(withName(file, 'Bob', ['express', '--force', 'still working']), {
+  const acted = run(withName(file, 'Bob', ['express', '--force', 'still working @Bob']), {
     env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(acted.status, 0, acted.stderr);
@@ -472,8 +472,8 @@ test('catch --from filters public acts and matching room changes to named peers'
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Cara', ['join']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello from bob']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
-  assert.equal(run(withName(file, 'Cara', ['express', '--force', 'hello from cara']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello from bob @Alice']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Cara', ['express', '--force', 'hello from cara @Alice']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['done', 'bye']), { env: { SQUARE_NOW_MS: '6000' } }).status, 0);
 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
@@ -546,7 +546,7 @@ test('catch --now delivers unreceipted mentions behind a self-advanced cursor', 
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'question @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
   // Bob responds before catching, so Bob's own activity moves the public cursor past Alice's mention.
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'answer']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'answer @Alice']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
   const caught = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caught.status, 0, caught.stderr);
   assert.match(caught.stdout, /question @Bob/);
@@ -579,7 +579,7 @@ test('history --all shows the full public v2 transcript', () => {
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['done', 'bye']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const activities = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -594,7 +594,7 @@ test('history --since excludes older public activity', () => {
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['done', 'bye']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const activities = run(withPath(file, ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -609,8 +609,8 @@ test('history --from filters to named participants', () => {
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Cara', ['join']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello from bob']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
-  assert.equal(run(withName(file, 'Cara', ['express', '--force', 'hello from cara']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello from bob @Alice']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Cara', ['express', '--force', 'hello from cara @Alice']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
   assert.equal(run(withName(file, 'Cara', ['done', 'later']), { env: { SQUARE_NOW_MS: '6000' } }).status, 0);
 
   const activities = run(withPath(file, ['history', '--from', 'Cara']), { env: { SQUARE_NOW_MS: '7000' } });
@@ -659,7 +659,7 @@ test('beside activity shows full body to target and only presence to third party
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Cara', ['join']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'secret reach phrase']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'secret reach phrase @Bob']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(bobWatch.status, 0, bobWatch.stderr);
@@ -683,9 +683,9 @@ test('blocked unread summary does not leak third-party beside body', () => {
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
   assert.equal(run(withName(file, 'Cara', ['join']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'secret pending phrase']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'secret pending phrase @Bob']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
-  const blocked = run(withName(file, 'Cara', ['express', 'cara tries after unread']), { env: { SQUARE_NOW_MS: '100000' } });
+  const blocked = run(withName(file, 'Cara', ['express', 'cara tries after unread @Alice']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(blocked.status, 1, blocked.stderr);
   assert.match(blocked.stdout, /\*walks over to @Bob\*/);
   assert.doesNotMatch(blocked.stdout, /secret pending phrase/);
@@ -718,13 +718,13 @@ test('bell pierces mention filter and second bell within hour is refused with ne
   assert.match(secondBell.stdout, /you can ring it again at 1970-01-01 09:00:04 \+08:00/);
 });
 
-test('center omits persisted reach while beside and bell persist explicitly', () => {
+test('mention omits persisted reach while beside and bell persist explicitly', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'center line']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'beside line']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'mention @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'beside line @Bob']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['express', '--force', '--bell', 'bell line']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
 
   const text = fs.readFileSync(file, 'utf8');
@@ -738,9 +738,9 @@ test('express --reply preserves one causal activity reference', () => {
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'question']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'question @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
-  const replied = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_2', 'answer']), {
+  const replied = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_2', 'answer @Alice']), {
     env: { SQUARE_NOW_MS: '4000' },
   });
   assert.equal(replied.status, 0, replied.stderr);
@@ -755,7 +755,7 @@ test('express --reply preserves one causal activity reference', () => {
   assert.equal(json.status, 0, json.stderr);
   assert.equal(JSON.parse(json.stdout).reply, 'act_2');
 
-  const missing = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_99', 'orphan']));
+  const missing = run(withName(file, 'Bob', ['express', '--force', '--reply', 'act_99', 'orphan @Alice']));
   assert.equal(missing.status, 2);
   assert.match(missing.stderr, /Unknown reply activity: act_99/);
 });
@@ -765,7 +765,7 @@ test('compact archives older activities into a v2 sidecar and preserves stable i
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const compacted = run(withPath(file, ['compact', '--keep', '1']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -832,7 +832,7 @@ test('history power filters and jsonl stay read-only', () => {
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'deploy failed on schema v3']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'deploy failed on schema v3 @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello @Bob please check']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const grepped = run(withPath(file, ['history', '--grep', 'schema v3', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -867,16 +867,16 @@ test('history grep searches ids, participant names, and bodies', () => {
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'first inventory']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'facts only']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'first inventory @Bob']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'facts only @Alice']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
 
   const byId = run(withPath(file, ['history', '--grep', '^act_2$', '--json']));
   assert.equal(byId.status, 0, byId.stderr);
-  assert.equal(JSON.parse(byId.stdout).body, 'first inventory');
+  assert.equal(JSON.parse(byId.stdout).body, 'first inventory @Bob');
 
   const byParticipant = run(withPath(file, ['history', '--grep', '^Bob$', '--json']));
   assert.equal(byParticipant.status, 0, byParticipant.stderr);
-  assert.equal(JSON.parse(byParticipant.stdout).body, 'facts only');
+  assert.equal(JSON.parse(byParticipant.stdout).body, 'facts only @Alice');
 
   const acrossFields = run(withPath(file, ['history', '--grep', 'act_2|facts only', '--limit', '2', '--json']));
   assert.equal(acrossFields.status, 0, acrossFields.stderr);
@@ -892,7 +892,7 @@ test('history grep defaults to a compact character-bounded search view', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
-  const body = `needle ${'🙂'.repeat(250)}TAIL`;
+  const body = `needle ${'🙂'.repeat(250)}TAIL @Alice`;
   assert.equal(run(withName(file, 'Alice', ['express', '--force', body]), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
 
   const compact = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
@@ -916,9 +916,9 @@ test('history grep centers snippets on late, multiline, and fixed matches', () =
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
-  const late = `START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END`;
+  const late = `START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END @Alice`;
   assert.equal(run(withName(file, 'Alice', ['express', '--force', late]), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'literal [ bracket']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'literal [ bracket @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
 
   const centered = run(withPath(file, ['history', '--grep', 'schema\\s+v3']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(centered.status, 0, centered.stderr);
@@ -941,7 +941,7 @@ test('history search reports shown and total matches consistently', () => {
   assert.equal(build(file, ['--cap', 'unlimited']).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   for (let i = 0; i < 12; i++) {
-    assert.equal(run(withName(file, 'Alice', ['express', '--force', `needle ${i}`]), { env: { SQUARE_NOW_MS: String(2000 + i) } }).status, 0);
+    assert.equal(run(withName(file, 'Alice', ['express', '--force', `needle ${i} @Alice`]), { env: { SQUARE_NOW_MS: String(2000 + i) } }).status, 0);
   }
   const human = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(human.status, 0, human.stderr);
@@ -953,11 +953,11 @@ test('history search reports shown and total matches consistently', () => {
   const limited = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--json']));
   assert.equal(limited.status, 0, limited.stderr);
   const limitedRows = limited.stdout.trim().split('\n').map((line) => JSON.parse(line));
-  assert.deepEqual(limitedRows.map((row) => row.body), ['needle 9', 'needle 10', 'needle 11']);
+  assert.deepEqual(limitedRows.map((row) => row.body), ['needle 9 @Alice', 'needle 10 @Alice', 'needle 11 @Alice']);
 
   const descending = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--order', 'desc', '--json']));
   assert.equal(descending.status, 0, descending.stderr);
-  assert.deepEqual(descending.stdout.trim().split('\n').map((line) => JSON.parse(line).body), ['needle 11', 'needle 10', 'needle 9']);
+  assert.deepEqual(descending.stdout.trim().split('\n').map((line) => JSON.parse(line).body), ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice']);
 });
 
 test('implicit writes refuse when more than one square is available', () => {
@@ -1065,11 +1065,11 @@ test('status attention and express blocker agree on unread square changes', () =
   assert.equal(run(withName(file, 'Bob', ['hold', 'pause']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(status.stdout, /Alice.*changes waiting/);
-  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', 'late body']), { env: { SQUARE_NOW_MS: '200000' } });
+  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(noWaitAct.stdout, /a hand is raised/);
   assert.match(noWaitAct.stdout, /draft kept/);
   assert.equal(run(withName(file, 'Bob', ['resume']), { env: { SQUARE_NOW_MS: '210000' } }).status, 0);
-  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', 'after resume']), { env: { SQUARE_NOW_MS: '220000' } });
+  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
   assert.match(unheld.stdout, /square moved behind your back/);
   assert.match(unheld.stdout, /catch --now/);
 });
@@ -1080,29 +1080,29 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
   assert.equal(run(withName(heldFile, 'Alice', ['join'])).status, 0);
   assert.equal(run(withName(heldFile, 'Host', ['join'])).status, 0);
   assert.equal(run(withName(heldFile, 'Host', ['hold', 'pause'])).status, 0);
-  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '-']), { input: 'held body\n' }), heldFile, 'Alice', 'held body\n', 'express -');
+  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', 'express -');
 
   const throttleFile = tempSquare();
   assert.equal(build(throttleFile, ['--cap', '10', '--throttle', '1']).status, 0);
   assert.equal(run(withName(throttleFile, 'Alice', ['join'])).status, 0);
-  assert.equal(run(withName(throttleFile, 'Alice', ['express', 'first'])).status, 0);
-  const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '-']), { input: 'throttled body\n' });
-  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body\n', 'express -');
+  assert.equal(run(withName(throttleFile, 'Alice', ['express', 'first @Alice'])).status, 0);
+  const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '-']), { input: 'throttled body @Alice\n' });
+  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', 'express -');
   assert.match(throttled.stdout, /next opening in (?:\d+s|1m)/);
   assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
 
   const capFile = tempSquare();
   assert.equal(build(capFile, ['--cap', '1']).status, 0);
   assert.equal(run(withName(capFile, 'Alice', ['join'])).status, 0);
-  assert.equal(run(withName(capFile, 'Alice', ['express', 'first'])).status, 0);
-  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '-']), { input: 'final body\n' }), capFile, 'Alice', 'final body\n', 'done -');
+  assert.equal(run(withName(capFile, 'Alice', ['express', 'first @Alice'])).status, 0);
+  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '-']), { input: 'final body @Alice\n' }), capFile, 'Alice', 'final body @Alice\n', 'done -');
 
   const blockedFile = tempSquare();
   assert.equal(build(blockedFile, ['--cap', '10']).status, 0);
   assert.equal(run(withName(blockedFile, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
   assert.equal(run(withName(blockedFile, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(blockedFile, 'Bob', ['express', 'peer']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '-']), { input: 'blocked body\n' }), blockedFile, 'Alice', 'blocked body\n', 'express -');
+  assert.equal(run(withName(blockedFile, 'Bob', ['express', 'peer @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
+  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express -');
 });
 
 test('join is bounded and points to the complete warmup', () => {
@@ -1149,7 +1149,7 @@ test('list, participants, and clipped status use current state and executable hi
   assert.equal(run(withName(file, 'Alice', ['join']), { cwd }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['join']), { cwd }).status, 0);
   assert.equal(run(withName(file, 'Bob', ['done', 'finished']), { cwd }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'x'.repeat(260)]), { cwd }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', `${'x'.repeat(260)} @Alice`]), { cwd }).status, 0);
 
   const listed = run(['list'], { cwd });
   assert.match(listed.stdout, /1 in square/);

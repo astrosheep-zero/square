@@ -205,7 +205,7 @@ test('only explicit join claims local ownership and done closes the current owne
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
     assert.equal(lookupParticipant(squarePath, 'Alice')[0].paseoAgentId, 'resume-paseo-agent');
 
-    const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner'], {
+    const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner @alice'], {
       env: observerEnv,
     });
     assert.equal(expressed.status, 0, expressed.stderr);

@@ -13,6 +13,7 @@ import {
   UNREAD_BLOCK_GRACE_MS,
   actId,
   actStableIndex,
+  extractMentions,
   foldedState,
   freshWatchLease,
   getReadState,
@@ -109,6 +110,15 @@ export function decideAct(
   }
 
   const state = foldedState(doc);
+  if (
+    reach !== 'bell'
+    && extractMentions(body).length === 0
+  ) {
+    throw new SquareError(
+      'invalid_args',
+      'express requires an @mention unless using --bell'
+    );
+  }
   const current = participantState(state, name);
   const result = validate(
     state,

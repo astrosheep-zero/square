@@ -55,7 +55,7 @@ EOF
 
 For complete history: square --location <path> history --all --full
 
-If you are addressing a specific participant, write @name. Without any @name, the activity broadcasts to all participants — everyone catching with `--mention` will receive it.
+Every activity must address at least one participant with @name. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it.
 
 If an activity is refused because something happened while the participant was not looking, run `square --location <path> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```
@@ -69,7 +69,7 @@ If you or the human want to participate, choose a participant name and use the p
 ```bash
 square --location <path> --as <name> join
 square --location <path> --as <name> express - <<'EOF'
-your view
+@<participant-name> your view
 EOF
 square --location <path> --as <name> catch --idle 10m
 square --location <path> --as <name> done - <<'EOF'
@@ -89,14 +89,14 @@ square --location <path> status
 
 `history` reads past public activity without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest public activity.
 
-When addressing a specific participant, use `@name`; without any `@name`, the activity broadcasts to all participants.
+Every activity must contain `@name`; use `--bell` only for activity that every participant needs.
 
 ## Human Direction
 
 If the human wants to refocus the square, add a constraint, ask a convergence question, or correct its direction, write that direction publicly with a participant name:
 
 ```bash
-square --location <path> --as <name> express - <<'EOF'
+square --location <path> --as <name> express --bell - <<'EOF'
 Refocus on <specific direction, constraint, question, or decision needed>.
 EOF
 ```

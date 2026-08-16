@@ -39,7 +39,7 @@ Run a nonblocking catch before expressing so the report does not land over unsee
 
 ```bash
 square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' catch --now
-square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' express - <<'EOF'
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.md --as '<participant>' express --bell - <<'EOF'
 **Square feedback**
 - Area: `catch --now`
 - Square identity: `/absolute/path/to/project/.square/SQUARE-main.md (@participant)`

@@ -187,7 +187,7 @@ test('package participant intents persist through the shared application pipelin
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
     await join(squarePath, 'Alice');
-    await express(squarePath, 'Alice', 'one', { force: true });
+    await express(squarePath, 'Alice', 'one @Alice', { force: true });
     await hold(squarePath, 'Alice', 'pause');
     await resume(squarePath, 'Alice');
     await done(squarePath, 'Alice', 'complete');

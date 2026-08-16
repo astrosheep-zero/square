@@ -135,6 +135,25 @@ test('a valid expression emits the caller as actor and preserves its body, reach
   }
 });
 
+test('an expression without a mention or bell is invalid', () => {
+  const doc = makeDoc({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+    ],
+  });
+
+  assert.throws(
+    () => decideAct(doc, { name: 'Alice', body: 'hello everyone', force: true, now: 3 }),
+    (error) => error.code === 'invalid_args' && /@mention.*--bell/.test(error.message)
+  );
+
+  assert.throws(
+    () => decideAct(doc, { name: 'Alice', body: 'aside', reach: { beside: 'Bob' }, force: true, now: 3 }),
+    (error) => error.code === 'invalid_args'
+  );
+});
+
 test('reply rejects an activity id that has not landed yet', () => {
   const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
   assert.throws(

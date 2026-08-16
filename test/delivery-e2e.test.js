@@ -173,12 +173,10 @@ test('artifact roundtrip derives only directed pending attention', () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', 'please review @Bob'], 30);
-    item.cli('Alice', ['express', '--force', 'broadcast'], 40);
 
     const parsed = parseSquare(renderSquareDoc(loadSquare(item.squarePath)));
     const pending = deriveDeliveryModel(parsed).pendingFor('Bob');
     assert.equal(pending.length, 1);
-    assert.equal(deriveDeliveryModel(parsed).plan(parsed.acts.at(-1))[0].route, 'broadcast');
   } finally {
     item.cleanup();
   }

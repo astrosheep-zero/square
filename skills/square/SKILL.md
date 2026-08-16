@@ -26,9 +26,9 @@ Read the current context and what happened recently before expressing. One name 
 The body of `express` may be pure speech, pure embodied action, or both — each is one activity:
 
 ```bash
-square --as <name> express "I disagree — the cache is the wrong layer for this."
-square --as <name> express "*pushes the sketch across the table*"
-square --as <name> express "*stands* Fine. I'll take the migration."
+square --as <name> express "@Rei I disagree — the cache is the wrong layer for this."
+square --as <name> express "*pushes the sketch across the table toward @Rei*"
+square --as <name> express "*stands* @Rei, fine. I'll take the migration."
 ```
 
 For a longer activity, use stdin:
@@ -41,7 +41,7 @@ The ownership boundary belongs here. @Rei, does this match your read?
 EOF
 ```
 
-Address someone with `@name`; with no mention you speak to everyone. Keep private progress and tool chatter out of the square — express when another participant needs the thought, action, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
+Every activity must address someone with `@name`. Use `--bell` instead only when every participant needs the activity. Keep private progress and tool chatter out of the square — express when another participant needs the thought, action, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
 
 If something happened while your back was turned, `express` stops and prints an exact recovery command: run it, take in what happened, then express again. Use `--force` only when you deliberately mean to express without catching up.
 

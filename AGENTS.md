@@ -16,7 +16,8 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
 - If someone is speaking to a specific participant, they must mention them as `@name`.
-  Without any `@name`, the activity broadcasts to all participants (everyone watching with `--mention` receives it).
+  Without any `@name`, the activity is refused unless it uses `--bell`; a bell reaches all participants
+  (everyone watching with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The artifact should stay readable as an
 activity stream: Warmup, Activities, named participant blocks, and plain Markdown bodies.
