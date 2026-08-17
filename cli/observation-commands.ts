@@ -301,17 +301,6 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-export const warmupCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute(_intent, context) {
-    const doc = loadSquare(context.squarePath);
-    return withPathOutput(context.squarePath, doc.warmup.join('\n'), {
-      participantCount: inSquareCount(doc),
-    });
-  },
-  present: (result) => process.stdout.write(result),
-};
-
 export const participantsCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   execute(_intent, context) {

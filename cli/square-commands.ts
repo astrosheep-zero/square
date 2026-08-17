@@ -149,11 +149,12 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const fallback = hasAutomaticDeliveryIdentity()
         ? []
         : ['', `» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
+      const scene = after.warmup.join('\n').trim();
       const output = [
-        `● ${joinedName} stepped into the square`,
+        `● You stepped into the square`,
+        ...(isRejoin || scene === '' ? [] : ['', scene]),
         ...(isRejoin || contextText === '' ? [] : ['', 'context', contextText]),
         ...(activities === '' ? [] : ['', 'recent activity', activities]),
-        ...(isRejoin ? [] : ['', `» ${participantCommandPrefix(context.squarePath, joinedName)} warmup`]),
         ...fallback,
       ].join('\n');
       return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(after) });
@@ -181,7 +182,9 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const line = reconnect && !intent.kick
         ? `● you are already in the square`
         : `✓ you banished the original ${joinedName} — the name is yours`;
-      return withPathOutput(context.squarePath, `${line}${fallback}`, { participantCount: inSquareCount(doc) });
+      const scene = doc.warmup.join('\n').trim();
+      const showScene = !(reconnect && !intent.kick) && scene !== '';
+      return withPathOutput(context.squarePath, `${line}${showScene ? `\n\n${scene}` : ''}${fallback}`, { participantCount: inSquareCount(doc) });
     }
   },
   present: (result) => process.stdout.write(result),

@@ -13,7 +13,6 @@ import {
   participantsCommand,
   statusCommand,
   streamCommand,
-  warmupCommand,
 } from './observation-commands.js';
 
 export interface RegisteredCommand {
@@ -41,7 +40,6 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['compact'], spec: compactCommand },
   { names: ['doctor'], spec: doctorCommand },
   { names: ['history'], spec: historyCommand },
-  { names: ['warmup'], spec: warmupCommand },
   { names: ['status'], spec: statusCommand },
   { names: ['participants'], spec: participantsCommand },
   { names: ['help'], spec: helpCommand },

@@ -52,7 +52,6 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Read or search the archive without changing what you have caught.',
     details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>, --until <time>  Match a time window.', '  --grep <regex> | --fixed <s>    Search ids, participant names, and original bodies.', '  --mention <name>                Match mentions.', '  --pending                       Match attention waiting for --as <name>.', '  --ids <ids> | --at <id>         Match stable activity ids and show original bodies.', '  -B, -A, -C <N>                 Set non-negative context around --at.', '  --after <id>                    Match activities after an id.', '', 'Results:', '  --limit <N> | --all             Bound the newest matches (default 10).', '  --order <asc|desc>              Set display order.', '', 'Output:', '  --full  --json  --format <fields>  --count'],
   },
-  { names: ['warmup'], usage: 'warmup', usesSquare: true, group: 'host', summary: 'Print the complete embedded participant warmup.' },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
   { names: ['participants'], usage: 'participants', usesSquare: true, group: 'host', summary: 'Show the full participant roster and current states.' },
   { names: ['hold'], usage: '--as <name> hold [reason | -]', usesSquare: true, group: 'participant', summary: 'Raise a hand and pause participant activity.' },
@@ -90,7 +89,7 @@ function isHelpFlag(value: string): boolean {
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
-    { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants', 'warmup', 'compact'] },
+    { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants', 'compact'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [

@@ -172,7 +172,8 @@ export function decideAct(
     .sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 
   const latestActivityAgeMs = activitySummaries[0]?.latestActivityAgeMs;
-  const hasUnread = unreadPublic.length > 0 || unreadRoomChanges.length > 0;
+  const hasUnreadBlockingChange = unreadRoomChanges.some((act) => act.kind !== 'join');
+  const hasUnread = unreadPublic.length > 0 || hasUnreadBlockingChange;
   const hasFreshUnreadActivity = latestActivityAgeMs !== undefined && latestActivityAgeMs <= UNREAD_BLOCK_GRACE_MS;
 
   if (!force && hasUnread && !hasFreshUnreadActivity) {

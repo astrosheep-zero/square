@@ -165,7 +165,6 @@ test('every public subcommand exposes scoped help without a square', () => {
     'claude-hook',
     'codex-hook',
     'history',
-    'warmup',
     'status',
     'participants',
     'hold',
@@ -1129,6 +1128,21 @@ test('status attention and express blocker agree on unread square changes', () =
   assert.match(unheld.stdout, /catch --now/);
 });
 
+test('an unread join alone does not block express', () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
+
+  const expressed = run(withName(file, 'Alice', ['express', 'welcome @Bob']), {
+    env: { SQUARE_NOW_MS: '200000' },
+  });
+  assert.equal(expressed.status, 0, expressed.stderr);
+  assert.match(expressed.stdout, /heads turn your way/);
+  assert.match(expressed.stdout, /Bob stepped into the square/);
+  assert.doesNotMatch(expressed.stdout, /catch --now/);
+});
+
 test('held, throttled, blocked, and capped activities preserve executable drafts', () => {
   const heldFile = tempSquare();
   assert.equal(build(heldFile, ['--cap', '10']).status, 0);
@@ -1160,15 +1174,15 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
   assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express -');
 });
 
-test('join is bounded and points to the complete warmup', () => {
+test('join is bounded and prints the scene inline', () => {
   const file = tempSquare();
   assert.equal(run(['build', '--location', file, '--cap', '3', '--template', 'brainstorm', '--force'], { input: '## Topic\n\nBounded join\n' }).status, 0);
   const joined = run(withName(file, 'Alice', ['join']));
   assert.equal(joined.status, 0, joined.stderr);
-  assert.ok(joined.stdout.length < 6000, `${joined.stdout.length} bytes`);
+  assert.ok(joined.stdout.length < 12000, `${joined.stdout.length} bytes`);
   assert.match(joined.stdout, /context/);
-  assert.match(joined.stdout, /» square --location '.*' --as 'Alice' warmup/);
-  assert.doesNotMatch(joined.stdout, /### Warmup/);
+  assert.match(joined.stdout, /stepped into the square/);
+  assert.doesNotMatch(joined.stdout, /warmup/);
 });
 
 test('list bounds recursive discovery by default and accepts an explicit depth', () => {

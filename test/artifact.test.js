@@ -288,7 +288,7 @@ test('createSquareDoc builds a snapshot from options and stdin without Markdown 
   assert.equal(doc.hardCap, null);
   assert.equal(doc.throttlePerMinute, 4);
   assert.deepEqual(doc.preamble, ['## Topic', '', 'Host context']);
-  assert.ok(doc.warmup.some((line) => line.includes('square --as <name> join')));
+  assert.ok(doc.warmup.some((line) => line.includes('stepped into the square')));
   assert.deepEqual(doc.acts, []);
   assert.deepEqual(doc.runtime, emptyRuntimeState());
 });
