@@ -78,8 +78,8 @@ export function canonicalSquarePath(squarePath: string): string {
   }
 }
 
-function bindingKey(sessionId: string, squarePath: string, name: string): string {
-  return JSON.stringify([sessionId, canonicalSquarePath(squarePath), nameKey(name)]);
+function bindingKey(sessionId: string, squarePath: string, name: string, channel: SessionChannel): string {
+  return JSON.stringify([sessionId, canonicalSquarePath(squarePath), nameKey(name), channel]);
 }
 
 function participantKey(squarePath: string, name: string): string {
@@ -133,7 +133,7 @@ function foldRegistry(raw: string, now: number): RegistryBinding[] {
     if (!entry) continue;
     order++;
     const ownerId = entry.owner_id ?? `legacy:${order}`;
-    state.set(bindingKey(entry.session_id, entry.square_path, entry.name), {
+    state.set(bindingKey(entry.session_id, entry.square_path, entry.name, entry.channel), {
       entry,
       updatedAt: Date.parse(entry.ts),
       ownerId,
@@ -300,6 +300,14 @@ export function localParticipantOwner(
   return lookupParticipant(squarePath, name, now).find((binding) => sessionIds.has(binding.sessionId))?.ownerId;
 }
 
+export function localParticipantName(squarePath: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const identities = localSessionIdentities(env);
+  const names = new Set(
+    identities.flatMap((identity) => lookupSession(identity.sessionId).filter((item) => canonicalSquarePath(item.squarePath) === canonicalSquarePath(squarePath)).map((item) => item.name))
+  );
+  return names.size === 1 ? [...names][0] : undefined;
+}
+
 export interface RegistryPruneResult {
   removed: number;
   kept: number;
@@ -403,4 +411,47 @@ export function recordLocalDone(name: string, squarePath: string, env: NodeJS.Pr
   for (const ownerId of new Set(current.map((binding) => binding.ownerId))) {
     retireOwnerWakeRoutes(ownerId, { at, env });
   }
+}
+
+export function recordSessionJoin(
+  sessionId: string,
+  name: string,
+  squarePath: string,
+  channel: SessionChannel,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const at = Date.now();
+  const ownerId = nextOwnerId();
+  const current = lookupParticipant(squarePath, name, at);
+  for (const binding of current) {
+    recordDone(binding.sessionId, binding.name, binding.squarePath, {
+      channel: binding.channel,
+      child: binding.child,
+      ...(binding.paseoAgentId ? { paseoAgentId: binding.paseoAgentId } : {}),
+      at,
+    });
+    retireOwnerWakeRoutes(binding.ownerId, { at, env });
+  }
+  recordJoin(sessionId, name, squarePath, { channel, at, ownerId });
+  publishWakeRoutes(ownerId, { at, env });
+  return ownerId;
+}
+
+export function recordSessionDone(
+  sessionId: string,
+  name: string,
+  squarePath: string,
+  channel: SessionChannel,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const binding = lookupSessionBindings(sessionId).find(
+    (item) => canonicalSquarePath(item.squarePath) === canonicalSquarePath(squarePath)
+      && sameName(item.name, name)
+      && item.channel === channel
+  );
+  if (binding === undefined) return false;
+  const at = Date.now();
+  recordDone(sessionId, binding.name, binding.squarePath, { channel, at });
+  retireOwnerWakeRoutes(binding.ownerId, { at, env });
+  return true;
 }

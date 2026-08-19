@@ -274,6 +274,25 @@ test('build defaults to unlimited, accepts its explicit spelling, and rejects th
   assert.match(removed.stderr, /positive integer or unlimited/);
 });
 
+test('CLI flags override Square location and participant environment values', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-env-precedence-'));
+  const configured = path.join(root, 'configured.square');
+  const explicit = path.join(root, 'explicit.square');
+  const built = run(['--location', explicit, 'build'], {
+    env: { SQUARE_LOCATION: configured },
+    input: 'precedence\n',
+  });
+  assert.equal(built.status, 0, built.stderr);
+  assert.equal(fs.existsSync(explicit), true);
+  assert.equal(fs.existsSync(configured), false);
+
+  const joined = run(['--location', explicit, '--as', 'Explicit', 'join'], {
+    env: { SQUARE_LOCATION: configured, SQUARE_PARTICIPANT_NAME: 'Configured' },
+  });
+  assert.equal(joined.status, 0, joined.stderr);
+  assert.deepEqual(loadSquare(explicit).acts.map((act) => act.actor), ['Explicit']);
+});
+
 test('unknown participant can join and roster derives from join acts', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
@@ -1011,7 +1030,7 @@ test('history search reports shown and total matches consistently', () => {
   assert.deepEqual(descending.stdout.trim().split('\n').map((line) => JSON.parse(line).body), ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice']);
 });
 
-test('implicit writes refuse when more than one square is available', () => {
+test('manual participant writes require an explicit location', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ambiguous-'));
   const first = path.join(cwd, '.square', 'first.square');
   const second = path.join(cwd, '.square', 'second.square');
@@ -1020,12 +1039,12 @@ test('implicit writes refuse when more than one square is available', () => {
   assert.equal(run(['--location', second, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'second' }).status, 0);
   const refused = run(['--as', 'Alice', 'express', '--force', 'ambiguous'], { cwd });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /more than one square/);
-  assert.match(refused.stderr, /» square list\n$/);
+  assert.match(refused.stderr, /needs a square location/);
+  assert.match(refused.stderr, /» square --location <path> --as <name> express\n$/);
   const readOnly = run(['status'], { cwd });
-  assert.equal(readOnly.status, 0, readOnly.stderr);
+  assert.notEqual(readOnly.status, 0);
   const doctor = run(['doctor'], { cwd });
-  assert.equal(doctor.status, 0, doctor.stderr);
+  assert.notEqual(doctor.status, 0);
   const doctorFix = run(['doctor', '--fix'], { cwd });
   assert.notEqual(doctorFix.status, 0);
   assert.match(doctorFix.stderr, /invalid arguments for doctor/);

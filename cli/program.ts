@@ -4,12 +4,6 @@ import { SquareError } from '../model.js';
 import { defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
-function isMutatingCommand(command: string, argv: string[]): boolean {
-  void argv;
-  if (['build', 'join', 'catch', 'express', 'done', 'hold', 'resume', 'compact'].includes(command)) return true;
-  return false;
-}
-
 function handleSquareError(error: unknown): never {
   if (error instanceof SquareError) {
     process.stderr.write(`${error.message}\n`);
@@ -35,10 +29,6 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
     const command = parsed.args[0];
     if (findCommand(command) === undefined) {
       process.stderr.write(`unknown command: ${command}\nrun 'square' for usage\n`);
-      process.exit(2);
-    }
-    if (!parsed.explicitSquarePath && parsed.multipleSquares && isMutatingCommand(command, parsed.args.slice(1))) {
-      process.stderr.write('✕ more than one square is active here; choose the path before changing or consuming activity.\n» square list\n');
       process.exit(2);
     }
     await executeRegisteredCommand(command, parsed.args.slice(1), defaultContext(command, parsed.squarePath, parsed.name));

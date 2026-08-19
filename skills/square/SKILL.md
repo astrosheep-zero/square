@@ -26,6 +26,8 @@ square --as <name> express "*pushes the sketch across the table toward @Rei* Thi
 
 ## Join
 
+CLI location and participant configuration may come from `SQUARE_LOCATION` and `SQUARE_PARTICIPANT_NAME`; `--location` overrides `SQUARE_LOCATION`, and `--as` overrides `SQUARE_PARTICIPANT_NAME`. Manual participant commands require an explicit location from one of those sources. Provider sessions automatically join only the current project's `.square/PUBLIC.square`; `SQUARE_LOCATION` never redirects that automatic entry.
+
 ```bash
 square --as <name> join
 ```

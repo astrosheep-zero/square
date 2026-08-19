@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 
-import { loadSquare } from '../artifact.js';
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
+import { localParticipantName } from '../registry.js';
 
 export const DEFAULT_SQUARE_PATH = '.square/SQUARE.square';
 
@@ -101,27 +100,18 @@ export function requireParticipant(name: string | undefined): string {
   return name;
 }
 
-function resolveDefaultSquarePath(): { path: string; multiple: boolean } {
-  const directory = path.join(process.cwd(), '.square');
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return { path: DEFAULT_SQUARE_PATH, multiple: false };
-  }
-  const candidates: Array<{ relPath: string; at: number }> = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.square')) continue;
-    const fullPath = path.join(directory, entry.name);
-    try {
-      const doc = loadSquare(fullPath);
-      candidates.push({ relPath: path.relative(process.cwd(), fullPath), at: doc.acts.at(-1)?.at ?? fs.statSync(fullPath).mtimeMs });
-    } catch {
-      // Unreadable artifacts are not implicit command targets.
-    }
-  }
-  candidates.sort((a, b) => b.at - a.at);
-  return { path: candidates[0]?.relPath ?? DEFAULT_SQUARE_PATH, multiple: candidates.length > 1 };
+const LOCATION_REQUIRED_COMMANDS = new Set(['join', 'catch', 'express', 'done', 'hold', 'resume']);
+
+function configuredLocation(): string | undefined {
+  const value = process.env.SQUARE_LOCATION?.trim();
+  return value === '' ? undefined : value;
+}
+
+function configuredName(): string | undefined {
+  const value = process.env.SQUARE_PARTICIPANT_NAME?.trim();
+  if (!value) return undefined;
+  validateName(value);
+  return value;
 }
 
 export interface ParsedGlobalArgs {
@@ -147,13 +137,21 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
       index -= 1;
     }
   }
+  if (name === undefined) name = configuredName();
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
   const command = args[0];
-  const resolved = !explicitSquarePath && !['ls', 'list', 'version', 'install', 'uninstall'].includes(command ?? '')
-    ? resolveDefaultSquarePath()
-    : { path: requestedPath ?? DEFAULT_SQUARE_PATH, multiple: false };
-  return { squarePath: resolved.path, explicitSquarePath, multipleSquares: resolved.multiple, name, args };
+  const configured = configuredLocation();
+  if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
+    fail(`✕ ${command} needs a square location\n» square --location <path> --as <name> ${command}`);
+  }
+  const squarePath = requestedPath ?? configured ?? DEFAULT_SQUARE_PATH;
+  if (name === undefined && command !== undefined && locationIsRequired(command)) name = localParticipantName(squarePath);
+  return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
+}
+
+export function locationIsRequired(command: string): boolean {
+  return LOCATION_REQUIRED_COMMANDS.has(command);
 }
 
 export function defaultContext(command: string, squarePath: string, name?: string): CommandContext {

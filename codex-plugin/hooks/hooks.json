@@ -1,5 +1,14 @@
 {
   "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+    ],
+    "SessionResume": [
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+    ],
     "PostToolUse": [
       {
         "hooks": [

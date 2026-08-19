@@ -1,10 +1,13 @@
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
+import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
 
 export interface CodexHookInput {
   session_id?: unknown;
   hook_event_name?: unknown;
+  cwd?: unknown;
+  source?: unknown;
 }
 
 export function codexHookResponse(
@@ -32,4 +35,23 @@ export function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process
   if (input === null || typeof input !== 'object') return '';
   const response = codexHookResponse(input as CodexHookInput, sessionInbox, env);
   return response === undefined ? '' : `${JSON.stringify(response)}\n`;
+}
+
+export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  let input: unknown;
+  try { input = JSON.parse(inputText); } catch { return ''; }
+  if (input === null || typeof input !== 'object') return '';
+  const value = input as CodexHookInput;
+  if (typeof value.session_id !== 'string' || typeof value.cwd !== 'string') return runCodexHook(inputText, env);
+  if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
+    try {
+      const context = await automaticSessionStart('codex', value.session_id, value.cwd, env);
+      return context === undefined ? '' : `${JSON.stringify({ hookSpecificOutput: { hookEventName: value.hook_event_name, additionalContext: context } })}\n`;
+    } catch { return ''; }
+  }
+  if (value.hook_event_name === 'SessionEnd') {
+    try { await automaticSessionEnd('codex', value.session_id, value.cwd, env); } catch { /* end remains bounded */ }
+    return '';
+  }
+  return runCodexHook(inputText, env);
 }
