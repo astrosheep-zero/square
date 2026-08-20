@@ -249,7 +249,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const committed = await execute(context.squarePath, { type: 'done', name: intent.name, body, now: nowMs() });
     const name = committed.acts[0].actor!;
     recordLocalDone(name, context.squarePath);
-    return withPathOutput(context.squarePath, `× ${name} steps out of the square — done · just now`, { participantCount: inSquareCount(loadSquare(context.squarePath)) });
+    return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount: inSquareCount(loadSquare(context.squarePath)) });
   },
   present: (result) => process.stdout.write(result),
 };

@@ -101,7 +101,7 @@ export function renderGlobalHelp(): string {
     '',
   ]);
   return [
-    'Usage: square [--location <path>] [--as <name>] <command> [args...]',
+    'Usage: square [--location <square>] [--as <name>] <command> [args...]',
     'Environment: SQUARE_LOCATION sets the CLI location; SQUARE_PARTICIPANT_NAME sets the participant name.',
     'CLI flags override environment values. Automatic provider sessions use only .square/PUBLIC.square.',
     '',
@@ -117,7 +117,7 @@ export function renderSubcommandHelp(command: string): string | undefined {
   const aliases = definition.names.filter((name) => name !== command);
   const usage = definition.usage.replace('{command}', command);
   return [
-    `Usage: square ${definition.usesSquare ? '[--location <path>] ' : ''}${usage}`,
+    `Usage: square ${definition.usesSquare ? '[--location <square>] ' : ''}${usage}`,
     ...(aliases.length > 0 ? [`Aliases: ${aliases.join(', ')}`] : []),
     '',
     definition.summary,

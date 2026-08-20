@@ -1,6 +1,6 @@
 import { loadSquare } from '../artifact.js';
-import { runClaudeHook } from '../claude-hook.js';
-import { runCodexHook } from '../codex-hook.js';
+import { runClaudeHookAsync } from '../claude-hook.js';
+import { runCodexHookAsync } from '../codex-hook.js';
 import { coreActivities, coreParticipants, coreStatus } from '../decisions.js';
 import { sessionInbox } from '../inbox.js';
 import { sweepPendingNotifications } from '../notifications.js';
@@ -308,7 +308,7 @@ export const participantsCommand: CommandSpec<undefined, string> = {
     const now = nowMs();
     const participants = coreParticipants(doc, now);
     const lines = participants.map((participant) => {
-      const glyph = participant.state === 'done' ? '×' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
+      const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
       const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
       const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
       return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
@@ -406,7 +406,7 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-function hookCommand(runHook: (input: string) => string): CommandSpec<undefined, string> {
+function hookCommand(runHook: (input: string) => string | Promise<string>): CommandSpec<undefined, string> {
   return {
     parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
     execute: () => runHook(readStdinSync()),
@@ -414,5 +414,5 @@ function hookCommand(runHook: (input: string) => string): CommandSpec<undefined,
   };
 }
 
-export const claudeHookCommand = hookCommand(runClaudeHook);
-export const codexHookCommand = hookCommand(runCodexHook);
+export const claudeHookCommand = hookCommand(runClaudeHookAsync);
+export const codexHookCommand = hookCommand(runCodexHookAsync);

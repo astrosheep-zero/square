@@ -198,7 +198,7 @@ test('every public subcommand exposes scoped help without a square', () => {
   const missingSquare = path.join(cwd, 'missing.square');
   const withGlobals = run(['--as', 'Alice', '--location', missingSquare, 'catch', '-h'], { cwd });
   assert.equal(withGlobals.status, 0, withGlobals.stderr);
-  assert.match(withGlobals.stdout, /Usage: square \[--location <path>\] --as <name> catch/);
+  assert.match(withGlobals.stdout, /Usage: square \[--location <square>\] --as <name> catch/);
 
   const retiredLocationFlag = run(['--square-path', missingSquare, 'catch', '--help'], { cwd });
   assert.equal(retiredLocationFlag.status, 2);
@@ -1040,7 +1040,7 @@ test('manual participant writes require an explicit location', () => {
   const refused = run(['--as', 'Alice', 'express', '--force', 'ambiguous'], { cwd });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /needs a square location/);
-  assert.match(refused.stderr, /» square --location <path> --as <name> express\n$/);
+  assert.match(refused.stderr, /» square ls\n$/);
   const readOnly = run(['status'], { cwd });
   assert.notEqual(readOnly.status, 0);
   const doctor = run(['doctor'], { cwd });

@@ -101,7 +101,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
 const PRESENCE_WINDOW_MS = 8 * 60 * 60 * 1000;
 
 function presenceGlyph(participant: ParticipantStatus): string {
-  if (participant.state === 'done') return '×';
+  if (participant.state === 'done') return '○';
   if (participant.presence === 'watching') return '◎';
   if (participant.presenceAt !== undefined) return '●';
   return '○';
@@ -219,7 +219,7 @@ export function renderEventCli(
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
-      return `× ${event.actor} stepped out of the square — done · ${actId(event)} · ${formatRelativeTime(event.at, now)}${bodySuffix(body)}`;
+      return `○ ${event.actor} stepped out of the square — done · ${actId(event)} · ${formatRelativeTime(event.at, now)}${bodySuffix(body)}`;
     }
     case 'read':
       return '';

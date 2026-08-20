@@ -143,7 +143,7 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
   const command = args[0];
   const configured = configuredLocation();
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
-    fail(`✕ ${command} needs a square location\n» square --location <path> --as <name> ${command}`);
+    fail(`✕ ${command} needs a square location\n» square ls`);
   }
   const squarePath = requestedPath ?? configured ?? DEFAULT_SQUARE_PATH;
   if (name === undefined && command !== undefined && locationIsRequired(command)) name = localParticipantName(squarePath);

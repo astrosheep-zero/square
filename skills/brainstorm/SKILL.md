@@ -7,7 +7,7 @@ allowed-tools: Bash(square *), Skill(square)
 # Square Brainstorm
 
 Use this skill when you are coordinating a brainstorm. Your job is to create the square, send participant agents into it, observe the conversation, and collect the result. Do not steer the conversation on your own unless the human explicitly asks for public direction.
-Commands default to `.square/SQUARE.square` for build and inspection. Manual participant commands require `--location <path>` or `SQUARE_LOCATION`; `--location` wins. Set `SQUARE_PARTICIPANT_NAME` for the participant name, overridden by `--as`. Automatic provider sessions join only `.square/PUBLIC.square`.
+Commands default to `.square/SQUARE.square` for build and inspection. Manual participant commands require `--location <square>` or `SQUARE_LOCATION`; `--location` wins. Set `SQUARE_PARTICIPANT_NAME` for the participant name, overridden by `--as`. `.square/PUBLIC.square` is the public square and does not need a manual `join`.
 
 ## Build
 
@@ -31,33 +31,33 @@ square status
 
 ## Start Participants
 
-Send each participant agent this prompt. Replace `<name>` and `<path>`, but do not summarize or rewrite the prompt:
+Send each participant agent this prompt. Replace `<name>` and `<square>`, but do not summarize or rewrite the prompt:
 
 ```text
-You are <name>, participating in a brainstorm. The square file is at <path>.
+You are <name>, participating in a brainstorm. The square file is at <square>.
 
 First action: enter the square. Read the context, warmup, and recent activity printed by this command before expressing:
-square --location <path> --as <name> join
+square --location <square> --as <name> join
 
 Then follow the Happy Path from the join output. Core commands:
-square --location <path> --as <name> express - <<'EOF'
+square --location <square> --as <name> express - <<'EOF'
 ...
 EOF
-square --location <path> --as <name> catch --mention --idle 10m
-square --location <path> --as <name> catch --now
-square --location <path> --as <name> catch --idle 10m
-square --location <path> history --limit 80
-square --location <path> history --from <name> --limit 80
-square --location <path> status
-square --location <path> --as <name> done - <<'EOF'
+square --location <square> --as <name> catch --mention --idle 10m
+square --location <square> --as <name> catch --now
+square --location <square> --as <name> catch --idle 10m
+square --location <square> history --limit 80
+square --location <square> history --from <name> --limit 80
+square --location <square> status
+square --location <square> --as <name> done - <<'EOF'
 ...
 EOF
 
-For complete history: square --location <path> history --all --full
+For complete history: square --location <square> history --all --full
 
 Every activity must address at least one participant with @name. Mentioned participants perceive the full body; others perceive only directed presence. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it. Precise history queries may still read original archive bodies.
 
-If an activity is refused because something happened while the participant was not looking, run `square --location <path> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
+If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```
 
 Need another voice later? Spawn another participant agent with a new `<name>` and give it the same participant prompt.
@@ -67,12 +67,12 @@ Need another voice later? Spawn another participant agent with a new `<name>` an
 If you or the human want to participate, choose a participant name and use the participant loop:
 
 ```bash
-square --location <path> --as <name> join
-square --location <path> --as <name> express - <<'EOF'
+square --location <square> --as <name> join
+square --location <square> --as <name> express - <<'EOF'
 @<participant-name> your view
 EOF
-square --location <path> --as <name> catch --idle 10m
-square --location <path> --as <name> done - <<'EOF'
+square --location <square> --as <name> catch --idle 10m
+square --location <square> --as <name> done - <<'EOF'
 final note
 EOF
 ```
@@ -82,9 +82,9 @@ EOF
 Use these to check progress:
 
 ```bash
-square --location <path> history --limit 50
-square --location <path> history --from <name>
-square --location <path> status
+square --location <square> history --limit 50
+square --location <square> history --from <name>
+square --location <square> status
 ```
 
 `history` reads the archive without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest ambient activity.
@@ -96,7 +96,7 @@ Every activity must contain `@name`; use `--bell` only for activity that every p
 If the human wants to refocus the square, add a constraint, ask a convergence question, or correct its direction, write that direction publicly with a participant name:
 
 ```bash
-square --location <path> --as <name> express --bell - <<'EOF'
+square --location <square> --as <name> express --bell - <<'EOF'
 Refocus on <specific direction, constraint, question, or decision needed>.
 EOF
 ```
@@ -106,8 +106,8 @@ Do not add direction on your own. If you notice the square drifting or stuck, re
 Pause the participant loop when a human needs time to read, think, or add another voice:
 
 ```bash
-square --location <path> hold "human reading"
-square --location <path> resume
+square --location <square> hold "human reading"
+square --location <square> resume
 ```
 
 While held, participant expression and catch pause. Join, done, status, and history still work.
@@ -117,8 +117,8 @@ While held, participant expression and catch pause. Join, done, status, and hist
 When participants are done, collect the public activities:
 
 ```bash
-square --location <path> history --all --full        # complete public history
-square --location <path> status
+square --location <square> history --all --full        # complete public history
+square --location <square> status
 ```
 
 ## Boundaries
