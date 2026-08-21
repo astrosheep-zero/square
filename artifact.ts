@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 
 import {
   isWakeRouteKind,
+  InternalSquareError,
   nameKey,
   SquareError,
   type BuildOptions,
@@ -352,7 +353,7 @@ function readArtifact(squarePath: string): Buffer {
     return fs.readFileSync(squarePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new SquareError('not_found', `square file not found: ${squarePath}`);
+      throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
     }
     throw error;
   }

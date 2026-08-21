@@ -351,15 +351,16 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.match(rebound.stdout, /you are already in the square/);
   assert.doesNotMatch(rebound.stdout, /catch --/);
 
-  const imposter = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
-  assert.equal(imposter.status, 2, imposter.stderr);
-  assert.match(imposter.stderr, /Bob shoos you out of the square/);
-  assert.match(imposter.stderr, /join --kick/);
+  const sameName = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  assert.equal(sameName.status, 2, sameName.stderr);
+  assert.match(sameName.stderr, /Bob shoos you out of the square/);
+  assert.match(sameName.stderr, /join --kick/);
+  assert.equal(loadSquare(file).acts.filter((act) => act.kind === 'join' && act.actor === 'Bob').length, 1);
 
-  const reclaimed = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
-  assert.equal(reclaimed.status, 0, reclaimed.stderr);
-  assert.match(reclaimed.stdout, /you banished the original Bob/);
-  assert.doesNotMatch(reclaimed.stdout, /catch --/);
+  const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  assert.equal(takeover.status, 0, takeover.stderr);
+  assert.match(takeover.stdout, /you banished the original Bob/);
+  assert.doesNotMatch(takeover.stdout, /catch --/);
   assert.equal(loadSquare(file).acts.filter((act) => act.kind === 'join' && act.actor === 'Bob').length, 1);
 });
 

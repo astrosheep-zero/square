@@ -16,7 +16,7 @@ test('delivery evidence writers and health labels stay inside their owning modul
     .sort();
 
   assert.deepEqual(externalUsers('presentOnce', 'presented.ts'), ['boundary-presentation.ts']);
-  assert.deepEqual(externalUsers('markDeliveredNotifications', 'delivery.ts'), ['watch.ts']);
+  assert.deepEqual(externalUsers('markDeliveredNotifications', 'delivery.ts'), ['square-engine.ts']);
   assert.deepEqual(externalUsers('recordWakeAttempt', 'wake-attempts.ts'), ['notifications.ts']);
   assert.deepEqual(externalUsers('recordRecoveredUnknown', 'wake-attempts.ts'), ['notifications.ts']);
 

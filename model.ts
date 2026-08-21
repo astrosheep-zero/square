@@ -19,22 +19,48 @@ export interface WakeRoute {
 }
 
 export type SquareErrorCode =
-  | 'not_found'
   | 'invalid_name'
   | 'invalid_args'
+  | 'unknown_participant'
+  | 'not_joined'
+  | 'already_joined'
+  | 'already_done'
+  | 'held'
+  | 'capped'
   | 'throttled'
+  | 'bell_quota'
+  | 'behind'
+  | 'io'
+  | 'unavailable';
+
+export type InternalSquareErrorCode = SquareErrorCode
+  | 'not_found'
   | 'cap_reached'
   | 'conflict'
   | 'pending_peer';
 
-export class SquareError extends Error {
+export interface SquareErrorFacts {
+  pending?: number;
+  holder?: string;
+  retryAfterMs?: number;
+}
+
+class SquareErrorBase<Code extends string> extends Error {
   constructor(
-    public code: SquareErrorCode,
-    message: string
+    public code: Code,
+    message: string,
+    public facts?: SquareErrorFacts
   ) {
     super(message);
     this.name = 'SquareError';
   }
+}
+
+export class SquareError extends SquareErrorBase<SquareErrorCode> {}
+export class InternalSquareError extends SquareErrorBase<InternalSquareErrorCode> {}
+
+export function isSquareError(error: unknown): error is SquareError | InternalSquareError {
+  return error instanceof SquareError || error instanceof InternalSquareError;
 }
 
 export type HardCap = number | null;

@@ -1,4 +1,5 @@
 import {
+  InternalSquareError,
   SquareError,
   type ActivitiesOptions,
   type Act,
@@ -57,22 +58,38 @@ function participantState(state: SquareState, name: string): SquareState['partic
 export interface DecideJoinResult {
   joinedName: string;
   addParticipant: boolean;
-  joinAct: Act;
+  joinAct?: Extract<Act, { kind: 'join' }>;
 }
 
 export function decideJoin(doc: SquareDoc, name: string, now: number): DecideJoinResult {
+  validateName(name);
   const knownName = resolveRosterName(doc, name);
   const joinedName = knownName ?? name;
   const state = foldedState(doc);
   const result = validate(state, { kind: 'join', actor: joinedName, at: now });
   if (!result.ok && result.reason === 'already_joined') {
-    throw new SquareError('conflict', `A participant named "${joinedName}" is already in this square.`);
+    return { joinedName, addParticipant: false };
   }
   return {
     joinedName,
     addParticipant: knownName === undefined,
     joinAct: { kind: 'join', actor: joinedName, at: now },
   };
+}
+
+function resolveStandingName(doc: SquareDoc, requestedName: string): string {
+  validateName(requestedName);
+  const name = resolveRosterName(doc, requestedName);
+  if (name === undefined) throw new SquareError('not_joined', `${requestedName} has not joined this square`);
+  return name;
+}
+
+function requireStanding(doc: SquareDoc, act: Act): void {
+  const result = validate(foldedState(doc), act);
+  if (result.ok) return;
+  if (result.reason === 'done') throw new SquareError('already_done', `${act.actor ?? 'participant'} is already done`);
+  if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor ?? 'participant'} has not joined this square`);
+  throw new Error(`Unexpected standing validation result: ${result.reason}`);
 }
 
 export type ActDecision =
@@ -97,7 +114,7 @@ export function decideAct(
   input: { name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
 ): ActDecision {
   const { now, force } = input;
-  const name = resolveKnownName(doc, input.name);
+  const name = resolveStandingName(doc, input.name);
   const body = input.body;
   if (body.trim() === '') throw new SquareError('invalid_args', 'express body cannot be empty');
   const reach = input.reach;
@@ -130,12 +147,12 @@ export function decideAct(
     { hardCap: doc.hardCap, throttlePerMinute: doc.throttlePerMinute, throttleWindowMs: THROTTLE_WINDOW_MS }
   );
   if (!result.ok) {
-    if (result.reason === 'done') throw new SquareError('conflict', `${name} is done; rejoin to express again`);
+    if (result.reason === 'done') throw new SquareError('already_done', `${name} is already done`);
     if (result.reason === 'held') return { type: 'held', reason: result.hold.reason };
     if (result.reason === 'hard_cap') return { type: 'capped', count: result.count, hardCap: result.hardCap };
     if (result.reason === 'throttled') return { type: 'throttled', delayMs: result.delayMs };
     if (result.reason === 'bell_quota') return { type: 'bell_quota', nextAt: result.nextAt };
-    if (result.reason === 'not_joined') throw new SquareError('conflict', `${name} has not joined this square`);
+    if (result.reason === 'not_joined') throw new SquareError('not_joined', `${name} has not joined this square`);
   }
 
   const delta = actDelta(doc.acts, readCursor(doc, name));
@@ -196,16 +213,24 @@ export function decideAct(
 }
 
 export function coreDone(doc: SquareDoc, name: string, body: string, now: number): Extract<Act, { kind: 'done' }> {
-  const resolvedName = resolveKnownName(doc, name);
-  return { kind: 'done', actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+  const resolvedName = resolveStandingName(doc, name);
+  const act = { kind: 'done' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+  requireStanding(doc, act);
+  return act;
 }
 
-export function coreHold(_doc: SquareDoc, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
-  return { kind: 'hold', actor, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+export function coreHold(doc: SquareDoc, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
+  const resolvedName = resolveStandingName(doc, actor);
+  const act = { kind: 'hold' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+  requireStanding(doc, act);
+  return act;
 }
 
-export function coreResume(_doc: SquareDoc, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
-  return { kind: 'resume', actor, at: now };
+export function coreResume(doc: SquareDoc, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
+  const resolvedName = resolveStandingName(doc, actor);
+  const act = { kind: 'resume' as const, actor: resolvedName, at: now };
+  requireStanding(doc, act);
+  return act;
 }
 
 export interface ParticipantStatus {
@@ -370,7 +395,7 @@ export function coreCompact(doc: SquareDoc, keep: number): CompactResult {
     .filter((participant) => participant.joined && readCursor(doc, participant.name) < cutoffIndex)
     .map((participant) => participant.name);
   if (unread.length > 0) {
-    throw new SquareError('conflict', `Refusing to compact: ${unread.join(', ')} ${unread.length === 1 ? 'has' : 'have'} not read through the activities being archived.`);
+    throw new InternalSquareError('conflict', `Refusing to compact: ${unread.join(', ')} ${unread.length === 1 ? 'has' : 'have'} not read through the activities being archived.`);
   }
   return {
     archived,

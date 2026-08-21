@@ -1,11 +1,11 @@
 import { helpRequest } from '../help.js';
-import { SquareError } from '../model.js';
+import { isSquareError } from '../model.js';
 
 import { defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
 function handleSquareError(error: unknown): never {
-  if (error instanceof SquareError) {
+  if (isSquareError(error)) {
     process.stderr.write(`${error.message}\n`);
     process.exit(error.code === 'not_found' ? 1 : 2);
   }

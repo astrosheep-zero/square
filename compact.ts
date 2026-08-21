@@ -1,7 +1,6 @@
-import { SquareError } from './model.js';
+import { isSquareError } from './model.js';
 import { withPathOutput } from './presentation.js';
-import { coreCompact } from './decisions.js';
-import { execute } from './square-application.js';
+import { compactSquare } from './square-file-adapter.js';
 
 export interface CompactOptions {
   keep: number;
@@ -17,15 +16,14 @@ export async function cmdCompact(squarePath: string, opts: CompactOptions): Prom
     let keptCount: number;
     const archive = archivePath(squarePath);
 
-    const committed = await execute<ReturnType<typeof coreCompact>>(squarePath, { type: 'compact', keep: opts.keep, archivePath: archive });
-    const result = committed.result;
+    const result = await compactSquare(squarePath, opts.keep, archive);
     archivedCount = result.archived.length;
     keptCount = result.doc.acts.length;
 
     const summary = ['✓ compacted', `  · archived ${archivedCount!} activities`, `  · kept ${keptCount!} activities`, ...(archivedCount! > 0 ? [`  · archive ${archive}`] : [])].join('\n');
     process.stdout.write(withPathOutput(squarePath, summary));
   } catch (err) {
-    if (err instanceof SquareError) {
+    if (isSquareError(err)) {
       process.stderr.write(err.message + '\n');
       process.exit(err.code === 'not_found' ? 1 : 2);
     }

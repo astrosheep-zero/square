@@ -34,11 +34,15 @@ function runCli(args, options = {}) {
 
 function withRegistry() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-'));
-  const previous = process.env.SQUARE_REGISTRY;
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  const previousRoutes = process.env.SQUARE_ROUTES;
   process.env.SQUARE_REGISTRY = path.join(root, 'sessions.ndjsonl');
+  process.env.SQUARE_ROUTES = path.join(root, 'routes.ndjsonl');
   return () => {
-    if (previous === undefined) delete process.env.SQUARE_REGISTRY;
-    else process.env.SQUARE_REGISTRY = previous;
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    if (previousRoutes === undefined) delete process.env.SQUARE_ROUTES;
+    else process.env.SQUARE_ROUTES = previousRoutes;
     fs.rmSync(root, { recursive: true, force: true });
   };
 }
@@ -105,6 +109,7 @@ test('one local command keeps its native and Paseo identities in the same owners
   try {
     const squarePath = path.join(os.tmpdir(), 'multi-channel-owner-square.square');
     recordLocalJoin('Alice', squarePath, {
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
       CLAUDE_CODE_SESSION_ID: 'claude-session',
       PASEO_AGENT_ID: 'paseo-agent',
     });
@@ -125,6 +130,7 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
   try {
     const squarePath = path.join(os.tmpdir(), 'nested-owner-square.square');
     const parentEnv = {
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
       PASEO_AGENT_ID: 'paseo-agent',
       CODEX_THREAD_ID: 'parent-codex',
     };
@@ -137,6 +143,7 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
 
     // Nested/detached child inherits PASEO_AGENT_ID but never claims root.
     const childEnv = {
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
       PASEO_AGENT_ID: 'paseo-agent',
       CODEX_THREAD_ID: 'child-codex',
     };
@@ -185,6 +192,13 @@ test('only explicit join claims local ownership and done closes the current owne
     });
     assert.equal(built.status, 0, built.stderr);
     assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env }).status, 0);
+    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
+
+    const reconnected = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env });
+    assert.equal(reconnected.status, 0, reconnected.stderr);
+    assert.match(reconnected.stdout, /already in the square/);
+    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
 
     const observerEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
@@ -221,6 +235,7 @@ test('only explicit join claims local ownership and done closes the current owne
 
     const noIdentityEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
@@ -239,15 +254,17 @@ test('only explicit join claims local ownership and done closes the current owne
     assert.match(takeover.stdout, /you banished the original Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
+    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
 
-    const unboundTakeover = runCli(['--location', squarePath, '--as', 'Alice', 'join', '--kick'], {
+    const unboundJoin = runCli(['--location', squarePath, '--as', 'Bob', 'join'], {
       env: noIdentityEnv,
     });
-    assert.equal(unboundTakeover.status, 0, unboundTakeover.stderr);
-    assert.match(unboundTakeover.stdout, /you banished the original Alice/);
-    assert.deepEqual(lookupParticipant(squarePath, 'Alice'), []);
+    assert.equal(unboundJoin.status, 0, unboundJoin.stderr);
+    assert.deepEqual(lookupParticipant(squarePath, 'Bob'), []);
 
-    const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], { env });
+    const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], {
+      env: observerEnv,
+    });
     assert.equal(done.status, 0, done.stderr);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session'), []);

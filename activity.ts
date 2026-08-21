@@ -4,7 +4,8 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { loadSquare } from './artifact.js';
-import { SquareError, validateName } from './model.js';
+import { deliveryDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
+import { SquareError, isSquareError, validateName } from './model.js';
 import {
   expressHintLine,
   renderActivityBlocked,
@@ -14,10 +15,10 @@ import {
   renderPendingFeed,
   withPathOutput,
 } from './presentation.js';
-import { currentHold, inSquareCount, nowMs, SLEEP_MS, resolveRosterName } from './runtime.js';
-import { decideAct } from './decisions.js';
-import { dispatchActNotifications } from './notifications.js';
-import { execute } from './square-application.js';
+import { countSays, currentHold, inSquareCount, nowMs, SLEEP_MS, resolveRosterName } from './runtime.js';
+import { wakeNotifierForSquare } from './notifications.js';
+import { openFileApplication } from './square-file-adapter.js';
+import { formatActivityId } from './square-core.js';
 import { formatTimestamp } from './time.js';
 
 export interface ActivityOptions {
@@ -71,7 +72,7 @@ export async function cmdActivity(
   try {
     doc = loadSquare(squarePath);
   } catch (err) {
-    if (err instanceof SquareError) {
+    if (isSquareError(err)) {
       process.stderr.write(err.message + '\n');
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
@@ -91,82 +92,88 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
+  const application = await openFileApplication(squarePath, { clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
 
-  while (true) {
-    const committed = await execute<ReturnType<typeof decideAct>>(squarePath, {
-      type: 'say',
-      name,
-      body,
-      force,
-      now: nowMs(),
-      ...(reach === undefined ? {} : { reach }),
-      ...(opts.reply === undefined ? {} : { reply: opts.reply }),
-    });
-    const decision = committed.result;
-    const freshDoc = loadSquare(squarePath);
-    const headerCount = inSquareCount(freshDoc);
-    const held = currentHold(freshDoc.acts).active;
-
-    switch (decision.type) {
-      case 'sent': {
-        const sayAct = committed.acts.find((act) => act.kind === 'say');
-        if (sayAct !== undefined) await dispatchActNotifications(squarePath, sayAct);
-        const hasPending = decision.pendingPublic.length > 0 || decision.pendingRoomChanges.length > 0;
-        const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, decision.pendingPublic, decision.pendingRoomChanges, knownName)}` : '';
-        const hint = expressHintLine(decision.ownActCount);
-        const withHint = hint ? `${decision.confirmation}\n${hint}` : decision.confirmation;
+  try {
+    while (true) {
+      const before = loadSquare(squarePath);
+      const delta = deliveryDelta(before, knownName);
+      const pendingPublic = peerPublicActs(delta, knownName);
+      const pendingRoomChanges = peerRoomChanges(delta, knownName);
+      try {
+        await application.express(name, body, {
+          force,
+          ...(reach === undefined ? {} : { reach }),
+          ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
+        });
+        const freshDoc = loadSquare(squarePath);
+        const headerCount = inSquareCount(freshDoc);
+        const held = currentHold(freshDoc.acts).active;
+        const ownActCount = countSays(freshDoc.acts, knownName);
+        const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
+        const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, pendingPublic, pendingRoomChanges, knownName)}` : '';
+        const hint = expressHintLine(ownActCount);
+        const confirmation = `● heads turn your way — #${ownActCount}`;
+        const withHint = hint ? `${confirmation}\n${hint}` : confirmation;
         process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
         return;
-      }
-      case 'blocked': {
+      } catch (error) {
+        if (!(error instanceof SquareError)) throw error;
+        const freshDoc = loadSquare(squarePath);
+        const headerCount = inSquareCount(freshDoc);
+        const held = currentHold(freshDoc.acts).active;
+
+        if (error.code === 'behind') {
         const draftPath = saveActivityDraft(squarePath, name, rawInput);
         process.stdout.write(
           renderActivityBlocked({
             squarePath,
             name: knownName,
             forceCommand: opts.forceCommand,
-            activitySummaries: decision.activitySummaries,
-            unreadRoomChanges: decision.unreadRoomChanges,
+            activitySummaries: [],
+            unreadRoomChanges: pendingRoomChanges,
             draftPath,
             participantCount: headerCount,
             held,
           })
         );
         process.exit(1);
-        break;
-      }
-      case 'capped': {
+        return;
+        }
+        if (error.code === 'capped') {
         process.stdout.write(
           renderActivityLimit({
             squarePath,
             name: knownName,
-            count: decision.count,
-            hardCap: decision.hardCap,
+            count: countSays(freshDoc.acts, knownName),
+            ...(freshDoc.hardCap === null ? {} : { hardCap: freshDoc.hardCap }),
             draftPath: saveActivityDraft(squarePath, name, rawInput),
             participantCount: headerCount,
             held,
           })
         );
         process.exit(1);
-        break;
-      }
-      case 'throttled': {
+        return;
+        }
+        if (error.code === 'throttled') {
+          const delayMs = error.facts?.retryAfterMs ?? SLEEP_MS;
         if (noWait) {
           const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs: decision.delayMs, draftPath, participantCount: headerCount, held }));
+          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs, draftPath, participantCount: headerCount, held }));
           process.exit(1);
         }
         if (announcedWait !== 'throttled') {
-          process.stdout.write(renderExpressWaiting({ reason: 'throttled', delayMs: decision.delayMs }) + '\n');
+          process.stdout.write(renderExpressWaiting({ reason: 'throttled', delayMs }) + '\n');
           announcedWait = 'throttled';
         }
-        await sleep(decision.delayMs);
-        break;
-      }
-      case 'held': {
+        await sleep(delayMs);
+        continue;
+        }
+        if (error.code === 'held') {
+          const holdReason = currentHold(freshDoc.acts).reason;
         if (noWait) {
           const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason: decision.reason, draftPath, participantCount: headerCount, held }));
+          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held }));
           process.exit(1);
         }
         if (announcedWait !== 'held') {
@@ -174,18 +181,24 @@ export async function cmdActivity(
           announcedWait = 'held';
         }
         await sleep(SLEEP_MS);
-        break;
-      }
-      case 'bell_quota': {
+        continue;
+        }
+        if (error.code === 'bell_quota') {
+          const nextAt = nowMs() + (error.facts?.retryAfterMs ?? 1);
         process.stdout.write(
           withPathOutput(
             squarePath,
-            [`✕ the bell stays quiet for now`, `  · you can ring it again at ${formatTimestamp(decision.nextAt)}`].join('\n'),
+            [`✕ the bell stays quiet for now`, `  · you can ring it again at ${formatTimestamp(nextAt)}`].join('\n'),
             { participantCount: headerCount, held }
           )
         );
         process.exit(1);
+        return;
+        }
+        throw error;
       }
     }
+  } finally {
+    await application.close();
   }
 }

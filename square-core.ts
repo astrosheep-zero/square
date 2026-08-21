@@ -250,6 +250,7 @@ export function validate(state: SquareState, act: Act, options: SquareValidation
       return { ok: true };
     case 'say': {
       if (current?.done) return { ok: false, reason: 'done' };
+      if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
       if (state.hold.active) return { ok: false, reason: 'held', hold: state.hold };
       const activityCount = current?.activityCount ?? 0;
       if (options.hardCap !== undefined && options.hardCap !== null && activityCount >= options.hardCap) {
@@ -277,6 +278,9 @@ export function validate(state: SquareState, act: Act, options: SquareValidation
     }
     case 'hold':
     case 'resume':
+      if (current?.done) return { ok: false, reason: 'done' };
+      if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
+      return { ok: true };
     case 'read':
       return { ok: true };
   }

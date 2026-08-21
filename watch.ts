@@ -3,13 +3,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { loadSquare } from './artifact.js';
 import {
   type SquareDoc,
-  type StoredAct,
   type WatchLease,
   type WatchOptions,
   SquareError,
+  isSquareError,
   nameKey,
 } from './model.js';
-import { markDeliveredNotifications } from './delivery.js';
 import {
   SLEEP_MS,
   STALE_MS,
@@ -22,10 +21,12 @@ import {
   hasQuorum,
   inSquareCount,
   nowMs,
+  removeWatchLease,
   touchPresenceCursor,
   writeWatchLease,
 } from './runtime.js';
-import { execute, withSquareLock, writeSquareDoc } from './square-application.js';
+import { openFileApplication } from './square-file-adapter.js';
+import { createFileCell } from './square-storage.js';
 import {
   renderWatchForceTakeover,
   renderWatchAlreadyActive,
@@ -36,17 +37,10 @@ import {
   withPathOutput,
   type WatchStatus,
 } from './presentation.js';
-import {
-  ackPeerDelta,
-  deliveryDelta,
-  filteredPeerActivities,
-  filteredRoomChanges,
-  matchesFeedFilter,
-  peerPublicActs,
-  peerRoomChanges,
-} from './activity-feed.js';
 import { coreParticipants, resolveKnownName } from './decisions.js';
 import { hasAutomaticDeliveryIdentity, localParticipantOwner } from './registry.js';
+import { parseActivityId } from './square-core.js';
+import type { CatchResult } from './square-engine.js';
 
 type WatchResult =
   | { type: 'output'; stdout: string; status?: WatchStatus }
@@ -58,10 +52,6 @@ type WatchResult =
 type WatchStartResult =
   | { type: 'started'; leaseId: string; replaced: boolean; heartbeatAt: number }
   | { type: 'active'; lease: WatchLease };
-
-function catchDelta(doc: SquareDoc, name: string): StoredAct[] {
-  return deliveryDelta(doc, name);
-}
 
 function watchStatusExitCode(status: WatchStatus | undefined): number {
   return status === 'capped' ? 1 : 0;
@@ -94,23 +84,20 @@ function sameLease(doc: SquareDoc, name: string, id: string, at = nowMs()): bool
   return freshWatchLease(doc, name, at)?.leaseId === id;
 }
 
-function consumeDelta(doc: SquareDoc, name: string, delta: StoredAct[], delivered: StoredAct[], at: number): boolean {
-  const consumed = ackPeerDelta(doc, name, delta);
-  const receipts = markDeliveredNotifications(doc, name, delivered, at);
-  return consumed || receipts;
-}
-
 function watchOutputResult(
   squarePath: string,
   doc: SquareDoc,
   name: string,
-  delta: StoredAct[],
+  caught: CatchResult,
   opts: { stalePartial?: boolean; participants?: string[]; mention?: string; status?: WatchStatus; idleMs?: number } = {}
 ): WatchResult {
-  const publicItems = peerPublicActs(delta, name).filter((item) => matchesFeedFilter(item, opts));
-  const roomChanges = filteredRoomChanges(delta, name, opts);
-  consumeDelta(doc, name, delta, publicItems, nowMs());
-  writeSquareDoc(squarePath, doc);
+  const delivered = caught.activities.flatMap((activity) => {
+    const index = parseActivityId(activity.id);
+    const stored = index === undefined ? undefined : doc.acts.find((item) => item.index === index);
+    return stored === undefined ? [] : [stored];
+  });
+  const publicItems = delivered.filter((item) => item.kind === 'say' || item.kind === 'done');
+  const roomChanges = delivered.filter((item) => item.kind === 'join' || item.kind === 'done' || item.kind === 'hold' || item.kind === 'resume');
   return {
     type: 'output',
     stdout: renderWatchOutput(doc.acts, publicItems, roomChanges, {
@@ -219,26 +206,33 @@ async function beginWatch(squarePath: string, name: string, opts: WatchOptions):
   const at = nowMs();
   const id = leaseId();
   const ownerId = localParticipantOwner(squarePath, name);
-  const committed = await execute<
-    | { type: 'active'; lease: WatchLease }
-    | { type: 'started'; name: string; replaced: boolean }
-  >(squarePath, {
-    type: 'lease',
-    name,
-    leaseId: id,
-    ...(ownerId === undefined ? {} : { ownerId }),
-    at,
-    expiresAt: at + WATCH_STALE_MS,
-    force: opts.replace,
-    filter: leaseFilter(opts),
-  });
-  if (committed.result.type === 'active') return committed.result;
-  return { type: 'started', leaseId: id, replaced: committed.result.replaced, heartbeatAt: at };
+  const cell = createFileCell(squarePath);
+  try {
+    return await cell.transact<WatchStartResult>((doc) => {
+      const known = resolveKnownName(doc, name);
+      const existing = freshWatchLease(doc, known, at);
+      if (existing !== undefined && !opts.replace) return { result: { type: 'active', lease: existing } };
+      setLease(doc, known, id, at, opts, ownerId);
+      touchPresenceCursor(doc, known, at);
+      return { state: doc, result: { type: 'started', leaseId: id, replaced: existing !== undefined, heartbeatAt: at } };
+    });
+  } finally {
+    await cell.close();
+  }
 }
 
 async function endWatch(squarePath: string, name: string, id: string | undefined): Promise<void> {
   if (id === undefined) return;
-  await execute(squarePath, { type: 'release-lease', name, leaseId: id });
+  const cell = createFileCell(squarePath);
+  try {
+    await cell.transact((doc) => {
+      const known = resolveKnownName(doc, name);
+      if (!removeWatchLease(doc, known, id)) return { result: undefined };
+      return { state: doc, result: undefined };
+    });
+  } finally {
+    await cell.close();
+  }
 }
 
 function installWatchInterruptHandler(squarePath: string, name: string, currentLeaseId: () => string | undefined): () => void {
@@ -269,36 +263,21 @@ function terminalStatus(doc: SquareDoc, name: string): WatchStatus | undefined {
 }
 
 async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions): Promise<void> {
-  const result = await withSquareLock<WatchResult>(squarePath, () => {
-    const doc = loadSquare(squarePath);
-    const at = nowMs();
-    const touched = touchPresenceCursor(doc, name, at);
-    const delta = catchDelta(doc, name);
-    const peerPublic = peerPublicActs(delta, name);
-    const roomChanges = peerRoomChanges(delta, name);
-    const filteredActivities = filteredPeerActivities(delta, name, opts);
-    const matchingRoomChanges = filteredRoomChanges(delta, name, opts);
-    const hasDeliverable = peerPublic.length > 0 || roomChanges.length > 0;
-    const hasFilteredDeliverable = filteredActivities.length > 0 || matchingRoomChanges.length > 0;
-    const status = terminalStatus(doc, name);
-
-    if (hasDeliverable && hasFilteredDeliverable) {
-      return watchOutputResult(squarePath, doc, name, delta, {
-        participants: opts.participants,
-        mention: opts.mention,
-        ...(status ? { status } : {}),
-      });
-    }
-
-    if (hasDeliverable) {
-      const acked = ackPeerDelta(doc, name, delta);
-      if (acked || touched) writeSquareDoc(squarePath, doc);
-    } else if (touched) {
-      writeSquareDoc(squarePath, doc);
-    }
-    if (status) return { type: 'terminal', status };
-    return { type: 'terminal', status: 'empty-now' };
-  });
+  const application = await openFileApplication(squarePath, { clock: nowMs });
+  let caught: CatchResult;
+  try {
+    caught = await application.catch(name, {
+      ...(opts.participants === undefined ? {} : { from: opts.participants }),
+      ...(opts.mention === undefined ? {} : { mention: true }),
+    });
+  } finally {
+    await application.close();
+  }
+  const doc = loadSquare(squarePath);
+  const status = terminalStatus(doc, name);
+  const result = caught.activities.length > 0
+    ? watchOutputResult(squarePath, doc, name, caught, { mention: opts.mention, ...(status ? { status } : {}) })
+    : { type: 'terminal' as const, status: status ?? 'empty-now' as WatchStatus };
 
   await finishWatchResult(squarePath, name, result, undefined);
 }
@@ -313,7 +292,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       opts = { ...opts, participants: opts.participants.map((p) => resolveKnownName(initialDoc, p)) };
     }
   } catch (err) {
-    if (err instanceof SquareError) {
+    if (isSquareError(err)) {
       process.stderr.write(err.message + '\n');
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
@@ -342,59 +321,37 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   }
   const idleMs = opts.idleMs ?? STALE_MS;
   const removeInterruptHandler = installWatchInterruptHandler(squarePath, name, () => currentLeaseId);
+  const application = await openFileApplication(squarePath, { clock: nowMs });
 
   try {
     while (true) {
-      const result = await withSquareLock<WatchResult>(squarePath, () => {
-        const doc = loadSquare(squarePath);
+      const cell = createFileCell(squarePath);
+      const leaseState = await cell.transact<WatchResult>((doc) => {
         const at = nowMs();
         const lease = freshWatchLease(doc, name, at);
-        if (lease === undefined || lease.leaseId !== currentLeaseId) return { type: 'replaced' };
-
-        let mutated = false;
-        if (at >= nextHeartbeatAt) {
-          setLease(doc, name, currentLeaseId!, at, opts, lease.ownerId);
-          mutated = touchPresenceCursor(doc, name, at) || mutated;
-          nextHeartbeatAt = at + WATCH_HEARTBEAT_MS;
-          mutated = true;
-        }
-
-        const delta = catchDelta(doc, name);
-        const peerPublic = peerPublicActs(delta, name);
-        const roomChanges = peerRoomChanges(delta, name);
-        const filteredActivities = filteredPeerActivities(delta, name, opts);
-        const matchingRoomChanges = filteredRoomChanges(delta, name, opts);
-        const hasDeliverable = peerPublic.length > 0 || roomChanges.length > 0;
-        const hasFilteredDeliverable = filteredActivities.length > 0 || matchingRoomChanges.length > 0;
+        if (lease === undefined || lease.leaseId !== currentLeaseId) return { result: { type: 'replaced' } };
+        if (currentHold(doc.acts).active) return { result: { type: 'held' } };
         const status = terminalStatus(doc, name);
-
-        if (currentHold(doc.acts).active) {
-          if (mutated) writeSquareDoc(squarePath, doc);
-          return { type: 'held' };
-        }
-
-        if (
-          hasDeliverable &&
-          hasFilteredDeliverable &&
-          (filteredActivities.length > 0 || matchingRoomChanges.length > 0 || status !== undefined)
-        ) {
-          return watchOutputResult(squarePath, doc, name, delta, {
-            participants: opts.participants,
-            mention: opts.mention,
-            ...(status ? { status } : {}),
-          });
-        }
-
-        if (hasDeliverable && !hasFilteredDeliverable) mutated = ackPeerDelta(doc, name, delta) || mutated;
-
-        if (status) {
-          if (mutated) writeSquareDoc(squarePath, doc);
-          return { type: 'terminal', status };
-        }
-
-        if (mutated) writeSquareDoc(squarePath, doc);
-        return { type: 'sleep' };
+        if (status) return { result: { type: 'terminal', status } };
+        if (at < nextHeartbeatAt) return { result: { type: 'sleep' } };
+        setLease(doc, name, currentLeaseId!, at, opts, lease.ownerId);
+        touchPresenceCursor(doc, name, at);
+        nextHeartbeatAt = at + WATCH_HEARTBEAT_MS;
+        return { state: doc, result: { type: 'sleep' } };
       });
+      await cell.close();
+
+      let result = leaseState;
+      if (result.type === 'sleep') {
+        const caught = await application.catch(name, {
+          ...(opts.participants === undefined ? {} : { from: opts.participants }),
+          ...(opts.mention === undefined ? {} : { mention: true }),
+        });
+        if (caught.activities.length > 0) {
+          const doc = loadSquare(squarePath);
+          result = watchOutputResult(squarePath, doc, name, caught, { mention: opts.mention });
+        }
+      }
 
       if (await finishWatchResult(squarePath, name, result, currentLeaseId)) {
         currentLeaseId = undefined;
@@ -403,21 +360,10 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       if (result.type === 'held') staleSince = nowMs();
 
       if (nowMs() - staleSince >= idleMs) {
-        const result = await withSquareLock<WatchResult>(squarePath, () => {
-          const doc = loadSquare(squarePath);
-          if (!sameLease(doc, name, currentLeaseId!)) return { type: 'replaced' };
-          const delta = catchDelta(doc, name);
-          const filteredActivities = filteredPeerActivities(delta, name, opts);
-          if (filteredActivities.length > 0) {
-            return watchOutputResult(squarePath, doc, name, delta, {
-              stalePartial: true,
-              participants: opts.participants,
-              mention: opts.mention,
-              idleMs,
-            });
-          }
-          return { type: 'terminal', status: 'stale' };
-        });
+        const doc = loadSquare(squarePath);
+        const result: WatchResult = !sameLease(doc, name, currentLeaseId!)
+          ? { type: 'replaced' }
+          : { type: 'terminal', status: 'stale' };
 
         if (await finishWatchResult(squarePath, name, result, currentLeaseId, idleMs)) {
           currentLeaseId = undefined;
@@ -428,6 +374,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       await sleep(SLEEP_MS);
     }
   } finally {
+    await application.close();
     removeInterruptHandler();
   }
 }

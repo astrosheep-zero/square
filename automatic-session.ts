@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { loadSquare } from './artifact.js';
-import { execute } from './square-application.js';
+import { openFileApplication } from './square-file-adapter.js';
 import { canonicalSquarePath, lookupSession, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { renderPublicTail } from './presentation.js';
@@ -47,14 +47,18 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   if (bindings.some((binding) => canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name && isCurrentlyJoined(doc.acts, name))) {
     return undefined;
   }
-  const committed = await execute(squarePath, { type: 'join', name, now: Date.now() });
+  const application = await openFileApplication(squarePath);
+  try {
+    await application.join(name);
+  } finally {
+    await application.close();
+  }
   const channel = provider === 'claude' ? 'claude-code' : provider;
   recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
   const after = loadSquare(squarePath);
   const scene = after.warmup.join('\n').trim();
   const context = after.preamble.join('\n').trim();
   const activity = renderPublicTail(after.acts, 10, Date.now(), name);
-  void committed;
   return [`You joined the public square as ${name}.`, scene, context ? `context\n${context}` : '', activity ? `recent activity\n${activity}` : ''].filter(Boolean).join('\n\n');
 }
 
@@ -65,6 +69,11 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   if (binding === undefined || !fs.existsSync(squarePath)) return;
   const doc = loadSquare(squarePath);
   if (!isCurrentlyJoined(doc.acts, binding.name)) return;
-  await execute(squarePath, { type: 'done', name: binding.name, body: '', now: Date.now() });
+  const application = await openFileApplication(squarePath);
+  try {
+    await application.done(binding.name);
+  } finally {
+    await application.close();
+  }
   recordSessionDone(sessionId, binding.name, squarePath, channel, env);
 }

@@ -54,6 +54,6 @@ export function filteredRoomChanges(delta: StoredAct[], name: string, filter: Ac
   return peerRoomChanges(delta, name).filter((act) => matchesParticipants(act, filter.participants));
 }
 
-export function ackPeerDelta(doc: SquareDoc, name: string, delta: StoredAct[]): boolean {
-  return advanceCursor(doc, name, latestActIndex([...peerPublicActs(delta, name), ...peerRoomChanges(delta, name)]));
+export function ackPeerDelta(doc: SquareDoc, name: string, delta: StoredAct[], at?: number): boolean {
+  return advanceCursor(doc, name, latestActIndex([...peerPublicActs(delta, name), ...peerRoomChanges(delta, name)]), at);
 }

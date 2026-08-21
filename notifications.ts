@@ -22,7 +22,8 @@ import { PaseoAdapter } from './paseo-delivery.js';
 import { quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
 import { isCurrentlyJoined } from './runtime.js';
-import { execute } from './square-application.js';
+import { createFileCell } from './square-storage.js';
+import type { Activity, WakeNotifier } from './square-engine.js';
 import {
   nextWakeAttemptNumber,
   recordRecoveredUnknown,
@@ -140,14 +141,20 @@ type NotifyLeaseClaim =
 
 async function claimNotifyLease(squarePath: string, recipient: string, actIndex: number): Promise<NotifyLeaseClaim> {
   const at = Date.now();
-  const committed = await execute<NotifyLeaseClaim>(squarePath, {
-    type: 'claim-notify',
-    key: notifyLeaseKey(recipient, actIndex),
-    leaseId: randomUUID(),
-    at,
-    expiresAt: at + NOTIFY_LEASE_MS,
-  });
-  return committed.result;
+  const key = notifyLeaseKey(recipient, actIndex);
+  const leaseId = randomUUID();
+  const cell = createFileCell(squarePath);
+  try {
+    return await cell.transact<NotifyLeaseClaim>((doc) => {
+      const current = doc.runtime.notifyLeases[key];
+      if (current !== undefined && current.expiresAt > at) return { result: { type: 'busy' as const } };
+      if (current?.phase === 'dispatching') return { result: { type: 'ambiguous' as const, lease: current } };
+      doc.runtime.notifyLeases[key] = { leaseId, expiresAt: at + NOTIFY_LEASE_MS, phase: 'claimed' };
+      return { state: doc, result: { type: 'acquired' as const, leaseId } };
+    });
+  } finally {
+    await cell.close();
+  }
 }
 
 async function transitionNotifyLease(
@@ -160,24 +167,37 @@ async function transitionNotifyLease(
   attemptN?: number,
 ): Promise<boolean> {
   const at = Date.now();
-  const committed = await execute<{ updated: boolean }>(squarePath, {
-    type: 'transition-notify',
-    key: notifyLeaseKey(recipient, actIndex),
-    leaseId,
-    expiresAt: at + NOTIFY_LEASE_MS,
-    phase,
-    ...(routeKind === undefined ? {} : { routeKind }),
-    ...(attemptN === undefined ? {} : { attemptN }),
-  });
-  return committed.result.updated;
+  const key = notifyLeaseKey(recipient, actIndex);
+  const cell = createFileCell(squarePath);
+  try {
+    return await cell.transact((doc) => {
+      if (doc.runtime.notifyLeases[key]?.leaseId !== leaseId) return { result: false };
+      doc.runtime.notifyLeases[key] = {
+        leaseId,
+        expiresAt: at + NOTIFY_LEASE_MS,
+        phase,
+        ...(routeKind === undefined ? {} : { routeKind }),
+        ...(attemptN === undefined ? {} : { attemptN }),
+      };
+      return { state: doc, result: true };
+    });
+  } finally {
+    await cell.close();
+  }
 }
 
-function releaseNotifyLease(squarePath: string, recipient: string, actIndex: number, leaseId: string): Promise<unknown> {
-  return execute(squarePath, {
-    type: 'release-notify',
-    key: notifyLeaseKey(recipient, actIndex),
-    leaseId,
-  });
+async function releaseNotifyLease(squarePath: string, recipient: string, actIndex: number, leaseId: string): Promise<void> {
+  const key = notifyLeaseKey(recipient, actIndex);
+  const cell = createFileCell(squarePath);
+  try {
+    await cell.transact((doc) => {
+      if (doc.runtime.notifyLeases[key]?.leaseId !== leaseId) return { result: undefined };
+      delete doc.runtime.notifyLeases[key];
+      return { state: doc, result: undefined };
+    });
+  } finally {
+    await cell.close();
+  }
 }
 
 async function processNotification(
@@ -280,7 +300,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
 }
 
-export interface DispatchActNotificationsOptions {
+interface WorkerLaunchOptions {
   launchWorker?: (workerPath: string, args: string[]) => void;
   env?: NodeJS.ProcessEnv;
 }
@@ -290,16 +310,18 @@ function launchWorker(workerPath: string, args: string[]): void {
   child.unref();
 }
 
-/** Start one detached worker only when this act contains directed attention. */
-export async function dispatchActNotifications(squarePath: string, item: import('./model.js').StoredAct, opts: DispatchActNotificationsOptions = {}): Promise<void> {
-  const env = opts.env ?? process.env;
-  if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
-  const doc = loadSquare(squarePath);
-  if (planActNotifications(doc, item).length === 0) return;
-  (opts.launchWorker ?? launchWorker)(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(item.index)]);
+export function wakeNotifierForSquare(squarePath: string, env: NodeJS.ProcessEnv = process.env): WakeNotifier {
+  return {
+    wake(recipients: readonly string[], activity: Activity): void {
+      if (env.SQUARE_DISABLE_PASEO_WAKE === '1' || recipients.length === 0) return;
+      const actIndex = parseActivityId(activity.id);
+      if (actIndex === undefined) return;
+      launchWorker(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(actIndex)]);
+    },
+  };
 }
 
-export interface SweepPendingNotificationsOptions extends DispatchActNotificationsOptions {
+export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {
   now?: number;
   limit?: number;
 }

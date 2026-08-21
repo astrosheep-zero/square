@@ -1,14 +1,11 @@
 import { cmdActivity } from '../activity.js';
 import { loadSquare } from '../artifact.js';
 import { cmdCompact } from '../compact.js';
-import { type DecideJoinResult } from '../decisions.js';
 import {
   type BuildOptions,
   type HardCap,
   type Reach,
-  SquareError,
   formatHardCap,
-  validateName,
 } from '../model.js';
 import {
   participantCommandPrefix,
@@ -17,10 +14,15 @@ import {
   renderPublicTail,
   withPathOutput,
 } from '../presentation.js';
-import { hasAutomaticDeliveryIdentity, localParticipantOwner, recordLocalDone, recordLocalJoin } from '../registry.js';
+import {
+  hasAutomaticDeliveryIdentity,
+  localParticipantOwner,
+  recordLocalDone,
+  recordLocalJoin,
+} from '../registry.js';
 import { sweepPendingNotifications } from '../notifications.js';
-import { inSquareCount, isCurrentlyJoined, nowMs, resolveRosterName } from '../runtime.js';
-import { createSquare, execute } from '../square-application.js';
+import { inSquareCount, nowMs } from '../runtime.js';
+import { createSquare, openFileApplication } from '../square-file-adapter.js';
 import { formatActivityId, parseActivityId } from '../square-core.js';
 
 import {
@@ -135,11 +137,23 @@ function parseJoin(argv: string[], context: CommandContext): JoinIntent {
 export const joinCommand: CommandSpec<JoinIntent, string> = {
   parse: parseJoin,
   async execute(intent, context) {
-    validateName(intent.name);
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
     try {
-      const committed = await execute<DecideJoinResult>(context.squarePath, { type: 'join', name: intent.name, now: nowMs() });
-      const joinedName = committed.result.joinedName;
-      const isRejoin = !committed.result.addParticipant;
+      const joined = await application.join(intent.name);
+      const joinedName = joined.name;
+      const isRejoin = joined.activity === null;
+      const reconnect = isRejoin
+        && localParticipantOwner(context.squarePath, joinedName) !== undefined;
+      if (isRejoin && !intent.kick && !reconnect) {
+        fail(
+          [
+            `✕ ${joinedName} shoos you out of the square`,
+            `  · a same-named participant stands here — the name is taken`,
+            `  · --kick banishes her and the name becomes yours`,
+            `» ${participantCommandPrefix(context.squarePath, joinedName)} join --kick`,
+          ].join('\n')
+        );
+      }
       const after = loadSquare(context.squarePath);
       const preamble = after.preamble.at(-1) === '---' ? after.preamble.slice(0, -1) : after.preamble;
       recordLocalJoin(joinedName, context.squarePath);
@@ -150,41 +164,21 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         ? []
         : ['', `» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
       const scene = after.warmup.join('\n').trim();
+      const entryLine = !isRejoin
+        ? '● You stepped into the square'
+        : reconnect && !intent.kick
+          ? '● you are already in the square'
+          : `✓ you banished the original ${joinedName} — the name is yours`;
       const output = [
-        `● You stepped into the square`,
-        ...(isRejoin || scene === '' ? [] : ['', scene]),
+        entryLine,
+        ...(reconnect || scene === '' ? [] : ['', scene]),
         ...(isRejoin || contextText === '' ? [] : ['', 'context', contextText]),
-        ...(activities === '' ? [] : ['', 'recent activity', activities]),
+        ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
         ...fallback,
       ].join('\n');
       return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(after) });
-    } catch (error) {
-      if (!(error instanceof SquareError) || error.code !== 'conflict') throw error;
-      const doc = loadSquare(context.squarePath);
-      const joinedName = resolveRosterName(doc, intent.name);
-      if (joinedName === undefined || !isCurrentlyJoined(doc.acts, joinedName)) throw error;
-      const reconnect = localParticipantOwner(context.squarePath, joinedName) !== undefined;
-      if (!intent.kick && !reconnect) {
-        fail(
-          [
-            `✕ ${joinedName} shoos you out of the square`,
-            `  · a same-named participant stands here — the name is taken`,
-            `  · --kick banishes her and the name becomes yours`,
-            `» ${participantCommandPrefix(context.squarePath, joinedName)} join --kick`,
-          ].join('\n')
-        );
-      }
-      recordLocalJoin(joinedName, context.squarePath);
-      await sweepPendingNotifications(context.squarePath);
-      const fallback = hasAutomaticDeliveryIdentity()
-        ? ''
-        : `\n» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m\n  no session delivery detected — keep this catch open for new activity`;
-      const line = reconnect && !intent.kick
-        ? `● you are already in the square`
-        : `✓ you banished the original ${joinedName} — the name is yours`;
-      const scene = doc.warmup.join('\n').trim();
-      const showScene = !(reconnect && !intent.kick) && scene !== '';
-      return withPathOutput(context.squarePath, `${line}${showScene ? `\n\n${scene}` : ''}${fallback}`, { participantCount: inSquareCount(doc) });
+    } finally {
+      await application.close();
     }
   },
   present: (result) => process.stdout.write(result),
@@ -246,8 +240,9 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse: parseDone,
   async execute(intent, context) {
     const body = resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim();
-    const committed = await execute(context.squarePath, { type: 'done', name: intent.name, body, now: nowMs() });
-    const name = committed.acts[0].actor!;
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const result = await application.done(intent.name, body).finally(() => application.close());
+    const name = result.activity.actor;
     recordLocalDone(name, context.squarePath);
     return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount: inSquareCount(loadSquare(context.squarePath)) });
   },
@@ -262,9 +257,12 @@ function parseHold(argv: string[], context: CommandContext): BodyIntent {
 export const holdCommand: CommandSpec<BodyIntent, string> = {
   parse: parseHold,
   async execute(intent, context) {
-    const committed = await execute(context.squarePath, { type: 'hold', actor: intent.name, body: resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim(), now: nowMs() });
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const result = await application.hold(intent.name, resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim())
+      .finally(() => application.close());
     const doc = loadSquare(context.squarePath);
-    return withPathOutput(context.squarePath, renderEventCli(committed.acts[0]), { participantCount: inSquareCount(doc), held: true });
+    const index = parseActivityId(result.activity.id)!;
+    return withPathOutput(context.squarePath, renderEventCli(doc.acts.find((activity) => activity.index === index)!), { participantCount: inSquareCount(doc), held: true });
   },
   present: (result) => process.stdout.write(result),
 };
@@ -275,9 +273,11 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
     return { name: requireParticipant(context.name) };
   },
   async execute(intent, context) {
-    const committed = await execute(context.squarePath, { type: 'resume', actor: intent.name, now: nowMs() });
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const result = await application.resume(intent.name).finally(() => application.close());
     const doc = loadSquare(context.squarePath);
-    return withPathOutput(context.squarePath, renderEventCli(committed.acts[0]), { participantCount: inSquareCount(doc) });
+    const index = parseActivityId(result.activity.id)!;
+    return withPathOutput(context.squarePath, renderEventCli(doc.acts.find((activity) => activity.index === index)!), { participantCount: inSquareCount(doc) });
   },
   present: (result) => process.stdout.write(result),
 };

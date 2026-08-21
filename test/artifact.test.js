@@ -22,7 +22,8 @@ import {
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { formatActivityId } from '../dist/square-core.js';
-import { appendAct } from '../dist/square-application.js';
+import { createApplication } from '../dist/square-engine.js';
+import { createFileCell } from '../dist/square-storage.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
 const ARCHIVE_MAGIC = Buffer.from('SQARCH01', 'ascii');
@@ -96,17 +97,18 @@ test('a written snapshot is one SQUARE01 file with no runtime sidecar', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('appendAct never reuses an index and publishes the complete next snapshot', () => {
+test('file application commit never reuses an index and publishes the complete next snapshot', async () => {
   const { dir, squarePath } = writeFixture({
     acts: [{ kind: 'join', actor: 'Alice', at: 1 }],
   });
-  const loaded = loadSquare(squarePath);
-  const appended = appendAct(squarePath, loaded, { kind: 'say', actor: 'Alice', at: 2, body: 'hello' });
-  assert.equal(appended.index, 1);
+  const app = createApplication({ cell: createFileCell(squarePath), clock: () => 2 });
+  const appended = await app.express('Alice', 'hello @Alice', { force: true });
+  assert.equal(appended.activity.id, 'act/1');
   const persisted = loadSquare(squarePath);
   assert.deepEqual(persisted.acts.map((act) => act.index), [0, 1]);
   assert.equal(persisted.runtime.nextActIndex, 2);
   assert.deepEqual(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock') && name !== path.basename(squarePath)), []);
+  await app.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -233,7 +235,7 @@ test('archived activity references remain valid below nextActIndex', () => {
   assert.deepEqual(decodeSquare(encodeSquare(doc)), doc);
 });
 
-test('a future receipt cannot persist and suppress the next real mention', () => {
+test('a future receipt cannot persist and suppress the next real mention', async () => {
   const { dir, squarePath } = writeFixture({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -246,10 +248,12 @@ test('a future receipt cannot persist and suppress the next real mention', () =>
   };
   assert.throws(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
 
-  appendAct(squarePath, loadSquare(squarePath), { kind: 'say', actor: 'Alice', at: 3, body: 'hey @Bob' });
+  const app = createApplication({ cell: createFileCell(squarePath), clock: () => 3 });
+  await app.express('Alice', 'hey @Bob', { force: true });
   const persisted = loadSquare(squarePath);
   assert.equal(persisted.acts.at(-1).index, 2);
   assert.deepEqual(deriveDeliveryModel(persisted).pendingFor('Bob').map((item) => item.item.index), [2]);
+  await app.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

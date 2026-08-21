@@ -34,8 +34,8 @@ import {
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
-import { done, express, hold, join, resume } from '../dist/index.js';
-import { execute } from '../dist/square-application.js';
+import { Square } from '../dist/index.js';
+import { compactSquare } from '../dist/square-file-adapter.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installHarnessLinks,
@@ -188,7 +188,7 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
   }
 });
 
-test('package participant intents persist through the shared application pipeline', async () => {
+test('package facade participant verbs persist through the shared application engine', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
   const doc = {
@@ -202,11 +202,13 @@ test('package participant intents persist through the shared application pipelin
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
-    await join(squarePath, 'Alice');
-    await express(squarePath, 'Alice', 'one @Alice', { force: true });
-    await hold(squarePath, 'Alice', 'pause');
-    await resume(squarePath, 'Alice');
-    await done(squarePath, 'Alice', 'complete');
+    const square = await Square.at({ path: squarePath });
+    const alice = await square.join('Alice');
+    await alice.express('one @Alice', { force: true });
+    await alice.hold('pause');
+    await alice.resume();
+    await alice.done('complete');
+    await square.close();
     const persisted = loadSquare(squarePath);
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
     assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2, 3, 4]);
@@ -236,7 +238,7 @@ test('failed compact archive staging leaves the Square document unchanged', asyn
   fs.writeFileSync(blockedParent, 'file');
   try {
     await assert.rejects(
-      execute(squarePath, { type: 'compact', keep: 1, archivePath: path.join(blockedParent, 'archive.square') }),
+      compactSquare(squarePath, 1, path.join(blockedParent, 'archive.square')),
       /EEXIST|ENOTDIR|ENOENT/
     );
     assert.deepEqual(loadSquare(squarePath).acts.map((item) => item.index), [0, 1]);

@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 
-import { emptyRuntimeState, loadSquare } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/artifact.js';
 import { deliveryDelta } from '../dist/activity-feed.js';
 import { coreActivities, coreHold, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
-import { appendAct } from '../dist/square-application.js';
+import { createApplication } from '../dist/square-engine.js';
+import { createMemoryCell } from '../dist/square-storage.js';
 
 function makeDoc(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -76,7 +74,7 @@ test('directed pending attention survives a cursor that already consumed the pub
 });
 
 test('host controls preserve the requesting actor and body', () => {
-  const doc = makeDoc();
+  const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Host', at: 1 }] });
   const hold = coreHold(doc, 'Host', 'pause', 10);
   const resume = coreResume(doc, 'Host', 11);
 
@@ -90,17 +88,18 @@ test('host controls preserve the requesting actor and body', () => {
   );
 });
 
-test('a participant cursor advances to the newest self activity and never reuses an index', () => {
-  const doc = makeDoc();
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'square-core-')), 'SQUARE.square');
-  appendAct(file, doc, { kind: 'join', actor: 'Alice', at: 1 });
-  appendAct(file, doc, { kind: 'say', actor: 'Alice', at: 2, body: 'hello' });
-  appendAct(file, doc, { kind: 'done', actor: 'Alice', at: 3, body: 'bye' });
+test('application commits advance the actor cursor and never reuse an index', async () => {
+  let now = 0;
+  const cell = createMemoryCell(makeDoc());
+  const app = createApplication({ cell, clock: () => (now += 1) });
+  await app.join('Alice');
+  await app.express('Alice', 'hello @Alice', { force: true });
+  await app.done('Alice', 'bye');
 
-  const stored = loadSquare(file);
+  const stored = (await cell.read()).state;
   assert.equal(stored.runtime.cursors.Alice.consumedThroughIndex, 2);
   assert.deepEqual(stored.acts.map((act) => act.index), [0, 1, 2]);
-  fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  await app.close();
 });
 
 test('a valid expression emits the caller as actor and preserves its body, reach, and reply', () => {
