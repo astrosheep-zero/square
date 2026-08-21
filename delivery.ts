@@ -1,4 +1,7 @@
+import path from 'node:path';
+
 import {
+  SquareError,
   type DeliveryReceipt,
   type DirectedNotificationRoute,
   type SquareState,
@@ -12,6 +15,7 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
+import { canonicalSquarePath, localParticipantName } from './registry.js';
 import { audienceOf, formatActivityId, resolveAudience } from './square-core.js';
 import { actId, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
 
@@ -179,4 +183,53 @@ export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNot
     },
     lease.filter ?? {}
   );
+}
+
+export type SquareRoute = Readonly<unknown>;
+
+const SQUARE_ROUTE_KEYS = ['name', 'squarePath', 'v'] as const;
+
+interface ParsedSquareRoute {
+  readonly v: 1;
+  readonly squarePath: string;
+  readonly name: string;
+}
+
+function publicSquareFromCwd(cwd: string): string {
+  return path.resolve(cwd, '.square', 'PUBLIC.square');
+}
+
+export function parseSquareRoute(value: unknown): ParsedSquareRoute {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new SquareError('invalid_args', 'Malformed Square route');
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.length !== SQUARE_ROUTE_KEYS.length || keys.some((key, index) => key !== SQUARE_ROUTE_KEYS[index])) {
+    throw new SquareError('invalid_args', 'Malformed Square route');
+  }
+  if (
+    record.v !== 1 ||
+    typeof record.squarePath !== 'string' || record.squarePath === '' ||
+    typeof record.name !== 'string' || record.name === ''
+  ) {
+    throw new SquareError('invalid_args', 'Malformed Square route');
+  }
+  return {
+    v: 1,
+    squarePath: record.squarePath,
+    name: record.name,
+  };
+}
+
+export function captureRoute(input: { cwd: string; env?: NodeJS.ProcessEnv }): SquareRoute | null {
+  const env = input.env ?? process.env;
+  const squarePath = canonicalSquarePath(publicSquareFromCwd(input.cwd));
+  const name = localParticipantName(squarePath, env);
+  if (name === undefined) return null;
+  return Object.freeze({
+    v: 1,
+    squarePath,
+    name,
+  });
 }
