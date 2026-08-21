@@ -116,6 +116,14 @@ export function sayNumberFor(acts: StoredAct[], target: StoredAct): number {
   throw new Error('target say act is not present in act history');
 }
 
+/** Shared terminal condition for a participant's watch lifecycle. */
+export function watchTerminalStatus(squareState: SquareState, name: string): 'capped' | 'quorum' | undefined {
+  if (squareState.hardCap !== null && countSays(squareState.acts, name) >= squareState.hardCap) return 'capped';
+  const done = doneNames(squareState.acts);
+  done.delete(nameKey(name));
+  return hasQuorum(squareState, name, done) ? 'quorum' : undefined;
+}
+
 export function doneNames(acts: StoredAct[]): Set<string> {
   return new Set(fold(acts).done.map((participant) => nameKey(participant)));
 }

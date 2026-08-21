@@ -65,24 +65,29 @@ test('raw file state APIs stay inside storage and the file application adapter',
   assert.deepEqual(leaks, [], `raw file state API escaped its owner boundary:\n${leaks.join('\n')}`);
 });
 
-test('StateCell access stays inside its storage and application owners', () => {
-  const owners = ['square-engine.ts', 'square-storage.ts', 'square-file-adapter.ts'];
-  const directAccess = filesContaining(
-    /\b(?:this\.)?cell\s*\.\s*(?:transact|read)\s*(?:<[^()]*>)?\s*\(/,
+test('StateCell access stays inside storage and its three transactional concerns', () => {
+  const owners = ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts', 'landing.ts', 'presence.ts', 'wakes.ts'];
+  const directTransactions = filesContaining(
+    /\b(?:this\.)?cell\s*\.\s*transact\s*(?:<[^()]*>)?\s*\(/,
     owners,
   );
+  const directReads = filesContaining(
+    /\b(?:this\.)?cell\s*\.\s*read\s*(?:<[^()]*>)?\s*\(/,
+    [...owners, 'views.ts'],
+  );
   const leaks = [
-    ...ownershipLeaks('StateCell', ['square-engine.ts', 'square-storage.ts']),
-    ...directAccess.map((file) => `direct transact/read: ${file}`),
+    ...ownershipLeaks('StateCell', ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts', 'open-square.ts']),
+    ...directTransactions.map((file) => `direct transact: ${file}`),
+    ...directReads.map((file) => `direct read: ${file}`),
   ];
   assert.deepEqual(
     leaks,
     [],
-    `raw StateCell access escaped the application boundary:\n${leaks.join('\n')}`,
+    `raw StateCell access escaped its concern boundary:\n${leaks.join('\n')}`,
   );
 });
 
-test('CLI observation consumes application projections, not the aggregate', () => {
+test('CLI observation consumes concern projections, not state or domain law', () => {
   const cliObservationFiles = productionFiles.filter((file) => file.startsWith(`cli${path.sep}`));
   const leaks = ['coreActivities', 'coreParticipants', 'coreStatus'].flatMap((identifier) =>
     cliObservationFiles
@@ -102,5 +107,36 @@ test('CLI observation consumes application projections, not the aggregate', () =
       leaks.push(`${identifier}: cli/observation-commands.ts`);
     }
   }
-  assert.deepEqual(leaks, [], `CLI observation bypasses application projections:\n${leaks.join('\n')}`);
+  assert.deepEqual(leaks, [], `CLI observation bypasses concern projections:\n${leaks.join('\n')}`);
+});
+
+test('the collector vocabulary and engine are gone', () => {
+  assert.equal(fs.existsSync(path.join(root, 'square-engine.ts')), false);
+  const stale = ['Square' + 'Application', 'create' + 'Application', 'openFile' + 'Application', 'probeFile' + 'Application', 'buildFile' + 'Application', 'buildMemory' + 'Application', 'Application' + 'BuildOptions']
+    .flatMap((identifier) => filesContaining(new RegExp(`\\b${identifier}\\b`)).map((file) => `${identifier}: ${file}`));
+  assert.deepEqual(stale, []);
+});
+
+test('watch terminal law and notifier type each have one directional owner', () => {
+  const runtime = productionSources.get('runtime.ts') ?? '';
+  const facade = productionSources.get('square-facade.ts') ?? '';
+  const binding = productionSources.get('open-square.ts') ?? '';
+  const concerns = ['landing.ts', 'presence.ts', 'views.ts', 'wakes.ts'];
+  assert.equal((runtime.match(/function watchTerminalStatus\b/g) ?? []).length, 1);
+  assert.equal(concerns.filter((file) => /function watchTerminalStatus\b/.test(productionSources.get(file) ?? '')).length, 0);
+  assert.equal((facade.match(/interface WakeNotifier\b/g) ?? []).length, 1);
+  assert.match(binding, /import type \{ WakeNotifier \} from ['"]\.\/square-facade\.js['"]/);
+  assert.doesNotMatch(facade, /open-square\.js/);
+  for (const concern of concerns) {
+    assert.doesNotMatch(productionSources.get(concern) ?? '', /from ['"]\.\/(?:landing|presence|views|wakes)\.js['"]/);
+  }
+});
+
+test('product adapters stay behind the facade and close boundary', () => {
+  const directClose = filesContaining(/\.cell\.close\s*\(/, ['open-square.ts']);
+  assert.deepEqual(directClose, [], `StateCell close escaped its package-private boundary: ${directClose.join(', ')}`);
+  const landingBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)landing\.js['"]/, ['square-wiring.ts']);
+  assert.deepEqual(landingBypasses, [], `participant mutation bypasses Square/Participant facade: ${landingBypasses.join(', ')}`);
+  const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, ['square-wiring.ts']);
+  assert.deepEqual(presenceBypasses, [], `participant consumption bypasses Square/Participant facade: ${presenceBypasses.join(', ')}`);
 });

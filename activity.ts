@@ -15,7 +15,10 @@ import {
 } from './presentation.js';
 import { nowMs, SLEEP_MS } from './runtime.js';
 import { wakeNotifierForSquare } from './notifications.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { Square } from './square-wiring.js';
+import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
 import { formatTimestamp } from './time.js';
 
@@ -66,12 +69,12 @@ export async function cmdActivity(
   validateName(name);
   const rawInput = String(resolveBody(activity)).replace(/\r\n/g, '\n');
 
-  const application = await openFileApplication(squarePath, { clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+  const reader = await openSquare(squarePath, { clock: nowMs });
   let knownName: string;
   try {
-    knownName = (await application.resolveParticipant(name)).name;
+    knownName = (await resolveParticipant(reader, name)).name;
   } catch (err) {
-    await application.close();
+    await closeOpenSquare(reader);
     if (isSquareError(err)) {
       if (err.code === 'unknown_participant' || err.code === 'invalid_args') {
         const draftPath = saveActivityDraft(squarePath, name, rawInput);
@@ -84,23 +87,28 @@ export async function cmdActivity(
     }
     throw err;
   }
+  await closeOpenSquare(reader);
   const body = rawInput.trim();
   const force = opts.force ?? false;
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
+  const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
   try {
+    const participant = await square.join(name);
     while (true) {
-      const before = await application.activityPresentation(knownName);
+      const beforeSquare = await openSquare(squarePath, { clock: nowMs });
+      const before = await activityPresentation(beforeSquare, knownName).finally(() => closeOpenSquare(beforeSquare));
       const pendingPublic = before.pendingPublic;
       const pendingRoomChanges = before.pendingRoomChanges;
       try {
-        await application.express(name, body, {
+        await participant.express(body, {
           force,
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
-        const fresh = await application.activityPresentation(knownName);
+        const freshSquare = await openSquare(squarePath, { clock: nowMs });
+        const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;
         const held = fresh.held;
         const ownActCount = fresh.ownActivityCount;
@@ -113,7 +121,8 @@ export async function cmdActivity(
         return;
       } catch (error) {
         if (!(error instanceof SquareError)) throw error;
-        const fresh = await application.activityPresentation(knownName);
+        const freshSquare = await openSquare(squarePath, { clock: nowMs });
+        const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;
         const held = fresh.held;
 
@@ -193,6 +202,6 @@ export async function cmdActivity(
       }
     }
   } finally {
-    await application.close();
+    await square.close();
   }
 }

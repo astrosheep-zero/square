@@ -49,7 +49,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   `], { cwd: fixture, encoding: 'utf8' });
   assert.equal(runtime.status, 0, runtime.stderr);
 
-  const deep = spawnSync(process.execPath, ['--input-type=module', '-e', "import '@astrosheep/square/square-engine.js'"], {
+  const deep = spawnSync(process.execPath, ['--input-type=module', '-e', "import '@astrosheep/square/landing.js'"], {
     cwd: fixture,
     encoding: 'utf8',
   });

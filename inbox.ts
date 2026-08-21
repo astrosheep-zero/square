@@ -1,14 +1,16 @@
 import { type InboxMembership } from './model.js';
 import { lookupSessionBindings } from './registry.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { inboxProjection } from './views.js';
 
 export async function sessionInbox(sessionId: string): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
   for (const binding of lookupSessionBindings(sessionId)) {
-    let application;
+    let square;
     try {
-      application = await openFileApplication(binding.squarePath);
-      const projection = await application.inboxProjection(binding.name, binding.ownerId);
+      square = await openSquare(binding.squarePath);
+      const projection = await inboxProjection(square, binding.name, binding.ownerId);
       if (!projection.joined) continue;
       inbox.push({
         name: projection.name,
@@ -19,7 +21,7 @@ export async function sessionInbox(sessionId: string): Promise<InboxMembership[]
     } catch {
       // A stale discovery-cache row only disables delivery for that membership.
     } finally {
-      await application?.close();
+      if (square !== undefined) await closeOpenSquare(square);
     }
   }
   return inbox;

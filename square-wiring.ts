@@ -1,68 +1,78 @@
-import {
-  type Activity,
-  type CatchOptions,
-  type CatchResult,
-  type ExpressOptions,
-  type ExpressResult,
-  type HistoryQuery,
-  type ParticipantStatus,
-  type PerceivedActivity,
-  type SquareApplication,
-  type SquareSnapshot,
-} from './square-engine.js';
-import { buildFileApplication, buildMemoryApplication, openFileApplication } from './square-file-adapter.js';
+import { closeOpenSquare, type OpenSquare } from './open-square.js';
+import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
+import { done, express, hold, join, resume } from './landing.js';
+import { catchUp } from './presence.js';
+import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
+import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
 
 class ParticipantHandle implements Participant {
-  constructor(readonly name: string, private readonly application: SquareApplication) {}
+  constructor(readonly name: string, private readonly square: OpenSquare) {}
 
   express(body: string, options?: ExpressOptions): Promise<ExpressResult> {
-    return this.application.express(this.name, body, options);
+    return express(this.square, this.name, body, options);
   }
 
   catch(options?: CatchOptions): Promise<CatchResult> {
-    return this.application.catch(this.name, options);
+    return catchUp(this.square, this.name, options);
   }
 
   history(query?: HistoryQuery): Promise<PerceivedActivity[]> {
-    return this.application.participantHistory(this.name, query);
+    return participantHistory(this.square, this.name, query);
   }
 
   hold(reason?: string): Promise<ExpressResult> {
-    return this.application.hold(this.name, reason);
+    return hold(this.square, this.name, reason);
   }
 
   resume(): Promise<ExpressResult> {
-    return this.application.resume(this.name);
+    return resume(this.square, this.name);
   }
 
   done(body?: string): Promise<ExpressResult> {
-    return this.application.done(this.name, body);
+    return done(this.square, this.name, body);
   }
 }
 
 export class Square {
-  private constructor(readonly location: string, private readonly application: SquareApplication) {}
+  private constructor(readonly location: string, private readonly square: OpenSquare) {}
 
   static async at(input: SquareAtInput): Promise<Square> {
-    return new Square(input.path, await openFileApplication(input.path, input));
+    return new Square(input.path, await openSquare(input.path, input));
   }
 
   static async build(input: SquareBuildInput): Promise<Square> {
-    return new Square(input.path, await buildFileApplication(input.path, input));
+    return new Square(input.path, await buildSquare(input.path, input));
   }
 
   static inMemory(input: Omit<SquareBuildInput, 'path'>): Square {
-    return new Square('memory', buildMemoryApplication(input));
+    return new Square('memory', buildMemorySquare(input));
   }
 
   async join(name: string): Promise<Participant> {
-    const joined = await this.application.join(name);
-    return new ParticipantHandle(joined.name, this.application);
+    const joined = await join(this.square, name);
+    return new ParticipantHandle(joined.name, this.square);
   }
 
-  participants(): Promise<ParticipantStatus[]> { return this.application.participants(); }
-  snapshot(): Promise<SquareSnapshot> { return this.application.snapshot(); }
-  history(query?: HistoryQuery): Promise<Activity[]> { return this.application.history(query); }
-  close(): Promise<void> { return this.application.close(); }
+  participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
+  snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
+  history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
+  close(): Promise<void> { return closeOpenSquare(this.square); }
+}
+
+export async function openParticipant(
+  input: SquareAtInput,
+  name: string,
+): Promise<{ readonly participant: Participant; close(): Promise<void> }> {
+  const square = await openSquare(input.path, input);
+  try {
+    const known = await resolveParticipant(square, name);
+    return {
+      participant: new ParticipantHandle(known.name, square),
+      close: () => closeOpenSquare(square),
+    };
+  } catch (error) {
+    await closeOpenSquare(square);
+    throw error;
+  }
 }

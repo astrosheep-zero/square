@@ -21,7 +21,8 @@ import {
   type SquareState,
   type StoredAct,
 } from './model.js';
-import { createApplication, type SquareApplication, type WakeNotifier } from './square-engine.js';
+import type { OpenSquare } from './open-square.js';
+import type { WakeNotifier } from './square-facade.js';
 
 /** The current CLI file mutation boundary. */
 function writeSquareState(squarePath: string, squareState: SquareState): void {
@@ -67,7 +68,7 @@ export async function createSquare(
   });
 }
 
-export interface ApplicationBuildOptions {
+export interface SquareBuildOptions {
   markdown: string;
   hardCap?: number | null;
   throttlePerMinute?: number;
@@ -75,7 +76,7 @@ export interface ApplicationBuildOptions {
   notifier?: WakeNotifier;
 }
 
-function validateBuildOptions(options: ApplicationBuildOptions): void {
+function validateBuildOptions(options: SquareBuildOptions): void {
   if (options.hardCap !== undefined && options.hardCap !== null
     && (!Number.isSafeInteger(options.hardCap) || options.hardCap < 1)) {
     throw new SquareError('invalid_args', 'hardCap must be a positive integer or null');
@@ -86,21 +87,14 @@ function validateBuildOptions(options: ApplicationBuildOptions): void {
   }
 }
 
-function applicationOptions(options: ApplicationBuildOptions): { clock?: () => number; notifier?: WakeNotifier } {
-  return {
-    ...(options.clock === undefined ? {} : { clock: options.clock }),
-    ...(options.notifier === undefined ? {} : { notifier: options.notifier }),
-  };
-}
-
-export async function openFileApplication(
+export async function openSquare(
   squarePath: string,
-  options: Pick<ApplicationBuildOptions, 'clock' | 'notifier'> = {},
-): Promise<SquareApplication> {
+  options: Pick<SquareBuildOptions, 'clock' | 'notifier'> = {},
+): Promise<OpenSquare> {
   const cell = openSquareCell(squarePath);
   try {
     await cell.read();
-    return createApplication({ cell, ...applicationOptions({ markdown: '', ...options }) });
+    return { cell, clock: options.clock ?? Date.now, ...(options.notifier === undefined ? {} : { notifier: options.notifier }), location: squarePath };
   } catch (error) {
     await cell.close();
     if (error instanceof InternalSquareError && error.code === 'not_found') {
@@ -110,12 +104,12 @@ export async function openFileApplication(
   }
 }
 
-export function probeFileApplication(squarePath: string): SquareApplication | undefined {
+export function probeSquare(squarePath: string): OpenSquare | undefined {
   const state = probeSquareFile(squarePath);
-  return state === undefined ? undefined : createApplication({ cell: createMemoryCell(state) });
+  return state === undefined ? undefined : { cell: createMemoryCell(state), clock: Date.now, location: squarePath };
 }
 
-export async function buildFileApplication(squarePath: string, options: ApplicationBuildOptions): Promise<SquareApplication> {
+export async function buildSquare(squarePath: string, options: SquareBuildOptions): Promise<OpenSquare> {
   validateBuildOptions(options);
   try {
     await createSquare(squarePath, {
@@ -129,15 +123,15 @@ export async function buildFileApplication(squarePath: string, options: Applicat
     }
     throw error;
   }
-  return openFileApplication(squarePath, options);
+  return openSquare(squarePath, options);
 }
 
-export function buildMemoryApplication(options: ApplicationBuildOptions): SquareApplication {
+export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
   validateBuildOptions(options);
   const squareState = createSquareState({
     force: false,
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return createApplication({ cell: createMemoryCell(squareState), ...applicationOptions(options) });
+  return { cell: createMemoryCell(squareState), clock: options.clock ?? Date.now, ...(options.notifier === undefined ? {} : { notifier: options.notifier }), location: 'memory' };
 }

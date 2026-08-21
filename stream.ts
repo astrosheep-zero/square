@@ -4,7 +4,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { quoteShell } from './presentation.js';
 import { SLEEP_MS } from './runtime.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { streamProjection } from './views.js';
 
 /** Machine-readable tailing stays available; interactive terminal rendering was retired. */
 export async function cmdStreamNdjson(squarePath: string, recipient?: string): Promise<void> {
@@ -16,9 +18,9 @@ export async function cmdStreamNdjson(squarePath: string, recipient?: string): P
   let cursor = -1;
   while (true) {
     try {
-      const application = await openFileApplication(squarePath);
+      const square = await openSquare(squarePath);
       try {
-        const projection = await application.streamProjection(cursor, recipient);
+        const projection = await streamProjection(square, cursor, recipient);
         for (const item of projection.activities) {
           process.stdout.write(`${JSON.stringify({
             seq: item.activity.index,
@@ -29,7 +31,7 @@ export async function cmdStreamNdjson(squarePath: string, recipient?: string): P
         }
         cursor = projection.cursor;
       } finally {
-        await application.close();
+        await closeOpenSquare(square);
       }
     } catch {
       // A concurrent artifact replacement is retried on the next poll.

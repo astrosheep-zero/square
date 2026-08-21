@@ -3,7 +3,9 @@ import { formatActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './wake-attempts.js';
 import { wakeEvidence } from './wake-evidence.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { pendingDeliveries } from './views.js';
 
 export type DeliveryHealthKind =
   | 'awaiting'
@@ -41,8 +43,8 @@ export async function classifyDeliveryHealth(
 ): Promise<DeliveryHealthItem[]> {
   const now = opts.now ?? Date.now();
   const env = opts.env ?? process.env;
-  const application = await openFileApplication(squarePath, { clock: () => now });
-  const pending = await application.pendingDeliveries().finally(() => application.close());
+  const square = await openSquare(squarePath, { clock: () => now });
+  const pending = await pendingDeliveries(square).finally(() => closeOpenSquare(square));
   const items: DeliveryHealthItem[] = [];
   for (const delivery of pending) {
     for (const note of delivery.notifications) {

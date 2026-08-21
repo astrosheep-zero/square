@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { probeFileApplication } from './square-file-adapter.js';
+import { probeSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { listPresentation } from './views.js';
 import { formatRelativeTime } from './time.js';
 
 interface SquareListItem {
@@ -29,9 +31,9 @@ async function readSquareListItem(filePath: string, root: string): Promise<Squar
     return null;
   }
 
-  const application = probeFileApplication(filePath);
-  if (application === undefined) return null;
-  const projection = await application.listPresentation().finally(() => application.close());
+  const square = probeSquare(filePath);
+  if (square === undefined) return null;
+  const projection = await listPresentation(square).finally(() => closeOpenSquare(square));
 
   const relative = path.relative(root, filePath) || path.basename(filePath);
   return {

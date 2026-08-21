@@ -21,9 +21,12 @@ import {
   recordLocalDone,
   recordLocalJoin,
 } from '../registry.js';
-import { sweepPendingNotifications } from '../notifications.js';
+import { sweepPendingNotifications, wakeNotifierForSquare } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
-import { createSquare, openFileApplication } from '../square-file-adapter.js';
+import { createSquare, openSquare } from '../square-file-adapter.js';
+import { closeOpenSquare } from '../open-square.js';
+import { Square } from '../square-wiring.js';
+import { entryPresentation, eventPresentation } from '../views.js';
 
 import {
   type CommandContext,
@@ -137,11 +140,14 @@ function parseJoin(argv: string[], context: CommandContext): JoinIntent {
 export const joinCommand: CommandSpec<JoinIntent, string> = {
   parse: parseJoin,
   async execute(intent, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const beforeSquare = await openSquare(context.squarePath, { clock: nowMs });
+    const before = await entryPresentation(beforeSquare, intent.name, intent.lastN);
+    await closeOpenSquare(beforeSquare);
+    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
     try {
-      const joined = await application.join(intent.name);
-      const joinedName = joined.name;
-      const isRejoin = joined.activity === null;
+      const participant = await square.join(intent.name);
+      const joinedName = participant.name;
+      const isRejoin = before.joined;
       const reconnect = isRejoin
         && localParticipantOwner(context.squarePath, joinedName) !== undefined;
       if (isRejoin && !intent.kick && !reconnect) {
@@ -154,7 +160,9 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           ].join('\n')
         );
       }
-      const after = await application.entryPresentation(joinedName, intent.lastN);
+      const afterSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
+      await closeOpenSquare(afterSquare);
       recordLocalJoin(joinedName, context.squarePath);
       await sweepPendingNotifications(context.squarePath);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
@@ -181,7 +189,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       ].join('\n');
       return withPathOutput(context.squarePath, output, { participantCount: after.participantCount });
     } finally {
-      await application.close();
+      await square.close();
     }
   },
   present: (result) => process.stdout.write(result),
@@ -243,12 +251,14 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse: parseDone,
   async execute(intent, context) {
     const body = resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim();
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
-    const result = await application.done(intent.name, body).finally(() => application.close());
+    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
+    const participant = await square.join(intent.name);
+    const result = await participant.done(body);
+    await square.close();
     const name = result.activity.actor;
     recordLocalDone(name, context.squarePath);
-    const presentation = await openFileApplication(context.squarePath, { clock: nowMs });
-    const participantCount = (await presentation.entryPresentation(name).finally(() => presentation.close())).participantCount;
+    const presentation = await openSquare(context.squarePath, { clock: nowMs });
+    const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
     return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
@@ -262,13 +272,17 @@ function parseHold(argv: string[], context: CommandContext): BodyIntent {
 export const holdCommand: CommandSpec<BodyIntent, string> = {
   parse: parseHold,
   async execute(intent, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
     try {
-      const result = await application.hold(intent.name, resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim());
-      const presentation = await application.eventPresentation(result.activity.id);
+      const participant = await square.join(intent.name);
+      const result = await participant.hold(resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim());
+      await square.close();
+      const presentationSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const presentation = await eventPresentation(presentationSquare, result.activity.id);
+      await closeOpenSquare(presentationSquare);
       return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount, held: true });
     } finally {
-      await application.close();
+      await square.close();
     }
   },
   present: (result) => process.stdout.write(result),
@@ -280,13 +294,17 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
     return { name: requireParticipant(context.name) };
   },
   async execute(intent, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
     try {
-      const result = await application.resume(intent.name);
-      const presentation = await application.eventPresentation(result.activity.id);
+      const participant = await square.join(intent.name);
+      const result = await participant.resume();
+      await square.close();
+      const presentationSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const presentation = await eventPresentation(presentationSquare, result.activity.id);
+      await closeOpenSquare(presentationSquare);
       return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount });
     } finally {
-      await application.close();
+      await square.close();
     }
   },
   present: (result) => process.stdout.write(result),

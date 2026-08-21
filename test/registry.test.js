@@ -18,7 +18,7 @@ import {
   recordLocalDone,
   recordLocalJoin,
 } from '../dist/registry.js';
-import { createApplication } from '../dist/square-engine.js';
+import { streamProjection } from '../dist/views.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -403,15 +403,16 @@ test('stream recipient filtering matches the addressed participant', async () =>
     ],
     runtime,
   };
-  const application = createApplication({ cell: createMemoryCell(state) });
+  const cell = createMemoryCell(state);
+  const square = { cell, clock: Date.now, location: 'memory' };
   try {
-    const bob = await application.streamProjection(-1, 'Bob');
-    const cara = await application.streamProjection(-1, 'Cara');
-    const alice = await application.streamProjection(-1, 'Alice');
+    const bob = await streamProjection(square, -1, 'Bob');
+    const cara = await streamProjection(square, -1, 'Cara');
+    const alice = await streamProjection(square, -1, 'Alice');
     assert.deepEqual(bob.activities.map(({ activity, route }) => [activity.index, route]), [[3, 'mention'], [5, 'bell']]);
     assert.deepEqual(cara.activities.map(({ activity, route }) => [activity.index, route]), [[5, 'bell']]);
     assert.deepEqual(alice.activities, []);
   } finally {
-    await application.close();
+    await cell.close();
   }
 });

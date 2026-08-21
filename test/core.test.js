@@ -4,7 +4,7 @@ import test from 'node:test';
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deliveryDelta } from '../dist/activity-feed.js';
 import { coreActivities, coreHold, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
-import { createApplication } from '../dist/square-engine.js';
+import { done, express, join } from '../dist/landing.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
 function makeState(overrides = {}) {
@@ -88,18 +88,18 @@ test('host controls preserve the requesting actor and body', () => {
   );
 });
 
-test('application commits advance the actor cursor and never reuse an index', async () => {
+test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
   const cell = createMemoryCell(makeState());
-  const app = createApplication({ cell, clock: () => (now += 1) });
-  await app.join('Alice');
-  await app.express('Alice', 'hello @Alice', { force: true });
-  await app.done('Alice', 'bye');
+  const square = { cell, clock: () => (now += 1), location: 'memory' };
+  await join(square, 'Alice');
+  await express(square, 'Alice', 'hello @Alice', { force: true });
+  await done(square, 'Alice', 'bye');
 
   const stored = (await cell.read()).state;
   assert.equal(stored.runtime.cursors.Alice.consumedThroughIndex, 2);
   assert.deepEqual(stored.acts.map((act) => act.index), [0, 1, 2]);
-  await app.close();
+  await cell.close();
 });
 
 test('a valid expression emits the caller as actor and preserves its body, reach, and reply', () => {

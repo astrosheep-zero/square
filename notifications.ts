@@ -18,8 +18,12 @@ import { formatActivityId, parseActivityId, type ActivityId } from './square-cor
 import { PaseoAdapter } from './paseo-delivery.js';
 import { quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
-import { openFileApplication } from './square-file-adapter.js';
-import type { Activity, SquareApplication, WakeNotifier } from './square-engine.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import type { OpenSquare } from './open-square.js';
+import type { Activity, WakeNotifier } from './square-facade.js';
+import { entryPresentation, notificationDelivered, notificationForAct, pendingDeliveries, resolveParticipant } from './views.js';
+import { claimNotificationLease, releaseNotificationLease, transitionNotificationLease } from './wakes.js';
 import {
   nextWakeAttemptNumber,
   recordRecoveredUnknown,
@@ -93,23 +97,23 @@ function notificationIndex(ref: number | ActivityId): number {
 }
 
 export async function hasDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId): Promise<boolean> {
-  const application = await openFileApplication(squarePath);
+  const square = await openSquare(squarePath);
   try {
-    const recipient = (await application.resolveParticipant(name)).name;
-    return application.notificationDelivered(recipient, notificationIndex(ref));
+    const recipient = (await resolveParticipant(square, name)).name;
+    return notificationDelivered(square, recipient, notificationIndex(ref));
   } finally {
-    await application.close();
+    await closeOpenSquare(square);
   }
 }
 
 export async function hasAttentionNotification(squarePath: string, name: string, ref: number | ActivityId, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  const application = await openFileApplication(squarePath);
+  const square = await openSquare(squarePath);
   try {
-    const recipient = (await application.resolveParticipant(name)).name;
+    const recipient = (await resolveParticipant(square, name)).name;
     const index = notificationIndex(ref);
-    return await application.notificationDelivered(recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
+    return await notificationDelivered(square, recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
   } finally {
-    await application.close();
+    await closeOpenSquare(square);
   }
 }
 
@@ -128,13 +132,13 @@ interface ProcessNotificationOptions {
   now?: () => number;
 }
 
-async function claimNotifyLease(application: SquareApplication, recipient: string, actIndex: number) {
+async function claimNotifyLease(square: OpenSquare, recipient: string, actIndex: number) {
   const leaseId = randomUUID();
-  return application.claimNotificationLease(recipient, actIndex, leaseId, NOTIFY_LEASE_MS);
+  return claimNotificationLease(square, recipient, actIndex, leaseId, NOTIFY_LEASE_MS);
 }
 
 async function transitionNotifyLease(
-  application: SquareApplication,
+  square: OpenSquare,
   recipient: string,
   actIndex: number,
   leaseId: string,
@@ -142,11 +146,11 @@ async function transitionNotifyLease(
   routeKind?: WakeRouteKind,
   attemptN?: number,
 ): Promise<boolean> {
-  return application.transitionNotificationLease(recipient, actIndex, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN);
+  return transitionNotificationLease(square, recipient, actIndex, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN);
 }
 
-async function releaseNotifyLease(application: SquareApplication, recipient: string, actIndex: number, leaseId: string): Promise<void> {
-  await application.releaseNotificationLease(recipient, actIndex, leaseId);
+async function releaseNotifyLease(square: OpenSquare, recipient: string, actIndex: number, leaseId: string): Promise<void> {
+  await releaseNotificationLease(square, recipient, actIndex, leaseId);
 }
 
 async function processNotification(
@@ -164,18 +168,18 @@ async function processNotification(
   const initialAt = now();
   if (!wakeIsEligible(await wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
 
-  const application = await openFileApplication(squarePath, { clock: now });
-  const claim = await claimNotifyLease(application, notification.recipient, notification.item.index);
+  const square = await openSquare(squarePath, { clock: now });
+  const claim = await claimNotifyLease(square, notification.recipient, notification.item.index);
   if (claim.type === 'busy' || claim.type === 'delivered') {
-    await application.close();
+    await closeOpenSquare(square);
     return;
   }
   if (claim.type === 'ambiguous') {
     const recovered = recordRecoveredUnknown(attention, claim.lease, env);
     if (recovered !== undefined) {
-      await releaseNotifyLease(application, notification.recipient, notification.item.index, claim.lease.leaseId);
+      await releaseNotifyLease(square, notification.recipient, notification.item.index, claim.lease.leaseId);
     }
-    await application.close();
+    await closeOpenSquare(square);
     return;
   }
 
@@ -201,14 +205,14 @@ async function processNotification(
         beforeSend: async (route, attemptN) => {
           if (await waitForCatch(route, request, notification.item.body)) return false;
           const currentAt = now();
-          if (!(await application.entryPresentation(notification.recipient)).joined) return false;
+          if (!(await entryPresentation(square, notification.recipient)).joined) return false;
           const current = await wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
           if (!wakeIsEligible(current)) return false;
           if (!current.attemptableRoutes.some((candidate) =>
             candidate.ownerId === route.ownerId && candidate.kind === route.kind && candidate.sessionId === route.sessionId
           )) return false;
           const dispatching = await transitionNotifyLease(
-            application,
+            square,
             notification.recipient,
             notification.item.index,
             leaseId,
@@ -221,7 +225,7 @@ async function processNotification(
         },
         record: async (route, attemptN, outcome) => {
           if (outcome.outcome === 'failed') {
-            await transitionNotifyLease(application, notification.recipient, notification.item.index, leaseId, 'claimed');
+            await transitionNotifyLease(square, notification.recipient, notification.item.index, leaseId, 'claimed');
             releaseLease = true;
           }
           recordWakeAttempt({
@@ -240,15 +244,15 @@ async function processNotification(
     );
   } finally {
     if (releaseLease) {
-      await releaseNotifyLease(application, notification.recipient, notification.item.index, leaseId);
+      await releaseNotifyLease(square, notification.recipient, notification.item.index, leaseId);
     }
-    await application.close();
+      await closeOpenSquare(square);
   }
 }
 
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
-  const application = await openFileApplication(squarePath);
-  const notifications = await application.notificationForAct(actIndex).finally(() => application.close());
+  const square = await openSquare(squarePath);
+  const notifications = await notificationForAct(square, actIndex).finally(() => closeOpenSquare(square));
   await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
 }
 
@@ -287,8 +291,8 @@ export async function sweepPendingNotifications(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const application = await openFileApplication(squarePath, { clock: () => now });
-  const pending = await application.pendingDeliveries().finally(() => application.close());
+  const square = await openSquare(squarePath, { clock: () => now });
+  const pending = await pendingDeliveries(square).finally(() => closeOpenSquare(square));
   const indexes = new Set<number>();
   for (const delivery of pending) {
     for (const note of delivery.notifications) {

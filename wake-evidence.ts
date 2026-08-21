@@ -8,7 +8,9 @@ import {
   terminalWakeEvidence,
   type WakeAttempt,
 } from './wake-attempts.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { notificationDelivered } from './views.js';
 
 export interface WakeEvidence {
   delivered: boolean;
@@ -26,8 +28,8 @@ export async function wakeEvidence(
   now: number,
   env: NodeJS.ProcessEnv,
 ): Promise<WakeEvidence> {
-  const application = await openFileApplication(squarePath, { clock: () => now });
-  const delivered = await application.notificationDelivered(recipient, actIndex).finally(() => application.close());
+  const square = await openSquare(squarePath, { clock: () => now });
+  const delivered = await notificationDelivered(square, recipient, actIndex).finally(() => closeOpenSquare(square));
   const owners = new Set(
     lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
   );

@@ -16,8 +16,9 @@ import { actId, nowMs } from '../runtime.js';
 import { cmdStream, cmdStreamNdjson } from '../stream.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { cmdWatch } from '../watch.js';
-import { openFileApplication } from '../square-file-adapter.js';
-import type { HistoryPresentation } from '../square-engine.js';
+import { openSquare } from '../square-file-adapter.js';
+import { closeOpenSquare } from '../open-square.js';
+import { historyPresentation, participantsPresentation, statusPresentation, type HistoryPresentation } from '../views.js';
 
 import {
   type CommandContext,
@@ -295,9 +296,9 @@ function renderHistoryProjection(
 export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
   async execute(options, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const square = await openSquare(context.squarePath, { clock: nowMs });
     try {
-      const projection = await application.historyPresentation(options);
+      const projection = await historyPresentation(square, options);
       let events = [...projection.activities];
       const searching = options.grep !== undefined || options.fixed !== undefined;
       const totalMatches = searching ? events.length : 0;
@@ -320,7 +321,7 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
         : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
       return withPathOutput(context.squarePath, output, { participantCount: projection.participantCount });
     } finally {
-      await application.close();
+      await closeOpenSquare(square);
     }
   },
   present: (result) => process.stdout.write(result),
@@ -329,10 +330,10 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
 export const participantsCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const square = await openSquare(context.squarePath, { clock: nowMs });
     try {
       const now = nowMs();
-      const participants = await application.participantsPresentation();
+      const participants = await participantsPresentation(square);
       const lines = participants.map((participant) => {
         const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
         const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
@@ -346,7 +347,7 @@ export const participantsCommand: CommandSpec<undefined, string> = {
         participantCount,
       });
     } finally {
-      await application.close();
+      await closeOpenSquare(square);
     }
   },
   present: (result) => process.stdout.write(result),
@@ -355,9 +356,9 @@ export const participantsCommand: CommandSpec<undefined, string> = {
 export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
-    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    const square = await openSquare(context.squarePath, { clock: nowMs });
     try {
-      const presentation = await application.statusPresentation();
+      const presentation = await statusPresentation(square);
       const result = presentation.status;
     const active = result.participants.filter((participant) => participant.state === 'active').sort((a, b) => {
       const aViewer = context.name !== undefined && sameName(a.name, context.name);
@@ -412,7 +413,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
     ].join('\n');
     return withPathOutput(context.squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
     } finally {
-      await application.close();
+      await closeOpenSquare(square);
     }
   },
   present: (result) => process.stdout.write(result),

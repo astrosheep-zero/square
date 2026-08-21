@@ -11,7 +11,7 @@ import {
   writeSquareFile,
 } from './artifact.js';
 import { withFileLock } from './file-lock.js';
-import type { StateCell } from './square-engine.js';
+import type { StateCell } from './state-cell.js';
 import { type SquareState } from './model.js';
 import { LOCK_RETRY_MS, LOCK_STALE_MS } from './runtime.js';
 

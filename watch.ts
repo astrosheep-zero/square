@@ -10,7 +10,12 @@ import {
   WATCH_HEARTBEAT_MS,
   nowMs,
 } from './runtime.js';
-import { openFileApplication } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
+import type { OpenSquare } from './open-square.js';
+import { closeOpenSquare } from './open-square.js';
+import { openParticipant } from './square-wiring.js';
+import { resolveParticipant, watchPresentation } from './views.js';
+import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease, type WatchLeaseStart } from './wakes.js';
 import {
   renderWatchForceTakeover,
   renderWatchAlreadyActive,
@@ -23,7 +28,8 @@ import {
 } from './presentation.js';
 import { hasAutomaticDeliveryIdentity, localParticipantOwner } from './registry.js';
 import { parseActivityId } from './square-core.js';
-import type { CatchResult, SquareApplication, WatchLeaseStart, WatchPresentation } from './square-engine.js';
+import type { CatchResult } from './square-facade.js';
+import type { WatchPresentation } from './views.js';
 
 type WatchResult =
   | { type: 'output'; stdout: string; status?: WatchStatus }
@@ -112,7 +118,7 @@ function writeWatchReplaced(squarePath: string, name: string, presentation: Watc
 }
 
 async function finishWatchResult(
-  application: SquareApplication,
+  square: OpenSquare,
   squarePath: string,
   name: string,
   result: WatchResult,
@@ -120,39 +126,39 @@ async function finishWatchResult(
   idleMs?: number
 ): Promise<boolean> {
   if (result.type === 'output') {
-    await endWatch(application, name, leaseId);
-    writeWatchOutput(squarePath, name, await application.watchPresentation(name), result.stdout, result.status);
+    await endWatch(square, name, leaseId);
+    writeWatchOutput(squarePath, name, await watchPresentation(square, name), result.stdout, result.status);
     process.exitCode = watchStatusExitCode(result.status);
     return true;
   }
   if (result.type === 'terminal') {
-    await endWatch(application, name, leaseId);
-    writeWatchTerminal(squarePath, name, await application.watchPresentation(name), result.status, idleMs);
+    await endWatch(square, name, leaseId);
+    writeWatchTerminal(squarePath, name, await watchPresentation(square, name), result.status, idleMs);
     process.exitCode = watchStatusExitCode(result.status);
     return true;
   }
   if (result.type === 'replaced') {
-    writeWatchReplaced(squarePath, name, await application.watchPresentation(name));
+    writeWatchReplaced(squarePath, name, await watchPresentation(square, name));
     process.exitCode = 0;
     return true;
   }
   return false;
 }
 
-async function beginWatch(application: SquareApplication, squarePath: string, name: string, opts: WatchOptions): Promise<WatchLeaseStart> {
+async function beginWatch(square: OpenSquare, squarePath: string, name: string, opts: WatchOptions): Promise<WatchLeaseStart> {
   const id = leaseId();
   const ownerId = localParticipantOwner(squarePath, name);
-  return application.acquireWatchLease(name, id, opts, ownerId);
+  return acquireWatchLease(square, name, id, opts, ownerId);
 }
 
-async function endWatch(application: SquareApplication, name: string, id: string | undefined): Promise<void> {
-  await application.releaseWatchLease(name, id);
+async function endWatch(square: OpenSquare, name: string, id: string | undefined): Promise<void> {
+  await releaseWatchLease(square, name, id);
 }
 
-function installWatchInterruptHandler(application: SquareApplication, squarePath: string, name: string, currentLeaseId: () => string | undefined): () => void {
+function installWatchInterruptHandler(square: OpenSquare, squarePath: string, name: string, currentLeaseId: () => string | undefined): () => void {
   const onInterrupt = () => {
     void (async () => {
-      await endWatch(application, name, currentLeaseId());
+      await endWatch(square, name, currentLeaseId());
       process.stdout.write(withPathOutput(squarePath, '✕ catch stopped'));
       process.exit(130);
     })().catch((error: unknown) => {
@@ -167,31 +173,33 @@ function installWatchInterruptHandler(application: SquareApplication, squarePath
 }
 
 async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions): Promise<void> {
-  const application = await openFileApplication(squarePath, { clock: nowMs });
+  const square = await openSquare(squarePath, { clock: nowMs });
+  const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
   try {
-    const caught: CatchResult = await application.catch(name, {
+    const caught: CatchResult = await facade.participant.catch({
       ...(opts.participants === undefined ? {} : { from: opts.participants }),
       ...(opts.mention === undefined ? {} : { mention: true }),
     });
-    const presentation = await application.watchPresentation(name);
+    const presentation = await watchPresentation(square, name);
     const status = presentation.terminalStatus;
     const result = caught.activities.length > 0
       ? watchOutputResult(squarePath, presentation, name, caught, { mention: opts.mention, ...(status ? { status } : {}) })
       : { type: 'terminal' as const, status: status ?? 'empty-now' as WatchStatus };
-    await finishWatchResult(application, squarePath, name, result, undefined);
+    await finishWatchResult(square, squarePath, name, result, undefined);
   } finally {
-    await application.close();
+    await facade.close();
+    await closeOpenSquare(square);
   }
 }
 
 export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions): Promise<void> {
-  let application: SquareApplication;
+  let square: OpenSquare;
   try {
-    application = await openFileApplication(squarePath, { clock: nowMs });
-    name = (await application.resolveParticipant(name)).name;
-    if (opts.mention !== undefined) opts = { ...opts, mention: (await application.resolveParticipant(opts.mention)).name };
+    square = await openSquare(squarePath, { clock: nowMs });
+    name = (await resolveParticipant(square, name)).name;
+    if (opts.mention !== undefined) opts = { ...opts, mention: (await resolveParticipant(square, opts.mention)).name };
     if (opts.participants !== undefined && opts.participants.length > 0) {
-      opts = { ...opts, participants: await Promise.all(opts.participants.map(async (participant) => (await application.resolveParticipant(participant)).name)) };
+      opts = { ...opts, participants: await Promise.all(opts.participants.map(async (participant) => (await resolveParticipant(square, participant)).name)) };
     }
   } catch (err) {
     if (isSquareError(err)) {
@@ -201,18 +209,18 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
     throw err;
   }
   if (opts.now) {
-    await application.close();
+    await closeOpenSquare(square);
     await cmdWatchNow(squarePath, name, opts);
     return;
   }
 
-  const start = await beginWatch(application, squarePath, name, opts);
+  const start = await beginWatch(square, squarePath, name, opts);
   if (start.type === 'active') {
-    const presentation = await application.watchPresentation(name);
+    const presentation = await watchPresentation(square, name);
     process.stdout.write(
       withPathOutput(squarePath, renderWatchAlreadyActive({ squarePath, name }), { participantCount: presentation.participantCount })
     );
-    await application.close();
+    await closeOpenSquare(square);
     process.exit(1);
   }
 
@@ -220,44 +228,45 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   let currentLeaseId: string | undefined = start.leaseId;
   let nextHeartbeatAt = start.heartbeatAt + WATCH_HEARTBEAT_MS;
   if (start.replaced) {
-    const presentation = await application.watchPresentation(name);
+    const presentation = await watchPresentation(square, name);
     process.stdout.write(
       withPathOutput(squarePath, renderWatchForceTakeover({ squarePath, name }), { participantCount: presentation.participantCount })
     );
   }
   const idleMs = opts.idleMs ?? STALE_MS;
-  const removeInterruptHandler = installWatchInterruptHandler(application, squarePath, name, () => currentLeaseId);
+  const removeInterruptHandler = installWatchInterruptHandler(square, squarePath, name, () => currentLeaseId);
+  const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
 
   try {
     while (true) {
-      const leaseState = await application.pulseWatchLease(name, currentLeaseId!, opts, nowMs() >= nextHeartbeatAt);
+      const leaseState = await pulseWatchLease(square, name, currentLeaseId!, opts, nowMs() >= nextHeartbeatAt);
       if (leaseState.type === 'sleep' && leaseState.heartbeatAt !== undefined) {
         nextHeartbeatAt = leaseState.heartbeatAt + WATCH_HEARTBEAT_MS;
       }
 
       let result: WatchResult = leaseState;
       if (result.type === 'sleep') {
-        const caught = await application.catch(name, {
+        const caught = await facade.participant.catch({
           ...(opts.participants === undefined ? {} : { from: opts.participants }),
           ...(opts.mention === undefined ? {} : { mention: true }),
         });
         if (caught.activities.length > 0) {
-          result = watchOutputResult(squarePath, await application.watchPresentation(name), name, caught, { mention: opts.mention });
+          result = watchOutputResult(squarePath, await watchPresentation(square, name), name, caught, { mention: opts.mention });
         }
       }
 
-      if (await finishWatchResult(application, squarePath, name, result, currentLeaseId)) {
+      if (await finishWatchResult(square, squarePath, name, result, currentLeaseId)) {
         currentLeaseId = undefined;
         return;
       }
       if (result.type === 'held') staleSince = nowMs();
 
       if (nowMs() - staleSince >= idleMs) {
-        const result: WatchResult = !await application.ownsWatchLease(name, currentLeaseId!)
+        const result: WatchResult = !await ownsWatchLease(square, name, currentLeaseId!)
           ? { type: 'replaced' }
           : { type: 'terminal', status: 'stale' };
 
-        if (await finishWatchResult(application, squarePath, name, result, currentLeaseId, idleMs)) {
+        if (await finishWatchResult(square, squarePath, name, result, currentLeaseId, idleMs)) {
           currentLeaseId = undefined;
           return;
         }
@@ -266,7 +275,8 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       await sleep(SLEEP_MS);
     }
   } finally {
-    await application.close();
+    await facade.close();
+    await closeOpenSquare(square);
     removeInterruptHandler();
   }
 }
