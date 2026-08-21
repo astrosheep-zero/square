@@ -18,7 +18,8 @@
     "build": "npm run clean && tsc && node --input-type=module -e \"import fs from 'node:fs'; fs.chmodSync('dist/square.js',0o755)\"",
     "verify-release": "node test/release.test.js",
     "prepublishOnly": "npm run build && npm run verify-release",
-    "test": "npm run build && node --test test/*.test.js"
+    "test": "npm run build && node --test test/*.test.js",
+    "test:cli-process": "npm run build && node --test test/process/square-cli-render.test.js"
   },
   "keywords": [
     "brainstorm",

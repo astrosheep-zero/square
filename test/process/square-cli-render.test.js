@@ -1,0 +1,662 @@
+// Isolated from the default suite. Run with: npm run test:cli-process (builds, then this file).
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+
+import { formatActivityId } from '../../dist/square-core.js';
+import { Square } from '../../dist/index.js';
+import {
+  ROOT,
+  CLI,
+  run,
+  withPath,
+  withName,
+  persistSquare,
+  tickingClock,
+  assertDraftRecovery,
+  testEnv,
+} from '../square-cli-helpers.js';
+
+test('status renders hold duration from the real actor', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const host = await square.join('Host');
+    await host.hold('pause');
+  });
+  const held = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '62000' } });
+  assert.equal(held.status, 0, held.stderr);
+  assert.match(held.stdout, /Host raised a hand — pause · 1m/);
+  assert.doesNotMatch(held.stdout, /12m/);
+});
+
+test('status stays compact and focuses on the current square', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    for (let index = 0; index < 12; index += 1) {
+      await alice.express(`activity ${index} @Bob`, { force: true });
+    }
+    await bob.done('leaving');
+    await alice.express('last activity @Alice', { force: true });
+  }, { hardCap: 100, markdown: '## Topic\n\nTesting status' });
+
+  const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /1 active · 1 done · cap 100 · throttle none/);
+  assert.match(status.stdout, /Alice · 13 activities/);
+  assert.doesNotMatch(status.stdout, /Bob/);
+  assert.doesNotMatch(status.stdout, /─/);
+});
+
+test('express does not surface delivery-health diagnostics during normal use', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await (await square.join('Alice')).express('hey @Bob', { force: true });
+    await bob.express('still working @Bob', { force: true });
+  });
+
+  const acted = run(withName(file, 'Bob', ['express', '--force', 'still working later @Bob']), {
+    env: { SQUARE_NOW_MS: '70000' },
+  });
+  assert.equal(acted.status, 0, acted.stderr);
+  assert.doesNotMatch(acted.stdout + acted.stderr, /delivery|receipt|harness doctor|pending/i);
+
+  const diagnosed = run(withPath(file, ['harness', 'doctor', 'delivery']), {
+    env: { SQUARE_NOW_MS: '70000' },
+  });
+  assert.equal(diagnosed.status, 0, diagnosed.stderr);
+  assert.match(diagnosed.stdout, /unreachable: 1/);
+});
+
+test('catch --mention renders matching says and suppresses room changes', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('hello @Alice', { force: true });
+    await square.join('Cara');
+    void alice;
+  });
+
+  const watched = run(withName(file, 'Alice', ['catch', '--now', '--mention']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(watched.status, 0, watched.stderr);
+  assert.match(watched.stdout, /calls your name across the square — @Alice/);
+  assert.match(watched.stdout, /Bob\s+#1/);
+  assert.doesNotMatch(watched.stdout, /while your back was turned/);
+  assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
+});
+
+test('catch --from renders named peers and rejects the removed --by flag', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    const cara = await square.join('Cara');
+    await bob.express('hello from bob @Alice', { force: true });
+    await cara.express('hello from cara @Alice', { force: true });
+    await bob.done('bye');
+  });
+
+  const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
+  assert.equal(watched.status, 0, watched.stderr);
+  assert.match(watched.stdout, /Bob stepped into the square/);
+  assert.match(watched.stdout, /Bob\s+#1/);
+  assert.match(watched.stdout, /Bob stepped out of the square — done/);
+  assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
+  assert.doesNotMatch(watched.stdout, /hello from cara/);
+
+  const removed = run(withName(file, 'Alice', ['catch', '--now', '--by', 'Bob']));
+  assert.notEqual(removed.status, 0);
+  assert.match(removed.stderr, /✕ catch does not know --by/);
+  assert.match(removed.stderr, /» square catch --help\n$/);
+});
+
+test('catch --now around the square excludes the current actor', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+    await square.join('Cara');
+  });
+
+  assert.equal(run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+
+  const watched = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.equal(watched.status, 0, watched.stderr);
+  assert.match(watched.stdout, /around the square/);
+  assert.match(watched.stdout, /Bob/);
+  assert.doesNotMatch(watched.stdout, /^\s*[◎●○×]\s+Alice\b/m);
+});
+
+test('history --all --full renders the complete archive', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('hello @Alice', { force: true });
+    await bob.done('bye');
+  });
+
+  const activities = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(activities.status, 0, activities.stderr);
+  assert.match(activities.stdout, /Bob\s+#1/);
+  assert.match(activities.stdout, /hello @Alice/);
+  assert.match(activities.stdout, /Bob stepped out of the square — done/);
+  assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
+});
+
+test('history --since excludes older public activity', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('hello @Alice', { force: true });
+    await bob.done('bye');
+  });
+
+  const activities = run(withName(file, 'Alice', ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(activities.status, 0, activities.stderr);
+  assert.doesNotMatch(activities.stdout, /Bob\s+#1/);
+  assert.match(activities.stdout, /Bob stepped out of the square — done/);
+});
+
+test('ambient catch and history render full body to a mention target and presence to others', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await square.join('Bob');
+    await square.join('Cara');
+    await alice.express('secret reach phrase @Bob', { force: true });
+  });
+
+  const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(bobWatch.status, 0, bobWatch.stderr);
+  assert.match(bobWatch.stdout, /secret reach phrase/);
+  assert.match(bobWatch.stdout, /Alice\s+#1/);
+
+  const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.equal(caraWatch.status, 0, caraWatch.stderr);
+  assert.match(caraWatch.stdout, /● Alice #1 · act\/3 · .*\n  talked to @Bob/);
+  assert.doesNotMatch(caraWatch.stdout, /secret reach phrase/);
+
+  const ambient = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '7000' } });
+  assert.equal(ambient.status, 0, ambient.stderr);
+  assert.match(ambient.stdout, /● Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
+  assert.match(ambient.stdout, /→ Alice was here/);
+
+  const archive = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
+  assert.equal(archive.status, 0, archive.stderr);
+  assert.match(archive.stdout, /secret reach phrase @Bob/);
+
+  const exact = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0']), { env: { SQUARE_NOW_MS: '9000' } });
+  assert.equal(exact.status, 0, exact.stderr);
+  assert.match(exact.stdout, /secret reach phrase @Bob/);
+
+  const json = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--json']), { env: { SQUARE_NOW_MS: '10000' } });
+  assert.equal(json.status, 0, json.stderr);
+  assert.match(JSON.parse(json.stdout).body, /secret reach phrase/);
+
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
+  const laterJoin = run(withName(file, 'Dan', ['join', '--all']), { env: { SQUARE_NOW_MS: '11000' } });
+  assert.equal(laterJoin.status, 0, laterJoin.stderr);
+  assert.match(laterJoin.stdout, /● Alice #1 · act\/3 · .*\n  talked to @Bob/);
+  assert.match(laterJoin.stdout, /● Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
+  assert.doesNotMatch(laterJoin.stdout, /secret reach phrase/);
+  assert.doesNotMatch(laterJoin.stdout, /two targets/);
+});
+
+test('history without --as expands the newest ten activities in chronological order', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    for (let index = 1; index <= 11; index += 1) {
+      const body = `history body ${index} ${'x'.repeat(index === 11 ? 230 : 4)} @Alice`;
+      await alice.express(body, { force: true });
+    }
+  }, { hardCap: null });
+
+  const history = run(withPath(file, ['history']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(history.status, 0, history.stderr);
+  assert.doesNotMatch(history.stdout, /history body 1 /);
+  assert.match(history.stdout, /history body 2 /);
+  assert.match(history.stdout, /history body 11 /);
+  assert.match(history.stdout, /history body 11 [^\n]*x{20}/);
+  assert.ok(history.stdout.indexOf('history body 2 ') < history.stdout.indexOf('history body 11 '));
+});
+
+test('bell quota refusal prints the next timestamp and express help keeps --bell', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await square.join('Bob');
+    await square.join('Cara');
+    await alice.express('bell one', { force: true, reach: 'bell' });
+  });
+
+  const secondBell = run(withName(file, 'Alice', ['express', '--bell', 'bell two']), { env: { SQUARE_NOW_MS: '7000' } });
+  assert.equal(secondBell.status, 1, secondBell.stderr);
+  assert.match(secondBell.stdout, /the bell stays quiet for now/);
+  assert.match(secondBell.stdout, /you can ring it again at 1970-01-01 09:00:04 \+08:00/);
+
+  const removed = run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'gone @Bob']));
+  assert.notEqual(removed.status, 0);
+  assert.match(removed.stderr, /express does not know --beside/);
+  assert.match(removed.stderr, /» square express --help\n$/);
+
+  const help = run(['express', '--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.doesNotMatch(help.stdout, /beside/);
+  assert.match(help.stdout, /--bell/);
+  assert.match(help.stdout, /--reply <activity-id>/);
+  assert.match(help.stdout, /act\/12/);
+  assert.doesNotMatch(help.stdout, /act\/N/);
+});
+
+test('express --reply renders the causal activity reference', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await alice.express('question @Bob', { force: true });
+    await bob.express('answer @Alice', { force: true, reply: 'act/2' });
+  });
+
+  const history = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--full']));
+  assert.equal(history.status, 0, history.stderr);
+  assert.match(history.stdout, /act\/3.*replies to act\/2/);
+
+  const json = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--json']));
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).reply, formatActivityId(2));
+});
+
+test('history --at accepts multiple coordinates and unions their context windows', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await alice.express('first @Bob', { force: true });
+    await bob.express('second @Alice', { force: true });
+  });
+
+  const comma = run(withPath(file, ['history', '--at', 'act/2,act/3', '-C', '0', '--json']));
+  assert.equal(comma.status, 0, comma.stderr);
+  assert.deepEqual(comma.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act/2', 'act/3']);
+
+  const repeated = run(withPath(file, ['history', '--at', 'act/2', '--at', 'act/3', '-C', '0', '--json']));
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.deepEqual(repeated.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act/2', 'act/3']);
+});
+
+test('inbox stays read-only while codex admits pending attention once at a boundary', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await square.join('Bob');
+    await alice.express('hey @Bob', { force: true });
+  });
+  const root = path.dirname(file);
+  const registry = path.join(root, 'sessions.ndjsonl');
+  const presented = path.join(root, 'presented.ndjsonl');
+  const env = { SQUARE_REGISTRY: registry, SQUARE_PRESENTED: presented };
+
+  const register = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { recordJoin } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
+    recordJoin('sid-cli', 'Bob', ${JSON.stringify(file)}, { channel: 'codex' });
+  `], { encoding: 'utf8', env: testEnv(env) });
+  assert.equal(register.status, 0, register.stderr);
+
+  const inspected1 = run(['inbox', '--for-session', 'sid-cli', '--json'], { env });
+  assert.equal(inspected1.status, 0, inspected1.stderr);
+  const pendingInbox = JSON.parse(inspected1.stdout);
+  assert.equal(pendingInbox.length, 1);
+  assert.equal(pendingInbox[0].notifications.length, 1);
+
+  const inspected2 = run(['inbox', '--for-session', 'sid-cli', '--json'], { env });
+  assert.equal(inspected2.status, 0, inspected2.stderr);
+  assert.deepEqual(JSON.parse(inspected2.stdout), pendingInbox);
+
+  const inject = spawnSync(process.execPath, [CLI, 'codex-hook'], {
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'PostToolUse' }),
+    env: testEnv(env),
+  });
+  assert.equal(inject.status, 0, inject.stderr);
+  assert.match(inject.stdout, /"hookEventName":"PostToolUse"/);
+
+  const duplicate = spawnSync(process.execPath, [CLI, 'codex-hook'], {
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'sid-cli', hook_event_name: 'PostToolUse' }),
+    env: testEnv(env),
+  });
+  assert.equal(duplicate.status, 0, duplicate.stderr);
+  assert.equal(duplicate.stdout, '');
+});
+
+test('history power filters and jsonl stay read-only', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('deploy failed on schema v3 @Alice', { force: true });
+    await alice.express('hello @Bob please check', { force: true });
+  });
+
+  const grepped = run(withPath(file, ['history', '--grep', 'schema v3', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(grepped.status, 0, grepped.stderr);
+  const row = JSON.parse(grepped.stdout.trim().split('\n').at(-1));
+  assert.match(row.id, /^act\//);
+  assert.match(row.body, /schema v3/);
+
+  const pending = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.equal(pending.status, 0, pending.stderr);
+  assert.equal(pending.stdout.trim().split('\n').filter(Boolean).length, 1);
+
+  const still = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '7000' } });
+  assert.equal(still.stdout.trim().split('\n').filter(Boolean).length, 1);
+
+  const caught = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '8000' } });
+  assert.equal(caught.status, 0, caught.stderr);
+  assert.match(caught.stdout, /hello @Bob/);
+
+  const after = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '9000' } });
+  assert.equal(after.stdout, '');
+});
+
+test('history grep defaults to a compact character-bounded search view', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express(`needle ${'🙂'.repeat(250)}TAIL @Alice`, { force: true });
+  });
+
+  const compact = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
+  assert.equal(compact.status, 0, compact.stderr);
+  assert.match(compact.stdout, /\b1 match\b/);
+  assert.match(compact.stdout, /act\/\d+ · Alice ·/);
+  assert.match(compact.stdout, /needle/);
+  assert.match(compact.stdout, /· 0 chars before · \d+ chars after/);
+  assert.doesNotMatch(compact.stdout, /TAIL/);
+  assert.doesNotMatch(compact.stdout, /�/);
+  assert.doesNotMatch(compact.stdout, /footprints/);
+  assert.match(compact.stdout, /history --at act\/\d+ -C 2 --full/);
+
+  const full = run(withPath(file, ['history', '--grep', 'needle', '--full']), { env: { SQUARE_NOW_MS: '3000' } });
+  assert.equal(full.status, 0, full.stderr);
+  assert.match(full.stdout, /TAIL/);
+  assert.doesNotMatch(full.stdout, /chars after/);
+});
+
+test('history grep centers snippets on late, multiline, and fixed matches', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express(`START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END @Alice`, { force: true });
+    await alice.express('literal [ bracket @Alice', { force: true });
+  });
+
+  const centered = run(withPath(file, ['history', '--grep', 'schema\\s+v3']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.equal(centered.status, 0, centered.stderr);
+  assert.match(centered.stdout, /schema v3/);
+  assert.match(centered.stdout, /· \d+ chars before · \d+ chars after/);
+  assert.doesNotMatch(centered.stdout, /START-/);
+  assert.doesNotMatch(centered.stdout, /-END/);
+
+  const invalid = run(withPath(file, ['history', '--grep', '[']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /Invalid --grep regex/);
+
+  const literal = run(withPath(file, ['history', '--fixed', '[']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.equal(literal.status, 0, literal.stderr);
+  assert.match(literal.stdout, /literal \[ bracket/);
+});
+
+test('history search reports shown and total matches consistently', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    for (let index = 0; index < 12; index += 1) {
+      await alice.express(`needle ${index} @Alice`, { force: true });
+    }
+  }, { hardCap: null });
+
+  const human = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /10 of 12 matches/);
+  assert.equal(run(withPath(file, ['history', '--grep', 'needle', '--json'])).stdout.trim().split('\n').length, 10);
+
+  const limited = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--json']));
+  assert.equal(limited.status, 0, limited.stderr);
+  const limitedRows = limited.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(limitedRows.map((row) => row.body), ['needle 9 @Alice', 'needle 10 @Alice', 'needle 11 @Alice']);
+
+  const descending = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--order', 'desc', '--json']));
+  assert.equal(descending.status, 0, descending.stderr);
+  assert.deepEqual(descending.stdout.trim().split('\n').map((line) => JSON.parse(line).body), ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice']);
+});
+
+test('manual participant writes require an explicit location', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ambiguous-'));
+  const first = path.join(cwd, '.square', 'first.square');
+  const second = path.join(cwd, '.square', 'second.square');
+  fs.mkdirSync(path.dirname(first), { recursive: true });
+  assert.equal(run(['--location', first, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'first' }).status, 0);
+  assert.equal(run(['--location', second, 'build', '--cap', 'unlimited', '--force'], { cwd, input: 'second' }).status, 0);
+  const refused = run(['--as', 'Alice', 'express', '--force', 'ambiguous'], { cwd });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /needs a square location/);
+  assert.match(refused.stderr, /» square ls\n$/);
+  const readOnly = run(['status'], { cwd });
+  assert.notEqual(readOnly.status, 0);
+  const doctor = run(['doctor'], { cwd });
+  assert.notEqual(doctor.status, 0);
+  const doctorFix = run(['doctor', '--fix'], { cwd });
+  assert.notEqual(doctorFix.status, 0);
+  assert.match(doctorFix.stderr, /invalid arguments for doctor/);
+});
+
+test('history grep describes an empty result precisely', async () => {
+  const file = await persistSquare(async () => {});
+  const result = run(withPath(file, ['history', '--grep', 'missing.*term']));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /○ no activity matched 'missing\.\*term'/);
+  assert.doesNotMatch(result.stdout, /no public activity in this view/);
+});
+
+test('status shows attention state and stable activity ids', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await square.join('Bob');
+    await alice.express('please check @Bob', { force: true });
+  });
+
+  const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.equal(waiting.status, 0, waiting.stderr);
+  assert.match(waiting.stdout, /Alice.*caught up/);
+  assert.match(waiting.stdout, /Bob.*1 mention waiting/);
+  assert.match(waiting.stdout, /● Alice #1 · act\/2 · .*\n    talked to @Bob/);
+  assert.doesNotMatch(waiting.stdout, /please check @Bob/);
+
+  const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.match(personal.stdout, /Bob.*1 mention waiting/);
+  assert.match(personal.stdout, /please check @Bob/);
+  assert.match(personal.stdout, /act\/\d+/);
+  assert.doesNotMatch(personal.stdout, /Alice.*caught up/);
+
+  assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+  const caughtUp = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.match(caughtUp.stdout, /Bob.*caught up/);
+});
+
+test('status header counts only participants still in the square', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.done('finished');
+  });
+  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /— 1 in the square/);
+});
+
+test('room changes and final notes remain visible without duplicate done events', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.hold('pause');
+    await bob.resume();
+  });
+  const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(caught.status, 0, caught.stderr);
+  assert.match(caught.stdout, /Bob stepped into the square/);
+  assert.match(caught.stdout, /Bob raised a hand — pause/);
+  assert.match(caught.stdout, /Bob lowered the hand/);
+
+  assert.equal(run(withName(file, 'Bob', ['done', '-']), { env: { SQUARE_NOW_MS: '6000' }, input: 'final note\n' }).status, 0);
+  const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
+  assert.equal(afterDone.status, 0, afterDone.stderr);
+  assert.match(afterDone.stdout, /final note/);
+  assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 1);
+  assert.match(run(withPath(file, ['history', '--full'])).stdout, /final note/);
+  assert.match(run(withName(file, 'Alice', ['status'])).stdout, /final note/);
+});
+
+test('status attention and express blocker agree on unread square changes', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.hold('pause');
+  });
+  const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
+  assert.match(status.stdout, /Alice.*changes waiting/);
+  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
+  assert.match(noWaitAct.stdout, /a hand is raised/);
+  assert.match(noWaitAct.stdout, /draft kept/);
+  assert.equal(run(withName(file, 'Bob', ['resume']), { env: { SQUARE_NOW_MS: '210000' } }).status, 0);
+  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
+  assert.match(unheld.stdout, /square moved behind your back/);
+  assert.match(unheld.stdout, /catch --now/);
+});
+
+test('an unread join alone does not block express', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+  });
+
+  const expressed = run(withName(file, 'Alice', ['express', 'welcome @Bob']), {
+    env: { SQUARE_NOW_MS: '200000' },
+  });
+  assert.equal(expressed.status, 0, expressed.stderr);
+  assert.match(expressed.stdout, /heads turn your way/);
+  assert.match(expressed.stdout, /Bob stepped into the square/);
+  assert.doesNotMatch(expressed.stdout, /catch --now/);
+});
+
+test('held, throttled, blocked, and capped activities preserve executable drafts', async () => {
+  const heldFile = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const host = await square.join('Host');
+    await host.hold('pause');
+  }, { hardCap: 10 });
+  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', 'express -');
+
+  const throttleFile = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('first @Alice', { force: true });
+  }, { hardCap: 10, throttlePerMinute: 1 });
+  const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '-']), {
+    input: 'throttled body @Alice\n',
+    env: { SQUARE_NOW_MS: '3000' },
+  });
+  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', 'express -');
+  assert.match(throttled.stdout, /next opening in (?:\d+s|1m)/);
+  assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
+
+  const capFile = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('first @Alice', { force: true });
+  }, { hardCap: 1 });
+  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '-']), { input: 'final body @Alice\n' }), capFile, 'Alice', 'final body @Alice\n', 'done -');
+
+  const blockedFile = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('peer @Alice', { force: true });
+  }, { hardCap: 10 });
+  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express -');
+});
+
+test('list bounds recursive discovery by default and accepts an explicit depth', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-depth-'));
+  const visible = path.join(cwd, 'one', 'two', 'three', 'four', 'visible-square.square');
+  const deeper = path.join(cwd, 'one', 'two', 'three', 'four', 'five', 'deeper.square');
+  fs.mkdirSync(path.dirname(visible), { recursive: true });
+  fs.mkdirSync(path.dirname(deeper), { recursive: true });
+  const visibleSquare = await Square.build({ path: visible, markdown: 'visible\n', hardCap: 3 });
+  await visibleSquare.close();
+  const deeperSquare = await Square.build({ path: deeper, markdown: 'deeper\n', hardCap: 3 });
+  await deeperSquare.close();
+
+  const bounded = run(['list'], { cwd });
+  assert.equal(bounded.status, 0, bounded.stderr);
+  assert.match(bounded.stdout, /visible-square/);
+  assert.doesNotMatch(bounded.stdout, /deeper\.square/);
+
+  const expanded = run(['list', '--depth', '5'], { cwd });
+  assert.equal(expanded.status, 0, expanded.stderr);
+  assert.match(expanded.stdout, /visible-square/);
+  assert.match(expanded.stdout, /deeper\.square/);
+
+  const invalid = run(['list', '--depth', '-1'], { cwd });
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stderr, /square list --help/);
+});
+
+test('list previews bounded context and the three most recently active participants', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-preview-'));
+  const file = path.join(cwd, '.square', 'preview.square');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const time = tickingClock();
+  const square = await Square.build({
+    path: file,
+    markdown: '## Topic\n\nFirst context line\nSecond context line\n',
+    hardCap: 10,
+    clock: time.tick,
+  });
+  await square.join('alice');
+  await square.join('bob');
+  await square.join('carol');
+  await square.join('dave');
+  await (await square.join('alice')).express('@bob latest', { force: true });
+  await square.close();
+
+  const listed = run(['list'], { cwd });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /context · ## Topic\n\s+· First context line\n\s+· … 1 more line/);
+  assert.match(listed.stdout, /participants · alice · dave · carol · … 1 more/);
+  assert.doesNotMatch(listed.stdout, /participants[^\n]*bob/);
+});
+
+test('list, participants, and clipped status use current state and executable hints', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-current-state-'));
+  const file = path.join(cwd, '.square', 'state.square');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const square = await Square.build({
+    path: file,
+    markdown: '## Topic\n\nCurrent state\n',
+    hardCap: 10,
+    throttlePerMinute: 2,
+  });
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  await bob.done('finished');
+  await alice.express(`${'x'.repeat(260)} @Alice`, { force: true });
+  await square.close();
+
+  const listed = run(['list'], { cwd });
+  assert.match(listed.stdout, /1 in square/);
+  assert.doesNotMatch(listed.stdout, /2 in square/);
+  assert.match(listed.stdout, /context · ## Topic\n\s+· Current state/);
+  assert.match(listed.stdout, /participants · Alice/);
+  assert.doesNotMatch(listed.stdout, /participants[^\n]*Bob/);
+
+  const participants = run(withPath(file, ['participants']), { cwd });
+  assert.match(participants.stdout, /Alice · active/);
+  assert.match(participants.stdout, /Bob · done/);
+  assert.doesNotMatch(participants.stdout, /^presence$/m);
+
+  const status = run(withName(file, 'Alice', ['status']), { cwd });
+  assert.match(status.stdout, /more chars/);
+  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act\/\d+ -C 2 --full/);
+  assert.match(status.stdout, /throttle 2\/min/);
+});

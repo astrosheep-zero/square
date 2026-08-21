@@ -159,3 +159,53 @@ test('reply rejects an activity id that has not landed yet', () => {
     /Unknown reply activity: act\/9/
   );
 });
+
+test('activity history after a timestamp excludes older public activity', () => {
+  const squareState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1000, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2000, body: '' },
+      { kind: 'say', actor: 'Bob', at: 3000, body: 'hello @Alice' },
+      { kind: 'done', actor: 'Bob', at: 4000, body: 'bye' },
+    ],
+  });
+
+  assert.deepEqual(
+    coreActivities(squareState, { after: 3500 }).map((item) => ({ index: item.index, kind: item.kind })),
+    [{ index: 3, kind: 'done' }],
+  );
+});
+
+test('activity history at indexes unions their context windows', () => {
+  const squareState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'first @Bob' },
+      { kind: 'say', actor: 'Bob', at: 4, body: 'second @Alice' },
+    ],
+  });
+
+  assert.deepEqual(
+    coreActivities(squareState, { atIndexes: [2, 3], beforeContext: 0, afterContext: 0 }).map((item) => item.index),
+    [2, 3],
+  );
+});
+
+test('activity history grep searches ids, participant names, and bodies', () => {
+  const squareState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, body: '' },
+      { kind: 'join', actor: 'Bob', at: 2, body: '' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'first inventory @Bob' },
+      { kind: 'say', actor: 'Bob', at: 4, body: 'facts only @Alice' },
+    ],
+  });
+
+  assert.deepEqual(coreActivities(squareState, { grep: '^act/2$' }).map((item) => item.body), ['first inventory @Bob']);
+  assert.deepEqual(coreActivities(squareState, { grep: '^Bob$' }).map((item) => item.body), ['facts only @Alice']);
+  assert.deepEqual(
+    coreActivities(squareState, { grep: 'act/2|facts only' }).map((item) => item.index),
+    [2, 3],
+  );
+});
