@@ -36,6 +36,7 @@ import {
 import { recordJoin } from '../dist/registry.js';
 import { done, express, hold, join, resume } from '../dist/index.js';
 import { execute } from '../dist/square-application.js';
+import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installHarnessLinks,
   opencodeExtensionLink,
@@ -53,6 +54,22 @@ function sampleInbox() {
 
 function enabledPlugins(pluginId) { return JSON.stringify({ installed: [{ pluginId, installed: true, enabled: true }] }); }
 function enabledClaudePlugins(pluginId) { return JSON.stringify([{ id: pluginId, version: SQUARE_IDENTITY.packageVersion, enabled: true, installPath: '/tmp/plugin' }]); }
+
+test('multi-target installation continues after an independent target fails', async () => {
+  const attempted = [];
+  const result = await executeTargetBatch(['claude', 'codex'], 'install', {
+    homeDir: '/tmp/home',
+    force: false,
+  }, async (target) => {
+    attempted.push(target);
+    if (target === 'claude') throw new Error('unavailable');
+    return { lines: ['codex installed'], notes: [] };
+  });
+
+  assert.deepEqual(attempted, ['claude', 'codex']);
+  assert.deepEqual(result.lines, ['codex installed']);
+  assert.deepEqual(result.failures, ['✕ claude install failed: unavailable']);
+});
 
 test('Square identity keeps package, plugin, and marketplace coordinates aligned', () => {
   assert.deepEqual(

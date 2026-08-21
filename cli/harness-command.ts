@@ -23,7 +23,10 @@ export interface ParsedInstallCommand {
 export interface HarnessCommandResult {
   lines: string[];
   notes: string[];
+  failures: string[];
 }
+
+type HarnessTargetExecutor = typeof executeHarnessTarget;
 
 function installTargets(intent: ParsedInstallCommand, action: 'install' | 'uninstall'): string[] {
   const available = harnessTargets().filter((target) => target.capabilities.includes(action));
@@ -49,24 +52,42 @@ function parseInstall(argv: string[], action: 'install' | 'uninstall'): ParsedIn
   return { targets, all, force };
 }
 
+export async function executeTargetBatch(
+  targets: string[],
+  action: 'install' | 'uninstall',
+  context: { homeDir: string; squarePath?: string; force: boolean },
+  executeTarget: HarnessTargetExecutor = executeHarnessTarget
+): Promise<HarnessCommandResult> {
+  const results: HarnessTargetResult[] = [];
+  const failures: string[] = [];
+  for (const target of targets) {
+    try {
+      results.push(await executeTarget(target, action, context));
+    } catch (error) {
+      failures.push(`✕ ${target} ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return {
+    notes: results.flatMap((result) => result.notes),
+    lines: results.flatMap((result) => result.lines),
+    failures,
+  };
+}
+
 function targetCommand(action: 'install' | 'uninstall'): CommandSpec<ParsedInstallCommand, HarnessCommandResult> {
   return {
     parse(argv) { return parseInstall(argv, action); },
     async execute(intent, context) {
-      const results: HarnessTargetResult[] = [];
-      for (const target of installTargets(intent, action)) {
-        results.push(await executeHarnessTarget(target, action, {
-          homeDir: context.homeDir,
-          squarePath: context.squarePath,
-          force: intent.force,
-        }));
-      }
-      return {
-        notes: results.flatMap((result) => result.notes),
-        lines: results.flatMap((result) => result.lines),
-      };
+      return executeTargetBatch(installTargets(intent, action), action, {
+        homeDir: context.homeDir,
+        squarePath: context.squarePath,
+        force: intent.force,
+      });
     },
-    present(result) { process.stdout.write(formatHarnessResult(result)); },
+    present(result) {
+      process.stdout.write(formatHarnessResult(result));
+      if (result.failures.length > 0) process.exitCode = 1;
+    },
   };
 }
 
@@ -99,6 +120,7 @@ export const harnessCommand: CommandSpec<ParsedHarnessCommand, HarnessCommandRes
     return {
       notes: results.flatMap((result) => result.notes),
       lines: results.flatMap((result) => result.lines),
+      failures: [],
     };
   },
   present(result) {
@@ -107,7 +129,7 @@ export const harnessCommand: CommandSpec<ParsedHarnessCommand, HarnessCommandRes
 };
 
 export function formatHarnessResult(result: HarnessCommandResult): string {
-  return `${[...result.notes, ...result.lines].join('\n')}\n`;
+  return `${[...result.notes, ...result.lines, ...result.failures].join('\n')}\n`;
 }
 
 export function runHarnessCommand(argv: string[], squarePath?: string): Promise<string> {

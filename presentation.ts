@@ -226,11 +226,14 @@ export function renderEventCli(
   }
 }
 
-function renderPresenceOnlySay(event: Extract<StoredAct, { kind: 'say' }>): string {
+function renderPresenceOnlySay(
+  event: Extract<StoredAct, { kind: 'say' }>,
+  opts: { now?: number; actNumber?: number } = {}
+): string {
   const audience = audienceOf(event);
   const targets = audience.kind === 'bell' ? [] : audience.names;
-  const dest = targets.length === 0 ? '' : ` to ${targets.map((name) => `@${name}`).join(' and ')}`;
-  return `*${event.actor} walks over${dest}*`;
+  const dest = targets.length === 0 ? '' : ` ${targets.map((name) => `@${name}`).join(' and ')}`;
+  return `● ${event.actor} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
 }
 
 export function renderAmbientEvent(
@@ -240,7 +243,7 @@ export function renderAmbientEvent(
 ): string {
   if (event.kind !== 'say') return renderEventCli(event, opts);
   const seen = perceive(event, viewer);
-  if (seen === 'presence') return renderPresenceOnlySay(event);
+  if (seen === 'presence') return renderPresenceOnlySay(event, opts);
   return renderEventCli(event, opts);
 }
 
@@ -258,7 +261,9 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
       ...item.previews.slice(-1).map((preview) => {
         const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number });
         if (rendered === '') return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
-        if (rendered.startsWith('*')) return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered}`;
+        if (preview.act.kind === 'say' && perceive(preview.act, opts.viewer) === 'presence') {
+          return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`;
+        }
         return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
       }),
     ]),
@@ -352,7 +357,7 @@ function lastPresenceAnchor(doc: SquareDoc, name: string): number {
 }
 
 function renderLastPresenceMarker(name: string): string {
-  return `· ${name}'s footprints reach here`;
+  return `→ ${name} was here`;
 }
 
 export function renderActivitiesView(

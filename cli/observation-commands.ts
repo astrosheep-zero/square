@@ -127,7 +127,7 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
   let before: number | undefined;
   let after: number | undefined;
   let afterIndex: number | undefined;
-  let atIndex: number | undefined;
+  const atIndexes: number[] = [];
   let beforeContext: number | undefined;
   let afterContext: number | undefined;
   let mention: string | undefined;
@@ -135,10 +135,8 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
   let full = false;
   let grep: string | undefined;
   let fixed: string | undefined;
-  let ids: number[] | undefined;
   let order: 'asc' | 'desc' | undefined;
   let format: string[] | undefined;
-  let countOnly = false;
   let json = false;
   const participants: string[] = [];
   for (let index = 0; index < argv.length; index++) {
@@ -169,7 +167,9 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
       afterIndex = parseActRef(requireValue(argv, index, flag), flag);
       index += 1;
     } else if (flag === '--at') {
-      atIndex = parseActRef(requireValue(argv, index, flag), flag);
+      const values = requireValue(argv, index, flag).split(',');
+      if (values.some((value) => value === '')) fail(`Invalid ${flag}: expected an activity id like act/12`);
+      atIndexes.push(...values.map((value) => parseActRef(value, flag)));
       index += 1;
     } else if (flag === '-B') {
       beforeContext = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
@@ -193,13 +193,6 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
     } else if (flag === '--fixed') {
       fixed = requireValue(argv, index, flag);
       index += 1;
-    } else if (flag === '--ids') {
-      ids = requireValue(argv, index, flag)
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => parseActRef(item, flag));
-      index += 1;
     } else if (flag === '--order') {
       const value = requireValue(argv, index, flag);
       if (value !== 'asc' && value !== 'desc') fail('Invalid --order: expected asc or desc.');
@@ -208,21 +201,20 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
     } else if (flag === '--format') {
       format = requireValue(argv, index, flag).split(',').map((item) => item.trim()).filter(Boolean);
       index += 1;
-    } else if (flag === '--count') countOnly = true;
-    else if (flag === '--json') json = true;
+    } else if (flag === '--json') json = true;
     else fail(`✕ history does not know ${flag}\n» square history --help`);
   }
   if (pending && !viewer) fail('--pending requires --as <name>.');
   if (grep !== undefined && fixed !== undefined) fail('--grep and --fixed cannot be combined.');
   if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
-  if (!lastNExplicit && (atIndex !== undefined || ids !== undefined || pending)) lastN = null;
+  if (!lastNExplicit && (atIndexes.length > 0 || pending)) lastN = null;
   return {
     lastN,
     participants,
     before,
     after,
     afterIndex,
-    atIndex,
+    atIndexes: atIndexes.length === 0 ? undefined : atIndexes,
     beforeContext,
     afterContext,
     mention,
@@ -231,10 +223,8 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
     full,
     grep,
     fixed,
-    ids,
     order,
     format,
-    countOnly,
     json,
   };
 }
@@ -284,17 +274,17 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
         ? events.slice(0, options.lastN)
         : events.slice(-options.lastN);
     }
-    if (options.countOnly) return `${searching ? totalMatches : events.length}\n`;
     if (options.json) return events.map((item) => jsonLine(doc, item)).join('\n') + (events.length > 0 ? '\n' : '');
     if (options.format !== undefined && options.format.length > 0) {
       return events.map((item) => renderFields(doc, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
     }
     const pattern = options.grep ?? options.fixed;
-    const archive = options.atIndex != null
-      || (options.ids !== undefined && options.ids.length > 0)
-      || (options.lastN == null && options.full === true);
+    const anonymous = options.viewer === undefined;
+    const archive = (options.atIndexes !== undefined && options.atIndexes.length > 0)
+      || (options.lastN == null && options.full === true)
+      || anonymous;
     const output = pattern === undefined || pattern === ''
-      ? renderActivitiesView(doc, events, null, options.full, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
+      ? renderActivitiesView(doc, events, null, options.full === true || anonymous, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
       : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
     return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(doc) });
   },

@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
 import { stageReplacement } from './harness-stage.js';
@@ -17,10 +17,16 @@ export function claudeMarketplaceRoot(homeDir: string): string {
 }
 
 function runClaude(homeDir: string, args: string[]): ClaudeCommandResult {
-  const result = spawnSync(process.env.SQUARE_CLAUDE_BIN || 'claude', args, {
+  const command = process.env.SQUARE_CLAUDE_BIN || 'claude';
+  const result = crossSpawn.sync(command, args, {
     encoding: 'utf8', env: { ...process.env, HOME: homeDir, CLAUDE_CONFIG_DIR: path.join(homeDir, '.claude') }, timeout: 30_000,
   });
-  if (result.error) throw result.error;
+  if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Claude CLI not found: ${command}. Install Claude Code or set SQUARE_CLAUDE_BIN to its executable path.`);
+    }
+    throw result.error;
+  }
   return { status: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 

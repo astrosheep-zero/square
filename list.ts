@@ -2,18 +2,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { probeSquare } from './artifact.js';
-import { inSquareCount, publicActs } from './runtime.js';
+import { foldedState, publicActs } from './runtime.js';
 import { formatRelativeTime } from './time.js';
 
 interface SquareListItem {
   path: string;
   lastActiveAt: number;
-  participants: number;
+  context: string[];
+  participants: string[];
   activities: number;
 }
 
 const DEFAULT_LIST_DEPTH = 4;
+const CONTEXT_PREVIEW_LINES = 2;
+const PARTICIPANT_PREVIEW_COUNT = 3;
 const LIST_SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
+
+function contextLines(lines: string[]): string[] {
+  return lines.map((line) => line.trim()).filter(Boolean);
+}
+
+function activeParticipantNames(doc: NonNullable<ReturnType<typeof probeSquare>>): string[] {
+  return foldedState(doc).participants
+    .filter((participant) => participant.joined)
+    .sort((a, b) => (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name))
+    .map((participant) => participant.name);
+}
 
 function readSquareListItem(filePath: string, root: string): SquareListItem | null {
   let stat: fs.Stats;
@@ -30,7 +44,8 @@ function readSquareListItem(filePath: string, root: string): SquareListItem | nu
   return {
     path: relative,
     lastActiveAt: stat.mtimeMs,
-    participants: inSquareCount(doc),
+    context: contextLines(doc.preamble),
+    participants: activeParticipantNames(doc),
     activities: publicActs(doc.acts).filter((act) => act.kind === 'say').length,
   };
 }
@@ -68,10 +83,23 @@ function renderSquareList(items: SquareListItem[]): string {
   if (items.length === 0) return '(no squares found)\n';
 
   const now = Date.now();
-  const lines = [
-    'squares',
-    ...items.map((item) => `${item.activities > 0 ? '●' : '○'} ${item.path} · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants} in square · ${item.activities} activities`),
-  ];
+  const lines = ['squares'];
+  for (const item of items) {
+    lines.push(`${item.activities > 0 ? '●' : '○'} ${item.path} · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in square · ${item.activities} activities`);
+
+    const shownContext = item.context.slice(0, CONTEXT_PREVIEW_LINES);
+    if (shownContext.length === 0) {
+      lines.push('  context · (none)');
+    } else {
+      shownContext.forEach((line, index) => lines.push(`  ${index === 0 ? 'context' : '       '} · ${line}`));
+      const hiddenContext = item.context.length - shownContext.length;
+      if (hiddenContext > 0) lines.push(`          · … ${hiddenContext} more ${hiddenContext === 1 ? 'line' : 'lines'}`);
+    }
+
+    const shownParticipants = item.participants.slice(0, PARTICIPANT_PREVIEW_COUNT);
+    const hiddenParticipants = item.participants.length - shownParticipants.length;
+    lines.push(`  participants · ${shownParticipants.length === 0 ? 'nobody' : shownParticipants.join(' · ')}${hiddenParticipants > 0 ? ` · … ${hiddenParticipants} more` : ''}`);
+  }
   return lines.join('\n') + '\n';
 }
 

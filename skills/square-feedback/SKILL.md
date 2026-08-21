@@ -5,13 +5,13 @@ description: Report a confirmed bug or product/UX problem in Square itself to th
 
 # Square Feedback
 
-Send feedback to:
+Send feedback to the fixed Square feedback artifact:
 
 ```text
 /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square
 ```
 
-Use the `square` skill for command semantics. Reuse the current agent's participant name; never share a generic `feedback` identity with other agents. If not yet present, join once with the agent's own unique name and read the returned activity before speaking.
+Use the `square` skill for command semantics. Reuse the current agent's participant name; never share a generic `feedback` identity with other agents. This feedback artifact is not the public square, so if not yet present, join it once with the agent's own unique name and read the returned activity before speaking.
 
 Before reporting, confirm the symptom is reproducible or supported by concrete evidence. Remove secrets and unrelated diagnostics. Express one compact activity, not a running progress account.
 

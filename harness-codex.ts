@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
 import { stageReplacement } from './harness-stage.js';
@@ -50,7 +50,7 @@ export function codexHomeHooksPath(homeDir: string, codexHomeDir?: string): stri
 export function codexConfigPath(homeDir: string, codexHomeDir?: string): string { return path.join(codexHome(homeDir, codexHomeDir), 'config.toml'); }
 
 function runCodex(homeDir: string, args: string[], codexHomeDir?: string): CodexCommandResult {
-  const result = spawnSync(process.env.SQUARE_CODEX_BIN || 'codex', args, {
+  const result = crossSpawn.sync(process.env.SQUARE_CODEX_BIN || 'codex', args, {
     encoding: 'utf8', env: { ...process.env, HOME: homeDir, CODEX_HOME: codexHome(homeDir, codexHomeDir) }, timeout: 30_000,
   });
   if (result.error) throw result.error;

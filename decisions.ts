@@ -304,18 +304,17 @@ export function coreActivities(doc: SquareDoc, opts: ActivitiesOptions): StoredA
   const viewer = opts.viewer !== undefined ? resolveKnownName(doc, opts.viewer) : undefined;
   let acts = [...doc.acts];
 
-  // --at establishes a context window first; other filters AND inside it.
-  if (opts.atIndex != null) {
+  // --at establishes one or more context windows first; other filters AND inside their union.
+  if (opts.atIndexes !== undefined && opts.atIndexes.length > 0) {
     const before = opts.beforeContext ?? 0;
     const after = opts.afterContext ?? 0;
-    const centerPos = acts.findIndex((act) => act.index === opts.atIndex);
-    if (centerPos < 0) return [];
-    acts = acts.slice(Math.max(0, centerPos - before), centerPos + after + 1);
-  }
-
-  if (opts.ids !== undefined && opts.ids.length > 0) {
-    const wanted = new Set(opts.ids);
-    acts = acts.filter((act) => wanted.has(act.index));
+    const selected = new Set<number>();
+    for (const atIndex of opts.atIndexes) {
+      const centerPos = acts.findIndex((act) => act.index === atIndex);
+      if (centerPos < 0) continue;
+      for (const act of acts.slice(Math.max(0, centerPos - before), centerPos + after + 1)) selected.add(act.index);
+    }
+    acts = acts.filter((act) => selected.has(act.index));
   }
   if (opts.afterIndex != null) acts = acts.filter((act) => act.index > opts.afterIndex!);
   if (canonicalParticipants.length > 0) {

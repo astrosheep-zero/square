@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import crossSpawn from 'cross-spawn';
 
 export interface HarnessLink {
   source: string;
@@ -82,7 +82,7 @@ export function doctorHarnessLinks(links: HarnessLink[]): string[] {
 export type OpenCodeCommandRunner = (homeDir: string, args: string[]) => { status: number; stdout: string; stderr: string };
 
 function runOpenCode(homeDir: string, args: string[]): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(process.env.SQUARE_OPENCODE_BIN || 'opencode', args, {
+  const result = crossSpawn.sync(process.env.SQUARE_OPENCODE_BIN || 'opencode', args, {
     encoding: 'utf8',
     env: { ...process.env, HOME: homeDir, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config') },
     timeout: 30_000,

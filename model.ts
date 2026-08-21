@@ -125,8 +125,8 @@ export interface ActivitiesOptions {
   after?: number;
   /** Exclusive lower bound on stable act index (--after act/<index>). */
   afterIndex?: number;
-  /** Center act index for a context window (--at). */
-  atIndex?: number;
+  /** Center act indexes for context windows (--at). */
+  atIndexes?: number[];
   beforeContext?: number;
   afterContext?: number;
   mention?: string;
@@ -136,10 +136,8 @@ export interface ActivitiesOptions {
   full?: boolean;
   grep?: string;
   fixed?: string;
-  ids?: number[];
   order?: 'asc' | 'desc';
   format?: string[];
-  countOnly?: boolean;
   json?: boolean;
 }
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
 
@@ -16,7 +16,7 @@ export function piPackageRoot(homeDir: string): string {
 }
 
 function runPi(homeDir: string, args: string[]): PiCommandResult {
-  const result = spawnSync(process.env.SQUARE_PI_BIN || 'pi', args, {
+  const result = crossSpawn.sync(process.env.SQUARE_PI_BIN || 'pi', args, {
     encoding: 'utf8',
     env: { ...process.env, HOME: homeDir },
     timeout: 30_000,

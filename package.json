@@ -35,6 +35,7 @@
   "author": "astrosheep",
   "license": "MIT",
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
     "typescript": "^5.8"
@@ -57,6 +58,7 @@
   },
   "dependencies": {
     "@getpaseo/client": "^0.3.1",
+    "cross-spawn": "^7.0.6",
     "ws": "^8.21.3"
   }
 }
