@@ -18,7 +18,7 @@ export async function cmdCompact(squarePath: string, opts: CompactOptions): Prom
 
     const result = await compactSquare(squarePath, opts.keep, archive);
     archivedCount = result.archived.length;
-    keptCount = result.doc.acts.length;
+    keptCount = result.state.acts.length;
 
     const summary = ['✓ compacted', `  · archived ${archivedCount!} activities`, `  · kept ${keptCount!} activities`, ...(archivedCount! > 0 ? [`  · archive ${archive}`] : [])].join('\n');
     process.stdout.write(withPathOutput(squarePath, summary));

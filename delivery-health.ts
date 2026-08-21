@@ -1,12 +1,9 @@
-import { loadSquare } from './artifact.js';
-import {
-  deriveDeliveryModel,
-  type DirectedNotificationRoute,
-} from './delivery.js';
+import { type DirectedNotificationRoute } from './delivery.js';
 import { formatActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './wake-attempts.js';
-import { joinedRecipients, wakeEvidence } from './wake-evidence.js';
+import { wakeEvidence } from './wake-evidence.js';
+import { openFileApplication } from './square-file-adapter.js';
 
 export type DeliveryHealthKind =
   | 'awaiting'
@@ -38,17 +35,19 @@ const DISPLAY_ORDER: readonly DeliveryHealthKind[] = [
 const ACTIONABLE = new Set<DeliveryHealthKind>(['wake-unknown', 'unreachable']);
 
 /** Purely classify current pending attention from the artifact and durable ledgers. */
-export function classifyDeliveryHealth(
+export async function classifyDeliveryHealth(
   squarePath: string,
   opts: { graceMs: number; now?: number; env?: NodeJS.ProcessEnv },
-): DeliveryHealthItem[] {
+): Promise<DeliveryHealthItem[]> {
   const now = opts.now ?? Date.now();
   const env = opts.env ?? process.env;
-  const doc = loadSquare(squarePath);
-  const model = deriveDeliveryModel(doc);
-  return joinedRecipients(doc).flatMap((recipient) => model.pendingFor(recipient).map((note) => {
+  const application = await openFileApplication(squarePath, { clock: () => now });
+  const pending = await application.pendingDeliveries().finally(() => application.close());
+  const items: DeliveryHealthItem[] = [];
+  for (const delivery of pending) {
+    for (const note of delivery.notifications) {
     const ageMs = Math.max(0, now - note.item.at);
-    const evidence = wakeEvidence(squarePath, note.recipient, note.item.index, now, env);
+    const evidence = await wakeEvidence(squarePath, note.recipient, note.item.index, now, env);
     const kind: DeliveryHealthKind = evidence.presented
       ? 'presented-not-delivered'
       : evidence.terminal?.outcome === 'accepted'
@@ -59,7 +58,7 @@ export function classifyDeliveryHealth(
             ? 'unreachable'
             : 'awaiting';
     const attempt = evidence.terminal ?? evidence.attempts.at(-1);
-    return {
+    items.push({
       squarePath,
       recipient: note.recipient,
       actIndex: note.item.index,
@@ -69,8 +68,10 @@ export function classifyDeliveryHealth(
       route: note.route,
       kind,
       ...(attempt === undefined ? {} : { attempt }),
-    };
-  }));
+    });
+    }
+  }
+  return items;
 }
 
 function formatItem(item: DeliveryHealthItem): string {
@@ -78,13 +79,13 @@ function formatItem(item: DeliveryHealthItem): string {
   return `  · ${formatActivityId(item.actIndex)} → @${item.recipient} from @${item.actor} · ${formatDuration(item.ageMs)}${evidence}`;
 }
 
-export function doctorDeliveryHealth(
+export async function doctorDeliveryHealth(
   squarePath: string,
   graceMs: number,
   now = Date.now(),
   env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const items = classifyDeliveryHealth(squarePath, { graceMs, now, env });
+): Promise<string[]> {
+  const items = await classifyDeliveryHealth(squarePath, { graceMs, now, env });
   if (items.length === 0) return ['✓ no pending delivery attention'];
 
   const out = [`· delivery attention · ${items.length} pending`];

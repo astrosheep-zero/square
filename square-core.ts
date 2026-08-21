@@ -52,7 +52,7 @@ interface ParticipantSnapshot {
   lastReadThrough: number;
 }
 
-export interface SquareState {
+export interface FoldedSquareState {
   participants: ParticipantSnapshot[];
   hold: Hold;
   joined: Participant[];
@@ -146,15 +146,15 @@ function touchParticipant(
   return created;
 }
 
-function pushThrottleAt(state: SquareState, at: number | undefined): void {
+function pushThrottleAt(state: FoldedSquareState, at: number | undefined): void {
   if (typeof at === 'number' && Number.isFinite(at)) state.throttleActivityAts.push(at);
 }
 
-function currentParticipant(state: SquareState, participant: Participant): ParticipantSnapshot | undefined {
+function currentParticipant(state: FoldedSquareState, participant: Participant): ParticipantSnapshot | undefined {
   return state.participants.find((item) => sameName(item.name, participant));
 }
 
-function pushBellAt(state: SquareState, actor: Participant, at: number | undefined): void {
+function pushBellAt(state: FoldedSquareState, actor: Participant, at: number | undefined): void {
   if (typeof at !== 'number' || !Number.isFinite(at)) return;
   const key = nameKey(actor);
   const current = state.bellSayAtsByActor.get(key) ?? [];
@@ -162,7 +162,7 @@ function pushBellAt(state: SquareState, actor: Participant, at: number | undefin
   state.bellSayAtsByActor.set(key, current);
 }
 
-function bellRecentAt(state: SquareState, actor: Participant, at: number, windowMs: number): number | undefined {
+function bellRecentAt(state: FoldedSquareState, actor: Participant, at: number, windowMs: number): number | undefined {
   const events = state.bellSayAtsByActor.get(nameKey(actor)) ?? [];
   let latest: number | undefined;
   for (const eventAt of events) {
@@ -172,11 +172,11 @@ function bellRecentAt(state: SquareState, actor: Participant, at: number, window
   return latest;
 }
 
-export function fold(acts: readonly Act[]): SquareState {
+export function fold(acts: readonly Act[]): FoldedSquareState {
   const ordered: MutableParticipantSnapshot[] = [];
   const byKey = new Map<string, MutableParticipantSnapshot>();
   const hold: Hold = { active: false };
-  const state: SquareState = {
+  const state: FoldedSquareState = {
     participants: ordered,
     hold,
     joined: [],
@@ -237,7 +237,7 @@ export function fold(acts: readonly Act[]): SquareState {
   return state;
 }
 
-export function validate(state: SquareState, act: Act, options: SquareValidationOptions = {}): ValidationResult {
+export function validate(state: FoldedSquareState, act: Act, options: SquareValidationOptions = {}): ValidationResult {
   const actor = actorOf(act);
   const current = actor === undefined ? undefined : currentParticipant(state, actor);
 

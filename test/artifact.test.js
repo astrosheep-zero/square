@@ -7,7 +7,7 @@ import test from 'node:test';
 import zlib from 'node:zlib';
 
 import {
-  createSquareDoc,
+  createSquareState,
   decodeArchive,
   decodeSquare,
   diagnoseSquareFile,
@@ -32,7 +32,7 @@ function withIndexes(acts) {
   return acts.map((act, index) => ({ ...act, index }));
 }
 
-function makeDoc(overrides = {}) {
+function makeState(overrides = {}) {
   const acts = withIndexes(overrides.acts ?? []);
   return {
     hardCap: 'hardCap' in overrides ? overrides.hardCap : 3,
@@ -47,9 +47,9 @@ function makeDoc(overrides = {}) {
 function writeFixture(overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-artifact-'));
   const squarePath = path.join(dir, 'SQUARE.square');
-  const doc = makeDoc(overrides);
-  writeSquareFile(squarePath, doc);
-  return { dir, squarePath, doc };
+  const squareState = makeState(overrides);
+  writeSquareFile(squarePath, squareState);
+  return { dir, squarePath, squareState };
 }
 
 function envelope(magic, payload) {
@@ -60,8 +60,8 @@ function envelope(magic, payload) {
   return Buffer.concat([header, payload]);
 }
 
-test('encode/decode roundtrip preserves document history and runtime', () => {
-  const doc = makeDoc({
+test('encode/decode roundtrip preserves Square state', () => {
+  const squareState = makeState({
     hardCap: null,
     throttlePerMinute: 5,
     acts: [
@@ -72,18 +72,18 @@ test('encode/decode roundtrip preserves document history and runtime', () => {
       { kind: 'done', actor: 'Alice', at: 1700000004000, body: 'bye' },
     ],
   });
-  doc.runtime.cursors.Alice = { consumedThroughIndex: 4, updatedAt: 1700000004000 };
-  doc.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 1700000001500 } };
-  doc.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
-  doc.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
+  squareState.runtime.cursors.Alice = { consumedThroughIndex: 4, updatedAt: 1700000004000 };
+  squareState.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 1700000001500 } };
+  squareState.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
+  squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
 
-  const decoded = decodeSquare(encodeSquare(doc));
-  assert.deepEqual(decoded, doc);
+  const decoded = decodeSquare(encodeSquare(squareState));
+  assert.deepEqual(decoded, squareState);
   assert.equal('version' in decoded.runtime, false);
 });
 
 test('a written snapshot is one SQUARE01 file with no runtime sidecar', () => {
-  const { dir, squarePath, doc } = writeFixture({
+  const { dir, squarePath, squareState } = writeFixture({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'say', actor: 'Alice', at: 2, body: 'hello' },
@@ -93,7 +93,7 @@ test('a written snapshot is one SQUARE01 file with no runtime sidecar', () => {
   const bytes = fs.readFileSync(squarePath);
   assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name !== path.basename(squarePath)), []);
-  assert.deepEqual(loadSquare(squarePath), doc);
+  assert.deepEqual(loadSquare(squarePath), squareState);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -122,8 +122,8 @@ test('loadSquare rejects paths that are not .square artifacts', () => {
 });
 
 test('decodeSquare rejects bad framing, digest, and payload', () => {
-  const doc = makeDoc();
-  const valid = encodeSquare(doc);
+  const squareState = makeState();
+  const valid = encodeSquare(squareState);
 
   assert.throws(() => decodeSquare(valid.subarray(0, 10)), /truncated header/);
   assert.throws(() => decodeSquare(Buffer.concat([Buffer.from('NOTSQUARE'), valid.subarray(8)])), /bad magic or unsupported format version/);
@@ -144,30 +144,30 @@ test('decodeSquare rejects bad framing, digest, and payload', () => {
 });
 
 test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind history', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'say', actor: 'Alice', at: 2, body: 'hello @Bob' },
     ],
   });
 
-  const behind = structuredClone(doc);
+  const behind = structuredClone(squareState);
   behind.runtime.nextActIndex = 1;
   assert.throws(() => encodeSquare(behind), /nextActIndex is behind/);
 
-  const reused = structuredClone(doc);
+  const reused = structuredClone(squareState);
   reused.acts[1].index = 0;
   assert.throws(() => encodeSquare(reused), /snapshot schema is malformed/);
 
-  const extraRuntime = structuredClone(doc);
+  const extraRuntime = structuredClone(squareState);
   extraRuntime.runtime.version = 2;
   assert.throws(() => encodeSquare(extraRuntime), /snapshot schema is malformed/);
 
-  const invalidReceipt = structuredClone(doc);
+  const invalidReceipt = structuredClone(squareState);
   invalidReceipt.runtime.deliveryReceipts.Alice = { bad: { status: 'delivered', at: 1 } };
   assert.throws(() => encodeSquare(invalidReceipt), /snapshot schema is malformed/);
 
-  const invalidLease = structuredClone(doc);
+  const invalidLease = structuredClone(squareState);
   invalidLease.runtime.notifyLeases.attention = {
     leaseId: 'lease',
     expiresAt: 1,
@@ -177,28 +177,28 @@ test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind h
   };
   assert.throws(() => encodeSquare(invalidLease), /snapshot schema is malformed/);
 
-  const beside = structuredClone(doc);
+  const beside = structuredClone(squareState);
   beside.acts[1].reach = { beside: 'Bob' };
   assert.throws(() => encodeSquare(beside), /snapshot schema is malformed/);
 });
 
 test('codec rejects future cursor, receipt, and notify-lease references', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
     ],
   });
 
-  const futureCursor = structuredClone(doc);
+  const futureCursor = structuredClone(squareState);
   futureCursor.runtime.cursors.Bob = { consumedThroughIndex: 2, updatedAt: 3 };
   assert.throws(() => encodeSquare(futureCursor), /runtime references an unassigned activity index/);
 
-  const futureReceipt = structuredClone(doc);
+  const futureReceipt = structuredClone(squareState);
   futureReceipt.runtime.deliveryReceipts.Bob = { [formatActivityId(2)]: { status: 'delivered', at: 3 } };
   assert.throws(() => encodeSquare(futureReceipt), /runtime references an unassigned activity index/);
 
-  const futureLease = structuredClone(doc);
+  const futureLease = structuredClone(squareState);
   futureLease.runtime.notifyLeases[JSON.stringify([formatActivityId(2), 'bob'])] = {
     leaseId: 'n1',
     expiresAt: 9,
@@ -206,11 +206,11 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
   };
   assert.throws(() => encodeSquare(futureLease), /runtime references an unassigned activity index/);
 
-  const malformedLease = structuredClone(doc);
+  const malformedLease = structuredClone(squareState);
   malformedLease.runtime.notifyLeases.attention = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
   assert.throws(() => encodeSquare(malformedLease), /snapshot schema is malformed/);
 
-  const mixedCaseLease = structuredClone(doc);
+  const mixedCaseLease = structuredClone(squareState);
   mixedCaseLease.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'Bob'])] = {
     leaseId: 'n1',
     expiresAt: 9,
@@ -218,21 +218,21 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
   };
   assert.throws(() => encodeSquare(mixedCaseLease), /snapshot schema is malformed/);
 
-  const underscoreReceipt = structuredClone(doc);
+  const underscoreReceipt = structuredClone(squareState);
   underscoreReceipt.runtime.deliveryReceipts.Bob = { [['act', '1'].join('_')]: { status: 'delivered', at: 3 } };
   assert.throws(() => encodeSquare(underscoreReceipt), /snapshot schema is malformed/);
 });
 
 test('archived activity references remain valid below nextActIndex', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [{ kind: 'say', actor: 'Alice', at: 5, body: 'later @Bob' }],
   });
-  doc.acts[0].index = 4;
-  doc.runtime.nextActIndex = 5;
-  doc.runtime.cursors.Bob = { consumedThroughIndex: 1, updatedAt: 2 };
-  doc.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 2 } };
-  doc.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
-  assert.deepEqual(decodeSquare(encodeSquare(doc)), doc);
+  squareState.acts[0].index = 4;
+  squareState.runtime.nextActIndex = 5;
+  squareState.runtime.cursors.Bob = { consumedThroughIndex: 1, updatedAt: 2 };
+  squareState.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 2 } };
+  squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
+  assert.deepEqual(decodeSquare(encodeSquare(squareState)), squareState);
 });
 
 test('a future receipt cannot persist and suppress the next real mention', async () => {
@@ -258,7 +258,7 @@ test('a future receipt cannot persist and suppress the next real mention', async
 });
 
 test('say metadata roundtrips through the binary snapshot', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
@@ -267,7 +267,7 @@ test('say metadata roundtrips through the binary snapshot', () => {
     ],
   });
 
-  const decoded = decodeSquare(encodeSquare(doc));
+  const decoded = decodeSquare(encodeSquare(squareState));
   assert.equal(decoded.acts[2].reach, undefined);
   assert.equal(decoded.acts[3].reach, 'bell');
   assert.equal(decoded.acts[3].reply, 2);
@@ -277,24 +277,24 @@ test('doctor reports unreadable snapshots without repairing them', () => {
   const { dir, squarePath } = writeFixture();
   const clean = diagnoseSquareFile(squarePath);
   assert.equal(clean.unfixable, undefined);
-  assert.equal(clean.doc.runtime.nextActIndex, 0);
+  assert.equal(clean.state.runtime.nextActIndex, 0);
 
   fs.writeFileSync(squarePath, 'not a snapshot');
   const broken = diagnoseSquareFile(squarePath);
   assert.match(broken.unfixable, /Invalid square artifact/);
-  assert.equal(broken.doc, undefined);
+  assert.equal(broken.state, undefined);
   assert.equal(fs.readFileSync(squarePath, 'utf8'), 'not a snapshot');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('createSquareDoc builds a snapshot from options and stdin without Markdown markers', () => {
-  const doc = createSquareDoc({ force: true, hardCap: null, throttlePerMinute: 4 }, '## Topic\n\nHost context');
-  assert.equal(doc.hardCap, null);
-  assert.equal(doc.throttlePerMinute, 4);
-  assert.deepEqual(doc.preamble, ['## Topic', '', 'Host context']);
-  assert.ok(doc.warmup.some((line) => line.includes('stepped into the square')));
-  assert.deepEqual(doc.acts, []);
-  assert.deepEqual(doc.runtime, emptyRuntimeState());
+test('createSquareState builds a snapshot from options and stdin without Markdown markers', () => {
+  const squareState = createSquareState({ force: true, hardCap: null, throttlePerMinute: 4 }, '## Topic\n\nHost context');
+  assert.equal(squareState.hardCap, null);
+  assert.equal(squareState.throttlePerMinute, 4);
+  assert.deepEqual(squareState.preamble, ['## Topic', '', 'Host context']);
+  assert.ok(squareState.warmup.some((line) => line.includes('stepped into the square')));
+  assert.deepEqual(squareState.acts, []);
+  assert.deepEqual(squareState.runtime, emptyRuntimeState());
 });
 
 test('compact archives use SQARCH01 and never merge as runtime', () => {
@@ -311,7 +311,7 @@ test('compact archives use SQARCH01 and never merge as runtime', () => {
   assert.deepEqual(loadArchive(archivePath), acts);
   assert.deepEqual(decodeArchive(encodeArchive(acts)), acts);
   assert.throws(() => decodeSquare(bytes), /bad magic or unsupported format version/);
-  assert.throws(() => decodeArchive(encodeSquare(makeDoc())), /bad magic or unsupported format version/);
+  assert.throws(() => decodeArchive(encodeSquare(makeState())), /bad magic or unsupported format version/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

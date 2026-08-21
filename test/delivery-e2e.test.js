@@ -182,7 +182,7 @@ test('artifact roundtrip derives only directed pending attention', () => {
   }
 });
 
-test('a native boundary presents bounded awareness once and records the current owner', () => {
+test('a native boundary presents bounded awareness once and records the current owner', async () => {
   const item = workshop();
   try {
     const body = `@Bob ${'x'.repeat(400)}`;
@@ -191,13 +191,13 @@ test('a native boundary presents bounded awareness once and records the current 
     registerRoute(item, 'bob-owner', 'bob-native');
     let payload;
 
-    const first = withRegistry(item.env, () => presentPendingAtBoundary(
+    const first = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-native',
       (context) => { payload = context; return 'presented'; },
       () => inboxFor(item, act),
       item.env,
     ));
-    const second = withRegistry(item.env, () => presentPendingAtBoundary(
+    const second = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-native',
       () => { throw new Error('duplicate presentation'); },
       () => inboxFor(item, act),
@@ -291,7 +291,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
     assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+    const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     }));
@@ -346,7 +346,7 @@ test('presented evidence is scoped to the current participant owner', async () =
     const adapter = acceptedAdapter();
 
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] }));
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+    const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     }));
@@ -378,7 +378,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
       adapters: [failed],
       now: () => firstAttemptAt,
     }));
-    const unreachable = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+    const unreachable = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       now: firstAttemptAt + 500,
       env: item.env,
@@ -414,10 +414,10 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
     registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
 
     const before = snapshotFiles(item.root);
-    const evidence = withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env));
+    const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env));
     const graceMs = wakeGraceMs(item.env);
-    const health = withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { graceMs, now, env: item.env }));
-    const doctor = withRegistry(item.env, () => doctorDeliveryHealth(item.squarePath, graceMs, now, item.env));
+    const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, { graceMs, now, env: item.env }));
+    const doctor = await withRegistry(item.env, () => doctorDeliveryHealth(item.squarePath, graceMs, now, item.env));
     const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now,
@@ -436,11 +436,11 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       adapters: [adapter],
     }));
     assert.equal(adapter.calls, 1);
-    assert.equal(wakeIsEligible(withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env))), false);
-    assert.equal(withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+    assert.equal(wakeIsEligible(await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env))), false);
+    assert.equal((await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,
-    }))
+    })))
       .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },

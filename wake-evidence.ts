@@ -1,9 +1,6 @@
-import { loadSquare } from './artifact.js';
-import { isDeliveryDelivered } from './delivery.js';
-import { type SquareDoc, type WakeRoute } from './model.js';
+import { type WakeRoute } from './model.js';
 import { hasPresentedAttention } from './presented.js';
 import { lookupParticipant } from './registry.js';
-import { isCurrentlyJoined } from './runtime.js';
 import { readWakeRoutes } from './routes.js';
 import {
   isWakeRouteAttemptable,
@@ -11,6 +8,7 @@ import {
   terminalWakeEvidence,
   type WakeAttempt,
 } from './wake-attempts.js';
+import { openFileApplication } from './square-file-adapter.js';
 
 export interface WakeEvidence {
   delivered: boolean;
@@ -20,20 +18,16 @@ export interface WakeEvidence {
   attemptableRoutes: WakeRoute[];
 }
 
-export function joinedRecipients(doc: SquareDoc): string[] {
-  return [...new Set(doc.acts.filter((act) => act.kind === 'join').map((act) => act.actor))]
-    .filter((name) => isCurrentlyJoined(doc.acts, name));
-}
-
 /** Project every wake decision from the same primary evidence. */
-export function wakeEvidence(
+export async function wakeEvidence(
   squarePath: string,
   recipient: string,
   actIndex: number,
   now: number,
   env: NodeJS.ProcessEnv,
-): WakeEvidence {
-  const doc = loadSquare(squarePath);
+): Promise<WakeEvidence> {
+  const application = await openFileApplication(squarePath, { clock: () => now });
+  const delivered = await application.notificationDelivered(recipient, actIndex).finally(() => application.close());
   const owners = new Set(
     lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
   );
@@ -42,7 +36,7 @@ export function wakeEvidence(
   const routes = readWakeRoutes({ freshOnly: true, now, env })
     .filter((route) => owners.has(route.ownerId));
   return {
-    delivered: isDeliveryDelivered(doc, recipient, actIndex),
+    delivered,
     presented: hasPresentedAttention(squarePath, recipient, actIndex, env, now),
     attempts,
     ...(terminal === undefined ? {} : { terminal }),

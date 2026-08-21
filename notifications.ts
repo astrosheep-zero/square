@@ -4,10 +4,7 @@ import { homedir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { loadSquare } from './artifact.js';
 import {
-  deriveDeliveryModel,
-  isDeliveryDelivered,
   leaseOwnsNotification,
   planActNotifications,
   type WakeAdapter,
@@ -15,34 +12,27 @@ import {
 } from './delivery.js';
 import { sessionInbox } from './inbox.js';
 import { hasPresentedAttention } from './presented.js';
-import { nameKey, SquareError, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
-import { SLEEP_MS, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { SquareError, type WakeRoute, type WakeRouteKind } from './model.js';
+import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { PaseoAdapter } from './paseo-delivery.js';
 import { quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
-import { isCurrentlyJoined } from './runtime.js';
-import { createFileCell } from './square-storage.js';
-import type { Activity, WakeNotifier } from './square-engine.js';
+import { openFileApplication } from './square-file-adapter.js';
+import type { Activity, SquareApplication, WakeNotifier } from './square-engine.js';
 import {
   nextWakeAttemptNumber,
   recordRecoveredUnknown,
   recordWakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
-import { joinedRecipients, wakeEvidence, wakeIsEligible } from './wake-evidence.js';
+import { wakeEvidence, wakeIsEligible } from './wake-evidence.js';
 import { WakePort } from './wake-port.js';
 
 const NOTIFY_LEASE_MS = 5 * 60 * 1000;
 
 export type { PlannedNotification } from './delivery.js';
 export { planActNotifications, matchesMentionTarget };
-
-function known(doc: ReturnType<typeof loadSquare>, name: string): string {
-  const value = resolveRosterName(doc, name);
-  if (value === undefined) throw new SquareError('invalid_args', `Unknown participant "${name}". Expected one of: ${rosterNames(doc).join(', ')}.`);
-  return value;
-}
 
 export { notificationMessageId } from './delivery.js';
 
@@ -74,7 +64,7 @@ function renderWakePayload(request: WakeRequest): string {
 async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
   const binding = lookupParticipant(request.squarePath, request.recipient)
     .find((item) => item.ownerId === route.ownerId);
-  const activeCatch = binding && sessionInbox(binding.sessionId)
+  const activeCatch = binding && (await sessionInbox(binding.sessionId))
     .find((item) => item.name === request.recipient)?.catchLease;
   if (!activeCatch || !leaseOwnsNotification(activeCatch, {
     actor: request.actor,
@@ -84,11 +74,10 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
 
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
-    const doc = loadSquare(request.squarePath);
-    if (isDeliveryDelivered(doc, request.recipient, request.actIndex)) return true;
+    if (await hasDeliveredNotification(request.squarePath, request.recipient, request.actIndex)) return true;
     const currentBinding = lookupParticipant(request.squarePath, request.recipient)
       .find((item) => item.ownerId === route.ownerId);
-    const lease = currentBinding && sessionInbox(currentBinding.sessionId)
+    const lease = currentBinding && (await sessionInbox(currentBinding.sessionId))
       .find((item) => item.name === request.recipient)?.catchLease;
     if (!lease || lease.expiresAt <= Date.now()) return false;
     await sleep(Math.min(250, lease.expiresAt - Date.now()));
@@ -103,22 +92,31 @@ function notificationIndex(ref: number | ActivityId): number {
   return index;
 }
 
-export function hasDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId): boolean {
-  const doc = loadSquare(squarePath);
-  return isDeliveryDelivered(doc, known(doc, name), notificationIndex(ref));
+export async function hasDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId): Promise<boolean> {
+  const application = await openFileApplication(squarePath);
+  try {
+    const recipient = (await application.resolveParticipant(name)).name;
+    return application.notificationDelivered(recipient, notificationIndex(ref));
+  } finally {
+    await application.close();
+  }
 }
 
-export function hasAttentionNotification(squarePath: string, name: string, ref: number | ActivityId, env: NodeJS.ProcessEnv = process.env): boolean {
-  const doc = loadSquare(squarePath);
-  const recipient = known(doc, name);
-  const index = notificationIndex(ref);
-  return isDeliveryDelivered(doc, recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
+export async function hasAttentionNotification(squarePath: string, name: string, ref: number | ActivityId, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const application = await openFileApplication(squarePath);
+  try {
+    const recipient = (await application.resolveParticipant(name)).name;
+    const index = notificationIndex(ref);
+    return await application.notificationDelivered(recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
+  } finally {
+    await application.close();
+  }
 }
 
 export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId, opts: { timeoutMs?: number } = {}): Promise<boolean> {
   const deadline = Date.now() + (opts.timeoutMs ?? 30000);
   while (Date.now() <= deadline) {
-    if (hasDeliveredNotification(squarePath, name, ref)) return true;
+    if (await hasDeliveredNotification(squarePath, name, ref)) return true;
     await sleep(Math.min(SLEEP_MS, Math.max(1, deadline - Date.now())));
   }
   return false;
@@ -130,35 +128,13 @@ interface ProcessNotificationOptions {
   now?: () => number;
 }
 
-function notifyLeaseKey(recipient: string, actIndex: number): string {
-  return JSON.stringify([formatActivityId(actIndex), nameKey(recipient)]);
-}
-
-type NotifyLeaseClaim =
-  | { type: 'acquired'; leaseId: string }
-  | { type: 'busy' }
-  | { type: 'ambiguous'; lease: NotifyLease };
-
-async function claimNotifyLease(squarePath: string, recipient: string, actIndex: number): Promise<NotifyLeaseClaim> {
-  const at = Date.now();
-  const key = notifyLeaseKey(recipient, actIndex);
+async function claimNotifyLease(application: SquareApplication, recipient: string, actIndex: number) {
   const leaseId = randomUUID();
-  const cell = createFileCell(squarePath);
-  try {
-    return await cell.transact<NotifyLeaseClaim>((doc) => {
-      const current = doc.runtime.notifyLeases[key];
-      if (current !== undefined && current.expiresAt > at) return { result: { type: 'busy' as const } };
-      if (current?.phase === 'dispatching') return { result: { type: 'ambiguous' as const, lease: current } };
-      doc.runtime.notifyLeases[key] = { leaseId, expiresAt: at + NOTIFY_LEASE_MS, phase: 'claimed' };
-      return { state: doc, result: { type: 'acquired' as const, leaseId } };
-    });
-  } finally {
-    await cell.close();
-  }
+  return application.claimNotificationLease(recipient, actIndex, leaseId, NOTIFY_LEASE_MS);
 }
 
 async function transitionNotifyLease(
-  squarePath: string,
+  application: SquareApplication,
   recipient: string,
   actIndex: number,
   leaseId: string,
@@ -166,38 +142,11 @@ async function transitionNotifyLease(
   routeKind?: WakeRouteKind,
   attemptN?: number,
 ): Promise<boolean> {
-  const at = Date.now();
-  const key = notifyLeaseKey(recipient, actIndex);
-  const cell = createFileCell(squarePath);
-  try {
-    return await cell.transact((doc) => {
-      if (doc.runtime.notifyLeases[key]?.leaseId !== leaseId) return { result: false };
-      doc.runtime.notifyLeases[key] = {
-        leaseId,
-        expiresAt: at + NOTIFY_LEASE_MS,
-        phase,
-        ...(routeKind === undefined ? {} : { routeKind }),
-        ...(attemptN === undefined ? {} : { attemptN }),
-      };
-      return { state: doc, result: true };
-    });
-  } finally {
-    await cell.close();
-  }
+  return application.transitionNotificationLease(recipient, actIndex, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN);
 }
 
-async function releaseNotifyLease(squarePath: string, recipient: string, actIndex: number, leaseId: string): Promise<void> {
-  const key = notifyLeaseKey(recipient, actIndex);
-  const cell = createFileCell(squarePath);
-  try {
-    await cell.transact((doc) => {
-      if (doc.runtime.notifyLeases[key]?.leaseId !== leaseId) return { result: undefined };
-      delete doc.runtime.notifyLeases[key];
-      return { state: doc, result: undefined };
-    });
-  } finally {
-    await cell.close();
-  }
+async function releaseNotifyLease(application: SquareApplication, recipient: string, actIndex: number, leaseId: string): Promise<void> {
+  await application.releaseNotificationLease(recipient, actIndex, leaseId);
 }
 
 async function processNotification(
@@ -213,15 +162,20 @@ async function processNotification(
     recipient: notification.recipient,
   };
   const initialAt = now();
-  if (!wakeIsEligible(wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
+  if (!wakeIsEligible(await wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
 
-  const claim = await claimNotifyLease(squarePath, notification.recipient, notification.item.index);
-  if (claim.type === 'busy') return;
+  const application = await openFileApplication(squarePath, { clock: now });
+  const claim = await claimNotifyLease(application, notification.recipient, notification.item.index);
+  if (claim.type === 'busy' || claim.type === 'delivered') {
+    await application.close();
+    return;
+  }
   if (claim.type === 'ambiguous') {
     const recovered = recordRecoveredUnknown(attention, claim.lease, env);
     if (recovered !== undefined) {
-      await releaseNotifyLease(squarePath, notification.recipient, notification.item.index, claim.lease.leaseId);
+      await releaseNotifyLease(application, notification.recipient, notification.item.index, claim.lease.leaseId);
     }
+    await application.close();
     return;
   }
 
@@ -229,7 +183,7 @@ async function processNotification(
   let releaseLease = true;
   try {
     const dispatchAt = now();
-    const evidence = wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
+    const evidence = await wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
     if (!wakeIsEligible(evidence)) return;
     const port = new WakePort(opts.adapters ?? [new PaseoAdapter()]);
     const request: WakeRequest = {
@@ -247,15 +201,14 @@ async function processNotification(
         beforeSend: async (route, attemptN) => {
           if (await waitForCatch(route, request, notification.item.body)) return false;
           const currentAt = now();
-          const latest = loadSquare(squarePath);
-          if (!isCurrentlyJoined(latest.acts, notification.recipient)) return false;
-          const current = wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
+          if (!(await application.entryPresentation(notification.recipient)).joined) return false;
+          const current = await wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
           if (!wakeIsEligible(current)) return false;
           if (!current.attemptableRoutes.some((candidate) =>
             candidate.ownerId === route.ownerId && candidate.kind === route.kind && candidate.sessionId === route.sessionId
           )) return false;
           const dispatching = await transitionNotifyLease(
-            squarePath,
+            application,
             notification.recipient,
             notification.item.index,
             leaseId,
@@ -268,7 +221,7 @@ async function processNotification(
         },
         record: async (route, attemptN, outcome) => {
           if (outcome.outcome === 'failed') {
-            await transitionNotifyLease(squarePath, notification.recipient, notification.item.index, leaseId, 'claimed');
+            await transitionNotifyLease(application, notification.recipient, notification.item.index, leaseId, 'claimed');
             releaseLease = true;
           }
           recordWakeAttempt({
@@ -287,16 +240,15 @@ async function processNotification(
     );
   } finally {
     if (releaseLease) {
-      await releaseNotifyLease(squarePath, notification.recipient, notification.item.index, leaseId);
+      await releaseNotifyLease(application, notification.recipient, notification.item.index, leaseId);
     }
+    await application.close();
   }
 }
 
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
-  const doc = loadSquare(squarePath);
-  const item = doc.acts.find((candidate) => candidate.index === actIndex);
-  if (item === undefined) return;
-  const notifications = planActNotifications(doc, item);
+  const application = await openFileApplication(squarePath);
+  const notifications = await application.notificationForAct(actIndex).finally(() => application.close());
   await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
 }
 
@@ -327,21 +279,21 @@ export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {
 }
 
 /** Reconsider old pending attention at a bounded action boundary using the existing worker. */
-export function sweepPendingNotifications(
+export async function sweepPendingNotifications(
   squarePath: string,
   opts: SweepPendingNotificationsOptions = {},
-): number[] {
+): Promise<number[]> {
   const env = opts.env ?? process.env;
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const doc = loadSquare(squarePath);
-  const model = deriveDeliveryModel(doc);
+  const application = await openFileApplication(squarePath, { clock: () => now });
+  const pending = await application.pendingDeliveries().finally(() => application.close());
   const indexes = new Set<number>();
-  for (const recipient of joinedRecipients(doc)) {
-    for (const note of model.pendingFor(recipient)) {
+  for (const delivery of pending) {
+    for (const note of delivery.notifications) {
       if (now - note.item.at <= wakeGraceMs(env)) continue;
-      if (!wakeIsEligible(wakeEvidence(squarePath, recipient, note.item.index, now, env))) continue;
+      if (!wakeIsEligible(await wakeEvidence(squarePath, delivery.recipient, note.item.index, now, env))) continue;
       indexes.add(note.item.index);
     }
   }

@@ -22,7 +22,7 @@ Boundaries should be light and useful:
   (everyone watching with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
-`history`; the binary artifact is persistence, not a participant-facing document. Activity bodies,
+`history`; the binary artifact persists the square's state and is not participant-facing. Activity bodies,
 warmup, and host context may still contain natural Markdown.
 
 Preferred language:
@@ -46,10 +46,10 @@ CLI voice:
 
 Implementation taste:
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
-- Keep one clear internal representation for the square document and events.
-- The authoritative artifact is one versioned `.square` binary snapshot containing both document and runtime facts; there is no runtime sidecar.
+- Keep one clear internal representation for the square's state and events.
+- The authoritative artifact is one versioned `.square` binary snapshot containing the square's state; there is no runtime sidecar.
 - Keep the binary codec and the internal square model strictly layered. Only the artifact boundary reads or writes square bytes.
-- All behavior operates on `SquareDoc`, never on binary framing, compressed payloads, storage schema fields, or display text.
+- All behavior operates on `SquareState`, never on binary framing, compressed payloads, storage schema fields, or display text.
 - Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.

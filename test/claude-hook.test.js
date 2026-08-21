@@ -46,8 +46,8 @@ function fixture() {
     { kind: 'say', actor: 'Alice', at: 5, body: 'ambient', index: 4 },
   ];
   const runtime = { ...emptyRuntimeState(5), nextActIndex: 5 };
-  const doc = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };
-  writeSquareFile(squarePath, doc);
+  const squareState = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };
+  writeSquareFile(squarePath, squareState);
   recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code' });
   return {
     squarePath,
@@ -63,10 +63,10 @@ function fixture() {
   };
 }
 
-test('session inbox returns only canonical pending directed notifications', () => {
+test('session inbox returns only canonical pending directed notifications', async () => {
   const item = fixture();
   try {
-    let inbox = sessionInbox('claude-session');
+    let inbox = await sessionInbox('claude-session');
     assert.equal(inbox.length, 1);
     assert.deepEqual(
       inbox[0].notifications.map((notification) => [notification.actIndex, notification.route]),
@@ -77,7 +77,7 @@ test('session inbox returns only canonical pending directed notifications', () =
       [formatActivityId(2)]: { status: 'delivered', at: 6 },
     };
     item.persist();
-    inbox = sessionInbox('claude-session');
+    inbox = await sessionInbox('claude-session');
     assert.deepEqual(
       inbox[0].notifications.map((notification) => notification.actIndex),
       [3]
@@ -87,7 +87,7 @@ test('session inbox returns only canonical pending directed notifications', () =
   }
 });
 
-test('session inbox never resurrects a mention from before the recipient joined', () => {
+test('session inbox never resurrects a mention from before the recipient joined', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-prejoin-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registryPath = path.join(root, 'sessions.ndjsonl');
@@ -104,7 +104,7 @@ test('session inbox never resurrects a mention from before the recipient joined'
     writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
     recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code' });
 
-    const inbox = sessionInbox('prejoin-session');
+    const inbox = await sessionInbox('prejoin-session');
     assert.deepEqual(inbox[0].notifications.map((notification) => notification.actIndex), [3]);
   } finally {
     if (previous === undefined) delete process.env.SQUARE_REGISTRY;
@@ -113,7 +113,7 @@ test('session inbox never resurrects a mention from before the recipient joined'
   }
 });
 
-test('session inbox does not inherit an active catch lease after ownership changes', () => {
+test('session inbox does not inherit an active catch lease after ownership changes', async () => {
   const item = fixture();
   try {
     item.runtime.leases.Bob = {
@@ -128,7 +128,7 @@ test('session inbox does not inherit an active catch lease after ownership chang
       channel: 'claude-code',
       ownerId: 'replacement-owner',
     });
-    const inbox = sessionInbox('replacement-session');
+    const inbox = await sessionInbox('replacement-session');
     assert.equal(inbox.length, 1);
     assert.equal(inbox[0].catchLease, undefined);
     assert.equal(inbox[0].notifications.length, 2);
@@ -137,7 +137,7 @@ test('session inbox does not inherit an active catch lease after ownership chang
   }
 });
 
-test('Claude admits bounded context at an agent boundary and presents once', () => {
+test('Claude admits bounded context at an agent boundary and presents once', async () => {
   const presented = path.join(os.tmpdir(), `square-presented-${Date.now()}.ndjsonl`);
   const previous = process.env.SQUARE_PRESENTED;
   process.env.SQUARE_PRESENTED = presented;
@@ -147,7 +147,7 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
       squarePath: '/tmp/SQUARE.square',
       notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
     }];
-    const response = claudeHookResponse(
+    const response = await claudeHookResponse(
       { session_id: 'session', hook_event_name: 'PostToolBatch' },
       () => inbox
     );
@@ -157,7 +157,7 @@ test('Claude admits bounded context at an agent boundary and presents once', () 
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.match(response.hookSpecificOutput.additionalContext, /square --location '\/tmp\/SQUARE\.square' --as 'Bob' catch --now/);
     assert.equal(
-      claudeHookResponse(
+      await claudeHookResponse(
         { session_id: 'session', hook_event_name: 'PostToolBatch' },
         () => inbox
       ),
@@ -236,7 +236,7 @@ test('unrelated participants do not share an adapter delivery lock', () => {
   }
 });
 
-test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', () => {
+test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', async () => {
   const item = fixture();
   const presented = path.join(os.tmpdir(), `square-presented-nested-${Date.now()}.ndjsonl`);
   try {
@@ -246,7 +246,7 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', (
     });
     const paseoOwner = lookupParticipant(item.squarePath, 'Bob')[0].ownerId;
 
-    const response = claudeHookResponse(
+    const response = await claudeHookResponse(
       { session_id: 'nested-claude', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented, PASEO_AGENT_ID: 'paseo-agent' }
@@ -263,7 +263,7 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', (
   }
 });
 
-test('active catch owns matching attention at every adapter boundary', () => {
+test('active catch owns matching attention at every adapter boundary', async () => {
   const item = fixture();
   const presented = path.join(os.tmpdir(), `square-presented-active-catch-${Date.now()}.ndjsonl`);
   try {
@@ -277,7 +277,7 @@ test('active catch owns matching attention at every adapter boundary', () => {
     item.persist();
 
     assert.equal(
-      claudeHookResponse(
+      await claudeHookResponse(
         { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
         sessionInbox,
         { SQUARE_PRESENTED: presented }
@@ -291,7 +291,7 @@ test('active catch owns matching attention at every adapter boundary', () => {
   }
 });
 
-test('a boundary still admits notifications excluded by an active catch filter', () => {
+test('a boundary still admits notifications excluded by an active catch filter', async () => {
   const item = fixture();
   const presented = path.join(os.tmpdir(), `square-presented-filtered-catch-${Date.now()}.ndjsonl`);
   try {
@@ -304,7 +304,7 @@ test('a boundary still admits notifications excluded by an active catch filter',
     };
     item.persist();
 
-    const response = claudeHookResponse(
+    const response = await claudeHookResponse(
       { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
       sessionInbox,
       { SQUARE_PRESENTED: presented }
@@ -317,14 +317,14 @@ test('a boundary still admits notifications excluded by an active catch filter',
   }
 });
 
-test('Claude hook is a bounded no-op for malformed, unsupported, or empty input', () => {
-  assert.equal(runClaudeHook('not json'), '');
+test('Claude hook is a bounded no-op for malformed, unsupported, or empty input', async () => {
+  assert.equal(await runClaudeHook('not json'), '');
   assert.equal(
-    claudeHookResponse({ session_id: 'session', hook_event_name: 'SessionStart' }, () => []),
+    await claudeHookResponse({ session_id: 'session', hook_event_name: 'SessionStart' }, () => []),
     undefined
   );
   assert.equal(
-    claudeHookResponse({ session_id: 'session', hook_event_name: 'Stop' }, () => []),
+    await claudeHookResponse({ session_id: 'session', hook_event_name: 'Stop' }, () => []),
     undefined
   );
 });

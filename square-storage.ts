@@ -1,14 +1,57 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 
-import { loadSquare, writeSquareFile } from './artifact.js';
+import {
+  createSquareState,
+  diagnoseSquareFile as diagnoseArtifactFile,
+  loadArchive,
+  loadSquare,
+  probeSquare,
+  writeArchiveFile,
+  writeSquareFile,
+} from './artifact.js';
 import { withFileLock } from './file-lock.js';
 import type { StateCell } from './square-engine.js';
-import { type SquareDoc } from './model.js';
+import { type SquareState } from './model.js';
 import { LOCK_RETRY_MS, LOCK_STALE_MS } from './runtime.js';
 
-function cloneDoc(doc: SquareDoc): SquareDoc {
-  return structuredClone(doc);
+/**
+ * The only production module allowed to cross the .square byte boundary.
+ * Consumers receive a SquareState and never need to know which codec or lock
+ * protects it.
+ */
+export {
+  createSquareState,
+  loadArchive,
+  writeArchiveFile,
+};
+
+export function readSquareFile(squarePath: string): SquareState {
+  return loadSquare(squarePath);
+}
+
+export function probeSquareFile(squarePath: string): SquareState | undefined {
+  return probeSquare(squarePath);
+}
+
+export function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
+  return diagnoseArtifactFile(squarePath);
+}
+
+export function writeSquareSnapshot(squarePath: string, squareState: SquareState): void {
+  writeSquareFile(squarePath, squareState);
+}
+
+export function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
+  return withFileLock(
+    `${squarePath}.lock`,
+    { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
+    fn,
+  );
+}
+
+function cloneState(squareState: SquareState): SquareState {
+  return structuredClone(squareState);
 }
 
 function assertCellOpen(closed: boolean): void {
@@ -22,8 +65,8 @@ interface MemoryWaiter {
 }
 
 /** In-process cell for fast application tests and embedded consumers. */
-export function createMemoryCell(initial: SquareDoc): StateCell {
-  let state = cloneDoc(initial);
+export function createMemoryCell(initial: SquareState): StateCell {
+  let state = cloneState(initial);
   let version = 0;
   let closed = false;
   let tail: Promise<void> = Promise.resolve();
@@ -39,15 +82,15 @@ export function createMemoryCell(initial: SquareDoc): StateCell {
   }
 
   const cell: StateCell = {
-    transact<R>(fn: (state: SquareDoc, version: number) => { state?: SquareDoc; result: R }) {
+    transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
       assertCellOpen(closed);
       let operation!: Promise<R>;
       operation = tail.then(() => {
         assertCellOpen(closed);
-        const working = cloneDoc(state);
+        const working = cloneState(state);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
-          state = cloneDoc(outcome.state);
+          state = cloneState(outcome.state);
           version += 1;
           publish();
         }
@@ -59,7 +102,7 @@ export function createMemoryCell(initial: SquareDoc): StateCell {
     async read() {
       assertCellOpen(closed);
       await tail;
-      return { state: cloneDoc(state), version };
+      return { state: cloneState(state), version };
     },
     changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);
@@ -114,16 +157,16 @@ export function createFileCell(squarePath: string): StateCell {
   }
 
   return {
-    async transact<R>(fn: (state: SquareDoc, version: number) => { state?: SquareDoc; result: R }) {
+    async transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
       assertCellOpen(closed);
       return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
         assertCellOpen(closed);
         observe();
-        const current = loadSquare(squarePath);
-        const working = cloneDoc(current);
+        const current = readSquareFile(squarePath);
+        const working = cloneState(current);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
-          writeSquareFile(squarePath, outcome.state);
+          writeSquareSnapshot(squarePath, outcome.state);
           fingerprint = fileFingerprint(squarePath);
           version += 1;
         }
@@ -133,8 +176,8 @@ export function createFileCell(squarePath: string): StateCell {
     async read() {
       assertCellOpen(closed);
       observe();
-      const state = loadSquare(squarePath);
-      return { state: cloneDoc(state), version };
+      const state = readSquareFile(squarePath);
+      return { state: cloneState(state), version };
     },
     async changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);
@@ -152,4 +195,9 @@ export function createFileCell(squarePath: string): StateCell {
       closed = true;
     },
   };
+}
+
+/** Application-facing file cell factory; keeps storage choice behind this module. */
+export function openSquareCell(squarePath: string): StateCell {
+  return createFileCell(squarePath);
 }

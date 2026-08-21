@@ -1,24 +1,23 @@
-import { loadSquare } from '../artifact.js';
 import { runClaudeHookAsync } from '../claude-hook.js';
 import { runCodexHookAsync } from '../codex-hook.js';
-import { coreActivities, coreParticipants, coreStatus } from '../decisions.js';
 import { sessionInbox } from '../inbox.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { cmdListSquares } from '../list.js';
-import { type ActivitiesOptions, type WatchOptions, sameName } from '../model.js';
-import { parseActivityId } from '../square-core.js';
+import { parseActivityId, type ActivitiesOptions, type StoredAct, type WatchOptions, sameName } from '../model.js';
 import {
   commandPrefix,
   participantCommandPrefix,
-  renderActivitiesView,
   renderGrepActivitiesView,
+  renderEventCli,
   renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
-import { actId, inSquareCount, nowMs, sayNumberFor } from '../runtime.js';
+import { actId, nowMs } from '../runtime.js';
 import { cmdStream, cmdStreamNdjson } from '../stream.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { cmdWatch } from '../watch.js';
+import { openFileApplication } from '../square-file-adapter.js';
+import type { HistoryPresentation } from '../square-engine.js';
 
 import {
   type CommandContext,
@@ -35,8 +34,8 @@ import {
 
 export const listCommand: CommandSpec<string[]> = {
   parse: (argv) => argv,
-  execute(argv, context) {
-    cmdListSquares(argv, () => usage(context.command));
+  async execute(argv, context) {
+    await cmdListSquares(argv, () => usage(context.command));
   },
   present: () => {},
 };
@@ -229,7 +228,7 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
   };
 }
 
-function renderFields(doc: ReturnType<typeof loadSquare>, item: import('../model.js').StoredAct, fields: string[]): string {
+function renderFields(sayNumbers: Readonly<Record<number, number>>, item: StoredAct, fields: string[]): string {
   return fields.map((field) => {
     switch (field) {
       case 'id': return actId(item.index);
@@ -239,14 +238,14 @@ function renderFields(doc: ReturnType<typeof loadSquare>, item: import('../model
       case 'at': return formatTimestamp(item.at);
       case 'kind': return item.kind;
       case 'body': return 'body' in item && typeof item.body === 'string' ? item.body.replace(/\s+/g, ' ').trim() : '';
-      case 'number': return item.kind === 'say' ? String(sayNumberFor(doc.acts, item)) : '';
+      case 'number': return item.kind === 'say' ? String(sayNumbers[item.index]) : '';
       case 'reply': return item.kind === 'say' && item.reply !== undefined ? actId(item.reply) : '';
       default: return '';
     }
   }).join('\t');
 }
 
-function jsonLine(doc: ReturnType<typeof loadSquare>, item: import('../model.js').StoredAct): string {
+function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: StoredAct): string {
   const act = item;
   return JSON.stringify({
     id: actId(item.index),
@@ -256,68 +255,110 @@ function jsonLine(doc: ReturnType<typeof loadSquare>, item: import('../model.js'
     at: act.at,
     ts: formatTimestamp(act.at),
     body: 'body' in act && typeof act.body === 'string' ? act.body : '',
-    number: act.kind === 'say' ? sayNumberFor(doc.acts, act) : null,
+    number: act.kind === 'say' ? sayNumbers[act.index] : null,
     reach: act.kind === 'say' ? act.reach ?? null : null,
     reply: act.kind === 'say' && act.reply !== undefined ? actId(act.reply) : null,
   });
 }
 
+function renderHistoryProjection(
+  projection: HistoryPresentation,
+  visible: HistoryPresentation['activities'],
+  full: boolean,
+  squarePath: string,
+  viewer: string,
+  mode: 'ambient' | 'archive',
+): string {
+  const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done');
+  const preview = full ? undefined : 200;
+  const chunks: string[] = [];
+  for (const activity of shown) {
+    const options = {
+      preview,
+      actNumber: activity.kind === 'say' ? projection.sayNumbers[activity.index] : undefined,
+    };
+    const rendered = mode === 'archive'
+      ? renderEventCli(activity, options)
+      : renderAmbientEvent(activity, viewer, options);
+    if (rendered !== '') chunks.push(rendered);
+    for (const name of projection.presenceAnchors[activity.index] ?? []) chunks.push(`→ ${name} was here`);
+  }
+  if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
+  if (preview !== undefined && shown.some((activity) =>
+    activity.kind === 'say' && activity.body.length > preview && (mode === 'archive' || activity.perception === 'full')
+  )) {
+    chunks.push(`» ${commandPrefix(squarePath)} history --full`);
+  }
+  return chunks.join('\n\n');
+}
+
 export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
-  execute(options, context) {
-    const doc = loadSquare(context.squarePath);
-    let events = coreActivities(doc, options);
-    const searching = options.grep !== undefined || options.fixed !== undefined;
-    const totalMatches = searching ? events.length : 0;
-    if (options.lastN != null) {
-      events = options.order === 'desc'
-        ? events.slice(0, options.lastN)
-        : events.slice(-options.lastN);
+  async execute(options, context) {
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    try {
+      const projection = await application.historyPresentation(options);
+      let events = [...projection.activities];
+      const searching = options.grep !== undefined || options.fixed !== undefined;
+      const totalMatches = searching ? events.length : 0;
+      if (options.lastN != null) {
+        events = options.order === 'desc'
+          ? events.slice(0, options.lastN)
+          : events.slice(-options.lastN);
+      }
+      if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item)).join('\n') + (events.length > 0 ? '\n' : '');
+      if (options.format !== undefined && options.format.length > 0) {
+        return events.map((item) => renderFields(projection.sayNumbers, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
+      }
+      const pattern = options.grep ?? options.fixed;
+      const anonymous = options.viewer === undefined;
+      const archive = (options.atIndexes !== undefined && options.atIndexes.length > 0)
+        || (options.lastN == null && options.full === true)
+        || anonymous;
+      const output = pattern === undefined || pattern === ''
+        ? renderHistoryProjection(projection, events, options.full === true || anonymous, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
+        : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
+      return withPathOutput(context.squarePath, output, { participantCount: projection.participantCount });
+    } finally {
+      await application.close();
     }
-    if (options.json) return events.map((item) => jsonLine(doc, item)).join('\n') + (events.length > 0 ? '\n' : '');
-    if (options.format !== undefined && options.format.length > 0) {
-      return events.map((item) => renderFields(doc, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
-    }
-    const pattern = options.grep ?? options.fixed;
-    const anonymous = options.viewer === undefined;
-    const archive = (options.atIndexes !== undefined && options.atIndexes.length > 0)
-      || (options.lastN == null && options.full === true)
-      || anonymous;
-    const output = pattern === undefined || pattern === ''
-      ? renderActivitiesView(doc, events, null, options.full === true || anonymous, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
-      : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
-    return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(doc) });
   },
   present: (result) => process.stdout.write(result),
 };
 
 export const participantsCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute(_intent, context) {
-    const doc = loadSquare(context.squarePath);
-    const now = nowMs();
-    const participants = coreParticipants(doc, now);
-    const lines = participants.map((participant) => {
-      const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
-      const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
-      const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-      return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
-    });
-    const participantCount = participants.filter(
-      (participant) => participant.state === 'active'
-    ).length;
-    return withPathOutput(context.squarePath, ['participants', ...lines].join('\n'), {
-      participantCount,
-    });
+  async execute(_intent, context) {
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    try {
+      const now = nowMs();
+      const participants = await application.participantsPresentation();
+      const lines = participants.map((participant) => {
+        const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
+        const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
+        const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
+        return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
+      });
+      const participantCount = participants.filter(
+        (participant) => participant.state === 'active'
+      ).length;
+      return withPathOutput(context.squarePath, ['participants', ...lines].join('\n'), {
+        participantCount,
+      });
+    } finally {
+      await application.close();
+    }
   },
   present: (result) => process.stdout.write(result),
 };
 
 export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute(_intent, context) {
-    const doc = loadSquare(context.squarePath);
-    const result = coreStatus(doc, nowMs());
+  async execute(_intent, context) {
+    const application = await openFileApplication(context.squarePath, { clock: nowMs });
+    try {
+      const presentation = await application.statusPresentation();
+      const result = presentation.status;
     const active = result.participants.filter((participant) => participant.state === 'active').sort((a, b) => {
       const aViewer = context.name !== undefined && sameName(a.name, context.name);
       const bViewer = context.name !== undefined && sameName(b.name, context.name);
@@ -354,9 +395,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       : renderAmbientEvent(result.latestAct, context.name ?? '', {
           now: result.now,
           preview: 200,
-          actNumber: result.latestAct.kind === 'say'
-            ? sayNumberFor(doc.acts, result.latestAct)
-            : undefined,
+          actNumber: presentation.latestActNumber,
         });
     const latest = visible === ''
       ? [result.latestAct === undefined
@@ -372,6 +411,9 @@ export const statusCommand: CommandSpec<undefined, string> = {
       ...(hold === undefined ? [] : ['', hold]), '', 'around the square', ...people, '', 'latest', ...latest,
     ].join('\n');
     return withPathOutput(context.squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
+    } finally {
+      await application.close();
+    }
   },
   present: (result) => process.stdout.write(result),
 };
@@ -389,8 +431,8 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
     if (!sessionId) fail('inbox requires --for-session <session-id>.');
     return { sessionId, json };
   },
-  execute(intent) {
-    const inbox = sessionInbox(intent.sessionId);
+  async execute(intent) {
+    const inbox = await sessionInbox(intent.sessionId);
     return intent.json ? `${JSON.stringify(inbox)}\n` : inbox.map((membership) => `${membership.name}\t${membership.squarePath}\t${membership.notifications.length}\n`).join('');
   },
   present: (result) => process.stdout.write(result),

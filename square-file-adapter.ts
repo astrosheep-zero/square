@@ -1,32 +1,31 @@
 import fs from 'node:fs';
 
-import { createSquareDoc, loadArchive, loadSquare, writeArchiveFile, writeSquareFile } from './artifact.js';
+import {
+  createSquareState,
+  loadArchive,
+  probeSquareFile,
+  readSquareFile,
+  writeArchiveFile,
+  writeSquareSnapshot,
+  withSquareFileLock,
+  openSquareCell,
+  createMemoryCell,
+} from './square-storage.js';
 import { coreCompact } from './decisions.js';
-import { withFileLock } from './file-lock.js';
 import { stageReplacement, type StagedReplacement } from './harness-stage.js';
 import {
   InternalSquareError,
   SquareError,
   type BuildOptions,
   type HardCap,
-  type SquareDoc,
+  type SquareState,
   type StoredAct,
 } from './model.js';
-import { LOCK_RETRY_MS, LOCK_STALE_MS } from './runtime.js';
 import { createApplication, type SquareApplication, type WakeNotifier } from './square-engine.js';
-import { createFileCell, createMemoryCell } from './square-storage.js';
 
 /** The current CLI file mutation boundary. */
-async function withSquareLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
-  return withFileLock(
-    `${squarePath}.lock`,
-    { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
-    fn,
-  );
-}
-
-function writeSquareDoc(squarePath: string, doc: SquareDoc): void {
-  writeSquareFile(squarePath, doc);
+function writeSquareState(squarePath: string, squareState: SquareState): void {
+  writeSquareSnapshot(squarePath, squareState);
 }
 
 /** Publish a dependent archive before the main snapshot, retaining rollback evidence. */
@@ -38,13 +37,13 @@ function prepareArchive(filePath: string, acts: StoredAct[]): StagedReplacement 
 }
 
 export async function compactSquare(squarePath: string, keep: number, archivePath: string): Promise<ReturnType<typeof coreCompact>> {
-  return withSquareLock(squarePath, () => {
-    const result = coreCompact(loadSquare(squarePath), keep);
+  return withSquareFileLock(squarePath, () => {
+    const result = coreCompact(readSquareFile(squarePath), keep);
     if (result.archived.length === 0) return result;
     let persistence: StagedReplacement | undefined;
     try {
       persistence = prepareArchive(archivePath, result.archived);
-      writeSquareDoc(squarePath, result.doc);
+      writeSquareState(squarePath, result.state);
       persistence.finalize();
       return result;
     } catch (error) {
@@ -60,11 +59,11 @@ export async function createSquare(
   options: BuildOptions & { hardCap: HardCap },
   snippet: string
 ): Promise<void> {
-  await withSquareLock(squarePath, () => {
+  await withSquareFileLock(squarePath, () => {
     if (fs.existsSync(squarePath) && !options.force) {
       throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
     }
-    writeSquareFile(squarePath, createSquareDoc(options, snippet));
+    writeSquareSnapshot(squarePath, createSquareState(options, snippet));
   });
 }
 
@@ -98,7 +97,7 @@ export async function openFileApplication(
   squarePath: string,
   options: Pick<ApplicationBuildOptions, 'clock' | 'notifier'> = {},
 ): Promise<SquareApplication> {
-  const cell = createFileCell(squarePath);
+  const cell = openSquareCell(squarePath);
   try {
     await cell.read();
     return createApplication({ cell, ...applicationOptions({ markdown: '', ...options }) });
@@ -109,6 +108,11 @@ export async function openFileApplication(
     }
     throw error;
   }
+}
+
+export function probeFileApplication(squarePath: string): SquareApplication | undefined {
+  const state = probeSquareFile(squarePath);
+  return state === undefined ? undefined : createApplication({ cell: createMemoryCell(state) });
 }
 
 export async function buildFileApplication(squarePath: string, options: ApplicationBuildOptions): Promise<SquareApplication> {
@@ -130,10 +134,10 @@ export async function buildFileApplication(squarePath: string, options: Applicat
 
 export function buildMemoryApplication(options: ApplicationBuildOptions): SquareApplication {
   validateBuildOptions(options);
-  const doc = createSquareDoc({
+  const squareState = createSquareState({
     force: false,
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return createApplication({ cell: createMemoryCell(doc), ...applicationOptions(options) });
+  return createApplication({ cell: createMemoryCell(squareState), ...applicationOptions(options) });
 }

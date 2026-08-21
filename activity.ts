@@ -3,8 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { loadSquare } from './artifact.js';
-import { deliveryDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
 import { SquareError, isSquareError, validateName } from './model.js';
 import {
   expressHintLine,
@@ -15,7 +13,7 @@ import {
   renderPendingFeed,
   withPathOutput,
 } from './presentation.js';
-import { countSays, currentHold, inSquareCount, nowMs, SLEEP_MS, resolveRosterName } from './runtime.js';
+import { nowMs, SLEEP_MS } from './runtime.js';
 import { wakeNotifierForSquare } from './notifications.js';
 import { openFileApplication } from './square-file-adapter.js';
 import { formatActivityId } from './square-core.js';
@@ -68,50 +66,46 @@ export async function cmdActivity(
   validateName(name);
   const rawInput = String(resolveBody(activity)).replace(/\r\n/g, '\n');
 
-  let doc;
+  const application = await openFileApplication(squarePath, { clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+  let knownName: string;
   try {
-    doc = loadSquare(squarePath);
+    knownName = (await application.resolveParticipant(name)).name;
   } catch (err) {
+    await application.close();
     if (isSquareError(err)) {
+      if (err.code === 'unknown_participant' || err.code === 'invalid_args') {
+        const draftPath = saveActivityDraft(squarePath, name, rawInput);
+        process.stderr.write(err.message + '\n');
+        process.stderr.write(`draft kept: ${draftPath}\n`);
+        process.exit(2);
+      }
       process.stderr.write(err.message + '\n');
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
     throw err;
   }
-  const knownName = resolveRosterName(doc, name);
-  if (knownName === undefined) {
-    const draftPath = saveActivityDraft(squarePath, name, rawInput);
-    const expected = doc.acts.filter((act) => act.kind === 'join').map((act) => act.actor);
-    process.stderr.write(`Unknown participant "${name}". Expected one of: ${expected.join(', ')}.\n`);
-    process.stderr.write(`draft kept: ${draftPath}\n`);
-    process.exit(2);
-  }
-
   const body = rawInput.trim();
   const force = opts.force ?? false;
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const application = await openFileApplication(squarePath, { clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
-
   try {
     while (true) {
-      const before = loadSquare(squarePath);
-      const delta = deliveryDelta(before, knownName);
-      const pendingPublic = peerPublicActs(delta, knownName);
-      const pendingRoomChanges = peerRoomChanges(delta, knownName);
+      const before = await application.activityPresentation(knownName);
+      const pendingPublic = before.pendingPublic;
+      const pendingRoomChanges = before.pendingRoomChanges;
       try {
         await application.express(name, body, {
           force,
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
-        const freshDoc = loadSquare(squarePath);
-        const headerCount = inSquareCount(freshDoc);
-        const held = currentHold(freshDoc.acts).active;
-        const ownActCount = countSays(freshDoc.acts, knownName);
+        const fresh = await application.activityPresentation(knownName);
+        const headerCount = fresh.participantCount;
+        const held = fresh.held;
+        const ownActCount = fresh.ownActivityCount;
         const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
-        const pending = hasPending ? `\n\n${renderPendingFeed(freshDoc.acts, pendingPublic, pendingRoomChanges, knownName)}` : '';
+        const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName)}` : '';
         const hint = expressHintLine(ownActCount);
         const confirmation = `● heads turn your way — #${ownActCount}`;
         const withHint = hint ? `${confirmation}\n${hint}` : confirmation;
@@ -119,9 +113,9 @@ export async function cmdActivity(
         return;
       } catch (error) {
         if (!(error instanceof SquareError)) throw error;
-        const freshDoc = loadSquare(squarePath);
-        const headerCount = inSquareCount(freshDoc);
-        const held = currentHold(freshDoc.acts).active;
+        const fresh = await application.activityPresentation(knownName);
+        const headerCount = fresh.participantCount;
+        const held = fresh.held;
 
         if (error.code === 'behind') {
         const draftPath = saveActivityDraft(squarePath, name, rawInput);
@@ -131,7 +125,7 @@ export async function cmdActivity(
             name: knownName,
             forceCommand: opts.forceCommand,
             activitySummaries: [],
-            unreadRoomChanges: pendingRoomChanges,
+            unreadRoomChanges: [...pendingRoomChanges],
             draftPath,
             participantCount: headerCount,
             held,
@@ -145,8 +139,8 @@ export async function cmdActivity(
           renderActivityLimit({
             squarePath,
             name: knownName,
-            count: countSays(freshDoc.acts, knownName),
-            ...(freshDoc.hardCap === null ? {} : { hardCap: freshDoc.hardCap }),
+            count: fresh.ownActivityCount,
+            ...(fresh.hardCap === null ? {} : { hardCap: fresh.hardCap }),
             draftPath: saveActivityDraft(squarePath, name, rawInput),
             participantCount: headerCount,
             held,
@@ -170,7 +164,7 @@ export async function cmdActivity(
         continue;
         }
         if (error.code === 'held') {
-          const holdReason = currentHold(freshDoc.acts).reason;
+          const holdReason = fresh.holdReason;
         if (noWait) {
           const draftPath = saveActivityDraft(squarePath, name, rawInput);
           process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held }));

@@ -5,7 +5,7 @@ import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel, leaseOwnsNotification, markDeliveredNotifications } from '../dist/delivery.js';
 import { formatActivityId } from '../dist/square-core.js';
 
-function doc(acts, runtime = emptyRuntimeState(acts.length)) {
+function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
   return {
     hardCap: null,
     preamble: [],
@@ -20,7 +20,7 @@ function plannedRecipients(model, act) {
 }
 
 test('every reach mode addresses exactly its eligible peers', () => {
-  const square = doc([
+  const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1, body: '' },
     { kind: 'join', actor: 'Bob', at: 2, body: '' },
     { kind: 'join', actor: 'Cara', at: 3, body: '' },
@@ -49,7 +49,7 @@ test('pending attention is post-join, independent of the read cursor, and closes
   ];
   const runtime = emptyRuntimeState(acts.length);
   runtime.cursors.Bob = { consumedThroughIndex: 4, updatedAt: 5 };
-  const square = doc(acts, runtime);
+  const square = squareState(acts, runtime);
   const delivery = deriveDeliveryModel(square);
 
   assert.deepEqual(delivery.pendingFor('bob').map(({ item }) => item.index), [3]);
@@ -59,7 +59,7 @@ test('pending attention is post-join, independent of the read cursor, and closes
 });
 
 test('a participant who has stepped out is not a delivery target', () => {
-  const square = doc([
+  const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1, body: '' },
     { kind: 'join', actor: 'Bob', at: 2, body: '' },
     { kind: 'done', actor: 'Bob', at: 3, body: '' },
@@ -98,7 +98,7 @@ test('pending projection remains complete across a long history', () => {
   }
 
   assert.deepEqual(
-    deriveDeliveryModel(doc(acts)).pendingFor('Bob').map(({ item }) => item.index),
+    deriveDeliveryModel(squareState(acts)).pendingFor('Bob').map(({ item }) => item.index),
     [2, 1_002, 2_002, 3_002]
   );
 });

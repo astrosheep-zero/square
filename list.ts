@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { probeSquare } from './artifact.js';
-import { foldedState, publicActs } from './runtime.js';
+import { probeFileApplication } from './square-file-adapter.js';
 import { formatRelativeTime } from './time.js';
 
 interface SquareListItem {
@@ -22,14 +21,7 @@ function contextLines(lines: string[]): string[] {
   return lines.map((line) => line.trim()).filter(Boolean);
 }
 
-function activeParticipantNames(doc: NonNullable<ReturnType<typeof probeSquare>>): string[] {
-  return foldedState(doc).participants
-    .filter((participant) => participant.joined)
-    .sort((a, b) => (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name))
-    .map((participant) => participant.name);
-}
-
-function readSquareListItem(filePath: string, root: string): SquareListItem | null {
+async function readSquareListItem(filePath: string, root: string): Promise<SquareListItem | null> {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(filePath);
@@ -37,23 +29,24 @@ function readSquareListItem(filePath: string, root: string): SquareListItem | nu
     return null;
   }
 
-  const doc = probeSquare(filePath);
-  if (doc === undefined) return null;
+  const application = probeFileApplication(filePath);
+  if (application === undefined) return null;
+  const projection = await application.listPresentation().finally(() => application.close());
 
   const relative = path.relative(root, filePath) || path.basename(filePath);
   return {
     path: relative,
     lastActiveAt: stat.mtimeMs,
-    context: contextLines(doc.preamble),
-    participants: activeParticipantNames(doc),
-    activities: publicActs(doc.acts).filter((act) => act.kind === 'say').length,
+    context: contextLines([...projection.context]),
+    participants: [...projection.participants],
+    activities: projection.activities,
   };
 }
 
-function collectSquareList(root: string, maxDepth: number): SquareListItem[] {
+async function collectSquareList(root: string, maxDepth: number): Promise<SquareListItem[]> {
   const items: SquareListItem[] = [];
 
-  function walk(dir: string, depth: number): void {
+  async function walk(dir: string, depth: number): Promise<void> {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -65,17 +58,17 @@ function collectSquareList(root: string, maxDepth: number): SquareListItem[] {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (depth < maxDepth && !LIST_SKIP_DIRS.has(entry.name)) walk(fullPath, depth + 1);
+        if (depth < maxDepth && !LIST_SKIP_DIRS.has(entry.name)) await walk(fullPath, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
 
-      const item = readSquareListItem(fullPath, root);
+      const item = await readSquareListItem(fullPath, root);
       if (item) items.push(item);
     }
   }
 
-  walk(root, 0);
+  await walk(root, 0);
   return items.sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -118,7 +111,7 @@ function parseMaxDepth(args: string[], usage: () => void): number {
   return depth;
 }
 
-export function cmdListSquares(args: string[], usage: () => void): void {
+export async function cmdListSquares(args: string[], usage: () => void): Promise<void> {
   const maxDepth = parseMaxDepth(args, usage);
-  process.stdout.write(renderSquareList(collectSquareList(process.cwd(), maxDepth)));
+  process.stdout.write(renderSquareList(await collectSquareList(process.cwd(), maxDepth)));
 }

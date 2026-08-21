@@ -18,7 +18,8 @@ import {
   recordLocalDone,
   recordLocalJoin,
 } from '../dist/registry.js';
-import { streamNotificationFor } from '../dist/stream.js';
+import { createApplication } from '../dist/square-engine.js';
+import { createMemoryCell } from '../dist/square-storage.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -377,7 +378,7 @@ test('automatic delivery capability follows native and Paseo session identities'
   assert.equal(hasAutomaticDeliveryIdentity({ PASEO_AGENT_ID: 'paseo-agent' }), true);
 });
 
-test('stream recipient filtering matches the addressed participant', () => {
+test('stream recipient filtering matches the addressed participant', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
@@ -390,20 +391,27 @@ test('stream recipient filtering matches the addressed participant', () => {
     leases: {},
     notifyLeases: {},
   };
-  const doc = {
+  const state = {
     hardCap: null,
     preamble: [],
     warmup: [],
-    acts,
+    acts: [
+      ...acts,
+      { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', index: 3 },
+      { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 },
+      { kind: 'say', actor: 'Alice', at: 6, body: 'attention', reach: 'bell', index: 5 },
+    ],
     runtime,
   };
-  const bobMention = { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', index: 3 };
-  const undirected = { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 };
-  const bell = { kind: 'say', actor: 'Alice', at: 6, body: 'attention', reach: 'bell', index: 5 };
-
-  assert.equal(streamNotificationFor(doc, bobMention, 'Bob').route, 'mention');
-  assert.equal(streamNotificationFor(doc, undirected, 'Bob'), undefined);
-  assert.equal(streamNotificationFor(doc, bell, 'Bob').route, 'bell');
-  assert.equal(streamNotificationFor(doc, bell, 'Cara').route, 'bell');
-  assert.equal(streamNotificationFor(doc, bell, 'Alice'), undefined);
+  const application = createApplication({ cell: createMemoryCell(state) });
+  try {
+    const bob = await application.streamProjection(-1, 'Bob');
+    const cara = await application.streamProjection(-1, 'Cara');
+    const alice = await application.streamProjection(-1, 'Alice');
+    assert.deepEqual(bob.activities.map(({ activity, route }) => [activity.index, route]), [[3, 'mention'], [5, 'bell']]);
+    assert.deepEqual(cara.activities.map(({ activity, route }) => [activity.index, route]), [[5, 'bell']]);
+    assert.deepEqual(alice.activities, []);
+  } finally {
+    await application.close();
+  }
 });

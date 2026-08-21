@@ -2,7 +2,7 @@ import { audienceIncludes, audienceOf, fold, formatActivityId, type ActivityId, 
 import {
   SquareError,
   type StoredAct,
-  type SquareDoc,
+  type SquareState,
   type HoldState,
   type ReadCursor,
   type WatchLease,
@@ -80,24 +80,24 @@ export function matchesMentionTarget(act: { body: string; reach?: Reach }, menti
   return audienceIncludes(audience, mention);
 }
 
-export function foldedState(doc: SquareDoc) {
-  return fold(doc.acts);
+export function foldedState(squareState: SquareState) {
+  return fold(squareState.acts);
 }
 
-export function rosterNames(doc: SquareDoc): string[] {
-  return foldedState(doc).participants.map((participant) => participant.name);
+export function rosterNames(squareState: SquareState): string[] {
+  return foldedState(squareState).participants.map((participant) => participant.name);
 }
 
-export function inSquareCount(doc: SquareDoc): number {
-  return foldedState(doc).joined.length;
+export function inSquareCount(squareState: SquareState): number {
+  return foldedState(squareState).joined.length;
 }
 
-export function resolveRosterName(doc: SquareDoc, name: string): string | undefined {
-  return findParticipantName(rosterNames(doc), name);
+export function resolveRosterName(squareState: SquareState, name: string): string | undefined {
+  return findParticipantName(rosterNames(squareState), name);
 }
 
-export function hasQuorum(doc: SquareDoc, name: string, outs: Set<string>): boolean {
-  const peers = rosterNames(doc).filter((participant) => !sameName(participant, name));
+export function hasQuorum(squareState: SquareState, name: string, outs: Set<string>): boolean {
+  const peers = rosterNames(squareState).filter((participant) => !sameName(participant, name));
   return peers.length > 0 && peers.every((peer) => outs.has(nameKey(peer)));
 }
 
@@ -147,12 +147,12 @@ export function actId(actOrIndex: StoredAct | number): ActivityId {
   return formatActivityId(index);
 }
 
-export function getReadState(doc: SquareDoc, name: string): ReadCursor | undefined {
-  return doc.runtime.cursors[name] ?? Object.entries(doc.runtime.cursors).find(([participant]) => sameName(participant, name))?.[1];
+export function getReadState(squareState: SquareState, name: string): ReadCursor | undefined {
+  return squareState.runtime.cursors[name] ?? Object.entries(squareState.runtime.cursors).find(([participant]) => sameName(participant, name))?.[1];
 }
 
-export function readCursor(doc: SquareDoc, name: string): number {
-  return getReadState(doc, name)?.consumedThroughIndex ?? -1;
+export function readCursor(squareState: SquareState, name: string): number {
+  return getReadState(squareState, name)?.consumedThroughIndex ?? -1;
 }
 
 export function currentHold(acts: StoredAct[]): HoldState {
@@ -164,36 +164,36 @@ export function publicActs(acts: StoredAct[]): Array<Extract<StoredAct, { kind: 
   return acts.filter((act): act is Extract<StoredAct, { kind: 'say' | 'done' }> => act.kind === 'say' || act.kind === 'done');
 }
 
-function canonicalRuntimeName(doc: SquareDoc, name: string): string {
-  return resolveRosterName(doc, name) ?? name;
+function canonicalRuntimeName(squareState: SquareState, name: string): string {
+  return resolveRosterName(squareState, name) ?? name;
 }
 
 export function advanceCursor(
-  doc: SquareDoc,
+  squareState: SquareState,
   name: string,
   index: number,
   updatedAt = Date.now()
 ): boolean {
-  return touchPresenceCursor(doc, name, updatedAt, index);
+  return touchPresenceCursor(squareState, name, updatedAt, index);
 }
 
 export function touchPresenceCursor(
-  doc: SquareDoc,
+  squareState: SquareState,
   name: string,
   at: number,
   consumedThroughIndex?: number
 ): boolean {
   if (!Number.isFinite(at)) return false;
   if (consumedThroughIndex !== undefined && (!Number.isInteger(consumedThroughIndex) || consumedThroughIndex < 0)) return false;
-  const key = canonicalRuntimeName(doc, name);
-  const current = getReadState(doc, key);
+  const key = canonicalRuntimeName(squareState, name);
+  const current = getReadState(squareState, key);
   const nextIndex =
     consumedThroughIndex === undefined
-      ? (current?.consumedThroughIndex ?? readCursor(doc, key))
+      ? (current?.consumedThroughIndex ?? readCursor(squareState, key))
       : Math.max(current?.consumedThroughIndex ?? -1, consumedThroughIndex);
   const updatedAt = current === undefined ? at : Math.max(current.updatedAt, at);
   if (current?.consumedThroughIndex === nextIndex && current.updatedAt === updatedAt) return false;
-  doc.runtime.cursors[key] = { consumedThroughIndex: nextIndex, updatedAt };
+  squareState.runtime.cursors[key] = { consumedThroughIndex: nextIndex, updatedAt };
   return true;
 }
 
@@ -201,24 +201,24 @@ export function latestActIndex(acts: StoredAct[]): number {
   return acts.reduce((max, act) => Math.max(max, act.index), -1);
 }
 
-export function freshWatchLease(doc: SquareDoc, name: string, at = Date.now()) {
-  const key = canonicalRuntimeName(doc, name);
-  const lease = watchLease(doc, key);
+export function freshWatchLease(squareState: SquareState, name: string, at = Date.now()) {
+  const key = canonicalRuntimeName(squareState, name);
+  const lease = watchLease(squareState, key);
   if (lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS) return undefined;
   return lease;
 }
 
-export function watchLease(doc: SquareDoc, name: string): WatchLease | undefined {
-  return doc.runtime.leases[canonicalRuntimeName(doc, name)];
+export function watchLease(squareState: SquareState, name: string): WatchLease | undefined {
+  return squareState.runtime.leases[canonicalRuntimeName(squareState, name)];
 }
 
-export function writeWatchLease(doc: SquareDoc, name: string, lease: WatchLease): void {
-  doc.runtime.leases[canonicalRuntimeName(doc, name)] = lease;
+export function writeWatchLease(squareState: SquareState, name: string, lease: WatchLease): void {
+  squareState.runtime.leases[canonicalRuntimeName(squareState, name)] = lease;
 }
 
-export function removeWatchLease(doc: SquareDoc, name: string, leaseId: string): boolean {
-  const key = canonicalRuntimeName(doc, name);
-  if (doc.runtime.leases[key]?.leaseId !== leaseId) return false;
-  delete doc.runtime.leases[key];
+export function removeWatchLease(squareState: SquareState, name: string, leaseId: string): boolean {
+  const key = canonicalRuntimeName(squareState, name);
+  if (squareState.runtime.leases[key]?.leaseId !== leaseId) return false;
+  delete squareState.runtime.leases[key];
   return true;
 }

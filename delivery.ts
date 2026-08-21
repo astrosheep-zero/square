@@ -1,7 +1,7 @@
 import {
   type DeliveryReceipt,
   type DirectedNotificationRoute,
-  type SquareDoc,
+  type SquareState,
   type SquareRuntimeState,
   type StoredAct,
   type WatchLease,
@@ -68,25 +68,25 @@ export interface DeliveryModel {
   pendingFor(recipient: string): PlannedNotification[];
 }
 
-function canonicalRecipient(doc: SquareDoc, name: string): string {
-  return resolveRosterName(doc, name) ?? name;
+function canonicalRecipient(squareState: SquareState, name: string): string {
+  return resolveRosterName(squareState, name) ?? name;
 }
 
 /** Delivery receipts are the only durable acknowledgement of directed attention. */
-export function deliveryReceipt(doc: SquareDoc, name: string, actOrIndex: StoredAct | number): DeliveryReceipt | undefined {
-  return deliveryReceiptFromRuntime(doc.runtime, canonicalRecipient(doc, name), actOrIndex);
+export function deliveryReceipt(squareState: SquareState, name: string, actOrIndex: StoredAct | number): DeliveryReceipt | undefined {
+  return deliveryReceiptFromRuntime(squareState.runtime, canonicalRecipient(squareState, name), actOrIndex);
 }
 
 export function deliveryReceiptFromRuntime(runtime: SquareRuntimeState, recipient: string, actOrIndex: StoredAct | number): DeliveryReceipt | undefined {
   return runtime.deliveryReceipts[recipient]?.[actId(actOrIndex)];
 }
 
-export function isDeliveryDelivered(doc: SquareDoc, name: string, actOrIndex: StoredAct | number): boolean {
-  return deliveryReceipt(doc, name, actOrIndex)?.status === 'delivered';
+export function isDeliveryDelivered(squareState: SquareState, name: string, actOrIndex: StoredAct | number): boolean {
+  return deliveryReceipt(squareState, name, actOrIndex)?.status === 'delivered';
 }
 
-export function recordDeliveredDelivery(doc: SquareDoc, name: string, actOrIndex: StoredAct | number, receipt: Omit<DeliveryReceipt, 'status'>): boolean {
-  return recordDeliveredRuntime(doc.runtime, canonicalRecipient(doc, name), actOrIndex, receipt);
+export function recordDeliveredDelivery(squareState: SquareState, name: string, actOrIndex: StoredAct | number, receipt: Omit<DeliveryReceipt, 'status'>): boolean {
+  return recordDeliveredRuntime(squareState.runtime, canonicalRecipient(squareState, name), actOrIndex, receipt);
 }
 
 export function recordDeliveredRuntime(runtime: SquareRuntimeState, recipient: string, actOrIndex: StoredAct | number, receipt: Omit<DeliveryReceipt, 'status'>): boolean {
@@ -96,16 +96,16 @@ export function recordDeliveredRuntime(runtime: SquareRuntimeState, recipient: s
   return true;
 }
 
-export function markDeliveredDelivery(doc: SquareDoc, name: string, actOrIndex: StoredAct | number, at = Date.now()): boolean {
-  return recordDeliveredDelivery(doc, name, actOrIndex, { at });
+export function markDeliveredDelivery(squareState: SquareState, name: string, actOrIndex: StoredAct | number, at = Date.now()): boolean {
+  return recordDeliveredDelivery(squareState, name, actOrIndex, { at });
 }
 
 /**
- * Derive delivery behavior once from the parsed Square document.
+ * Derive delivery behavior once from the decoded Square state.
  * All consumers share these targets instead of reinterpreting artifact text or cursor state.
  */
-export function deriveDeliveryModel(doc: SquareDoc): DeliveryModel {
-  const roster = rosterNames(doc).filter((name) => isCurrentlyJoined(doc.acts, name));
+export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
+  const roster = rosterNames(squareState).filter((name) => isCurrentlyJoined(squareState.acts, name));
   let pendingByRecipient: Map<string, PlannedNotification[]> | undefined;
 
   function plan(item: StoredAct): PlannedNotification[] {
@@ -122,16 +122,16 @@ export function deriveDeliveryModel(doc: SquareDoc): DeliveryModel {
     if (recipient === undefined) return [];
     if (pendingByRecipient === undefined) {
       pendingByRecipient = new Map(roster.map((name) => [name, []]));
-      const joinedAfter = new Map(roster.map((name) => [name, lastJoinIndex(doc.acts, name)]));
+      const joinedAfter = new Map(roster.map((name) => [name, lastJoinIndex(squareState.acts, name)]));
 
-      for (const act of doc.acts) {
+      for (const act of squareState.acts) {
         if (act.kind !== 'say') continue;
         const audience = audienceOf(act);
         if (audience.kind === 'mentions' && audience.names.length === 0) continue;
         for (const planned of plan(act)) {
           const joinedAt = joinedAfter.get(planned.recipient);
           if (joinedAt === undefined || act.index <= joinedAt) continue;
-          if (isDeliveryDelivered(doc, planned.recipient, act.index)) continue;
+          if (isDeliveryDelivered(squareState, planned.recipient, act.index)) continue;
           pendingByRecipient.get(planned.recipient)?.push(planned);
         }
       }
@@ -142,17 +142,17 @@ export function deriveDeliveryModel(doc: SquareDoc): DeliveryModel {
   return { plan, pendingFor };
 }
 
-export function planActNotifications(doc: SquareDoc, item: StoredAct): PlannedNotification[] {
-  return deriveDeliveryModel(doc).plan(item);
+export function planActNotifications(squareState: SquareState, item: StoredAct): PlannedNotification[] {
+  return deriveDeliveryModel(squareState).plan(item);
 }
 
 /** Mark only the directed notifications selected by the canonical pending projection. */
-export function markDeliveredNotifications(doc: SquareDoc, recipient: string, delivered: StoredAct[], at = Date.now()): boolean {
+export function markDeliveredNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now()): boolean {
   const deliveredIndexes = new Set(delivered.map((item) => item.index));
   let changed = false;
-  for (const notification of deriveDeliveryModel(doc).pendingFor(recipient)) {
+  for (const notification of deriveDeliveryModel(squareState).pendingFor(recipient)) {
     if (!deliveredIndexes.has(notification.item.index)) continue;
-    changed = recordDeliveredDelivery(doc, notification.recipient, notification.item.index, { at }) || changed;
+    changed = recordDeliveredDelivery(squareState, notification.recipient, notification.item.index, { at }) || changed;
   }
   return changed;
 }

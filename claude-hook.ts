@@ -28,11 +28,11 @@ export async function runClaudeHookAsync(inputText: string, env: NodeJS.ProcessE
   return runClaudeHook(inputText, env);
 }
 
-export function claudeHookResponse(
+export async function claudeHookResponse(
   input: NativeHookInput,
-  lookup: (sessionId: string) => InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
-): object | undefined {
+): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (input.hook_event_name !== 'PostToolBatch') return undefined;
   return presentPendingAtBoundary(
@@ -43,7 +43,7 @@ export function claudeHookResponse(
   );
 }
 
-export function runClaudeHook(inputText: string, env: NodeJS.ProcessEnv = process.env): string {
+export async function runClaudeHook(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   let input: unknown;
   try {
     input = JSON.parse(inputText);
@@ -51,6 +51,6 @@ export function runClaudeHook(inputText: string, env: NodeJS.ProcessEnv = proces
     return '';
   }
   if (input === null || typeof input !== 'object') return '';
-  const response = claudeHookResponse(input as NativeHookInput, sessionInbox, env);
+  const response = await claudeHookResponse(input as NativeHookInput, sessionInbox, env);
   return response === undefined ? '' : `${JSON.stringify(response)}\n`;
 }

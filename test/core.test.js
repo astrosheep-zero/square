@@ -7,7 +7,7 @@ import { coreActivities, coreHold, coreResume, decideAct, decideJoin } from '../
 import { createApplication } from '../dist/square-engine.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
-function makeDoc(overrides = {}) {
+function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
   return {
     hardCap: 'hardCap' in overrides ? overrides.hardCap : null,
@@ -20,7 +20,7 @@ function makeDoc(overrides = {}) {
 }
 
 test('joining contributes one canonical lifecycle activity for an unknown participant', () => {
-  const result = decideJoin(makeDoc(), 'Alice', 100);
+  const result = decideJoin(makeState(), 'Alice', 100);
 
   assert.equal(result.addParticipant, true);
   assert.equal(result.joinedName, 'Alice');
@@ -29,7 +29,7 @@ test('joining contributes one canonical lifecycle activity for an unknown partic
 });
 
 test('pending activities begin after the recipient joined and include directed mentions', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'say', actor: 'Alice', at: 2, body: 'too early @Bob' },
@@ -40,13 +40,13 @@ test('pending activities begin after the recipient joined and include directed m
   });
 
   assert.deepEqual(
-    coreActivities(doc, { pending: true, viewer: 'Bob' }).map((item) => item.index),
+    coreActivities(squareState, { pending: true, viewer: 'Bob' }).map((item) => item.index),
     [3, 4]
   );
 });
 
 test('mention history selects directed says for the addressed participant', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
@@ -55,12 +55,12 @@ test('mention history selects directed says for the addressed participant', () =
     ],
   });
 
-  assert.deepEqual(coreActivities(doc, { mention: 'Bob' }).map((item) => item.index), [3]);
-  assert.deepEqual(coreActivities(doc, { mention: 'Cara' }), []);
+  assert.deepEqual(coreActivities(squareState, { mention: 'Bob' }).map((item) => item.index), [3]);
+  assert.deepEqual(coreActivities(squareState, { mention: 'Cara' }), []);
 });
 
 test('directed pending attention survives a cursor that already consumed the public stream', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
@@ -68,15 +68,15 @@ test('directed pending attention survives a cursor that already consumed the pub
       { kind: 'say', actor: 'Bob', at: 4, body: 'self activity' },
     ],
   });
-  doc.runtime.cursors.Bob = { consumedThroughIndex: 3, updatedAt: 4 };
+  squareState.runtime.cursors.Bob = { consumedThroughIndex: 3, updatedAt: 4 };
 
-  assert.deepEqual(deliveryDelta(doc, 'Bob').map((item) => item.index), [2]);
+  assert.deepEqual(deliveryDelta(squareState, 'Bob').map((item) => item.index), [2]);
 });
 
 test('host controls preserve the requesting actor and body', () => {
-  const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Host', at: 1 }] });
-  const hold = coreHold(doc, 'Host', 'pause', 10);
-  const resume = coreResume(doc, 'Host', 11);
+  const squareState = makeState({ acts: [{ kind: 'join', actor: 'Host', at: 1 }] });
+  const hold = coreHold(squareState, 'Host', 'pause', 10);
+  const resume = coreResume(squareState, 'Host', 11);
 
   assert.deepEqual(
     { kind: hold.kind, actor: hold.actor, body: hold.body },
@@ -90,7 +90,7 @@ test('host controls preserve the requesting actor and body', () => {
 
 test('application commits advance the actor cursor and never reuse an index', async () => {
   let now = 0;
-  const cell = createMemoryCell(makeDoc());
+  const cell = createMemoryCell(makeState());
   const app = createApplication({ cell, clock: () => (now += 1) });
   await app.join('Alice');
   await app.express('Alice', 'hello @Alice', { force: true });
@@ -103,7 +103,7 @@ test('application commits advance the actor cursor and never reuse an index', as
 });
 
 test('a valid expression emits the caller as actor and preserves its body, reach, and reply', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
@@ -116,7 +116,7 @@ test('a valid expression emits the caller as actor and preserves its body, reach
       notifyLeases: {},
     },
   });
-  const decision = decideAct(doc, {
+  const decision = decideAct(squareState, {
     name: 'Alice',
     body: 'hi @Bob',
     reply: 1,
@@ -134,7 +134,7 @@ test('a valid expression emits the caller as actor and preserves its body, reach
 });
 
 test('an expression without a mention or bell is invalid', () => {
-  const doc = makeDoc({
+  const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
@@ -142,20 +142,20 @@ test('an expression without a mention or bell is invalid', () => {
   });
 
   assert.throws(
-    () => decideAct(doc, { name: 'Alice', body: 'hello everyone', force: true, now: 3 }),
+    () => decideAct(squareState, { name: 'Alice', body: 'hello everyone', force: true, now: 3 }),
     (error) => error.code === 'invalid_args' && /@mention.*--bell/.test(error.message)
   );
 
   assert.throws(
-    () => decideAct(doc, { name: 'Alice', body: 'aside', force: true, now: 3 }),
+    () => decideAct(squareState, { name: 'Alice', body: 'aside', force: true, now: 3 }),
     (error) => error.code === 'invalid_args'
   );
 });
 
 test('reply rejects an activity id that has not landed yet', () => {
-  const doc = makeDoc({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
+  const squareState = makeState({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
   assert.throws(
-    () => decideAct(doc, { name: 'Alice', body: 'late answer', force: true, now: 2, reply: 9 }),
+    () => decideAct(squareState, { name: 'Alice', body: 'late answer', force: true, now: 2, reply: 9 }),
     /Unknown reply activity: act\/9/
   );
 });

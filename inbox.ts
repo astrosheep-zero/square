@@ -1,33 +1,25 @@
-import { loadSquare } from './artifact.js';
-import { deriveDeliveryModel } from './delivery.js';
 import { type InboxMembership } from './model.js';
 import { lookupSessionBindings } from './registry.js';
-import { freshWatchLease, isCurrentlyJoined, resolveRosterName } from './runtime.js';
+import { openFileApplication } from './square-file-adapter.js';
 
-export function sessionInbox(sessionId: string): InboxMembership[] {
+export async function sessionInbox(sessionId: string): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
   for (const binding of lookupSessionBindings(sessionId)) {
+    let application;
     try {
-      const doc = loadSquare(binding.squarePath);
-      const name = resolveRosterName(doc, binding.name);
-      if (!name || !isCurrentlyJoined(doc.acts, name)) continue;
-      const notifications = deriveDeliveryModel(doc).pendingFor(name).map(({ item, route }) => ({
-        actIndex: item.index,
-        actor: item.actor,
-        at: item.at,
-        route,
-        body: item.body,
-      }));
-      const lease = freshWatchLease(doc, name);
-      const catchLease = lease?.ownerId === binding.ownerId ? lease : undefined;
+      application = await openFileApplication(binding.squarePath);
+      const projection = await application.inboxProjection(binding.name, binding.ownerId);
+      if (!projection.joined) continue;
       inbox.push({
-        name,
+        name: projection.name,
         squarePath: binding.squarePath,
-        notifications,
-        ...(catchLease !== undefined ? { catchLease } : {}),
+        notifications: [...projection.notifications],
+        ...(projection.catchLease !== undefined ? { catchLease: projection.catchLease } : {}),
       });
     } catch {
       // A stale discovery-cache row only disables delivery for that membership.
+    } finally {
+      await application?.close();
     }
   }
   return inbox;

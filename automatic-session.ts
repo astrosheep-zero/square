@@ -2,12 +2,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadSquare } from './artifact.js';
 import { openFileApplication } from './square-file-adapter.js';
 import { canonicalSquarePath, lookupSession, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
-import { isCurrentlyJoined } from './runtime.js';
-import { renderPublicTail } from './presentation.js';
-import { type SquareDoc, validateName } from './model.js';
+import { renderAmbientEvent } from './presentation.js';
+import { validateName } from './model.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
@@ -35,31 +33,34 @@ export function automaticParticipant(provider: AutomaticProvider, sessionId: str
 export async function automaticSessionStart(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
   const squarePath = publicSquarePath(cwd);
   if (!fs.existsSync(squarePath)) return undefined;
-  let doc: SquareDoc;
+  let application;
   try {
-    doc = loadSquare(squarePath);
+    application = await openFileApplication(squarePath);
   } catch (error) {
     process.stderr.write(`! PUBLIC.square unreadable: ${error instanceof Error ? error.message : String(error)}\n`);
     return undefined;
   }
   const name = automaticParticipant(provider, sessionId, env);
   const bindings = lookupSession(sessionId);
-  if (bindings.some((binding) => canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name && isCurrentlyJoined(doc.acts, name))) {
+  const before = await application.entryPresentation(name);
+  if (bindings.some((binding) => canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name) && before.joined) {
+    await application.close();
     return undefined;
   }
-  const application = await openFileApplication(squarePath);
   try {
     await application.join(name);
+    const channel = provider === 'claude' ? 'claude-code' : provider;
+    recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
+    const after = await application.entryPresentation(name, 10);
+    const activity = after.recentActivities.map((event) => renderAmbientEvent(event, name, {
+      now: Date.now(),
+      preview: 200,
+      actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
+    })).filter(Boolean).join('\n\n');
+    return [`You joined the public square as ${name}.`, after.scene, after.context ? `context\n${after.context}` : '', activity ? `recent activity\n${activity}` : ''].filter(Boolean).join('\n\n');
   } finally {
     await application.close();
   }
-  const channel = provider === 'claude' ? 'claude-code' : provider;
-  recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
-  const after = loadSquare(squarePath);
-  const scene = after.warmup.join('\n').trim();
-  const context = after.preamble.join('\n').trim();
-  const activity = renderPublicTail(after.acts, 10, Date.now(), name);
-  return [`You joined the public square as ${name}.`, scene, context ? `context\n${context}` : '', activity ? `recent activity\n${activity}` : ''].filter(Boolean).join('\n\n');
 }
 
 export async function automaticSessionEnd(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -67,10 +68,9 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   const channel = provider === 'claude' ? 'claude-code' : provider;
   const binding = lookupSessionBindings(sessionId).find((item) => canonicalSquarePath(item.squarePath) === canonicalSquarePath(squarePath) && item.channel === channel);
   if (binding === undefined || !fs.existsSync(squarePath)) return;
-  const doc = loadSquare(squarePath);
-  if (!isCurrentlyJoined(doc.acts, binding.name)) return;
   const application = await openFileApplication(squarePath);
   try {
+    if (!(await application.entryPresentation(binding.name)).joined) return;
     await application.done(binding.name);
   } finally {
     await application.close();

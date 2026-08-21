@@ -83,15 +83,16 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
   ].join('\n');
 }
 
-export function presentPendingAtBoundary<T>(
+export async function presentPendingAtBoundary<T>(
   sessionId: string,
   present: (context: string) => T,
-  lookup: (sessionId: string) => InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
-): T | undefined {
+): Promise<T | undefined> {
+  const inbox = await lookup(sessionId);
   return presentOnce(
     sessionId,
-    (id) => pendingAtBoundary(lookup(id)),
+    () => pendingAtBoundary(inbox),
     (inbox) => present(renderPendingAtBoundary(inbox)),
     env
   );

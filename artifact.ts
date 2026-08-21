@@ -14,7 +14,7 @@ import {
   type HardCap,
   type NotifyLease,
   type ReadCursor,
-  type SquareDoc,
+  type SquareState,
   type SquareRuntimeState,
   type StoredAct,
   type WatchLease,
@@ -36,7 +36,7 @@ export interface DoctorProblem {
 export interface DiagnoseResult {
   unfixable?: string;
   problems: DoctorProblem[];
-  doc?: SquareDoc;
+  state?: SquareState;
 }
 
 function invalidArtifact(detail: string): SquareError {
@@ -221,7 +221,7 @@ function validateActs(value: unknown): value is StoredAct[] {
   return true;
 }
 
-function validateSquareDoc(value: unknown): SquareDoc {
+function validateSquareState(value: unknown): SquareState {
   if (!isObject(value)
     || !hasExactKeys(value, ['hardCap', 'preamble', 'warmup', 'acts', 'runtime'], ['throttlePerMinute'])
     || !(value.hardCap === null || (Number.isSafeInteger(value.hardCap) && (value.hardCap as number) > 0))
@@ -242,7 +242,7 @@ function validateSquareDoc(value: unknown): SquareDoc {
   const references = validateAssignedRuntimeReferences(runtime);
   if (references === 'malformed') throw invalidArtifact('snapshot schema is malformed.');
   if (references === 'future') throw invalidArtifact('runtime references an unassigned activity index.');
-  return value as unknown as SquareDoc;
+  return value as unknown as SquareState;
 }
 
 function encodeEnvelope(magic: Buffer, value: unknown): Buffer {
@@ -311,10 +311,10 @@ function readGuide(name: string): string {
   }
 }
 
-export function createSquareDoc(
+export function createSquareState(
   options: BuildOptions & { hardCap: HardCap },
   snippet: string,
-): SquareDoc {
+): SquareState {
   const guides = [readGuide('participant')];
   if (options.template !== undefined) guides.push(readGuide(options.template));
   return {
@@ -327,12 +327,12 @@ export function createSquareDoc(
   };
 }
 
-export function encodeSquare(doc: SquareDoc): Buffer {
-  return encodeEnvelope(SQUARE_MAGIC, validateSquareDoc(doc));
+export function encodeSquare(squareState: SquareState): Buffer {
+  return encodeEnvelope(SQUARE_MAGIC, validateSquareState(squareState));
 }
 
-export function decodeSquare(bytes: Buffer): SquareDoc {
-  return validateSquareDoc(decodeEnvelope(bytes, SQUARE_MAGIC));
+export function decodeSquare(bytes: Buffer): SquareState {
+  return validateSquareState(decodeEnvelope(bytes, SQUARE_MAGIC));
 }
 
 export function encodeArchive(acts: StoredAct[]): Buffer {
@@ -380,12 +380,12 @@ function atomicWrite(target: string, bytes: Buffer): void {
   }
 }
 
-export function writeSquareFile(squarePath: string, doc: SquareDoc): void {
+export function writeSquareFile(squarePath: string, squareState: SquareState): void {
   requireSquareExtension(squarePath);
-  atomicWrite(squarePath, encodeSquare(doc));
+  atomicWrite(squarePath, encodeSquare(squareState));
 }
 
-export function loadSquare(squarePath: string): SquareDoc {
+export function loadSquare(squarePath: string): SquareState {
   requireSquareExtension(squarePath);
   return decodeSquare(readArtifact(squarePath));
 }
@@ -398,7 +398,7 @@ export function loadArchive(archivePath: string): StoredAct[] {
   return decodeArchive(readArtifact(archivePath));
 }
 
-export function probeSquare(squarePath: string): SquareDoc | undefined {
+export function probeSquare(squarePath: string): SquareState | undefined {
   if (!squarePath.endsWith('.square')) return undefined;
   let descriptor: number | undefined;
   try {
@@ -421,7 +421,7 @@ export function probeSquare(squarePath: string): SquareDoc | undefined {
 
 export function diagnoseSquareFile(squarePath: string): DiagnoseResult {
   try {
-    return { problems: [], doc: loadSquare(squarePath) };
+    return { problems: [], state: loadSquare(squarePath) };
   } catch (error) {
     return {
       unfixable: error instanceof Error ? error.message : String(error),

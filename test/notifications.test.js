@@ -26,14 +26,14 @@ function fixture() {
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'private payload @Bob', index: 2 },
   ];
-  const doc = {
+  const squareState = {
     hardCap: null,
     preamble: [],
     warmup: ['warmup'],
     acts,
     runtime: { ...emptyRuntimeState(3), nextActIndex: 3 },
   };
-  writeSquareFile(squarePath, doc);
+  writeSquareFile(squarePath, squareState);
   return { root, squarePath, env };
 }
 

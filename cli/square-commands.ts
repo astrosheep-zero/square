@@ -1,17 +1,18 @@
 import { cmdActivity } from '../activity.js';
-import { loadSquare } from '../artifact.js';
 import { cmdCompact } from '../compact.js';
 import {
   type BuildOptions,
   type HardCap,
   type Reach,
+  formatActivityId,
   formatHardCap,
+  parseActivityId,
 } from '../model.js';
 import {
   participantCommandPrefix,
   quoteShell,
   renderEventCli,
-  renderPublicTail,
+  renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
 import {
@@ -23,7 +24,6 @@ import {
 import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openFileApplication } from '../square-file-adapter.js';
-import { formatActivityId, parseActivityId } from '../square-core.js';
 
 import {
   type CommandContext,
@@ -154,16 +154,19 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           ].join('\n')
         );
       }
-      const after = loadSquare(context.squarePath);
-      const preamble = after.preamble.at(-1) === '---' ? after.preamble.slice(0, -1) : after.preamble;
+      const after = await application.entryPresentation(joinedName, intent.lastN);
       recordLocalJoin(joinedName, context.squarePath);
       await sweepPendingNotifications(context.squarePath);
-      const activities = renderPublicTail(after.acts, intent.lastN, nowMs(), joinedName);
-      const contextText = preamble.join('\n').trim();
+      const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
+        now: nowMs(),
+        preview: intent.lastN === null ? undefined : 200,
+        actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
+      })).filter(Boolean).join('\n\n');
+      const contextText = after.joinContext;
       const fallback = hasAutomaticDeliveryIdentity()
         ? []
         : ['', `» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
-      const scene = after.warmup.join('\n').trim();
+      const scene = after.scene;
       const entryLine = !isRejoin
         ? '● You stepped into the square'
         : reconnect && !intent.kick
@@ -176,7 +179,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
         ...fallback,
       ].join('\n');
-      return withPathOutput(context.squarePath, output, { participantCount: inSquareCount(after) });
+      return withPathOutput(context.squarePath, output, { participantCount: after.participantCount });
     } finally {
       await application.close();
     }
@@ -244,7 +247,9 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const result = await application.done(intent.name, body).finally(() => application.close());
     const name = result.activity.actor;
     recordLocalDone(name, context.squarePath);
-    return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount: inSquareCount(loadSquare(context.squarePath)) });
+    const presentation = await openFileApplication(context.squarePath, { clock: nowMs });
+    const participantCount = (await presentation.entryPresentation(name).finally(() => presentation.close())).participantCount;
+    return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
 };
@@ -258,11 +263,13 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
   parse: parseHold,
   async execute(intent, context) {
     const application = await openFileApplication(context.squarePath, { clock: nowMs });
-    const result = await application.hold(intent.name, resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim())
-      .finally(() => application.close());
-    const doc = loadSquare(context.squarePath);
-    const index = parseActivityId(result.activity.id)!;
-    return withPathOutput(context.squarePath, renderEventCli(doc.acts.find((activity) => activity.index === index)!), { participantCount: inSquareCount(doc), held: true });
+    try {
+      const result = await application.hold(intent.name, resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim());
+      const presentation = await application.eventPresentation(result.activity.id);
+      return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount, held: true });
+    } finally {
+      await application.close();
+    }
   },
   present: (result) => process.stdout.write(result),
 };
@@ -274,10 +281,13 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
   },
   async execute(intent, context) {
     const application = await openFileApplication(context.squarePath, { clock: nowMs });
-    const result = await application.resume(intent.name).finally(() => application.close());
-    const doc = loadSquare(context.squarePath);
-    const index = parseActivityId(result.activity.id)!;
-    return withPathOutput(context.squarePath, renderEventCli(doc.acts.find((activity) => activity.index === index)!), { participantCount: inSquareCount(doc) });
+    try {
+      const result = await application.resume(intent.name);
+      const presentation = await application.eventPresentation(result.activity.id);
+      return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount });
+    } finally {
+      await application.close();
+    }
   },
   present: (result) => process.stdout.write(result),
 };

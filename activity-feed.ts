@@ -1,4 +1,4 @@
-import { sameName, type StoredAct, type SquareDoc, type PublicAct, type RoomChangeAct } from './model.js';
+import { sameName, type StoredAct, type SquareState, type PublicAct, type RoomChangeAct } from './model.js';
 import { advanceCursor, latestActIndex, readCursor } from './runtime.js';
 import { deriveDeliveryModel, matchesCatchFilter } from './delivery.js';
 
@@ -12,10 +12,10 @@ export function actDelta(acts: StoredAct[], cursor: number): StoredAct[] {
 }
 
 /** Public cursor changes plus directed receipts that remain pending behind it. */
-export function deliveryDelta(doc: SquareDoc, name: string): StoredAct[] {
-  const items = actDelta(doc.acts, readCursor(doc, name));
+export function deliveryDelta(squareState: SquareState, name: string): StoredAct[] {
+  const items = actDelta(squareState.acts, readCursor(squareState, name));
   const seen = new Set(items.map((act) => act.index));
-  for (const notification of deriveDeliveryModel(doc).pendingFor(name)) {
+  for (const notification of deriveDeliveryModel(squareState).pendingFor(name)) {
     if (!seen.has(notification.item.index)) items.push(notification.item);
   }
   return items.sort((a, b) => a.index - b.index);
@@ -54,6 +54,6 @@ export function filteredRoomChanges(delta: StoredAct[], name: string, filter: Ac
   return peerRoomChanges(delta, name).filter((act) => matchesParticipants(act, filter.participants));
 }
 
-export function ackPeerDelta(doc: SquareDoc, name: string, delta: StoredAct[], at?: number): boolean {
-  return advanceCursor(doc, name, latestActIndex([...peerPublicActs(delta, name), ...peerRoomChanges(delta, name)]), at);
+export function ackPeerDelta(squareState: SquareState, name: string, delta: StoredAct[], at?: number): boolean {
+  return advanceCursor(squareState, name, latestActIndex([...peerPublicActs(delta, name), ...peerRoomChanges(delta, name)]), at);
 }

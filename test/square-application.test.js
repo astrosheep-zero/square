@@ -4,12 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareDoc, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { createApplication } from '../dist/square-engine.js';
 import { createFileCell, createMemoryCell } from '../dist/square-storage.js';
 
-function emptyDoc() {
-  return createSquareDoc({ force: false, hardCap: null }, 'warmup');
+function emptyState() {
+  return createSquareState({ force: false, hardCap: null }, 'warmup');
 }
 
 async function rejectsWithCode(operation, code) {
@@ -20,14 +20,14 @@ async function rejectsWithCode(operation, code) {
 }
 
 function memoryFixture() {
-  const cell = createMemoryCell(emptyDoc());
+  const cell = createMemoryCell(emptyState());
   return { cell, persisted: async () => (await cell.read()).state };
 }
 
 function fileFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-'));
   const squarePath = path.join(root, 'SQUARE.square');
-  writeSquareFile(squarePath, emptyDoc());
+  writeSquareFile(squarePath, emptyState());
   return { cell: createFileCell(squarePath), persisted: async () => loadSquare(squarePath) };
 }
 
@@ -79,6 +79,12 @@ async function exerciseApplication(makeFixture) {
   assert.equal(bobHistory.at(-1).body, 'private @Bob');
   assert.equal(caraHistory.at(-1).perception, 'presence');
   assert.equal('body' in caraHistory.at(-1), false);
+  const bobPresentation = await app.historyPresentation({ viewer: 'Bob', lastN: null });
+  const caraPresentation = await app.historyPresentation({ viewer: 'Cara', lastN: null });
+  const anonymousPresentation = await app.historyPresentation({ lastN: null });
+  assert.equal(bobPresentation.activities.at(-1).perception, 'full');
+  assert.equal(caraPresentation.activities.at(-1).perception, 'presence');
+  assert.equal(anonymousPresentation.activities.at(-1).perception, 'full');
   const afterHistory = await cell.read();
   assert.equal(afterHistory.version, beforeHistory.version);
   assert.deepEqual(afterHistory.state.runtime.cursors, beforeHistory.state.runtime.cursors);
@@ -124,7 +130,7 @@ for (const [name, makeFixture] of [['memory', memoryFixture], ['file', fileFixtu
 }
 
 test('memory StateCell changed wakes only after a committed version', async () => {
-  const cell = createMemoryCell(emptyDoc());
+  const cell = createMemoryCell(emptyState());
   const before = await cell.read();
   const waiting = cell.changed(before.version, 500);
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -134,7 +140,7 @@ test('memory StateCell changed wakes only after a committed version', async () =
 });
 
 test('memory StateCell makes a throwing transaction invisible', async () => {
-  const cell = createMemoryCell(emptyDoc());
+  const cell = createMemoryCell(emptyState());
   const before = await cell.read();
   await assert.rejects(cell.transact((state) => {
     state.acts.push({ kind: 'join', actor: 'lost', at: 1, index: 0 });
@@ -149,7 +155,7 @@ test('memory StateCell makes a throwing transaction invisible', async () => {
 test('file StateCell serializes concurrent writers in the existing binary artifact', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-concurrent-'));
   const squarePath = path.join(root, 'SQUARE.square');
-  writeSquareFile(squarePath, emptyDoc());
+  writeSquareFile(squarePath, emptyState());
   const first = createApplication({ cell: createFileCell(squarePath), clock: () => 100 });
   const second = createApplication({ cell: createFileCell(squarePath), clock: () => 200 });
 

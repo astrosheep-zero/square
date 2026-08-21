@@ -191,14 +191,14 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
 test('package facade participant verbs persist through the shared application engine', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
-  const doc = {
+  const squareState = {
     hardCap: null,
     preamble: [],
     warmup: ['warmup'],
     acts: [],
     runtime: emptyRuntimeState(0),
   };
-  writeSquareFile(squarePath, doc);
+  writeSquareFile(squarePath, squareState);
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
@@ -219,10 +219,10 @@ test('package facade participant verbs persist through the shared application en
   }
 });
 
-test('failed compact archive staging leaves the Square document unchanged', async () => {
+test('failed compact archive staging leaves the Square state unchanged', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-compact-stage-failure-'));
   const squarePath = path.join(dir, 'SQUARE.square');
-  const doc = {
+  const squareState = {
     hardCap: null,
     preamble: [],
     warmup: ['warmup'],
@@ -232,8 +232,8 @@ test('failed compact archive staging leaves the Square document unchanged', asyn
     ],
     runtime: emptyRuntimeState(2),
   };
-  doc.runtime.cursors.Alice = { consumedThroughIndex: 1, updatedAt: 2 };
-  writeSquareFile(squarePath, doc);
+  squareState.runtime.cursors.Alice = { consumedThroughIndex: 1, updatedAt: 2 };
+  writeSquareFile(squarePath, squareState);
   const blockedParent = path.join(dir, 'not-a-directory');
   fs.writeFileSync(blockedParent, 'file');
   try {

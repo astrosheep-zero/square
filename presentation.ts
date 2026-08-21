@@ -1,4 +1,4 @@
-import { type StoredAct, type SquareDoc, type PublicAct, type RoomChangeAct, sameName } from './model.js';
+import { type StoredAct, type SquareState, type PublicAct, type RoomChangeAct, sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { audienceIncludes, audienceOf, perceive } from './square-core.js';
@@ -345,10 +345,10 @@ export function renderPublicTail(events: StoredAct[], lastN: number | null | und
     .join('\n\n');
 }
 
-function lastPresenceAnchor(doc: SquareDoc, name: string): number {
-  const cursor = readCursor(doc, name);
-  for (let i = doc.acts.length - 1; i >= 0; i--) {
-    const event = doc.acts[i];
+function lastPresenceAnchor(squareState: SquareState, name: string): number {
+  const cursor = readCursor(squareState, name);
+  for (let i = squareState.acts.length - 1; i >= 0; i--) {
+    const event = squareState.acts[i];
     const index = event.index;
     if (index > cursor) continue;
     if (event.kind === 'say' || event.kind === 'done') return index;
@@ -361,7 +361,7 @@ function renderLastPresenceMarker(name: string): string {
 }
 
 export function renderActivitiesView(
-  doc: SquareDoc,
+  squareState: SquareState,
   visible: StoredAct[],
   lastN: number | null | undefined,
   full: boolean | undefined,
@@ -374,8 +374,8 @@ export function renderActivitiesView(
   const previewLen = full ? undefined : BODY_PREVIEW_LENGTH;
 
   const markers = new Map<number, string[]>();
-  for (const participant of rosterNames(doc)) {
-    const anchor = lastPresenceAnchor(doc, participant);
+  for (const participant of rosterNames(squareState)) {
+    const anchor = lastPresenceAnchor(squareState, participant);
     if (anchor >= 0) markers.set(anchor, [...(markers.get(anchor) ?? []), participant]);
   }
 
@@ -383,7 +383,7 @@ export function renderActivitiesView(
   for (const act of shown) {
     const opts = {
       preview: previewLen,
-      actNumber: act.kind === 'say' ? sayNumberFor(doc.acts, act) : undefined,
+      actNumber: act.kind === 'say' ? sayNumberFor(squareState.acts, act) : undefined,
     };
     const rendered = mode === 'archive'
       ? renderEventCli(act, opts)

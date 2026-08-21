@@ -124,9 +124,11 @@ const TARGETS: readonly HarnessTarget[] = [
   {
     name: 'delivery',
     capabilities: ['doctor'],
-    doctor: ({ squarePath }) => result(readableSquarePath(squarePath)
-      ? doctorDeliveryHealth(squarePath, wakeGraceMs())
-      : ['○ delivery health skipped (no readable square path)']),
+    async doctor({ squarePath }) {
+      return result(readableSquarePath(squarePath)
+        ? await doctorDeliveryHealth(squarePath, wakeGraceMs())
+        : ['○ delivery health skipped (no readable square path)']);
+    },
   },
 ];
 

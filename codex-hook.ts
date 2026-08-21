@@ -10,11 +10,11 @@ export interface CodexHookInput {
   source?: unknown;
 }
 
-export function codexHookResponse(
+export async function codexHookResponse(
   input: CodexHookInput,
-  lookup: (sessionId: string) => InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
-): object | undefined {
+): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (input.hook_event_name !== 'PostToolUse') return undefined;
   return presentPendingAtBoundary(
@@ -25,7 +25,7 @@ export function codexHookResponse(
   );
 }
 
-export function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process.env): string {
+export async function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   let input: unknown;
   try {
     input = JSON.parse(inputText);
@@ -33,7 +33,7 @@ export function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process
     return '';
   }
   if (input === null || typeof input !== 'object') return '';
-  const response = codexHookResponse(input as CodexHookInput, sessionInbox, env);
+  const response = await codexHookResponse(input as CodexHookInput, sessionInbox, env);
   return response === undefined ? '' : `${JSON.stringify(response)}\n`;
 }
 

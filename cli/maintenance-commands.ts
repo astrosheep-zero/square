@@ -1,4 +1,4 @@
-import { diagnoseSquareFile } from '../artifact.js';
+import { diagnoseSquareFile } from '../square-storage.js';
 import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 import { inSquareCount } from '../runtime.js';
 
@@ -16,7 +16,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   },
   execute(_intent, context) {
     const diagnosis = diagnoseSquareFile(context.squarePath);
-    if (diagnosis.unfixable !== undefined || diagnosis.doc === undefined) {
+    if (diagnosis.unfixable !== undefined || diagnosis.state === undefined) {
       return {
         output: withPathOutput(
           context.squarePath,
@@ -27,7 +27,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     }
     return {
       output: withPathOutput(context.squarePath, renderDoctorClean(), {
-        participantCount: inSquareCount(diagnosis.doc),
+        participantCount: inSquareCount(diagnosis.state),
       }),
     };
   },

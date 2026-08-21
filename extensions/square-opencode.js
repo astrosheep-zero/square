@@ -34,7 +34,7 @@ export default async function squareOpenCodePlugin() {
           joining.delete(input.sessionID);
           output.output = `${output.output}${output.output === '' ? '' : '\n\n'}${joined}`;
         }
-        presentPendingAtBoundary(
+        await presentPendingAtBoundary(
           input.sessionID,
           (context) => {
             output.output = `${output.output}${output.output === '' ? '' : '\n\n'}${context}`;

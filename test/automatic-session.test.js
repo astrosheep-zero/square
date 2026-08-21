@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareDoc, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { runCodexHookAsync } from '../dist/codex-hook.js';
 
@@ -14,7 +14,7 @@ function fixture() {
   const cwd = path.join(root, 'workspace');
   const publicPath = path.join(cwd, '.square', 'PUBLIC.square');
   fs.mkdirSync(path.dirname(publicPath), { recursive: true });
-  writeSquareFile(publicPath, createSquareDoc({ force: true, hardCap: null }, 'Host context'));
+  writeSquareFile(publicPath, createSquareState({ force: true, hardCap: null }, 'Host context'));
   const env = { ...process.env, SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'), SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'), SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'), SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'), SQUARE_LOCATION: path.join(root, 'other.square') };
   return { root, cwd, publicPath, env };
 }
@@ -42,9 +42,9 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
     const second = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(second, undefined);
   });
-  const doc = loadSquare(item.publicPath);
-  assert.equal(doc.acts.filter((act) => act.kind === 'join').length, 1);
-  assert.equal(doc.acts.some((act) => JSON.stringify(act).includes('thread-1')), false);
+  const squareState = loadSquare(item.publicPath);
+  assert.equal(squareState.acts.filter((act) => act.kind === 'join').length, 1);
+  assert.equal(squareState.acts.some((act) => JSON.stringify(act).includes('thread-1')), false);
   assert.equal(automaticParticipant('codex', 'thread-1', item.env), `codex-${crypto.createHash('sha256').update('thread-1').digest('hex').slice(0, 12)}`);
 });
 
@@ -54,8 +54,8 @@ test('automatic session end writes ordinary done for its bound owner', { concurr
     await automaticSessionStart('pi', 'pi-session', item.cwd, env);
     await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
   });
-  const doc = loadSquare(item.publicPath);
-  assert.deepEqual(doc.acts.map((act) => act.kind), ['join', 'done']);
+  const squareState = loadSquare(item.publicPath);
+  assert.deepEqual(squareState.acts.map((act) => act.kind), ['join', 'done']);
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'changed' }, (env) => automaticSessionEnd('pi', 'pi-session', item.cwd, env));
   assert.equal(loadSquare(item.publicPath).acts.length, 2);
 });

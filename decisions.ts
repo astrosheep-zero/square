@@ -4,7 +4,7 @@ import {
   type ActivitiesOptions,
   type Act,
   type StoredAct,
-  type SquareDoc,
+  type SquareState,
   type Reach,
   type HardCap,
   sameName,
@@ -25,7 +25,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
-import { extractMentions, formatActivityId, validate, type SquareState } from './square-core.js';
+import { extractMentions, formatActivityId, validate, type FoldedSquareState } from './square-core.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
@@ -41,17 +41,17 @@ export interface UnreadActivityPreview {
   act: Extract<StoredAct, { kind: 'say' }>;
 }
 
-export function resolveKnownName(doc: SquareDoc, name: string): string {
+export function resolveKnownName(squareState: SquareState, name: string): string {
   validateName(name);
-  const known = resolveRosterName(doc, name);
+  const known = resolveRosterName(squareState, name);
   if (known === undefined) {
-    const roster = rosterNames(doc);
+    const roster = rosterNames(squareState);
     throw new SquareError('invalid_args', `Unknown participant "${name}". Expected one of: ${roster.join(', ')}.`);
   }
   return known;
 }
 
-function participantState(state: SquareState, name: string): SquareState['participants'][number] | undefined {
+function participantState(state: FoldedSquareState, name: string): FoldedSquareState['participants'][number] | undefined {
   return state.participants.find((participant) => sameName(participant.name, name));
 }
 
@@ -61,11 +61,11 @@ export interface DecideJoinResult {
   joinAct?: Extract<Act, { kind: 'join' }>;
 }
 
-export function decideJoin(doc: SquareDoc, name: string, now: number): DecideJoinResult {
+export function decideJoin(squareState: SquareState, name: string, now: number): DecideJoinResult {
   validateName(name);
-  const knownName = resolveRosterName(doc, name);
+  const knownName = resolveRosterName(squareState, name);
   const joinedName = knownName ?? name;
-  const state = foldedState(doc);
+  const state = foldedState(squareState);
   const result = validate(state, { kind: 'join', actor: joinedName, at: now });
   if (!result.ok && result.reason === 'already_joined') {
     return { joinedName, addParticipant: false };
@@ -77,15 +77,15 @@ export function decideJoin(doc: SquareDoc, name: string, now: number): DecideJoi
   };
 }
 
-function resolveStandingName(doc: SquareDoc, requestedName: string): string {
+function resolveStandingName(squareState: SquareState, requestedName: string): string {
   validateName(requestedName);
-  const name = resolveRosterName(doc, requestedName);
+  const name = resolveRosterName(squareState, requestedName);
   if (name === undefined) throw new SquareError('not_joined', `${requestedName} has not joined this square`);
   return name;
 }
 
-function requireStanding(doc: SquareDoc, act: Act): void {
-  const result = validate(foldedState(doc), act);
+function requireStanding(squareState: SquareState, act: Act): void {
+  const result = validate(foldedState(squareState), act);
   if (result.ok) return;
   if (result.reason === 'done') throw new SquareError('already_done', `${act.actor ?? 'participant'} is already done`);
   if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor ?? 'participant'} has not joined this square`);
@@ -110,23 +110,23 @@ export type ActDecision =
 const UNREAD_PREVIEW_LIMIT = 3;
 
 export function decideAct(
-  doc: SquareDoc,
+  squareState: SquareState,
   input: { name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
 ): ActDecision {
   const { now, force } = input;
-  const name = resolveStandingName(doc, input.name);
+  const name = resolveStandingName(squareState, input.name);
   const body = input.body;
   if (body.trim() === '') throw new SquareError('invalid_args', 'express body cannot be empty');
   const reach = input.reach;
   const reply = input.reply;
   if (reply !== undefined) {
-    if (!Number.isSafeInteger(reply) || reply < 0 || reply >= doc.runtime.nextActIndex) {
+    if (!Number.isSafeInteger(reply) || reply < 0 || reply >= squareState.runtime.nextActIndex) {
       const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
       throw new SquareError('invalid_args', `Unknown reply activity: ${label}`);
     }
   }
 
-  const state = foldedState(doc);
+  const state = foldedState(squareState);
   if (
     reach !== 'bell'
     && extractMentions(body).length === 0
@@ -144,7 +144,7 @@ export function decideAct(
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
-    { hardCap: doc.hardCap, throttlePerMinute: doc.throttlePerMinute, throttleWindowMs: THROTTLE_WINDOW_MS }
+    { hardCap: squareState.hardCap, throttlePerMinute: squareState.throttlePerMinute, throttleWindowMs: THROTTLE_WINDOW_MS }
   );
   if (!result.ok) {
     if (result.reason === 'done') throw new SquareError('already_done', `${name} is already done`);
@@ -155,7 +155,7 @@ export function decideAct(
     if (result.reason === 'not_joined') throw new SquareError('not_joined', `${name} has not joined this square`);
   }
 
-  const delta = actDelta(doc.acts, readCursor(doc, name));
+  const delta = actDelta(squareState.acts, readCursor(squareState, name));
   const unreadPublic = peerPublicActs(delta, name);
   const unreadRoomChanges = peerRoomChanges(delta, name);
 
@@ -212,24 +212,24 @@ export function decideAct(
   };
 }
 
-export function coreDone(doc: SquareDoc, name: string, body: string, now: number): Extract<Act, { kind: 'done' }> {
-  const resolvedName = resolveStandingName(doc, name);
+export function coreDone(squareState: SquareState, name: string, body: string, now: number): Extract<Act, { kind: 'done' }> {
+  const resolvedName = resolveStandingName(squareState, name);
   const act = { kind: 'done' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
-  requireStanding(doc, act);
+  requireStanding(squareState, act);
   return act;
 }
 
-export function coreHold(doc: SquareDoc, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
-  const resolvedName = resolveStandingName(doc, actor);
+export function coreHold(squareState: SquareState, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
+  const resolvedName = resolveStandingName(squareState, actor);
   const act = { kind: 'hold' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
-  requireStanding(doc, act);
+  requireStanding(squareState, act);
   return act;
 }
 
-export function coreResume(doc: SquareDoc, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
-  const resolvedName = resolveStandingName(doc, actor);
+export function coreResume(squareState: SquareState, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
+  const resolvedName = resolveStandingName(squareState, actor);
   const act = { kind: 'resume' as const, actor: resolvedName, at: now };
-  requireStanding(doc, act);
+  requireStanding(squareState, act);
   return act;
 }
 
@@ -246,13 +246,13 @@ export interface ParticipantStatus {
 
 export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
 
-function presenceFor(doc: SquareDoc, snapshot: SquareState['participants'][number] | undefined, name: string, now: number): {
+function presenceFor(squareState: SquareState, snapshot: FoldedSquareState['participants'][number] | undefined, name: string, now: number): {
   state: CorePresenceState;
   lastAt: number | undefined;
 } {
   if (snapshot?.done) return { state: 'done', lastAt: snapshot.lastActiveAt };
-  const cursor = getReadState(doc, name);
-  const lease = freshWatchLease(doc, name, now);
+  const cursor = getReadState(squareState, name);
+  const lease = freshWatchLease(squareState, name, now);
   if (lease !== undefined) return { state: 'watching', lastAt: cursor?.updatedAt ?? lease.heartbeatAt };
   const lastAt = cursor?.updatedAt ?? (snapshot?.joined ? snapshot.lastActiveAt : undefined);
   return lastAt === undefined
@@ -274,16 +274,16 @@ export interface StatusResult {
   now: number;
 }
 
-function buildParticipantStatuses(doc: SquareDoc, now: number, state = foldedState(doc)): ParticipantStatus[] {
-  const delivery = deriveDeliveryModel(doc);
+function buildParticipantStatuses(squareState: SquareState, now: number, state = foldedState(squareState)): ParticipantStatus[] {
+  const delivery = deriveDeliveryModel(squareState);
   return state.participants.map((snapshot) => {
     const participant = snapshot.name;
-    const presence = presenceFor(doc, snapshot, participant, now);
+    const presence = presenceFor(squareState, snapshot, participant, now);
     const participantStatus = snapshot?.done ? 'done' : snapshot?.joined ? 'active' : 'not joined';
-    const consumedThrough = readCursor(doc, participant);
+    const consumedThrough = readCursor(squareState, participant);
     let unreadActivityCount = 0;
     if (snapshot?.joined) {
-      for (const act of doc.acts) {
+      for (const act of squareState.acts) {
         if (actStableIndex(act) <= consumedThrough || act.actor === undefined || sameName(act.actor, participant)) continue;
         if (act.kind !== 'read') unreadActivityCount++;
       }
@@ -301,33 +301,33 @@ function buildParticipantStatuses(doc: SquareDoc, now: number, state = foldedSta
   });
 }
 
-export function coreStatus(doc: SquareDoc, now: number): StatusResult {
-  const state = foldedState(doc);
-  const latestAct = publicActs(doc.acts).at(-1);
+export function coreStatus(squareState: SquareState, now: number): StatusResult {
+  const state = foldedState(squareState);
+  const latestAct = publicActs(squareState.acts).at(-1);
   return {
-    hardCap: doc.hardCap,
-    throttlePerMinute: doc.throttlePerMinute,
+    hardCap: squareState.hardCap,
+    throttlePerMinute: squareState.throttlePerMinute,
     activeCount: state.joined.length,
     doneCount: state.done.length,
     holdActive: state.hold.active,
     holdReason: state.hold.reason,
     holdActor: state.hold.actor,
     holdAt: state.hold.at,
-    participants: buildParticipantStatuses(doc, now, state),
+    participants: buildParticipantStatuses(squareState, now, state),
     latestAct,
     now,
   };
 }
 
-export function coreParticipants(doc: SquareDoc, now: number): ParticipantStatus[] {
-  return buildParticipantStatuses(doc, now);
+export function coreParticipants(squareState: SquareState, now: number): ParticipantStatus[] {
+  return buildParticipantStatuses(squareState, now);
 }
 
-export function coreActivities(doc: SquareDoc, opts: ActivitiesOptions): StoredAct[] {
+export function coreActivities(squareState: SquareState, opts: ActivitiesOptions): StoredAct[] {
   const participants = opts.participants ?? [];
-  const canonicalParticipants = participants.map((participant) => resolveKnownName(doc, participant));
-  const viewer = opts.viewer !== undefined ? resolveKnownName(doc, opts.viewer) : undefined;
-  let acts = [...doc.acts];
+  const canonicalParticipants = participants.map((participant) => resolveKnownName(squareState, participant));
+  const viewer = opts.viewer !== undefined ? resolveKnownName(squareState, opts.viewer) : undefined;
+  let acts = [...squareState.acts];
 
   // --at establishes one or more context windows first; other filters AND inside their union.
   if (opts.atIndexes !== undefined && opts.atIndexes.length > 0) {
@@ -351,12 +351,12 @@ export function coreActivities(doc: SquareDoc, opts: ActivitiesOptions): StoredA
   if (opts.before != null) acts = acts.filter((act) => act.at < opts.before!);
   if (opts.after != null) acts = acts.filter((act) => act.at > opts.after!);
   if (opts.mention != null) {
-    const mention = resolveKnownName(doc, opts.mention);
+    const mention = resolveKnownName(squareState, opts.mention);
     acts = acts.filter((act) => act.kind === 'say' && (act.reach === 'bell' || matchesMentionTarget(act, mention)));
   }
   if (opts.pending) {
     if (viewer === undefined) return [];
-    const pendingIndexes = new Set(deriveDeliveryModel(doc).pendingFor(viewer).map((notification) => notification.item.index));
+    const pendingIndexes = new Set(deriveDeliveryModel(squareState).pendingFor(viewer).map((notification) => notification.item.index));
     acts = acts.filter((act) => pendingIndexes.has(act.index));
   }
   const search = opts.grep !== undefined ? { pattern: opts.grep, fixed: false } : opts.fixed !== undefined ? { pattern: opts.fixed, fixed: true } : undefined;
@@ -382,27 +382,27 @@ export function coreActivities(doc: SquareDoc, opts: ActivitiesOptions): StoredA
 
 export interface CompactResult {
   archived: StoredAct[];
-  doc: SquareDoc;
+  state: SquareState;
 }
 
-export function coreCompact(doc: SquareDoc, keep: number): CompactResult {
-  if (doc.acts.length <= keep) return { archived: [], doc };
-  const splitAt = doc.acts.length - keep;
-  const archived = doc.acts.slice(0, splitAt);
-  const retained = doc.acts.slice(splitAt);
+export function coreCompact(squareState: SquareState, keep: number): CompactResult {
+  if (squareState.acts.length <= keep) return { archived: [], state: squareState };
+  const splitAt = squareState.acts.length - keep;
+  const archived = squareState.acts.slice(0, splitAt);
+  const retained = squareState.acts.slice(splitAt);
   const cutoffIndex = actStableIndex(archived[archived.length - 1]);
-  const unread = foldedState(doc).participants
-    .filter((participant) => participant.joined && readCursor(doc, participant.name) < cutoffIndex)
+  const unread = foldedState(squareState).participants
+    .filter((participant) => participant.joined && readCursor(squareState, participant.name) < cutoffIndex)
     .map((participant) => participant.name);
   if (unread.length > 0) {
     throw new InternalSquareError('conflict', `Refusing to compact: ${unread.join(', ')} ${unread.length === 1 ? 'has' : 'have'} not read through the activities being archived.`);
   }
   return {
     archived,
-    doc: {
-      ...doc,
+    state: {
+      ...squareState,
       acts: retained,
-      runtime: doc.runtime,
+      runtime: squareState.runtime,
     },
   };
 }

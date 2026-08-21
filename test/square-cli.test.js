@@ -242,10 +242,10 @@ test('build writes one SQUARE01 snapshot with no sidecar or Markdown markers', (
   const bytes = fs.readFileSync(file);
   assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
   assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name !== path.basename(file) && !name.endsWith('.lock')), []);
-  const doc = loadSquare(file);
-  assert.equal(doc.hardCap, 3);
-  assert.deepEqual(doc.preamble, ['## Topic', '', 'Testing v2']);
-  assert.deepEqual(doc.acts, []);
+  const squareState = loadSquare(file);
+  assert.equal(squareState.hardCap, 3);
+  assert.deepEqual(squareState.preamble, ['## Topic', '', 'Testing v2']);
+  assert.deepEqual(squareState.acts, []);
   const runtime = runtimeState(file);
   assert.equal('version' in runtime, false);
   assert.equal(runtime.nextActIndex, 0);
@@ -298,9 +298,9 @@ test('unknown participant can join and roster derives from join acts', () => {
   assert.equal(build(file).status, 0);
   const joined = run(withName(file, 'Alice', ['join']));
   assert.equal(joined.status, 0, joined.stderr);
-  const doc = loadSquare(file);
-  assert.deepEqual(doc.acts.map((act) => act.kind), ['join']);
-  assert.equal(doc.acts[0].actor, 'Alice');
+  const squareState = loadSquare(file);
+  assert.deepEqual(squareState.acts.map((act) => act.kind), ['join']);
+  assert.equal(squareState.acts[0].actor, 'Alice');
 });
 
 test('join and catch only show fallback catch hints without automatic session delivery', () => {
@@ -374,12 +374,12 @@ test('hold and resume persist the real actor, never system', () => {
   assert.match(held.stdout, /Host raised a hand — pause · 1m/);
   assert.doesNotMatch(held.stdout, /12m/);
   assert.equal(run(withName(file, 'Host', ['resume']), { env: { SQUARE_NOW_MS: '63000' } }).status, 0);
-  const doc = loadSquare(file);
-  const hold = doc.acts.find((act) => act.kind === 'hold');
-  const resume = doc.acts.find((act) => act.kind === 'resume');
+  const squareState = loadSquare(file);
+  const hold = squareState.acts.find((act) => act.kind === 'hold');
+  const resume = squareState.acts.find((act) => act.kind === 'resume');
   assert.equal(hold?.actor, 'Host');
   assert.equal(resume?.actor, 'Host');
-  assert.ok(doc.acts.every((act) => act.actor !== 'system'));
+  assert.ok(squareState.acts.every((act) => act.actor !== 'system'));
 });
 
 test('status stays compact and focuses on the current square', () => {
@@ -406,14 +406,14 @@ test('actor cursor advances on any self activity', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join'])).status, 0);
-  let doc = loadSquare(file);
-  assert.equal(doc.runtime.cursors.Alice.consumedThroughIndex, 0);
+  let squareState = loadSquare(file);
+  assert.equal(squareState.runtime.cursors.Alice.consumedThroughIndex, 0);
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello @Alice'])).status, 0);
-  doc = loadSquare(file);
-  assert.equal(doc.runtime.cursors.Alice.consumedThroughIndex, 1);
+  squareState = loadSquare(file);
+  assert.equal(squareState.runtime.cursors.Alice.consumedThroughIndex, 1);
   assert.equal(run(withName(file, 'Alice', ['done', 'bye'])).status, 0);
-  doc = loadSquare(file);
-  assert.equal(doc.runtime.cursors.Alice.consumedThroughIndex, 2);
+  squareState = loadSquare(file);
+  assert.equal(squareState.runtime.cursors.Alice.consumedThroughIndex, 2);
 });
 
 test('express does not surface delivery-health diagnostics during normal use', () => {
@@ -871,9 +871,9 @@ test('compact archives older activities into a SQARCH01 file and preserves stabl
   assert.match(compacted.stdout, /archived 2 activities/);
   assert.match(compacted.stdout, /kept\s+1 activities/);
 
-  const doc = loadSquare(file);
-  assert.deepEqual(doc.acts.map((act) => [act.kind, act.actor]), [['say', 'Bob']]);
-  assert.equal(doc.acts[0].index, 2);
+  const squareState = loadSquare(file);
+  assert.deepEqual(squareState.acts.map((act) => [act.kind, act.actor]), [['say', 'Bob']]);
+  assert.equal(squareState.acts[0].index, 2);
 
   const archivePath = file.replace(/\.square$/, '.archive.square');
   const archiveBytes = fs.readFileSync(archivePath);
