@@ -229,7 +229,7 @@ test('only explicit join claims local ownership and done closes the current owne
 
     const refused = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.equal(refused.status, 2, refused.stderr);
-    assert.match(refused.stderr, /Alice shoos you out of the square/);
+    assert.match(refused.stderr, /@Alice shoos you out of the square/);
     assert.match(refused.stderr, /join --kick/);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
     assert.deepEqual(lookupSession('observer-session'), []);
@@ -252,7 +252,7 @@ test('only explicit join claims local ownership and done closes the current owne
 
     const takeover = runCli(['--location', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
     assert.equal(takeover.status, 0, takeover.stderr);
-    assert.match(takeover.stdout, /you banished the original Alice/);
+    assert.match(takeover.stdout, /you banished the original @Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
     assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);

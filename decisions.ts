@@ -10,6 +10,7 @@ import {
   sameName,
   validateName,
 } from './model.js';
+import { participantIdentity } from './participant-identity.js';
 import {
   UNREAD_BLOCK_GRACE_MS,
   actId,
@@ -46,7 +47,7 @@ export function resolveKnownName(squareState: SquareState, name: string): string
   const known = resolveRosterName(squareState, name);
   if (known === undefined) {
     const roster = rosterNames(squareState);
-    throw new SquareError('invalid_args', `Unknown participant "${name}". Expected one of: ${roster.join(', ')}.`);
+    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(name)}". Expected one of: ${roster.map(participantIdentity).join(', ')}.`);
   }
   return known;
 }
@@ -80,15 +81,15 @@ export function decideJoin(squareState: SquareState, name: string, now: number):
 function resolveStandingName(squareState: SquareState, requestedName: string): string {
   validateName(requestedName);
   const name = resolveRosterName(squareState, requestedName);
-  if (name === undefined) throw new SquareError('not_joined', `${requestedName} has not joined this square`);
+  if (name === undefined) throw new SquareError('not_joined', `${participantIdentity(requestedName)} has not joined this square`);
   return name;
 }
 
 function requireStanding(squareState: SquareState, act: Act): void {
   const result = validate(foldedState(squareState), act);
   if (result.ok) return;
-  if (result.reason === 'done') throw new SquareError('already_done', `${act.actor ?? 'participant'} is already done`);
-  if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor ?? 'participant'} has not joined this square`);
+  if (result.reason === 'done') throw new SquareError('already_done', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} is already done`);
+  if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} has not joined this square`);
   throw new Error(`Unexpected standing validation result: ${result.reason}`);
 }
 

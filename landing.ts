@@ -2,6 +2,7 @@ import { extractMentions, formatActivityId, parseActivityId, type Act, type Acti
 import { coreDone, coreHold, coreResume, decideAct, decideJoin } from './decisions.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
+import { participantIdentity } from './participant-identity.js';
 import type { OpenSquare } from './open-square.js';
 import { touchPresenceCursor } from './runtime.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
@@ -62,15 +63,15 @@ export async function express(square: OpenSquare, name: string, body: string, op
     const decision = decideAct(state, { name, body, force: options.force ?? false, now, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
     if (decision.type === 'blocked') {
       const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
-      throw new SquareError('behind', `${name} has pending activity`, { pending });
+      throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
     }
     if (decision.type === 'held') {
       const holder = state.acts.filter((activity) => activity.kind === 'hold').at(-1)?.actor;
       throw new SquareError('held', 'The square is held', holder === undefined ? undefined : { holder });
     }
-    if (decision.type === 'capped') throw new SquareError('capped', `${name} reached the activity cap`);
+    if (decision.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
     if (decision.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: decision.delayMs });
-    if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${name} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
+    if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
     const stored = committedActivity(storeActs(state, [decision.act]), 'express');
     return { state, result: { stored, recipients: deriveDeliveryModel(state).plan(stored).map((notification) => notification.recipient) } };
   });

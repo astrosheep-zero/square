@@ -27,7 +27,7 @@ test('status renders hold duration from the real actor', async () => {
   });
   const held = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '62000' } });
   assert.equal(held.status, 0, held.stderr);
-  assert.match(held.stdout, /Host raised a hand — pause · 1m/);
+  assert.match(held.stdout, /@Host raised a hand — pause · 1m/);
   assert.doesNotMatch(held.stdout, /12m/);
 });
 
@@ -45,7 +45,7 @@ test('status stays compact and focuses on the current square', async () => {
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /1 active · 1 done · cap 100 · throttle none/);
-  assert.match(status.stdout, /Alice · 13 activities/);
+  assert.match(status.stdout, /@Alice · 13 activities/);
   assert.doesNotMatch(status.stdout, /Bob/);
   assert.doesNotMatch(status.stdout, /─/);
 });
@@ -83,7 +83,7 @@ test('catch --mention renders matching says and suppresses room changes', async 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--mention']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.match(watched.stdout, /calls your name across the square — @Alice/);
-  assert.match(watched.stdout, /Bob\s+#1/);
+  assert.match(watched.stdout, /@Bob\s+#1/);
   assert.doesNotMatch(watched.stdout, /while your back was turned/);
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
 });
@@ -100,9 +100,9 @@ test('catch --from renders named peers and rejects the removed --by flag', async
 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(watched.status, 0, watched.stderr);
-  assert.match(watched.stdout, /Bob stepped into the square/);
-  assert.match(watched.stdout, /Bob\s+#1/);
-  assert.match(watched.stdout, /Bob stepped out of the square — done/);
+  assert.match(watched.stdout, /@Bob stepped into the square/);
+  assert.match(watched.stdout, /@Bob\s+#1/);
+  assert.match(watched.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
   assert.doesNotMatch(watched.stdout, /hello from cara/);
 
@@ -139,9 +139,9 @@ test('history --all --full renders the complete archive', async () => {
 
   const activities = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
-  assert.match(activities.stdout, /Bob\s+#1/);
+  assert.match(activities.stdout, /@Bob\s+#1/);
   assert.match(activities.stdout, /hello @Alice/);
-  assert.match(activities.stdout, /Bob stepped out of the square — done/);
+  assert.match(activities.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
 });
 
@@ -156,7 +156,7 @@ test('history --since excludes older public activity', async () => {
   const activities = run(withName(file, 'Alice', ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
   assert.doesNotMatch(activities.stdout, /Bob\s+#1/);
-  assert.match(activities.stdout, /Bob stepped out of the square — done/);
+  assert.match(activities.stdout, /@Bob stepped out of the square — done/);
 });
 
 test('ambient catch and history render full body to a mention target and presence to others', async () => {
@@ -170,17 +170,17 @@ test('ambient catch and history render full body to a mention target and presenc
   const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(bobWatch.status, 0, bobWatch.stderr);
   assert.match(bobWatch.stdout, /secret reach phrase/);
-  assert.match(bobWatch.stdout, /Alice\s+#1/);
+  assert.match(bobWatch.stdout, /@Alice\s+#1/);
 
   const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
-  assert.match(caraWatch.stdout, /● Alice #1 · act\/3 · .*\n  talked to @Bob/);
+  assert.match(caraWatch.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
   assert.doesNotMatch(caraWatch.stdout, /secret reach phrase/);
 
   const ambient = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
-  assert.match(ambient.stdout, /● Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
-  assert.match(ambient.stdout, /→ Alice was here/);
+  assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
+  assert.match(ambient.stdout, /→ @Alice was here/);
 
   const archive = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(archive.status, 0, archive.stderr);
@@ -197,8 +197,8 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.equal(run(withName(file, 'Alice', ['express', '--force', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
   const laterJoin = run(withName(file, 'Dan', ['join', '--all']), { env: { SQUARE_NOW_MS: '11000' } });
   assert.equal(laterJoin.status, 0, laterJoin.stderr);
-  assert.match(laterJoin.stdout, /● Alice #1 · act\/3 · .*\n  talked to @Bob/);
-  assert.match(laterJoin.stdout, /● Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
+  assert.match(laterJoin.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
+  assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
   assert.doesNotMatch(laterJoin.stdout, /secret reach phrase/);
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
@@ -364,7 +364,7 @@ test('history grep defaults to a compact character-bounded search view', async (
   const compact = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /\b1 match\b/);
-  assert.match(compact.stdout, /act\/\d+ · Alice ·/);
+  assert.match(compact.stdout, /act\/\d+ · @Alice ·/);
   assert.match(compact.stdout, /needle/);
   assert.match(compact.stdout, /· 0 chars before · \d+ chars after/);
   assert.doesNotMatch(compact.stdout, /TAIL/);
@@ -461,20 +461,20 @@ test('status shows attention state and stable activity ids', async () => {
 
   const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(waiting.status, 0, waiting.stderr);
-  assert.match(waiting.stdout, /Alice.*caught up/);
-  assert.match(waiting.stdout, /Bob.*1 mention waiting/);
-  assert.match(waiting.stdout, /● Alice #1 · act\/2 · .*\n    talked to @Bob/);
+  assert.match(waiting.stdout, /@Alice.*caught up/);
+  assert.match(waiting.stdout, /@Bob.*1 mention waiting/);
+  assert.match(waiting.stdout, /● @Alice #1 · act\/2 · .*\n    talked to @Bob/);
   assert.doesNotMatch(waiting.stdout, /please check @Bob/);
 
   const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });
-  assert.match(personal.stdout, /Bob.*1 mention waiting/);
+  assert.match(personal.stdout, /@Bob.*1 mention waiting/);
   assert.match(personal.stdout, /please check @Bob/);
   assert.match(personal.stdout, /act\/\d+/);
-  assert.doesNotMatch(personal.stdout, /Alice.*caught up/);
+  assert.doesNotMatch(personal.stdout, /@Alice.*caught up/);
 
   assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
   const caughtUp = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '6000' } });
-  assert.match(caughtUp.stdout, /Bob.*caught up/);
+  assert.match(caughtUp.stdout, /@Bob.*caught up/);
 });
 
 test('status header counts only participants still in the square', async () => {
@@ -497,9 +497,9 @@ test('room changes and final notes remain visible without duplicate done events'
   });
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caught.status, 0, caught.stderr);
-  assert.match(caught.stdout, /Bob stepped into the square/);
-  assert.match(caught.stdout, /Bob raised a hand — pause/);
-  assert.match(caught.stdout, /Bob lowered the hand/);
+  assert.match(caught.stdout, /@Bob stepped into the square/);
+  assert.match(caught.stdout, /@Bob raised a hand — pause/);
+  assert.match(caught.stdout, /@Bob lowered the hand/);
 
   assert.equal(run(withName(file, 'Bob', ['done', '-']), { env: { SQUARE_NOW_MS: '6000' }, input: 'final note\n' }).status, 0);
   const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
@@ -517,7 +517,7 @@ test('status attention and express blocker agree on unread square changes', asyn
     await bob.hold('pause');
   });
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
-  assert.match(status.stdout, /Alice.*changes waiting/);
+  assert.match(status.stdout, /@Alice.*changes waiting/);
   const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(noWaitAct.stdout, /a hand is raised/);
   assert.match(noWaitAct.stdout, /draft kept/);
@@ -538,7 +538,7 @@ test('an unread join alone does not block express', async () => {
   });
   assert.equal(expressed.status, 0, expressed.stderr);
   assert.match(expressed.stdout, /heads turn your way/);
-  assert.match(expressed.stdout, /Bob stepped into the square/);
+  assert.match(expressed.stdout, /@Bob stepped into the square/);
   assert.doesNotMatch(expressed.stdout, /catch --now/);
 });
 
@@ -623,7 +623,7 @@ test('list previews bounded context and the three most recently active participa
   const listed = run(['list'], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, /context · ## Topic\n\s+· First context line\n\s+· … 1 more line/);
-  assert.match(listed.stdout, /participants · alice · dave · carol · … 1 more/);
+  assert.match(listed.stdout, /participants · @alice · @dave · @carol · … 1 more/);
   assert.doesNotMatch(listed.stdout, /participants[^\n]*bob/);
 });
 
@@ -647,12 +647,12 @@ test('list, participants, and clipped status use current state and executable hi
   assert.match(listed.stdout, /1 in square/);
   assert.doesNotMatch(listed.stdout, /2 in square/);
   assert.match(listed.stdout, /context · ## Topic\n\s+· Current state/);
-  assert.match(listed.stdout, /participants · Alice/);
+  assert.match(listed.stdout, /participants · @Alice/);
   assert.doesNotMatch(listed.stdout, /participants[^\n]*Bob/);
 
   const participants = run(withPath(file, ['participants']), { cwd });
-  assert.match(participants.stdout, /Alice · active/);
-  assert.match(participants.stdout, /Bob · done/);
+  assert.match(participants.stdout, /@Alice · active/);
+  assert.match(participants.stdout, /@Bob · done/);
   assert.doesNotMatch(participants.stdout, /^presence$/m);
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });

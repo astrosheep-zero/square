@@ -1,7 +1,7 @@
 import { leaseOwnsNotification, notificationMessageId } from './delivery.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { participantCommandPrefix } from './presentation.js';
+import { participantCommandPrefix, participantIdentity } from './presentation.js';
 import { presentOnce } from './presented.js';
 
 const BODY_MAX = 200;
@@ -52,7 +52,7 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
     const command = `${participantCommandPrefix(membership.squarePath, membership.name)} catch --now`;
     const id = notificationMessageId(membership.squarePath, notification.actIndex);
     const block = [
-      `${id} · ${membership.squarePath}: @${membership.name} from @${notification.actor} (${notification.route})`,
+      `${id} · ${membership.squarePath}: ${participantIdentity(membership.name)} from ${participantIdentity(notification.actor)} (${notification.route})`,
       bodyPreview(notification.body),
       `Ack with: ${command}`,
     ].join('\n');

@@ -7,6 +7,7 @@ import { parseActivityId, type ActivitiesOptions, type StoredAct, type WatchOpti
 import {
   commandPrefix,
   participantCommandPrefix,
+  participantIdentity,
   renderGrepActivitiesView,
   renderEventCli,
   renderAmbientEvent,
@@ -282,7 +283,7 @@ function renderHistoryProjection(
       ? renderEventCli(activity, options)
       : renderAmbientEvent(activity, viewer, options);
     if (rendered !== '') chunks.push(rendered);
-    for (const name of projection.presenceAnchors[activity.index] ?? []) chunks.push(`→ ${name} was here`);
+    for (const name of projection.presenceAnchors[activity.index] ?? []) chunks.push(`→ ${participantIdentity(name)} was here`);
   }
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
   if (preview !== undefined && shown.some((activity) =>
@@ -338,7 +339,7 @@ export const participantsCommand: CommandSpec<undefined, string> = {
         const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
         const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
         const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-        return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
+        return `  ${glyph} ${participantIdentity(participant.name)} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
       });
       const participantCount = participants.filter(
         (participant) => participant.state === 'active'
@@ -383,11 +384,11 @@ export const statusCommand: CommandSpec<undefined, string> = {
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
             : 'caught up';
-      return `  ${glyph} ${participant.name} · ${summary}${attention === '' ? '' : ` · ${attention}`}`;
+      return `  ${glyph} ${participantIdentity(participant.name)} · ${summary}${attention === '' ? '' : ` · ${attention}`}`;
     });
     const cap = result.hardCap === null ? 'unlimited' : String(result.hardCap);
     const hold = result.holdActive
-      ? `· ${result.holdActor ?? 'someone'} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''} · ${result.holdAt === undefined
+      ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''} · ${result.holdAt === undefined
         ? 'just now'
         : formatRelativeTime(result.holdAt, result.now)}`
       : undefined;

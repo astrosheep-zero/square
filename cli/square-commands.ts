@@ -9,6 +9,7 @@ import {
 } from '../model.js';
 import {
   participantCommandPrefix,
+  participantIdentity,
   quoteShell,
   renderEventCli,
   renderAmbientEvent,
@@ -152,7 +153,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
           [
-            `✕ ${joinedName} shoos you out of the square`,
+            `✕ ${participantIdentity(joinedName)} shoos you out of the square`,
             `  · a same-named participant stands here — the name is taken`,
             `  · --kick banishes her and the name becomes yours`,
             `» ${participantCommandPrefix(context.squarePath, joinedName)} join --kick`,
@@ -178,7 +179,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         ? '● You stepped into the square'
         : reconnect && !intent.kick
           ? '● you are already in the square'
-          : `✓ you banished the original ${joinedName} — the name is yours`;
+          : `✓ you banished the original ${participantIdentity(joinedName)} — the name is yours`;
       const output = [
         entryLine,
         ...(reconnect || scene === '' ? [] : ['', scene]),
@@ -258,7 +259,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     recordLocalDone(name, context.squarePath);
     const presentation = await openSquare(context.squarePath, { clock: nowMs });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
-    return withPathOutput(context.squarePath, `○ ${name} steps out of the square — done · just now`, { participantCount });
+    return withPathOutput(context.squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
 };

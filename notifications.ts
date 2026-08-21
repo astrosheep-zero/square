@@ -16,7 +16,7 @@ import { SquareError, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { PaseoAdapter } from './paseo-delivery.js';
-import { quoteShell } from './presentation.js';
+import { participantIdentity, quoteShell } from './presentation.js';
 import { lookupParticipant } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
@@ -58,7 +58,7 @@ function renderWakePayload(request: WakeRequest): string {
     : request.squarePath;
   return [
     '<system-reminder source="square">',
-    `${request.route === 'bell' ? 'Bell' : 'Mention'} from @${request.actor} in \`${display}\``,
+    `${request.route === 'bell' ? 'Bell' : 'Mention'} from ${participantIdentity(request.actor)} in \`${display}\``,
     'The native adapter will present it at the next boundary. If no native wake is available, pull from the square yourself.',
     `\`${catchCommand(request.squarePath, request.recipient)}\``,
     '</system-reminder>',

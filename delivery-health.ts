@@ -1,5 +1,6 @@
 import { type DirectedNotificationRoute } from './delivery.js';
 import { formatActivityId } from './square-core.js';
+import { participantIdentity } from './presentation.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './wake-attempts.js';
 import { wakeEvidence } from './wake-evidence.js';
@@ -78,7 +79,7 @@ export async function classifyDeliveryHealth(
 
 function formatItem(item: DeliveryHealthItem): string {
   const evidence = item.attempt?.signature === undefined ? '' : ` · ${item.attempt.signature}`;
-  return `  · ${formatActivityId(item.actIndex)} → @${item.recipient} from @${item.actor} · ${formatDuration(item.ageMs)}${evidence}`;
+  return `  · ${formatActivityId(item.actIndex)} → ${participantIdentity(item.recipient)} from ${participantIdentity(item.actor)} · ${formatDuration(item.ageMs)}${evidence}`;
 }
 
 export async function doctorDeliveryHealth(

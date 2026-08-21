@@ -1,6 +1,8 @@
 import { type StoredAct, type SquareState, type PublicAct, type RoomChangeAct, sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { participantIdentity } from './participant-identity.js';
+export { participantIdentity } from './participant-identity.js';
 import { audienceIncludes, audienceOf, perceive } from './square-core.js';
 import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
@@ -129,7 +131,7 @@ export function renderPresenceLines(participants: ParticipantStatus[], now: numb
   const shown = recent.slice(0, limit);
   if (shown.length === 0) return ['  ○ nobody nearby'];
 
-  const lines = shown.map((p) => `  ${presenceGlyph(p)} ${p.name} · ${presenceText(p, now)}`);
+  const lines = shown.map((p) => `  ${presenceGlyph(p)} ${participantIdentity(p.name)} · ${presenceText(p, now)}`);
   const remaining = recent.length - shown.length;
   if (remaining > 0) lines.push(`  ○ …and ${remaining} more`);
   return lines;
@@ -172,15 +174,16 @@ export function previewActivityBody(body: string): string {
 
 export function renderRoomChangeText(event: RoomChangeAct): string {
   const actor = event.actor ?? 'someone';
+  const identity = actor === 'someone' ? actor : participantIdentity(actor);
   switch (event.kind) {
     case 'join':
-      return `${actor} stepped into the square`;
+      return `${identity} stepped into the square`;
     case 'done':
-      return `${actor} stepped out of the square`;
+      return `${identity} stepped out of the square`;
     case 'hold':
-      return `${actor} raised a hand${event.body ? ` — ${event.body}` : ''}`;
+      return `${identity} raised a hand${event.body ? ` — ${event.body}` : ''}`;
     case 'resume':
-      return `${actor} lowered the hand`;
+      return `${identity} lowered the hand`;
   }
 }
 
@@ -212,14 +215,14 @@ export function renderEventCli(
       const mention = opts.mention;
       const mentionSuffix =
         mention !== undefined && audienceIncludes(audienceOf(event), mention)
-          ? ` · calls your name across the square — @${mention}`
+          ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
-      return `● ${event.actor} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}${bodySuffix(body)}`;
+      return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}${bodySuffix(body)}`;
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
-      return `○ ${event.actor} stepped out of the square — done · ${actId(event)} · ${formatRelativeTime(event.at, now)}${bodySuffix(body)}`;
+      return `○ ${participantIdentity(event.actor)} stepped out of the square — done · ${actId(event)} · ${formatRelativeTime(event.at, now)}${bodySuffix(body)}`;
     }
     case 'read':
       return '';
@@ -232,8 +235,8 @@ function renderPresenceOnlySay(
 ): string {
   const audience = audienceOf(event);
   const targets = audience.kind === 'bell' ? [] : audience.names;
-  const dest = targets.length === 0 ? '' : ` ${targets.map((name) => `@${name}`).join(' and ')}`;
-  return `● ${event.actor} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
+  const dest = targets.length === 0 ? '' : ` ${targets.map((name) => participantIdentity(name)).join(' and ')}`;
+  return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
 }
 
 export function renderAmbientEvent(
@@ -260,11 +263,11 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
     ...opts.activitySummaries.flatMap((item) => [
       ...item.previews.slice(-1).map((preview) => {
         const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number });
-        if (rendered === '') return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
+        if (rendered === '') return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
         if (preview.act.kind === 'say' && perceive(preview.act, opts.viewer) === 'presence') {
-          return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`;
+          return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`;
         }
-        return `  · ${item.name} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
+        return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
       }),
     ]),
     ...opts.roomChanges.map((act) => `  · ${renderRoomChangeText(act)}`),
@@ -357,7 +360,7 @@ function lastPresenceAnchor(squareState: SquareState, name: string): number {
 }
 
 function renderLastPresenceMarker(name: string): string {
-  return `→ ${name} was here`;
+  return `→ ${participantIdentity(name)} was here`;
 }
 
 export function renderActivitiesView(
@@ -431,14 +434,14 @@ export function renderGrepActivitiesView(
     const rawBody = act.body ?? '';
     if (full === true) {
       const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
-      chunks.push(`${actId(act.index)} · ${act.actor ?? 'unknown'} · ${formatTimestamp(act.at)}\n${body}`);
+      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}\n${body}`);
       continue;
     }
 
     const snippet = grepSnippet(rawBody, pattern, GREP_PREVIEW_CHARS, fixed);
     if (snippet === undefined) {
       const preview = previewBody(rawBody, GREP_PREVIEW_CHARS);
-      chunks.push(`${actId(act.index)} · ${act.actor ?? 'unknown'} · ${formatTimestamp(act.at)}${preview === '' ? '' : `\n  ${preview}`}`);
+      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}${preview === '' ? '' : `\n  ${preview}`}`);
       continue;
     }
     const clippedBefore = snippet.beforeOmitted > 0;
@@ -448,7 +451,7 @@ export function renderGrepActivitiesView(
     const omitted = clippedBefore || clippedAfter
       ? `\n  · ${snippet.beforeOmitted} chars before · ${snippet.afterOmitted} chars after`
       : '';
-    chunks.push(`${actId(act.index)} · ${act.actor ?? 'unknown'} · ${formatTimestamp(act.at)}\n  ${text.trim()}${omitted}`);
+    chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}\n  ${text.trim()}${omitted}`);
   }
 
   if (publicVisible.length === 1) {

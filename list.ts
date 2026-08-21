@@ -5,6 +5,7 @@ import { probeSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { listPresentation } from './views.js';
 import { formatRelativeTime } from './time.js';
+import { participantIdentity } from './presentation.js';
 
 interface SquareListItem {
   path: string;
@@ -93,7 +94,7 @@ function renderSquareList(items: SquareListItem[]): string {
 
     const shownParticipants = item.participants.slice(0, PARTICIPANT_PREVIEW_COUNT);
     const hiddenParticipants = item.participants.length - shownParticipants.length;
-    lines.push(`  participants · ${shownParticipants.length === 0 ? 'nobody' : shownParticipants.join(' · ')}${hiddenParticipants > 0 ? ` · … ${hiddenParticipants} more` : ''}`);
+    lines.push(`  participants · ${shownParticipants.length === 0 ? 'nobody' : shownParticipants.map(participantIdentity).join(' · ')}${hiddenParticipants > 0 ? ` · … ${hiddenParticipants} more` : ''}`);
   }
   return lines.join('\n') + '\n';
 }

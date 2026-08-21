@@ -38,6 +38,18 @@ test('CLI test runner isolates host delivery identities', () => {
   }
 });
 
+test('participant identities include leading @ in human-readable output', () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  const joined = run(withName(file, 'Alice', ['join']), {
+    env: { SQUARE_REGISTRY: TEST_REGISTRY, SQUARE_PRESENTED: TEST_PRESENTED },
+  });
+  assert.equal(joined.status, 0, joined.stderr);
+  const roster = run(withPath(file, ['participants']));
+  assert.equal(roster.status, 0, roster.stderr);
+  assert.match(roster.stdout, /@Alice/);
+});
+
 test('install and uninstall manage an explicit OpenCode target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');
@@ -262,12 +274,12 @@ test('join and catch only show fallback catch hints without automatic session de
 
   const sameName = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
   assert.equal(sameName.status, 2, sameName.stderr);
-  assert.match(sameName.stderr, /Bob shoos you out of the square/);
+  assert.match(sameName.stderr, /@Bob shoos you out of the square/);
   assert.match(sameName.stderr, /join --kick/);
 
   const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
   assert.equal(takeover.status, 0, takeover.stderr);
-  assert.match(takeover.stdout, /you banished the original Bob/);
+  assert.match(takeover.stdout, /you banished the original @Bob/);
   assert.doesNotMatch(takeover.stdout, /catch --/);
 });
 
