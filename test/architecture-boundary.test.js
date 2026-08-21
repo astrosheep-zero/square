@@ -117,6 +117,31 @@ test('the collector vocabulary and engine are gone', () => {
   assert.deepEqual(stale, []);
 });
 
+test('the removed archive compaction protocol leaves no residue', () => {
+  const sources = new Map([
+    ...productionSources,
+    ...fs.readdirSync(path.join(root, 'test'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
+      .map((entry) => [`test/${entry.name}`, fs.readFileSync(path.join(root, 'test', entry.name), 'utf8')]),
+  ]);
+  const removed = [
+    ['SQ', 'ARCH01'].join(''),
+    ['encode', 'Archive'].join(''),
+    ['decode', 'Archive'].join(''),
+    ['write', 'ArchiveFile'].join(''),
+    ['load', 'Archive'].join(''),
+    ['core', 'Compact'].join(''),
+    ['Compact', 'Result'].join(''),
+    ['compact', 'Square'].join(''),
+    ['compact', 'FileSquare'].join(''),
+    ['.', 'archive', '.square'].join(''),
+  ];
+  const leaks = removed.flatMap((identifier) => [...sources]
+    .filter(([, source]) => source.includes(identifier))
+    .map(([file]) => `${identifier}: ${file}`));
+  assert.deepEqual(leaks, [], `removed archive compaction residue:\n${leaks.join('\n')}`);
+});
+
 test('watch terminal law and notifier type each have one directional owner', () => {
   const runtime = productionSources.get('runtime.ts') ?? '';
   const facade = productionSources.get('square-facade.ts') ?? '';

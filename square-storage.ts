@@ -4,10 +4,8 @@ import fs from 'node:fs';
 import {
   createSquareState,
   diagnoseSquareFile as diagnoseArtifactFile,
-  loadArchive,
   loadSquare,
   probeSquare,
-  writeArchiveFile,
   writeSquareFile,
 } from './artifact.js';
 import { withFileLock } from './file-lock.js';
@@ -22,8 +20,6 @@ import { LOCK_RETRY_MS, LOCK_STALE_MS } from './runtime.js';
  */
 export {
   createSquareState,
-  loadArchive,
-  writeArchiveFile,
 };
 
 export function readSquareFile(squarePath: string): SquareState {

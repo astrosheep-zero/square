@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { decodeArchive, loadArchive, loadSquare } from '../dist/artifact.js';
+import { loadSquare } from '../dist/artifact.js';
 import { formatActivityId } from '../dist/square-core.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -172,7 +172,6 @@ test('every public subcommand exposes scoped help without a square', () => {
     'install',
     'uninstall',
     'harness',
-    'compact',
     'doctor',
   ];
 
@@ -222,7 +221,7 @@ test('help command resolves aliases and rejects unknown commands', () => {
   assert.match(unknown.stderr, /unknown command: missing-command/);
   assert.match(unknown.stderr, /square help/);
 
-  for (const removed of ['act', 'echo']) {
+  for (const removed of ['act', 'echo', 'compact']) {
     const legacy = run(['help', removed], { cwd });
     assert.equal(legacy.status, 2);
     assert.match(legacy.stderr, new RegExp(`unknown command: ${removed}`));
@@ -856,36 +855,6 @@ test('history --at accepts multiple coordinates and unions their context windows
   const repeated = run(withPath(file, ['history', '--at', 'act/2', '--at', 'act/3', '-C', '0', '--json']));
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.deepEqual(repeated.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act/2', 'act/3']);
-});
-
-test('compact archives older activities into a SQARCH01 file and preserves stable indexes', () => {
-  const file = tempSquare();
-  assert.equal(build(file).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['join']), { env: { SQUARE_NOW_MS: '1000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['join']), { env: { SQUARE_NOW_MS: '2000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello @Alice']), { env: { SQUARE_NOW_MS: '3000' } }).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
-
-  const compacted = run(withPath(file, ['compact', '--keep', '1']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(compacted.status, 0, compacted.stderr);
-  assert.match(compacted.stdout, /archived 2 activities/);
-  assert.match(compacted.stdout, /kept\s+1 activities/);
-
-  const squareState = loadSquare(file);
-  assert.deepEqual(squareState.acts.map((act) => [act.kind, act.actor]), [['say', 'Bob']]);
-  assert.equal(squareState.acts[0].index, 2);
-
-  const archivePath = file.replace(/\.square$/, '.archive.square');
-  const archiveBytes = fs.readFileSync(archivePath);
-  assert.equal(archiveBytes.subarray(0, 8).toString('ascii'), 'SQARCH01');
-  const archived = loadArchive(archivePath);
-  assert.deepEqual(archived.map((act) => [act.index, act.kind, act.actor]), [
-    [0, 'join', 'Alice'],
-    [1, 'join', 'Bob'],
-  ]);
-  assert.equal(archived[0].at, 1000);
-  assert.equal(archived[1].at, 2000);
-  assert.doesNotMatch(JSON.stringify(decodeArchive(archiveBytes)), /evt_/);
 });
 
 test('inbox stays read-only while codex admits pending attention once at a boundary', () => {

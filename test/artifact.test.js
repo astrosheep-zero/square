@@ -8,16 +8,12 @@ import zlib from 'node:zlib';
 
 import {
   createSquareState,
-  decodeArchive,
   decodeSquare,
   diagnoseSquareFile,
   emptyRuntimeState,
-  encodeArchive,
   encodeSquare,
-  loadArchive,
   loadSquare,
   probeSquare,
-  writeArchiveFile,
   writeSquareFile,
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
@@ -26,8 +22,6 @@ import { express } from '../dist/landing.js';
 import { createFileCell } from '../dist/square-storage.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
-const ARCHIVE_MAGIC = Buffer.from('SQARCH01', 'ascii');
-
 function withIndexes(acts) {
   return acts.map((act, index) => ({ ...act, index }));
 }
@@ -295,30 +289,4 @@ test('createSquareState builds a snapshot from options and stdin without Markdow
   assert.ok(squareState.warmup.some((line) => line.includes('stepped into the square')));
   assert.deepEqual(squareState.acts, []);
   assert.deepEqual(squareState.runtime, emptyRuntimeState());
-});
-
-test('compact archives use SQARCH01 and never merge as runtime', () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 1000, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2000, index: 1 },
-  ];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-archive-'));
-  const archivePath = path.join(dir, 'SQUARE.archive.square');
-  writeArchiveFile(archivePath, acts);
-
-  const bytes = fs.readFileSync(archivePath);
-  assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQARCH01');
-  assert.deepEqual(loadArchive(archivePath), acts);
-  assert.deepEqual(decodeArchive(encodeArchive(acts)), acts);
-  assert.throws(() => decodeSquare(bytes), /bad magic or unsupported format version/);
-  assert.throws(() => decodeArchive(encodeSquare(makeState())), /bad magic or unsupported format version/);
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('probeSquare ignores files without SQUARE01 magic', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-probe-'));
-  const archive = path.join(dir, 'SQUARE.archive.square');
-  writeArchiveFile(archive, [{ kind: 'join', actor: 'Alice', at: 1, index: 0 }]);
-  assert.equal(probeSquare(archive), undefined);
-  fs.rmSync(dir, { recursive: true, force: true });
 });

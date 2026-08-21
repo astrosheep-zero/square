@@ -379,30 +379,3 @@ export function coreActivities(squareState: SquareState, opts: ActivitiesOptions
   }
   return acts;
 }
-
-export interface CompactResult {
-  archived: StoredAct[];
-  state: SquareState;
-}
-
-export function coreCompact(squareState: SquareState, keep: number): CompactResult {
-  if (squareState.acts.length <= keep) return { archived: [], state: squareState };
-  const splitAt = squareState.acts.length - keep;
-  const archived = squareState.acts.slice(0, splitAt);
-  const retained = squareState.acts.slice(splitAt);
-  const cutoffIndex = actStableIndex(archived[archived.length - 1]);
-  const unread = foldedState(squareState).participants
-    .filter((participant) => participant.joined && readCursor(squareState, participant.name) < cutoffIndex)
-    .map((participant) => participant.name);
-  if (unread.length > 0) {
-    throw new InternalSquareError('conflict', `Refusing to compact: ${unread.join(', ')} ${unread.length === 1 ? 'has' : 'have'} not read through the activities being archived.`);
-  }
-  return {
-    archived,
-    state: {
-      ...squareState,
-      acts: retained,
-      runtime: squareState.runtime,
-    },
-  };
-}

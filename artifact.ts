@@ -22,7 +22,6 @@ import {
 import { parseActivityId } from './square-core.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
-const ARCHIVE_MAGIC = Buffer.from('SQARCH01', 'ascii');
 const LENGTH_BYTES = 4;
 const DIGEST_BYTES = 32;
 const HEADER_BYTES = SQUARE_MAGIC.length + LENGTH_BYTES + DIGEST_BYTES;
@@ -335,19 +334,6 @@ export function decodeSquare(bytes: Buffer): SquareState {
   return validateSquareState(decodeEnvelope(bytes, SQUARE_MAGIC));
 }
 
-export function encodeArchive(acts: StoredAct[]): Buffer {
-  if (!validateActs(acts)) throw invalidArtifact('archive activity schema is malformed.');
-  return encodeEnvelope(ARCHIVE_MAGIC, { acts });
-}
-
-export function decodeArchive(bytes: Buffer): StoredAct[] {
-  const value = decodeEnvelope(bytes, ARCHIVE_MAGIC);
-  if (!isObject(value) || !hasExactKeys(value, ['acts']) || !validateActs(value.acts)) {
-    throw invalidArtifact('archive schema is malformed.');
-  }
-  return value.acts;
-}
-
 function readArtifact(squarePath: string): Buffer {
   try {
     return fs.readFileSync(squarePath);
@@ -388,14 +374,6 @@ export function writeSquareFile(squarePath: string, squareState: SquareState): v
 export function loadSquare(squarePath: string): SquareState {
   requireSquareExtension(squarePath);
   return decodeSquare(readArtifact(squarePath));
-}
-
-export function writeArchiveFile(archivePath: string, acts: StoredAct[]): void {
-  atomicWrite(archivePath, encodeArchive(acts));
-}
-
-export function loadArchive(archivePath: string): StoredAct[] {
-  return decodeArchive(readArtifact(archivePath));
 }
 
 export function probeSquare(squarePath: string): SquareState | undefined {

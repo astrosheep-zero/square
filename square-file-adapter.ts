@@ -2,24 +2,18 @@ import fs from 'node:fs';
 
 import {
   createSquareState,
-  loadArchive,
   probeSquareFile,
-  readSquareFile,
-  writeArchiveFile,
   writeSquareSnapshot,
   withSquareFileLock,
   openSquareCell,
   createMemoryCell,
 } from './square-storage.js';
-import { coreCompact } from './decisions.js';
-import { stageReplacement, type StagedReplacement } from './harness-stage.js';
 import {
   InternalSquareError,
   SquareError,
   type BuildOptions,
   type HardCap,
   type SquareState,
-  type StoredAct,
 } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import type { WakeNotifier } from './square-facade.js';
@@ -27,31 +21,6 @@ import type { WakeNotifier } from './square-facade.js';
 /** The current CLI file mutation boundary. */
 function writeSquareState(squarePath: string, squareState: SquareState): void {
   writeSquareSnapshot(squarePath, squareState);
-}
-
-/** Publish a dependent archive before the main snapshot, retaining rollback evidence. */
-function prepareArchive(filePath: string, acts: StoredAct[]): StagedReplacement {
-  const existing = fs.existsSync(filePath) ? loadArchive(filePath) : [];
-  return stageReplacement(filePath, (stage) => {
-    writeArchiveFile(stage, [...existing, ...acts]);
-  });
-}
-
-export async function compactSquare(squarePath: string, keep: number, archivePath: string): Promise<ReturnType<typeof coreCompact>> {
-  return withSquareFileLock(squarePath, () => {
-    const result = coreCompact(readSquareFile(squarePath), keep);
-    if (result.archived.length === 0) return result;
-    let persistence: StagedReplacement | undefined;
-    try {
-      persistence = prepareArchive(archivePath, result.archived);
-      writeSquareState(squarePath, result.state);
-      persistence.finalize();
-      return result;
-    } catch (error) {
-      try { persistence?.rollback(); } catch {}
-      throw error;
-    }
-  });
 }
 
 /** File-owned artifact creation for the CLI and path-backed public facade. */

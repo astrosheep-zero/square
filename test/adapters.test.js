@@ -35,7 +35,6 @@ import {
 } from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
 import { Square } from '../dist/index.js';
-import { compactSquare } from '../dist/square-file-adapter.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installHarnessLinks,
@@ -215,35 +214,6 @@ test('package facade participant verbs persist through the shared application en
   } finally {
     if (previousDisableWake === undefined) delete process.env.SQUARE_DISABLE_PASEO_WAKE;
     else process.env.SQUARE_DISABLE_PASEO_WAKE = previousDisableWake;
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('failed compact archive staging leaves the Square state unchanged', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-compact-stage-failure-'));
-  const squarePath = path.join(dir, 'SQUARE.square');
-  const squareState = {
-    hardCap: null,
-    preamble: [],
-    warmup: ['warmup'],
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'keep history', index: 1 },
-    ],
-    runtime: emptyRuntimeState(2),
-  };
-  squareState.runtime.cursors.Alice = { consumedThroughIndex: 1, updatedAt: 2 };
-  writeSquareFile(squarePath, squareState);
-  const blockedParent = path.join(dir, 'not-a-directory');
-  fs.writeFileSync(blockedParent, 'file');
-  try {
-    await assert.rejects(
-      compactSquare(squarePath, 1, path.join(blockedParent, 'archive.square')),
-      /EEXIST|ENOTDIR|ENOENT/
-    );
-    assert.deepEqual(loadSquare(squarePath).acts.map((item) => item.index), [0, 1]);
-    assert.deepEqual(loadSquare(squarePath).warmup, ['warmup']);
-  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

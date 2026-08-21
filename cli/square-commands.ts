@@ -1,5 +1,4 @@
 import { cmdActivity } from '../activity.js';
-import { cmdCompact } from '../compact.js';
 import {
   type BuildOptions,
   type HardCap,
@@ -308,20 +307,4 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
     }
   },
   present: (result) => process.stdout.write(result),
-};
-
-export const compactCommand: CommandSpec<{ keep: number }> = {
-  parse(argv, context) {
-    let keep = 50;
-    for (let index = 0; index < argv.length; index++) {
-      if (argv[index] !== '--keep') usage(context.command);
-      keep = parsePositiveInteger(requireValue(argv, index, argv[index]), argv[index]);
-      index += 1;
-    }
-    return { keep };
-  },
-  async execute(intent, context) {
-    await cmdCompact(context.squarePath, intent);
-  },
-  present: () => {},
 };
