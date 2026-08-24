@@ -37,6 +37,7 @@ import {
   readPipedBodyFallback,
   readStdinSync,
   requireParticipant,
+  requireSquarePath,
   requireValue,
   resolveBody,
   usage,
@@ -107,11 +108,12 @@ function parseBuild(argv: string[]): BuildIntent {
 export const buildCommand: CommandSpec<BuildIntent, string> = {
   parse: (argv) => parseBuild(argv),
   async execute(intent, context) {
-    await createSquare(context.squarePath, intent.options, intent.snippet);
+    const squarePath = requireSquarePath(context);
+    await createSquare(squarePath, intent.options, intent.snippet);
     const cap = intent.options.hardCap === null ? 'unlimited' : formatHardCap(intent.options.hardCap);
     const throttle = intent.options.throttlePerMinute === undefined ? [] : [`  · throttle ${intent.options.throttlePerMinute}/min`];
     return withPathOutput(
-      context.squarePath,
+      squarePath,
       ['✓ built', `  · cap ${cap}`, ...throttle, '  · participants (none seeded — first join adds names)'].join('\n'),
       { participantCount: 0 }
     );
@@ -140,31 +142,32 @@ function parseJoin(argv: string[], context: CommandContext): JoinIntent {
 export const joinCommand: CommandSpec<JoinIntent, string> = {
   parse: parseJoin,
   async execute(intent, context) {
-    const beforeSquare = await openSquare(context.squarePath, { clock: nowMs });
+    const squarePath = requireSquarePath(context);
+    const beforeSquare = await openSquare(squarePath, { clock: nowMs });
     const before = await entryPresentation(beforeSquare, intent.name, intent.lastN);
     await closeOpenSquare(beforeSquare);
-    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     try {
       const participant = await square.join(intent.name);
       const joinedName = participant.name;
       const isRejoin = before.joined;
       const reconnect = isRejoin
-        && localParticipantOwner(context.squarePath, joinedName) !== undefined;
+        && localParticipantOwner(squarePath, joinedName) !== undefined;
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
           [
             `✕ ${participantIdentity(joinedName)} shoos you out of the square`,
             `  · a same-named participant stands here — the name is taken`,
             `  · --kick banishes her and the name becomes yours`,
-            `» ${participantCommandPrefix(context.squarePath, joinedName)} join --kick`,
+            `» ${participantCommandPrefix(squarePath, joinedName)} join --kick`,
           ].join('\n')
         );
       }
-      const afterSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);
-      recordLocalJoin(joinedName, context.squarePath);
-      await sweepPendingNotifications(context.squarePath);
+      recordLocalJoin(joinedName, squarePath);
+      await sweepPendingNotifications(squarePath);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
         now: nowMs(),
         preview: intent.lastN === null ? undefined : 200,
@@ -173,7 +176,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const contextText = after.joinContext;
       const fallback = hasAutomaticDeliveryIdentity()
         ? []
-        : ['', `» ${participantCommandPrefix(context.squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
+        : ['', `» ${participantCommandPrefix(squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
       const scene = after.scene;
       const entryLine = !isRejoin
         ? '● You stepped into the square'
@@ -187,7 +190,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
         ...fallback,
       ].join('\n');
-      return withPathOutput(context.squarePath, output, { participantCount: after.participantCount });
+      return withPathOutput(squarePath, output, { participantCount: after.participantCount });
     } finally {
       await square.close();
     }
@@ -229,14 +232,15 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
 export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
-    await sweepPendingNotifications(context.squarePath);
+    const squarePath = requireSquarePath(context);
+    await sweepPendingNotifications(squarePath);
     const reachArg = intent.reach === 'bell' ? ' --bell' : '';
-    await cmdActivity(context.squarePath, intent.name, intent.activity, resolveBody, {
+    await cmdActivity(squarePath, intent.name, intent.activity, resolveBody, {
       force: intent.force,
       noWait: intent.noWait,
       reach: intent.reach,
       reply: intent.reply,
-      forceCommand: `${participantCommandPrefix(context.squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply ${formatActivityId(intent.reply)}`} -`,
+      forceCommand: `${participantCommandPrefix(squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply ${formatActivityId(intent.reply)}`} -`,
     });
   },
   present: () => {},
@@ -250,16 +254,17 @@ function parseDone(argv: string[], context: CommandContext): BodyIntent {
 export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse: parseDone,
   async execute(intent, context) {
+    const squarePath = requireSquarePath(context);
     const body = resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim();
-    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     const participant = await square.join(intent.name);
     const result = await participant.done(body);
     await square.close();
     const name = result.activity.actor;
-    recordLocalDone(name, context.squarePath);
-    const presentation = await openSquare(context.squarePath, { clock: nowMs });
+    recordLocalDone(name, squarePath);
+    const presentation = await openSquare(squarePath, { clock: nowMs });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
-    return withPathOutput(context.squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });
+    return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
 };
@@ -272,15 +277,16 @@ function parseHold(argv: string[], context: CommandContext): BodyIntent {
 export const holdCommand: CommandSpec<BodyIntent, string> = {
   parse: parseHold,
   async execute(intent, context) {
-    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
+    const squarePath = requireSquarePath(context);
+    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     try {
       const participant = await square.join(intent.name);
       const result = await participant.hold(resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim());
       await square.close();
-      const presentationSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const presentationSquare = await openSquare(squarePath, { clock: nowMs });
       const presentation = await eventPresentation(presentationSquare, result.activity.id);
       await closeOpenSquare(presentationSquare);
-      return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount, held: true });
+      return withPathOutput(squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount, held: true });
     } finally {
       await square.close();
     }
@@ -294,15 +300,16 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
     return { name: requireParticipant(context.name) };
   },
   async execute(intent, context) {
-    const square = await Square.at({ path: context.squarePath, clock: nowMs, notifier: wakeNotifierForSquare(context.squarePath) });
+    const squarePath = requireSquarePath(context);
+    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     try {
       const participant = await square.join(intent.name);
       const result = await participant.resume();
       await square.close();
-      const presentationSquare = await openSquare(context.squarePath, { clock: nowMs });
+      const presentationSquare = await openSquare(squarePath, { clock: nowMs });
       const presentation = await eventPresentation(presentationSquare, result.activity.id);
       await closeOpenSquare(presentationSquare);
-      return withPathOutput(context.squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount });
+      return withPathOutput(squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount });
     } finally {
       await square.close();
     }

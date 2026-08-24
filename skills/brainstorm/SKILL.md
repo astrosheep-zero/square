@@ -7,7 +7,7 @@ allowed-tools: Bash(square *), Skill(square)
 # Square Brainstorm
 
 Use this skill when you are coordinating a brainstorm. Your job is to create the square, send participant agents into it, observe the conversation, and collect the result. Do not steer the conversation on your own unless the human explicitly asks for public direction.
-Commands default to `.square/SQUARE.square` for build and inspection. Manual participant commands require `--location <square>` or `SQUARE_LOCATION`; `--location` wins. Set `SQUARE_PARTICIPANT_NAME` for the participant name, overridden by `--as`. `.square/PUBLIC.square` is the public square and does not need a manual `join`.
+Commands that access a square require `--location <square>` or `SQUARE_LOCATION`; `--location` wins. Set `SQUARE_PARTICIPANT_NAME` for the participant name, overridden by `--as`. `.square/PUBLIC.square` is the public square and does not need a manual `join`.
 
 ## Build
 

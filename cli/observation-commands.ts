@@ -30,6 +30,7 @@ import {
   parseNonNegativeInteger,
   readStdinSync,
   requireParticipant,
+  requireSquarePath,
   requireValue,
   usage,
 } from './context.js';
@@ -59,8 +60,9 @@ export const streamCommand: CommandSpec<StreamIntent> = {
     return { ndjson, forName };
   },
   async execute(intent, context) {
-    if (intent.ndjson) await cmdStreamNdjson(context.squarePath, intent.forName);
-    else await cmdStream(context.squarePath);
+    const squarePath = requireSquarePath(context);
+    if (intent.ndjson) await cmdStreamNdjson(squarePath, intent.forName);
+    else await cmdStream(squarePath);
   },
   present: () => {},
 };
@@ -103,8 +105,9 @@ export const catchCommand: CommandSpec<WatchOptions> = {
     };
   },
   async execute(intent, context) {
-    await cmdWatch(context.squarePath, requireParticipant(context.name), intent);
-    await sweepPendingNotifications(context.squarePath);
+    const squarePath = requireSquarePath(context);
+    await cmdWatch(squarePath, requireParticipant(context.name), intent);
+    await sweepPendingNotifications(squarePath);
   },
   present: () => {},
 };
@@ -122,6 +125,7 @@ function parseTimestamp(value: string, flag: string): number {
 }
 
 function parseHistory(argv: string[], context: CommandContext): ActivitiesOptions {
+  const squarePath = requireSquarePath(context);
   const viewer = context.name;
   let lastN: number | null = 10;
   let lastNExplicit = false;
@@ -144,7 +148,7 @@ function parseHistory(argv: string[], context: CommandContext): ActivitiesOption
     const flag = argv[index];
     if (flag === '--limit') {
       const value = argv[index + 1];
-      const retry = `${commandPrefix(context.squarePath)} history --limit 30`;
+      const retry = `${commandPrefix(squarePath)} history --limit 30`;
       if (value === undefined || value.startsWith('--')) fail(`✕ --limit needs a positive number\n» ${retry}`);
       if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
         fail(`✕ --limit needs a positive number\n» ${retry}`);
@@ -297,7 +301,8 @@ function renderHistoryProjection(
 export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
   async execute(options, context) {
-    const square = await openSquare(context.squarePath, { clock: nowMs });
+    const squarePath = requireSquarePath(context);
+    const square = await openSquare(squarePath, { clock: nowMs });
     try {
       const projection = await historyPresentation(square, options);
       let events = [...projection.activities];
@@ -318,9 +323,9 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
         || (options.lastN == null && options.full === true)
         || anonymous;
       const output = pattern === undefined || pattern === ''
-        ? renderHistoryProjection(projection, events, options.full === true || anonymous, context.squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
-        : renderGrepActivitiesView(events, totalMatches, options.full, context.squarePath, pattern, options.fixed !== undefined);
-      return withPathOutput(context.squarePath, output, { participantCount: projection.participantCount });
+        ? renderHistoryProjection(projection, events, options.full === true || anonymous, squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
+        : renderGrepActivitiesView(events, totalMatches, options.full, squarePath, pattern, options.fixed !== undefined);
+      return withPathOutput(squarePath, output, { participantCount: projection.participantCount });
     } finally {
       await closeOpenSquare(square);
     }
@@ -331,7 +336,8 @@ export const historyCommand: CommandSpec<ActivitiesOptions, string> = {
 export const participantsCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
-    const square = await openSquare(context.squarePath, { clock: nowMs });
+    const squarePath = requireSquarePath(context);
+    const square = await openSquare(squarePath, { clock: nowMs });
     try {
       const now = nowMs();
       const participants = await participantsPresentation(square);
@@ -344,7 +350,7 @@ export const participantsCommand: CommandSpec<undefined, string> = {
       const participantCount = participants.filter(
         (participant) => participant.state === 'active'
       ).length;
-      return withPathOutput(context.squarePath, ['participants', ...lines].join('\n'), {
+      return withPathOutput(squarePath, ['participants', ...lines].join('\n'), {
         participantCount,
       });
     } finally {
@@ -357,7 +363,8 @@ export const participantsCommand: CommandSpec<undefined, string> = {
 export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
-    const square = await openSquare(context.squarePath, { clock: nowMs });
+    const squarePath = requireSquarePath(context);
+    const square = await openSquare(squarePath, { clock: nowMs });
     try {
       const presentation = await statusPresentation(square);
       const result = presentation.status;
@@ -405,14 +412,14 @@ export const statusCommand: CommandSpec<undefined, string> = {
         : '  · latest activity is private to another participant']
       : [`  ${visible.replace(/\n/g, '\n  ')}`];
     if (visible.includes('more chars') && result.latestAct !== undefined) {
-      const prefix = context.name === undefined ? commandPrefix(context.squarePath) : participantCommandPrefix(context.squarePath, context.name);
+      const prefix = context.name === undefined ? commandPrefix(squarePath) : participantCommandPrefix(squarePath, context.name);
       latest.push(`» ${prefix} history --at ${actId(result.latestAct)} -C 2 --full`);
     }
     const output = [
       `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,
       ...(hold === undefined ? [] : ['', hold]), '', 'around the square', ...people, '', 'latest', ...latest,
     ].join('\n');
-    return withPathOutput(context.squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
+    return withPathOutput(squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
     } finally {
       await closeOpenSquare(square);
     }

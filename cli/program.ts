@@ -17,7 +17,7 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
   try {
     const requestedHelp = helpRequest(rawArgs);
     if (requestedHelp !== undefined) {
-      await executeRegisteredCommand('help', requestedHelp.command === undefined ? [] : [requestedHelp.command], defaultContext('help', '.square/SQUARE.square'));
+      await executeRegisteredCommand('help', requestedHelp.command === undefined ? [] : [requestedHelp.command], defaultContext('help'));
       return;
     }
 

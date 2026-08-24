@@ -5,10 +5,8 @@ import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 import { localParticipantName } from '../registry.js';
 
-export const DEFAULT_SQUARE_PATH = '.square/SQUARE.square';
-
 export interface CommandContext {
-  squarePath: string;
+  squarePath?: string;
   name?: string;
   homeDir: string;
   command: string;
@@ -100,7 +98,20 @@ export function requireParticipant(name: string | undefined): string {
   return name;
 }
 
-const LOCATION_REQUIRED_COMMANDS = new Set(['join', 'catch', 'express', 'done', 'hold', 'resume']);
+const LOCATION_REQUIRED_COMMANDS = new Set([
+  'build',
+  'stream',
+  'join',
+  'catch',
+  'express',
+  'done',
+  'hold',
+  'resume',
+  'history',
+  'status',
+  'participants',
+  'doctor',
+]);
 
 function configuredLocation(): string | undefined {
   const value = process.env.SQUARE_LOCATION?.trim();
@@ -115,7 +126,7 @@ function configuredName(): string | undefined {
 }
 
 export interface ParsedGlobalArgs {
-  squarePath: string;
+  squarePath?: string;
   explicitSquarePath: boolean;
   multipleSquares: boolean;
   name?: string;
@@ -145,8 +156,10 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
     fail(`✕ ${command} needs a square location\n» square ls`);
   }
-  const squarePath = requestedPath ?? configured ?? DEFAULT_SQUARE_PATH;
-  if (name === undefined && command !== undefined && locationIsRequired(command)) name = localParticipantName(squarePath);
+  const squarePath = requestedPath ?? configured;
+  if (name === undefined && squarePath !== undefined && command !== undefined && locationIsRequired(command)) {
+    name = localParticipantName(squarePath);
+  }
   return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
 }
 
@@ -154,6 +167,11 @@ export function locationIsRequired(command: string): boolean {
   return LOCATION_REQUIRED_COMMANDS.has(command);
 }
 
-export function defaultContext(command: string, squarePath: string, name?: string): CommandContext {
+export function defaultContext(command: string, squarePath?: string, name?: string): CommandContext {
   return { command, squarePath, name, homeDir: os.homedir() };
+}
+
+export function requireSquarePath(context: CommandContext): string {
+  if (context.squarePath === undefined) fail(`✕ ${context.command} needs a square location\n» square ls`);
+  return context.squarePath;
 }

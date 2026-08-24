@@ -2,7 +2,7 @@ import { diagnoseSquareFile } from '../square-storage.js';
 import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 import { inSquareCount } from '../runtime.js';
 
-import { type CommandSpec, usage } from './context.js';
+import { requireSquarePath, type CommandSpec, usage } from './context.js';
 
 interface DoctorResult {
   output: string;
@@ -15,18 +15,19 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     return undefined;
   },
   execute(_intent, context) {
-    const diagnosis = diagnoseSquareFile(context.squarePath);
+    const squarePath = requireSquarePath(context);
+    const diagnosis = diagnoseSquareFile(squarePath);
     if (diagnosis.unfixable !== undefined || diagnosis.state === undefined) {
       return {
         output: withPathOutput(
-          context.squarePath,
+          squarePath,
           renderDoctorUnfixable(diagnosis.unfixable ?? 'the snapshot could not be decoded'),
         ),
         exitCode: 2,
       };
     }
     return {
-      output: withPathOutput(context.squarePath, renderDoctorClean(), {
+      output: withPathOutput(squarePath, renderDoctorClean(), {
         participantCount: inSquareCount(diagnosis.state),
       }),
     };

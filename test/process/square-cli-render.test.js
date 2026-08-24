@@ -441,7 +441,7 @@ test('manual participant writes require an explicit location', () => {
   assert.notEqual(doctor.status, 0);
   const doctorFix = run(['doctor', '--fix'], { cwd });
   assert.notEqual(doctorFix.status, 0);
-  assert.match(doctorFix.stderr, /invalid arguments for doctor/);
+  assert.match(doctorFix.stderr, /doctor needs a square location/);
 });
 
 test('history grep describes an empty result precisely', async () => {
