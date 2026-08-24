@@ -2,6 +2,7 @@ import { extractMentions } from './square-core.js';
 import { captureRoute, parseSquareRoute, type SquareRoute } from './delivery.js';
 import { sameName, SquareError } from './model.js';
 import { Square } from './square-wiring.js';
+import { wakeNotifierForSquare } from './notifications.js';
 import type { ExpressResult } from './square-facade.js';
 
 export { Square } from './square-wiring.js';
@@ -47,7 +48,7 @@ export async function express(route: SquareRoute, options: RouteExpressOptions):
   ) {
     throw new SquareError('invalid_args', 'Route express requires { as, body }');
   }
-  const square = await Square.at({ path: parsed.squarePath });
+  const square = await Square.at({ path: parsed.squarePath, notifier: wakeNotifierForSquare(parsed.squarePath) });
   try {
     const recipient = (await square.participants()).find(
       (participant) => participant.state === 'joined' && sameName(participant.name, parsed.name)
