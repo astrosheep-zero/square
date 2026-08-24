@@ -4,7 +4,6 @@ import { deriveDeliveryModel } from './delivery.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { OpenSquare } from './open-square.js';
-import { touchPresenceCursor } from './runtime.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 
 function storeActs(state: SquareState, acts: readonly Act[]): StoredAct[] {
@@ -13,7 +12,6 @@ function storeActs(state: SquareState, acts: readonly Act[]): StoredAct[] {
     const item = { ...act, index: state.runtime.nextActIndex } as StoredAct;
     state.runtime.nextActIndex += 1;
     state.acts.push(item);
-    if (item.actor !== undefined) touchPresenceCursor(state, item.actor, item.at, item.index);
     stored.push(item);
   }
   return stored;

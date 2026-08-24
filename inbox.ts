@@ -15,6 +15,7 @@ export async function sessionInbox(sessionId: string): Promise<InboxMembership[]
       inbox.push({
         name: projection.name,
         squarePath: binding.squarePath,
+        ownerId: binding.ownerId,
         notifications: [...projection.notifications],
         ...(projection.catchLease !== undefined ? { catchLease: projection.catchLease } : {}),
       });

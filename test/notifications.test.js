@@ -98,7 +98,7 @@ test('PaseoAdapter waits for the current boundary and sends supplied awareness o
   assert.equal(sent.agentId, 'exact-agent');
   assert.equal(sent.prompt, payload);
   assert.doesNotMatch(sent.prompt, /private payload/);
-  assert.deepEqual(loadSquare(item.squarePath).runtime.deliveryReceipts, {});
+  assert.deepEqual(loadSquare(item.squarePath).runtime.observations, {});
   assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -171,7 +171,7 @@ test('a closed Paseo route is retired without consuming pending attention', asyn
   assert.deepEqual(readWakeAttempts({ env: item.env }), []);
   const { readWakeRoutes } = await import('../dist/routes.js');
   assert.deepEqual(readWakeRoutes({ env: item.env, now: Date.now() }), []);
-  assert.deepEqual(loadSquare(item.squarePath).runtime.deliveryReceipts, {});
+  assert.deepEqual(loadSquare(item.squarePath).runtime.observations, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
@@ -201,7 +201,7 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
 
   assert.equal(sent.agentId, 'gone-agent');
   assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
-  assert.deepEqual(loadSquare(item.squarePath).runtime.deliveryReceipts, {});
+  assert.equal(loadSquare(item.squarePath).runtime.observations.Bob['act/2'].state, 'notified');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 

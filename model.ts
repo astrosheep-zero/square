@@ -76,15 +76,12 @@ export interface BuildOptions {
 export type StoredAct = Act & { index: number; at: number };
 export type StoredActHead = StoredAct extends infer T ? T extends StoredAct ? Omit<T, 'body' | 'through' | 'index'> : never : never;
 
-export interface ReadCursor {
-  consumedThroughIndex: number;
-  updatedAt: number;
-}
+export type ObservationState = 'notified' | 'seen';
 
-export interface DeliveryReceipt {
-  /** Inject presentation lives only in the machine-local presented ledger. */
-  status: 'delivered';
+export interface ActivityObservation {
+  state: ObservationState;
   at: number;
+  ownerId?: string;
 }
 
 export interface WatchLeaseFilter {
@@ -114,6 +111,7 @@ export interface InboxNotification {
 export interface InboxMembership {
   name: string;
   squarePath: string;
+  ownerId?: string;
   notifications: InboxNotification[];
   catchLease?: WatchLease;
 }
@@ -128,8 +126,7 @@ export interface NotifyLease {
 
 export interface SquareRuntimeState {
   nextActIndex: number;
-  cursors: Record<string, ReadCursor>;
-  deliveryReceipts: Record<string, Record<string, DeliveryReceipt>>;
+  observations: Record<string, Record<string, ActivityObservation>>;
   leases: Record<string, WatchLease>;
   notifyLeases: Record<string, NotifyLease>;
 }

@@ -1,7 +1,7 @@
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
 import { done, express, hold, implicitJoin, join, resume } from './landing.js';
-import { catchUp } from './presence.js';
+import { catchUp, markBoundarySeen as recordBoundarySeen, markNotificationNotified as recordNotificationNotified } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
@@ -65,6 +65,14 @@ export class Square {
   snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
   history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
   close(): Promise<void> { return closeOpenSquare(this.square); }
+}
+
+export function markBoundarySeen(squarePath: string, name: string, ownerId: string | undefined, actIndexes: readonly number[], at?: number): Promise<void> {
+  return recordBoundarySeen(squarePath, name, ownerId, actIndexes, at);
+}
+
+export function markNotificationNotified(square: OpenSquare, name: string, actIndex: number, ownerId: string | undefined, at?: number): Promise<void> {
+  return recordNotificationNotified(square, name, actIndex, ownerId, at);
 }
 
 export async function openParticipant(

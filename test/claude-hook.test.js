@@ -73,8 +73,8 @@ test('session inbox returns only canonical pending directed notifications', asyn
       [[2, 'mention'], [3, 'bell']]
     );
 
-    item.runtime.deliveryReceipts.Bob = {
-      [formatActivityId(2)]: { status: 'delivered', at: 6 },
+    item.runtime.observations.Bob = {
+      [formatActivityId(2)]: { state: 'seen', at: 6 },
     };
     item.persist();
     inbox = await sessionInbox('claude-session');

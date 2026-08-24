@@ -17,7 +17,6 @@ import {
   actStableIndex,
   foldedState,
   freshWatchLease,
-  getReadState,
   publicActs,
   readCursor,
   resolveRosterName,
@@ -274,10 +273,10 @@ function presenceFor(squareState: SquareState, snapshot: FoldedSquareState['part
   lastAt: number | undefined;
 } {
   if (snapshot?.done) return { state: 'done', lastAt: snapshot.lastActiveAt };
-  const cursor = getReadState(squareState, name);
+  const cursorAt = squareState.acts.findLast((act) => act.index <= readCursor(squareState, name))?.at;
   const lease = freshWatchLease(squareState, name, now);
-  if (lease !== undefined) return { state: 'watching', lastAt: cursor?.updatedAt ?? lease.heartbeatAt };
-  const lastAt = cursor?.updatedAt ?? (snapshot?.joined ? snapshot.lastActiveAt : undefined);
+  if (lease !== undefined) return { state: 'watching', lastAt: cursorAt ?? lease.heartbeatAt };
+  const lastAt = cursorAt ?? (snapshot?.joined ? snapshot.lastActiveAt : undefined);
   return lastAt === undefined
     ? { state: 'never-joined', lastAt: undefined }
     : { state: 'active', lastAt };

@@ -428,8 +428,7 @@ test('stream recipient filtering matches the addressed participant', async () =>
   ];
   const runtime = {
     nextActIndex: 6,
-    cursors: {},
-    deliveryReceipts: {},
+    observations: {},
     leases: {},
     notifyLeases: {},
   };

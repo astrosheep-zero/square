@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
-import { deriveDeliveryModel, leaseOwnsNotification, markDeliveredNotifications } from '../dist/delivery.js';
+import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications } from '../dist/delivery.js';
 import { formatActivityId } from '../dist/square-core.js';
+import { readCursor, recordObservation } from '../dist/runtime.js';
 
 function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
   return {
@@ -48,14 +49,14 @@ test('pending attention is post-join, independent of the read cursor, and closes
     { kind: 'say', actor: 'Bob', at: 5, body: 'self cursor advance' },
   ];
   const runtime = emptyRuntimeState(acts.length);
-  runtime.cursors.Bob = { consumedThroughIndex: 4, updatedAt: 5 };
+  runtime.observations.Bob = { 'act/4': { state: 'seen', at: 5 } };
   const square = squareState(acts, runtime);
   const delivery = deriveDeliveryModel(square);
 
   assert.deepEqual(delivery.pendingFor('bob').map(({ item }) => item.index), [3]);
-  assert.equal(markDeliveredNotifications(square, 'Bob', [square.acts[3]], 6), true);
+  assert.equal(markSeenNotifications(square, 'Bob', [square.acts[3]], 6), true);
   assert.deepEqual(deriveDeliveryModel(square).pendingFor('Bob'), []);
-  assert.equal(square.runtime.deliveryReceipts.Bob[formatActivityId(3)].status, 'delivered');
+  assert.equal(square.runtime.observations.Bob[formatActivityId(3)].state, 'seen');
 });
 
 test('a participant who has stepped out is not a delivery target', () => {
@@ -101,4 +102,19 @@ test('pending projection remains complete across a long history', () => {
     deriveDeliveryModel(squareState(acts)).pendingFor('Bob').map(({ item }) => item.index),
     [2, 1_002, 2_002, 3_002]
   );
+});
+
+test('out-of-order observations advance only the continuous seen prefix', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'one' },
+    { kind: 'say', actor: 'Alice', at: 4, body: 'two' },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'three' },
+  ]);
+  recordObservation(square, 'Bob', 3, 'seen', 8);
+  recordObservation(square, 'Bob', 4, 'seen', 9);
+  assert.equal(readCursor(square, 'Bob'), 1);
+  recordObservation(square, 'Bob', 2, 'seen', 10);
+  assert.equal(readCursor(square, 'Bob'), 4);
 });

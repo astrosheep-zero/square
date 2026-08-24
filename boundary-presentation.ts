@@ -1,5 +1,7 @@
 import { leaseOwnsNotification } from './delivery.js';
 import { sessionInbox } from './inbox.js';
+import { notificationMessageId } from './delivery.js';
+import { markBoundarySeen } from './square-wiring.js';
 import type { InboxMembership } from './model.js';
 import { renderAttentionPreview } from './attention-presentation.js';
 import { participantCommandPrefix } from './presentation.js';
@@ -89,10 +91,30 @@ export async function presentPendingAtBoundary<T>(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<T | undefined> {
   const inbox = await lookup(sessionId);
-  return presentOnce(
+  let deliveredInbox: InboxMembership[] | undefined;
+  let deliveredContext: string | undefined;
+  const result = presentOnce(
     sessionId,
     () => pendingAtBoundary(inbox),
-    (inbox) => present(renderPendingAtBoundary(inbox)),
+    (inbox) => {
+      const context = renderPendingAtBoundary(inbox);
+      deliveredInbox = inbox;
+      deliveredContext = context;
+      return present(context);
+    },
     env
   );
+  if (result !== undefined && deliveredInbox !== undefined && deliveredContext !== undefined) {
+    await markCompleteBoundaryObservations(deliveredInbox, deliveredContext);
+  }
+  return result;
+}
+
+async function markCompleteBoundaryObservations(inbox: InboxMembership[], context: string): Promise<void> {
+  for (const membership of inbox) {
+    const complete = membership.notifications
+      .filter((notification) => context.includes(notificationMessageId(membership.squarePath, notification.actIndex)) && notification.body.length <= 120)
+      .map((notification) => notification.actIndex);
+    if (complete.length > 0) await markBoundarySeen(membership.squarePath, membership.name, membership.ownerId, complete);
+  }
 }

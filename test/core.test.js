@@ -6,6 +6,7 @@ import { deliveryDelta } from '../dist/activity-feed.js';
 import { coreActivities, coreHold, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
 import { done, express, join } from '../dist/landing.js';
 import { createMemoryCell } from '../dist/square-storage.js';
+import { readCursor } from '../dist/runtime.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -59,7 +60,7 @@ test('mention history selects directed says for the addressed participant', () =
   assert.deepEqual(coreActivities(squareState, { mention: 'Cara' }), []);
 });
 
-test('directed pending attention survives a cursor that already consumed the public stream', () => {
+test('directed pending attention survives observations of later activity', () => {
   const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
@@ -68,9 +69,9 @@ test('directed pending attention survives a cursor that already consumed the pub
       { kind: 'say', actor: 'Bob', at: 4, body: 'self activity' },
     ],
   });
-  squareState.runtime.cursors.Bob = { consumedThroughIndex: 3, updatedAt: 4 };
+  squareState.runtime.observations.Bob = { 'act/3': { state: 'seen', at: 4 } };
 
-  assert.deepEqual(deliveryDelta(squareState, 'Bob').map((item) => item.index), [2]);
+  assert.deepEqual(deliveryDelta(squareState, 'Bob').map((item) => item.index), [2, 3]);
 });
 
 test('host controls preserve the requesting actor and body', () => {
@@ -97,7 +98,7 @@ test('landings advance the actor cursor and never reuse an index', async () => {
   await done(square, 'Alice', 'bye');
 
   const stored = (await cell.read()).state;
-  assert.equal(stored.runtime.cursors.Alice.consumedThroughIndex, 2);
+  assert.equal(readCursor(stored, 'Alice'), 2);
   assert.deepEqual(stored.acts.map((act) => act.index), [0, 1, 2]);
   await cell.close();
 });
@@ -110,8 +111,7 @@ test('a valid expression emits the caller as actor and preserves its body, reach
     ],
     runtime: {
       nextActIndex: 2,
-      cursors: {},
-      deliveryReceipts: {},
+      observations: {},
       leases: {},
       notifyLeases: {},
     },

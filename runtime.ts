@@ -4,7 +4,8 @@ import {
   type StoredAct,
   type SquareState,
   type HoldState,
-  type ReadCursor,
+  type ActivityObservation,
+  type ObservationState,
   type WatchLease,
   findParticipantName,
   nameKey,
@@ -155,12 +156,13 @@ export function actId(actOrIndex: StoredAct | number): ActivityId {
   return formatActivityId(index);
 }
 
-export function getReadState(squareState: SquareState, name: string): ReadCursor | undefined {
-  return squareState.runtime.cursors[name] ?? Object.entries(squareState.runtime.cursors).find(([participant]) => sameName(participant, name))?.[1];
+function observationRecipient(squareState: SquareState, name: string): string {
+  return resolveRosterName(squareState, name) ?? name;
 }
 
-export function readCursor(squareState: SquareState, name: string): number {
-  return getReadState(squareState, name)?.consumedThroughIndex ?? -1;
+function observationMap(squareState: SquareState, name: string): Record<string, ActivityObservation> {
+  const key = observationRecipient(squareState, name);
+  return squareState.runtime.observations?.[key] ?? {};
 }
 
 export function currentHold(acts: StoredAct[]): HoldState {
@@ -176,33 +178,45 @@ function canonicalRuntimeName(squareState: SquareState, name: string): string {
   return resolveRosterName(squareState, name) ?? name;
 }
 
-export function advanceCursor(
+export function observationFor(squareState: SquareState, name: string, index: number): ActivityObservation | undefined {
+  return observationMap(squareState, name)[formatActivityId(index)];
+}
+
+export function recordObservation(
   squareState: SquareState,
   name: string,
   index: number,
-  updatedAt = Date.now()
+  state: ObservationState,
+  at = Date.now(),
+  ownerId?: string,
 ): boolean {
-  return touchPresenceCursor(squareState, name, updatedAt, index);
+  if (!Number.isSafeInteger(index) || index < 0 || !Number.isFinite(at)) return false;
+  const key = observationRecipient(squareState, name);
+  const id = formatActivityId(index);
+  const current = squareState.runtime.observations[key]?.[id];
+  if (current?.state === 'seen' || (current?.state === state && current.at >= at && current.ownerId === ownerId)) return false;
+  const next: ActivityObservation = {
+    state: state === 'seen' ? 'seen' : 'notified',
+    at: Math.max(current?.at ?? -Infinity, at),
+    ...(ownerId === undefined ? (current?.ownerId === undefined ? {} : { ownerId: current.ownerId }) : { ownerId }),
+  };
+  ((squareState.runtime.observations ??= {})[key] ??= {})[id] = next;
+  return true;
 }
 
-export function touchPresenceCursor(
-  squareState: SquareState,
-  name: string,
-  at: number,
-  consumedThroughIndex?: number
-): boolean {
-  if (!Number.isFinite(at)) return false;
-  if (consumedThroughIndex !== undefined && (!Number.isInteger(consumedThroughIndex) || consumedThroughIndex < 0)) return false;
-  const key = canonicalRuntimeName(squareState, name);
-  const current = getReadState(squareState, key);
-  const nextIndex =
-    consumedThroughIndex === undefined
-      ? (current?.consumedThroughIndex ?? readCursor(squareState, key))
-      : Math.max(current?.consumedThroughIndex ?? -1, consumedThroughIndex);
-  const updatedAt = current === undefined ? at : Math.max(current.updatedAt, at);
-  if (current?.consumedThroughIndex === nextIndex && current.updatedAt === updatedAt) return false;
-  squareState.runtime.cursors[key] = { consumedThroughIndex: nextIndex, updatedAt };
-  return true;
+export function readCursor(squareState: SquareState, name: string): number {
+  const boundary = lastJoinIndex(squareState.acts, name) ?? -1;
+  let cursor = boundary;
+  for (const act of squareState.acts) {
+    if (act.index <= boundary || act.kind === 'read' || act.actor === undefined) continue;
+    if (sameName(act.actor, name)) {
+      cursor = act.index;
+      continue;
+    }
+    if (observationFor(squareState, name, act.index)?.state !== 'seen') break;
+    cursor = act.index;
+  }
+  return cursor;
 }
 
 export function latestActIndex(acts: StoredAct[]): number {

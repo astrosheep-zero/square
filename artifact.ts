@@ -10,10 +10,9 @@ import {
   nameKey,
   SquareError,
   type BuildOptions,
-  type DeliveryReceipt,
+  type ActivityObservation,
   type HardCap,
   type NotifyLease,
-  type ReadCursor,
   type SquareState,
   type SquareRuntimeState,
   type StoredAct,
@@ -72,19 +71,12 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
-function validateReadCursor(value: unknown): value is ReadCursor {
+function validateObservation(value: unknown): value is ActivityObservation {
   return isObject(value)
-    && hasExactKeys(value, ['consumedThroughIndex', 'updatedAt'])
-    && Number.isSafeInteger(value.consumedThroughIndex)
-    && (value.consumedThroughIndex as number) >= -1
-    && isFiniteNumber(value.updatedAt);
-}
-
-function validateDeliveryReceipt(value: unknown): value is DeliveryReceipt {
-  return isObject(value)
-    && hasExactKeys(value, ['status', 'at'])
-    && value.status === 'delivered'
-    && isFiniteNumber(value.at);
+    && hasExactKeys(value, ['state', 'at'], ['ownerId'])
+    && (value.state === 'notified' || value.state === 'seen')
+    && isFiniteNumber(value.at)
+    && (value.ownerId === undefined || isNonblankString(value.ownerId));
 }
 
 function validateWatchLease(value: unknown): value is WatchLease {
@@ -138,26 +130,19 @@ function parseNotifyLeaseKey(key: string): { index: number; name: string } | und
 
 function validateRuntime(value: unknown): value is SquareRuntimeState {
   if (!isObject(value)
-    || !hasExactKeys(value, ['nextActIndex', 'cursors', 'deliveryReceipts', 'leases', 'notifyLeases'])
+    || !hasExactKeys(value, ['nextActIndex', 'observations', 'leases', 'notifyLeases'])
     || !isNonNegativeInteger(value.nextActIndex)
-    || !validateRecord(value.cursors, validateReadCursor)
+    || !validateRecord(value.observations, (candidate) => isObject(candidate) && Object.entries(candidate).every(([id, observation]) => parseActivityId(id) !== undefined && validateObservation(observation)))
     || !validateRecord(value.leases, validateWatchLease)
     || !validateRecord(value.notifyLeases, validateNotifyLease)
-    || !isObject(value.deliveryReceipts)) return false;
-  return Object.entries(value.deliveryReceipts).every(([name, receipts]) =>
-    name.length > 0
-      && isObject(receipts)
-      && Object.entries(receipts).every(([id, receipt]) => parseActivityId(id) !== undefined && validateDeliveryReceipt(receipt))
-  );
+    ) return false;
+  return true;
 }
 
 function validateAssignedRuntimeReferences(runtime: SquareRuntimeState): 'ok' | 'malformed' | 'future' {
   const bound = runtime.nextActIndex;
-  for (const cursor of Object.values(runtime.cursors)) {
-    if (cursor.consumedThroughIndex !== -1 && cursor.consumedThroughIndex >= bound) return 'future';
-  }
-  for (const receipts of Object.values(runtime.deliveryReceipts)) {
-    for (const id of Object.keys(receipts)) {
+  for (const observations of Object.values(runtime.observations)) {
+    for (const id of Object.keys(observations)) {
       const index = parseActivityId(id);
       if (index === undefined) return 'malformed';
       if (index >= bound) return 'future';
@@ -287,8 +272,7 @@ function decodeEnvelope(bytes: Buffer, magic: Buffer): unknown {
 export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
   return {
     nextActIndex,
-    cursors: {},
-    deliveryReceipts: {},
+    observations: {},
     leases: {},
     notifyLeases: {},
   };

@@ -66,8 +66,8 @@ test('encode/decode roundtrip preserves Square state', () => {
       { kind: 'done', actor: 'Alice', at: 1700000004000, body: 'bye' },
     ],
   });
-  squareState.runtime.cursors.Alice = { consumedThroughIndex: 4, updatedAt: 1700000004000 };
-  squareState.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 1700000001500 } };
+  squareState.runtime.observations.Alice = { [formatActivityId(4)]: { state: 'seen', at: 1700000004000 } };
+  squareState.runtime.observations.Bob = { [formatActivityId(1)]: { state: 'notified', at: 1700000001500 } };
   squareState.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
   squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
 
@@ -157,9 +157,9 @@ test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind h
   extraRuntime.runtime.version = 2;
   assert.throws(() => encodeSquare(extraRuntime), /snapshot schema is malformed/);
 
-  const invalidReceipt = structuredClone(squareState);
-  invalidReceipt.runtime.deliveryReceipts.Alice = { bad: { status: 'delivered', at: 1 } };
-  assert.throws(() => encodeSquare(invalidReceipt), /snapshot schema is malformed/);
+  const invalidObservation = structuredClone(squareState);
+  invalidObservation.runtime.observations.Alice = { bad: { state: 'seen', at: 1 } };
+  assert.throws(() => encodeSquare(invalidObservation), /snapshot schema is malformed/);
 
   const invalidLease = structuredClone(squareState);
   invalidLease.runtime.notifyLeases.attention = {
@@ -176,7 +176,7 @@ test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind h
   assert.throws(() => encodeSquare(beside), /snapshot schema is malformed/);
 });
 
-test('codec rejects future cursor, receipt, and notify-lease references', () => {
+test('codec rejects future observation and notify-lease references', () => {
   const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -184,13 +184,9 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
     ],
   });
 
-  const futureCursor = structuredClone(squareState);
-  futureCursor.runtime.cursors.Bob = { consumedThroughIndex: 2, updatedAt: 3 };
-  assert.throws(() => encodeSquare(futureCursor), /runtime references an unassigned activity index/);
-
-  const futureReceipt = structuredClone(squareState);
-  futureReceipt.runtime.deliveryReceipts.Bob = { [formatActivityId(2)]: { status: 'delivered', at: 3 } };
-  assert.throws(() => encodeSquare(futureReceipt), /runtime references an unassigned activity index/);
+  const futureObservation = structuredClone(squareState);
+  futureObservation.runtime.observations.Bob = { [formatActivityId(2)]: { state: 'seen', at: 3 } };
+  assert.throws(() => encodeSquare(futureObservation), /runtime references an unassigned activity index/);
 
   const futureLease = structuredClone(squareState);
   futureLease.runtime.notifyLeases[JSON.stringify([formatActivityId(2), 'bob'])] = {
@@ -212,9 +208,9 @@ test('codec rejects future cursor, receipt, and notify-lease references', () => 
   };
   assert.throws(() => encodeSquare(mixedCaseLease), /snapshot schema is malformed/);
 
-  const underscoreReceipt = structuredClone(squareState);
-  underscoreReceipt.runtime.deliveryReceipts.Bob = { [['act', '1'].join('_')]: { status: 'delivered', at: 3 } };
-  assert.throws(() => encodeSquare(underscoreReceipt), /snapshot schema is malformed/);
+  const underscoreObservation = structuredClone(squareState);
+  underscoreObservation.runtime.observations.Bob = { [['act', '1'].join('_')]: { state: 'seen', at: 3 } };
+  assert.throws(() => encodeSquare(underscoreObservation), /snapshot schema is malformed/);
 });
 
 test('archived activity references remain valid below nextActIndex', () => {
@@ -223,13 +219,12 @@ test('archived activity references remain valid below nextActIndex', () => {
   });
   squareState.acts[0].index = 4;
   squareState.runtime.nextActIndex = 5;
-  squareState.runtime.cursors.Bob = { consumedThroughIndex: 1, updatedAt: 2 };
-  squareState.runtime.deliveryReceipts.Bob = { [formatActivityId(1)]: { status: 'delivered', at: 2 } };
+  squareState.runtime.observations.Bob = { [formatActivityId(1)]: { state: 'seen', at: 2 } };
   squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
   assert.deepEqual(decodeSquare(encodeSquare(squareState)), squareState);
 });
 
-test('a future receipt cannot persist and suppress the next real mention', async () => {
+test('a future observation cannot persist and suppress the next real mention', async () => {
   const { dir, squarePath } = writeFixture({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -237,8 +232,8 @@ test('a future receipt cannot persist and suppress the next real mention', async
     ],
   });
   const poisoned = loadSquare(squarePath);
-  poisoned.runtime.deliveryReceipts.Bob = {
-    [formatActivityId(poisoned.runtime.nextActIndex)]: { status: 'delivered', at: 3 },
+  poisoned.runtime.observations.Bob = {
+    [formatActivityId(poisoned.runtime.nextActIndex)]: { state: 'seen', at: 3 },
   };
   assert.throws(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
 

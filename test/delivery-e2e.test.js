@@ -17,6 +17,7 @@ import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
 import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
+import { readCursor } from '../dist/runtime.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -228,8 +229,8 @@ test('catch is the durable acknowledgement that closes pending attention for lat
 
     item.cli('Bob', ['catch', '--now'], 40);
     const caught = loadSquare(item.squarePath);
-    assert.equal(caught.runtime.deliveryReceipts.Bob[formatActivityId(act.index)].status, 'delivered');
-    assert.ok(caught.runtime.cursors.Bob.consumedThroughIndex >= act.index);
+    assert.equal(caught.runtime.observations.Bob[formatActivityId(act.index)].state, 'seen');
+    assert.ok(readCursor(caught, 'Bob') >= act.index);
     assert.deepEqual(deriveDeliveryModel(caught).pendingFor('Bob'), []);
 
     const worker = await runWorker(item, act.index);

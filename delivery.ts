@@ -2,10 +2,8 @@ import path from 'node:path';
 
 import {
   SquareError,
-  type DeliveryReceipt,
   type DirectedNotificationRoute,
   type SquareState,
-  type SquareRuntimeState,
   type StoredAct,
   type WatchLease,
   type WatchLeaseFilter,
@@ -17,7 +15,7 @@ import {
 } from './model.js';
 import { canonicalSquarePath, localParticipantName } from './registry.js';
 import { audienceOf, formatActivityId, resolveAudience } from './square-core.js';
-import { actId, isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, resolveRosterName, rosterNames } from './runtime.js';
+import { isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, observationFor, recordObservation, resolveRosterName, rosterNames } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
@@ -77,32 +75,9 @@ function canonicalRecipient(squareState: SquareState, name: string): string {
   return resolveRosterName(squareState, name) ?? name;
 }
 
-/** Delivery receipts are the only durable acknowledgement of directed attention. */
-export function deliveryReceipt(squareState: SquareState, name: string, actOrIndex: StoredAct | number): DeliveryReceipt | undefined {
-  return deliveryReceiptFromRuntime(squareState.runtime, canonicalRecipient(squareState, name), actOrIndex);
-}
-
-export function deliveryReceiptFromRuntime(runtime: SquareRuntimeState, recipient: string, actOrIndex: StoredAct | number): DeliveryReceipt | undefined {
-  return runtime.deliveryReceipts[recipient]?.[actId(actOrIndex)];
-}
-
-export function isDeliveryDelivered(squareState: SquareState, name: string, actOrIndex: StoredAct | number): boolean {
-  return deliveryReceipt(squareState, name, actOrIndex)?.status === 'delivered';
-}
-
-export function recordDeliveredDelivery(squareState: SquareState, name: string, actOrIndex: StoredAct | number, receipt: Omit<DeliveryReceipt, 'status'>): boolean {
-  return recordDeliveredRuntime(squareState.runtime, canonicalRecipient(squareState, name), actOrIndex, receipt);
-}
-
-export function recordDeliveredRuntime(runtime: SquareRuntimeState, recipient: string, actOrIndex: StoredAct | number, receipt: Omit<DeliveryReceipt, 'status'>): boolean {
-  const id = actId(actOrIndex);
-  if (deliveryReceiptFromRuntime(runtime, recipient, actOrIndex)?.status === 'delivered') return false;
-  (runtime.deliveryReceipts[recipient] ??= {})[id] = { status: 'delivered', ...receipt };
-  return true;
-}
-
-export function markDeliveredDelivery(squareState: SquareState, name: string, actOrIndex: StoredAct | number, at = Date.now()): boolean {
-  return recordDeliveredDelivery(squareState, name, actOrIndex, { at });
+export function isActivitySeen(squareState: SquareState, name: string, actOrIndex: StoredAct | number): boolean {
+  const index = typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index;
+  return observationFor(squareState, canonicalRecipient(squareState, name), index)?.state === 'seen';
 }
 
 /**
@@ -136,7 +111,7 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
         for (const planned of plan(act)) {
           const joinedAt = joinedAfter.get(planned.recipient);
           if (joinedAt === undefined || act.index <= joinedAt) continue;
-          if (isDeliveryDelivered(squareState, planned.recipient, act.index)) continue;
+          if (isActivitySeen(squareState, planned.recipient, act.index)) continue;
           pendingByRecipient.get(planned.recipient)?.push(planned);
         }
       }
@@ -151,13 +126,13 @@ export function planActNotifications(squareState: SquareState, item: StoredAct):
   return deriveDeliveryModel(squareState).plan(item);
 }
 
-/** Mark only the directed notifications selected by the canonical pending projection. */
-export function markDeliveredNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now()): boolean {
+/** Mark only the notifications selected by the canonical catch projection as fully seen. */
+export function markSeenNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now()): boolean {
   const deliveredIndexes = new Set(delivered.map((item) => item.index));
   let changed = false;
   for (const notification of deriveDeliveryModel(squareState).pendingFor(recipient)) {
     if (!deliveredIndexes.has(notification.item.index)) continue;
-    changed = recordDeliveredDelivery(squareState, notification.recipient, notification.item.index, { at }) || changed;
+    changed = recordObservation(squareState, notification.recipient, notification.item.index, 'seen', at) || changed;
   }
   return changed;
 }

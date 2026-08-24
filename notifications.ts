@@ -20,6 +20,7 @@ import { lookupParticipant } from './registry.js';
 import { retireWakeRoute } from './routes.js';
 import { recordPresentedForOwner } from './presented.js';
 import { openSquare } from './square-file-adapter.js';
+import { markNotificationNotified } from './square-wiring.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import type { Activity, WakeNotifier } from './square-facade.js';
@@ -254,6 +255,7 @@ async function processNotification(
             ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
           }, env);
           if (outcome.outcome === 'accepted') {
+            await markNotificationNotified(square, notification.recipient, notification.item.index, route.ownerId, now());
             recordPresentedForOwner(route.ownerId, squarePath, notification.recipient, notification.item.index, env, now());
           }
           if (outcome.outcome !== 'failed') releaseLease = true;

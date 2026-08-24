@@ -1,5 +1,5 @@
 import { sameName, type StoredAct, type SquareState, type PublicAct, type RoomChangeAct } from './model.js';
-import { advanceCursor, latestActIndex, readCursor } from './runtime.js';
+import { readCursor } from './runtime.js';
 import { deriveDeliveryModel, matchesCatchFilter } from './delivery.js';
 
 export interface ActivityFeedFilter {
@@ -11,14 +11,9 @@ export function actDelta(acts: StoredAct[], cursor: number): StoredAct[] {
   return acts.filter((act) => act.index > cursor);
 }
 
-/** Public cursor changes plus directed receipts that remain pending behind it. */
+/** Visible activities after the participant's derived continuous-seen prefix. */
 export function deliveryDelta(squareState: SquareState, name: string): StoredAct[] {
-  const items = actDelta(squareState.acts, readCursor(squareState, name));
-  const seen = new Set(items.map((act) => act.index));
-  for (const notification of deriveDeliveryModel(squareState).pendingFor(name)) {
-    if (!seen.has(notification.item.index)) items.push(notification.item);
-  }
-  return items.sort((a, b) => a.index - b.index);
+  return actDelta(squareState.acts, readCursor(squareState, name));
 }
 
 export function peerRoomChanges(delta: StoredAct[], name: string): RoomChangeAct[] {
@@ -52,8 +47,4 @@ export function filteredPeerActivities(delta: StoredAct[], name: string, filter:
 export function filteredRoomChanges(delta: StoredAct[], name: string, filter: ActivityFeedFilter): RoomChangeAct[] {
   if (filter.mention !== undefined) return [];
   return peerRoomChanges(delta, name).filter((act) => matchesParticipants(act, filter.participants));
-}
-
-export function ackPeerDelta(squareState: SquareState, name: string, delta: StoredAct[], at?: number): boolean {
-  return advanceCursor(squareState, name, latestActIndex([...peerPublicActs(delta, name), ...peerRoomChanges(delta, name)]), at);
 }
