@@ -80,6 +80,7 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
     actor: request.actor,
     body,
     route: request.route,
+    recipient: request.recipient,
   })) return false;
 
   const deadline = Date.now() + 180_000;

@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deliveryDelta } from '../dist/activity-feed.js';
-import { coreActivities, coreHold, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
-import { done, express, join } from '../dist/landing.js';
+import { coreActivities, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
+import { done, express, ignore, join, listen, listening } from '../dist/landing.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 import { readCursor } from '../dist/runtime.js';
 
@@ -46,18 +46,22 @@ test('pending activities begin after the recipient joined and include directed m
   );
 });
 
-test('mention history selects directed says for the addressed participant', () => {
+test('mention history selects historical direct attention for the addressed participant', () => {
   const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
       { kind: 'join', actor: 'Cara', at: 3, body: '' },
       { kind: 'say', actor: 'Alice', at: 4, body: 'private @Bob' },
+      { kind: 'listen', actor: 'Cara', target: 'Alice', at: 5 },
+      { kind: 'say', actor: 'Alice', at: 6, body: 'listener attention' },
+      { kind: 'ignore', actor: 'Cara', target: 'Alice', at: 7 },
+      { kind: 'say', actor: 'Alice', at: 8, body: 'after ignore' },
     ],
   });
 
   assert.deepEqual(coreActivities(squareState, { mention: 'Bob' }).map((item) => item.index), [3]);
-  assert.deepEqual(coreActivities(squareState, { mention: 'Cara' }), []);
+  assert.deepEqual(coreActivities(squareState, { mention: 'Cara' }).map((item) => item.index), [5]);
 });
 
 test('directed pending attention survives observations of later activity', () => {
@@ -133,7 +137,7 @@ test('a valid expression emits the caller as actor and preserves its body, reach
   }
 });
 
-test('an expression without a mention or bell is invalid', () => {
+test('the library admits a bare expression even when nobody is listening', () => {
   const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
@@ -141,15 +145,48 @@ test('an expression without a mention or bell is invalid', () => {
     ],
   });
 
-  assert.throws(
-    () => decideAct(squareState, { name: 'Alice', body: 'hello everyone', force: true, now: 3 }),
-    (error) => error.code === 'invalid_args' && /@mention.*--bell/.test(error.message)
-  );
+  const decision = decideAct(squareState, { name: 'Alice', body: 'hello everyone', force: true, now: 3 });
+  assert.equal(decision.type, 'sent');
+  if (decision.type === 'sent') assert.equal(decision.act.body, 'hello everyone');
+});
 
-  assert.throws(
-    () => decideAct(squareState, { name: 'Alice', body: 'aside', force: true, now: 3 }),
-    (error) => error.code === 'invalid_args'
-  );
+test('listener decisions are idempotent and preserve active target spelling order', () => {
+  const joined = makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] });
+  assert.deepEqual(coreListen(joined, 'caller', 'aku/Riko/7a', 2), {
+    kind: 'listen', actor: 'Caller', target: 'aku/Riko/7a', at: 2,
+  });
+
+  const listening = makeState({ acts: [
+    { kind: 'join', actor: 'Caller', at: 1 },
+    { kind: 'listen', actor: 'Caller', target: 'aku/Riko/7a', at: 2 },
+    { kind: 'listen', actor: 'Caller', target: 'aku/Momo', at: 3 },
+  ] });
+  assert.equal(coreListen(listening, 'Caller', 'AKU/riko/7A', 4), undefined);
+  assert.deepEqual(coreListening(listening, 'caller'), ['aku/Riko/7a', 'aku/Momo']);
+  assert.deepEqual(coreIgnore(listening, 'Caller', 'AKU/RIKO/7A', 5), {
+    kind: 'ignore', actor: 'Caller', target: 'AKU/RIKO/7A', at: 5,
+  });
+  assert.equal(coreIgnore(listening, 'Caller', 'aku/missing', 5), undefined);
+});
+
+test('listener landings append only real edge changes', async () => {
+  let now = 10;
+  const cell = createMemoryCell(makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
+  const square = { cell, clock: () => ++now, location: 'memory' };
+
+  const first = await listen(square, 'Caller', 'aku/riko');
+  const repeated = await listen(square, 'caller', 'AKU/RIKO');
+  assert.equal(first.activity.kind, 'listen');
+  assert.equal(first.activity.target, 'aku/riko');
+  assert.equal(repeated.activity, null);
+  assert.deepEqual(await listening(square, 'Caller'), ['aku/riko']);
+
+  const removed = await ignore(square, 'Caller', 'aku/riko');
+  const absent = await ignore(square, 'Caller', 'aku/riko');
+  assert.equal(removed.activity.kind, 'ignore');
+  assert.equal(absent.activity, null);
+  assert.deepEqual((await cell.read()).state.acts.map((act) => act.kind), ['join', 'listen', 'ignore']);
+  await cell.close();
 });
 
 test('reply rejects an activity id that has not landed yet', () => {

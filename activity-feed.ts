@@ -28,10 +28,10 @@ function matchesParticipants(act: StoredAct, participants: string[] | undefined)
   return participants === undefined || (act.actor !== undefined && participants.some((participant) => sameName(participant, act.actor!)));
 }
 
-export function matchesFeedFilter(act: StoredAct, filter: ActivityFeedFilter): boolean {
+export function matchesFeedFilter(act: StoredAct, filter: ActivityFeedFilter, recipients?: readonly string[]): boolean {
   if (act.kind === 'say') {
     return matchesCatchFilter(
-      { actor: act.actor, body: act.body, reach: act.reach },
+      { actor: act.actor, body: act.body, reach: act.reach, ...(recipients === undefined ? {} : { recipients }) },
       filter
     );
   }

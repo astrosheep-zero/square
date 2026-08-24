@@ -282,6 +282,7 @@ function renderHistoryProjection(
     const options = {
       preview,
       actNumber: activity.kind === 'say' ? projection.sayNumbers[activity.index] : undefined,
+      perception: activity.perception,
     };
     const rendered = mode === 'archive'
       ? renderEventCli(activity, options)
@@ -387,7 +388,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       const attention = !showAttention
         ? ''
         : participant.pendingMentionCount > 0
-          ? `${participant.pendingMentionCount} mention${participant.pendingMentionCount === 1 ? '' : 's'} waiting`
+          ? `${participant.pendingMentionCount} attention${participant.pendingMentionCount === 1 ? '' : 's'} waiting`
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
             : 'caught up';
@@ -405,6 +406,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
           now: result.now,
           preview: 200,
           actNumber: presentation.latestActNumber,
+          squareState: presentation.state,
         });
     const latest = visible === ''
       ? [result.latestAct === undefined

@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { Square, SquareError } from '../dist/index.js';
+import { recordJoin } from '../dist/registry.js';
 
 test('fixed facade builds, opens, and exposes participant-scoped activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));
@@ -45,6 +46,24 @@ test('participant history defaults to the recent ten activities in ascending ord
   await square.close();
 });
 
+test('participant history uses listener attention at each activity boundary', async () => {
+  let at = 0;
+  const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  await alice.express('before listening', { force: true });
+  await bob.listen('Alice');
+  await alice.express('after listening', { force: true });
+
+  const history = await bob.history({ all: true });
+  const before = history.find((activity) => activity.body === undefined && activity.kind === 'say');
+  const after = history.find((activity) => activity.body === 'after listening');
+  assert.equal(before?.perception, 'presence');
+  assert.equal(after?.perception, 'full');
+  assert.deepEqual((await bob.history({ mention: true })).map((activity) => activity.body), ['after listening']);
+  await square.close();
+});
+
 test('idle catch wakes for a committed activity and expires while quiet', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
@@ -72,4 +91,48 @@ test('invalid facade join retains the stable coded error and commits nothing', a
   await assert.rejects(square.join('bad name'), (error) => error instanceof SquareError && error.code === 'invalid_name');
   assert.equal((await square.snapshot()).actCount, 0);
   await square.close();
+});
+
+test('listener facade commits only edge changes and exposes canonical listener state', async () => {
+  let at = 0;
+  const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
+  const alice = await square.join('Alice');
+  await square.join('Bob');
+
+  const first = await alice.listen('bob');
+  assert.deepEqual(first.activity && { kind: first.activity.kind, actor: first.activity.actor, target: first.activity.target }, { kind: 'listen', actor: 'Alice', target: 'bob' });
+  assert.equal((await alice.listen('BOB')).activity, null);
+  assert.deepEqual(await alice.listening(), ['bob']);
+  assert.deepEqual((await square.snapshot()).participants.find((participant) => participant.name === 'Alice')?.listening, ['bob']);
+  assert.equal((await alice.ignore('Bob')).activity?.kind, 'ignore');
+  assert.equal((await alice.ignore('Bob')).activity, null);
+  assert.deepEqual(await alice.listening(), []);
+  await square.close();
+});
+
+test('recognize returns only the current locally bound participant without changing presence', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-recognize-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const registryPath = path.join(root, 'sessions.ndjsonl');
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  process.env.SQUARE_REGISTRY = registryPath;
+  try {
+    const square = await Square.build({ path: squarePath, markdown: 'context' });
+    const alice = await square.join('Alice');
+    const before = (await square.snapshot()).actCount;
+    recordJoin('alice-session', alice.name, squarePath, { channel: 'codex' });
+    assert.equal((await square.recognize({ CODEX_THREAD_ID: 'alice-session' }))?.name, 'Alice');
+    assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);
+    assert.equal((await square.snapshot()).actCount, before);
+    await square.join('Bob');
+    recordJoin('alice-session', 'Bob', squarePath, { channel: 'codex' });
+    assert.equal(await square.recognize({ CODEX_THREAD_ID: 'alice-session' }), null);
+    await alice.done();
+    assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);
+    await square.close();
+  } finally {
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

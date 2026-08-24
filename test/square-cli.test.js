@@ -50,6 +50,46 @@ test('participant identities include leading @ in human-readable output', () => 
   assert.match(roster.stdout, /@Alice/);
 });
 
+test('listen commands describe edge changes and listener attention admits bare express', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+  });
+  const rejected = run(withName(file, 'Alice', ['express', 'bare thought']));
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /no one is turned toward you/);
+
+  const listened = run(withName(file, 'Bob', ['listen', 'Alice']));
+  assert.equal(listened.status, 0, listened.stderr);
+  assert.match(listened.stdout, /@Bob turns an ear toward @Alice/);
+  const repeated = run(withName(file, 'Bob', ['listen', 'Alice']));
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stdout, /already turns an ear toward @Alice/);
+  assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', 'bare thought'])).status, 0);
+  const listening = run(withName(file, 'Bob', ['listening']));
+  assert.equal(listening.status, 0, listening.stderr);
+  assert.match(listening.stdout, /@Alice/);
+  const ignored = run(withName(file, 'Bob', ['ignore', 'Alice']));
+  assert.equal(ignored.status, 0, ignored.stderr);
+  assert.match(ignored.stdout, /@Bob turns away from @Alice/);
+  const absent = run(withName(file, 'Bob', ['ignore', 'Alice']));
+  assert.equal(absent.status, 0, absent.stderr);
+  assert.match(absent.stdout, /is not turned toward @Alice/);
+});
+
+test('listener commands do not rejoin a participant who already left', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const bob = await square.join('Bob');
+    await bob.done();
+  });
+  const before = run(withPath(file, ['history', '--all', '--full']));
+  const refused = run(withName(file, 'Bob', ['listen', 'Alice']));
+  assert.equal(refused.status, 2);
+  const after = run(withPath(file, ['history', '--all', '--full']));
+  assert.equal(after.stdout, before.stdout);
+});
+
 test('install and uninstall manage an explicit OpenCode target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');

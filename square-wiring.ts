@@ -1,9 +1,10 @@
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
-import { done, express, hold, implicitJoin, join, resume } from './landing.js';
+import { done, express, hold, ignore, implicitJoin, join, listen, listening, resume } from './landing.js';
 import { catchUp, markBoundarySeen as recordBoundarySeen, markNotificationNotified as recordNotificationNotified } from './presence.js';
-import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
-import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
+import { currentParticipant, history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
+import { localParticipantName } from './registry.js';
+import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
 
 class ParticipantHandle implements Participant {
@@ -11,6 +12,18 @@ class ParticipantHandle implements Participant {
 
   express(body: string, options?: ExpressOptions): Promise<ExpressResult> {
     return express(this.square, this.name, body, options);
+  }
+
+  listen(target: string): Promise<ListenerChangeResult> {
+    return listen(this.square, this.name, target);
+  }
+
+  ignore(target: string): Promise<ListenerChangeResult> {
+    return ignore(this.square, this.name, target);
+  }
+
+  listening(): Promise<readonly string[]> {
+    return listening(this.square, this.name);
   }
 
   catch(options?: CatchOptions): Promise<CatchResult> {
@@ -64,6 +77,12 @@ export class Square {
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
   snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
   history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
+  async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
+    const registered = localParticipantName(this.square.location, env);
+    if (registered === undefined) return null;
+    const canonicalName = await currentParticipant(this.square, registered);
+    return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square);
+  }
   close(): Promise<void> { return closeOpenSquare(this.square); }
 }
 

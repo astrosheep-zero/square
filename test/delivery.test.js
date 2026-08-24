@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
-import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications } from '../dist/delivery.js';
+import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications, perceiveActivity } from '../dist/delivery.js';
+import { renderAttentionPreview } from '../dist/attention-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { readCursor, recordObservation } from '../dist/runtime.js';
 
@@ -72,6 +73,57 @@ test('a participant who has stepped out is not a delivery target', () => {
   assert.deepEqual(delivery.pendingFor('Bob'), []);
 });
 
+test('listener audience is historical across ignore, done, and rejoin', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Caller', at: 1 },
+    { kind: 'listen', actor: 'Caller', target: 'aku/riko', at: 2 },
+    { kind: 'join', actor: 'aku/riko', at: 3 },
+    { kind: 'say', actor: 'aku/riko', at: 4, body: 'first answer' },
+    { kind: 'ignore', actor: 'Caller', target: 'aku/riko', at: 5 },
+    { kind: 'say', actor: 'aku/riko', at: 6, body: 'ignored answer' },
+    { kind: 'listen', actor: 'Caller', target: 'aku/riko', at: 7 },
+    { kind: 'say', actor: 'aku/riko', at: 8, body: 'second answer' },
+    { kind: 'done', actor: 'Caller', at: 9 },
+    { kind: 'say', actor: 'aku/riko', at: 10, body: 'after done' },
+    { kind: 'join', actor: 'Caller', at: 11 },
+    { kind: 'say', actor: 'aku/riko', at: 12, body: 'after rejoin' },
+  ]);
+  const delivery = deriveDeliveryModel(square);
+
+  assert.deepEqual(plannedRecipients(delivery, square.acts[3]), ['Caller:attention']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[5]), []);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[7]), ['Caller:attention']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[9]), []);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[11]), []);
+  assert.equal(perceiveActivity(square, square.acts[3], 'Caller'), 'full');
+  assert.equal(perceiveActivity(square, square.acts[3], 'Observer'), 'presence');
+});
+
+test('listener delivery attention does not claim a listener was mentioned', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 3 },
+    { kind: 'say', actor: 'Alice', body: 'bare thought', at: 4 },
+  ]);
+  const [{ route }] = deriveDeliveryModel(square).plan(square.acts[3]);
+  assert.equal(route, 'attention');
+  const rendered = renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: 3, recipient: 'Bob', actor: 'Alice', route, body: 'bare thought' });
+  assert.match(rendered, /\(attention\)/);
+  assert.doesNotMatch(rendered, /\(mention\)/);
+});
+
+test('a later listen does not retroactively receive an earlier bare say', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Caller', at: 1 },
+    { kind: 'join', actor: 'aku/riko', at: 2 },
+    { kind: 'say', actor: 'aku/riko', at: 3, body: 'too early' },
+    { kind: 'listen', actor: 'Caller', target: 'aku/riko', at: 4 },
+  ]);
+  assert.deepEqual(deriveDeliveryModel(square).plan(square.acts[2]), []);
+  assert.equal(perceiveActivity(square, square.acts[2], 'Caller'), 'presence');
+});
+
 test('a catch lease owns only the notifications admitted by its filter', () => {
   const mention = { actor: 'Alice', body: 'question @Bob', route: 'mention' };
   const bell = { actor: 'Alice', body: 'attention', route: 'bell' };
@@ -82,6 +134,21 @@ test('a catch lease owns only the notifications admitted by its filter', () => {
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Cara' } }, mention), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'], mention: 'Cara' } }, bell), true);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, mention), true);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { actor: 'aku/riko', body: 'bare answer', route: 'attention', recipient: 'Bob' }), true);
+});
+
+test('delivery route distinguishes mentioned recipients from listeners on the same say', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'listen', actor: 'Cara', target: 'Alice', at: 4 },
+    { kind: 'say', actor: 'Alice', body: 'question @Bob', at: 5 },
+  ]);
+  assert.deepEqual(
+    deriveDeliveryModel(square).plan(square.acts[4]).map(({ recipient, route }) => [recipient, route]),
+    [['Bob', 'mention'], ['Cara', 'attention']],
+  );
 });
 
 test('pending projection remains complete across a long history', () => {

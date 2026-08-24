@@ -25,8 +25,8 @@ import { sweepPendingNotifications, wakeNotifierForSquare } from '../notificatio
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
-import { Square } from '../square-wiring.js';
-import { entryPresentation, eventPresentation } from '../views.js';
+import { openParticipant, Square } from '../square-wiring.js';
+import { admitsBareExpress, entryPresentation, eventPresentation } from '../views.js';
 
 import {
   type CommandContext,
@@ -66,6 +66,11 @@ interface ActivityIntent {
 interface BodyIntent {
   name: string;
   body?: string;
+}
+
+interface ListenerIntent {
+  name: string;
+  target?: string;
 }
 
 function parseBuild(argv: string[]): BuildIntent {
@@ -172,6 +177,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         now: nowMs(),
         preview: intent.lastN === null ? undefined : 200,
         actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
+        squareState: after.state,
       })).filter(Boolean).join('\n\n');
       const contextText = after.joinContext;
       const fallback = hasAutomaticDeliveryIdentity()
@@ -234,8 +240,19 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     await sweepPendingNotifications(squarePath);
+    const body = resolveBody(intent.activity);
+    if (!intent.force && intent.reach !== 'bell') {
+      const reader = await openSquare(squarePath, { clock: nowMs });
+      try {
+        if (!await admitsBareExpress(reader, intent.name, body)) {
+          fail(`✕ no one is turned toward you\n  · address someone with @name, ring the bell, or use --force\n» ${participantCommandPrefix(squarePath, intent.name)} express --force -`);
+        }
+      } finally {
+        await closeOpenSquare(reader);
+      }
+    }
     const reachArg = intent.reach === 'bell' ? ' --bell' : '';
-    await cmdActivity(squarePath, intent.name, intent.activity, resolveBody, {
+    await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
       noWait: intent.noWait,
       reach: intent.reach,
@@ -244,6 +261,91 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
     });
   },
   present: () => {},
+};
+
+function parseListener(argv: string[], context: CommandContext, targetRequired: boolean): ListenerIntent {
+  if (targetRequired ? argv.length !== 1 : argv.length !== 0) usage(context.command);
+  return { name: requireParticipant(context.name), ...(targetRequired ? { target: argv[0] } : {}) };
+}
+
+function listenerPresentation(
+  squarePath: string,
+  actor: string,
+  target: string,
+  verb: 'listen' | 'ignore',
+  activity: Awaited<ReturnType<import('../square-facade.js').Participant['listen']>>['activity'],
+  participantCount: number,
+): string {
+  if (activity !== null) {
+    const action = verb === 'listen'
+      ? `${participantIdentity(actor)} turns an ear toward ${participantIdentity(target)}`
+      : `${participantIdentity(actor)} turns away from ${participantIdentity(target)}`;
+    return withPathOutput(squarePath, `· ${action}`, { participantCount });
+  }
+  const action = verb === 'listen'
+    ? `${participantIdentity(actor)} already turns an ear toward ${participantIdentity(target)}`
+    : `${participantIdentity(actor)} is not turned toward ${participantIdentity(target)}`;
+  return withPathOutput(squarePath, `○ ${action}`, { participantCount });
+}
+
+export const listenCommand: CommandSpec<ListenerIntent, string> = {
+  parse(argv, context) { return parseListener(argv, context, true); },
+  async execute(intent, context) {
+    const squarePath = requireSquarePath(context);
+    const square = await Square.at({ path: squarePath, clock: nowMs });
+    const facade = await openParticipant({ path: squarePath, clock: nowMs }, intent.name);
+    try {
+      const participant = facade.participant;
+      const result = await participant.listen(intent.target!);
+      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
+      return listenerPresentation(squarePath, participant.name, intent.target!, 'listen', result.activity, participantCount);
+    } finally {
+      await facade.close();
+      await square.close();
+    }
+  },
+  present: (result) => process.stdout.write(result),
+};
+
+export const ignoreCommand: CommandSpec<ListenerIntent, string> = {
+  parse(argv, context) { return parseListener(argv, context, true); },
+  async execute(intent, context) {
+    const squarePath = requireSquarePath(context);
+    const square = await Square.at({ path: squarePath, clock: nowMs });
+    const facade = await openParticipant({ path: squarePath, clock: nowMs }, intent.name);
+    try {
+      const participant = facade.participant;
+      const result = await participant.ignore(intent.target!);
+      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
+      return listenerPresentation(squarePath, participant.name, intent.target!, 'ignore', result.activity, participantCount);
+    } finally {
+      await facade.close();
+      await square.close();
+    }
+  },
+  present: (result) => process.stdout.write(result),
+};
+
+export const listeningCommand: CommandSpec<ListenerIntent, string> = {
+  parse(argv, context) { return parseListener(argv, context, false); },
+  async execute(intent, context) {
+    const squarePath = requireSquarePath(context);
+    const square = await Square.at({ path: squarePath, clock: nowMs });
+    const facade = await openParticipant({ path: squarePath, clock: nowMs }, intent.name);
+    try {
+      const participant = facade.participant;
+      const targets = await participant.listening();
+      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
+      const body = targets.length === 0
+        ? `○ ${participantIdentity(participant.name)} is not turned toward anyone`
+        : ['listening', ...targets.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
+      return withPathOutput(squarePath, body, { participantCount });
+    } finally {
+      await facade.close();
+      await square.close();
+    }
+  },
+  present: (result) => process.stdout.write(result),
 };
 
 function parseDone(argv: string[], context: CommandContext): BodyIntent {

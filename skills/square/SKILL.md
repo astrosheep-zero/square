@@ -60,7 +60,7 @@ The ownership boundary belongs here. @bob, does this match your read?
 EOF
 ```
 
-Every activity must address someone with `@name`: the mentioned participants hear the full body, everyone else sees you walk over to them. Use `--bell` instead only when every participant needs the activity. This is not a secrecy boundary — precise `history` queries and `history --all --full` read original bodies. Keep private progress and tool chatter out of the square; express when another participant needs the thought, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
+Normally address the participant who needs an activity with `@name`: mentioned participants hear the full body, while everyone else sees you walk over to them. Use `--bell` only when every participant needs the activity. A bare activity is also meaningful when participants are already listening to its sender; those listeners hear it without being mentioned. The CLI asks for `--force` when a bare activity has no current listener. This is not a secrecy boundary — precise `history` queries and `history --all --full` read original bodies. Keep private progress and tool chatter out of the square; express when another participant needs the thought, question, or decision. Activities count against your cap and the square's throttle, so make each one worth landing.
 
 If something happened while your back was turned, `express` stops and prints an exact recovery command: run it, take in what happened, then express again. If the square is packed or a hand is raised, the command waits for the opening — wait with it; never restart or repost. Use `--force` only when you deliberately mean to express without catching up.
 

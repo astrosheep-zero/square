@@ -21,12 +21,11 @@ import {
   readCursor,
   resolveRosterName,
   rosterNames,
-  matchesMentionTarget,
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
-import { extractMentions, formatActivityId, validate, type FoldedSquareState } from './square-core.js';
-import { deriveDeliveryModel } from './delivery.js';
+import { formatActivityId, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
+import { deriveDeliveryModel, perceiveActivity } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
 export interface UnreadActivitySummary {
@@ -39,6 +38,7 @@ export interface UnreadActivitySummary {
 export interface UnreadActivityPreview {
   number: number;
   act: Extract<StoredAct, { kind: 'say' }>;
+  perception: Perception;
 }
 
 export function resolveKnownName(squareState: SquareState, name: string): string {
@@ -149,15 +149,6 @@ export function decideAct(
   }
 
   const state = foldedState(squareState);
-  if (
-    reach !== 'bell'
-    && extractMentions(body).length === 0
-  ) {
-    throw new SquareError(
-      'invalid_args',
-      'express requires an @mention unless using --bell'
-    );
-  }
   const current = participantState(state, name);
   const result = validate(
     state,
@@ -196,7 +187,7 @@ export function decideAct(
       latestAt: currentSummary === undefined ? item.at : Math.max(currentSummary.latestAt, item.at),
       previews: [
         ...(currentSummary?.previews ?? []),
-        { number: sayCountByActor.get(actorKey) ?? 1, act: item },
+        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: perceiveActivity(squareState, item, name) },
       ].slice(-UNREAD_PREVIEW_LIMIT),
     });
   }
@@ -241,6 +232,29 @@ export function coreDone(squareState: SquareState, name: string, body: string, n
   return act;
 }
 
+export function coreListen(squareState: SquareState, actor: string, target: string, now: number): Extract<Act, { kind: 'listen' }> | undefined {
+  const resolvedActor = resolveStandingName(squareState, actor);
+  validateName(target);
+  const state = foldedState(squareState);
+  const act = { kind: 'listen' as const, actor: resolvedActor, target, at: now };
+  requireStanding(squareState, act);
+  return isListening(state, resolvedActor, target) ? undefined : act;
+}
+
+export function coreIgnore(squareState: SquareState, actor: string, target: string, now: number): Extract<Act, { kind: 'ignore' }> | undefined {
+  const resolvedActor = resolveStandingName(squareState, actor);
+  validateName(target);
+  const state = foldedState(squareState);
+  const act = { kind: 'ignore' as const, actor: resolvedActor, target, at: now };
+  requireStanding(squareState, act);
+  return isListening(state, resolvedActor, target) ? act : undefined;
+}
+
+export function coreListening(squareState: SquareState, actor: string): readonly string[] {
+  const resolvedActor = resolveStandingName(squareState, actor);
+  return listeningTo(foldedState(squareState), resolvedActor);
+}
+
 export function coreHold(squareState: SquareState, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
   const resolvedName = resolveStandingName(squareState, actor);
   const act = { kind: 'hold' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
@@ -258,6 +272,7 @@ export function coreResume(squareState: SquareState, actor: string, now: number)
 export interface ParticipantStatus {
   name: string;
   state: 'active' | 'done' | 'not joined';
+  listening: readonly string[];
   activityCount: number;
   lastActiveAt: number | undefined;
   presence: CorePresenceState;
@@ -313,6 +328,7 @@ function buildParticipantStatuses(squareState: SquareState, now: number, state =
     return {
       name: participant,
       state: participantStatus,
+      listening: listeningTo(state, participant),
       activityCount: snapshot?.activityCount ?? 0,
       lastActiveAt: snapshot?.lastActiveAt,
       presence: presence.state,
@@ -374,7 +390,8 @@ export function coreActivities(squareState: SquareState, opts: ActivitiesOptions
   if (opts.after != null) acts = acts.filter((act) => act.at > opts.after!);
   if (opts.mention != null) {
     const mention = resolveKnownName(squareState, opts.mention);
-    acts = acts.filter((act) => act.kind === 'say' && (act.reach === 'bell' || matchesMentionTarget(act, mention)));
+    const delivery = deriveDeliveryModel(squareState);
+    acts = acts.filter((act) => act.kind === 'say' && delivery.plan(act).some((item) => sameName(item.recipient, mention)));
   }
   if (opts.pending) {
     if (viewer === undefined) return [];

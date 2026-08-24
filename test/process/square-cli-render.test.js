@@ -180,7 +180,8 @@ test('ambient catch and history render full body to a mention target and presenc
   const ambient = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
   assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
-  assert.match(ambient.stdout, /→ @Alice was here/);
+  assert.match(ambient.stdout, /→ @Bob was here/);
+  assert.match(ambient.stdout, /→ @Cara was here/);
 
   const archive = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(archive.status, 0, archive.stderr);
@@ -461,13 +462,13 @@ test('status shows attention state and stable activity ids', async () => {
 
   const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(waiting.status, 0, waiting.stderr);
-  assert.match(waiting.stdout, /@Alice.*caught up/);
-  assert.match(waiting.stdout, /@Bob.*1 mention waiting/);
+  assert.match(waiting.stdout, /@Alice.*1 change waiting/);
+  assert.match(waiting.stdout, /@Bob.*1 attention waiting/);
   assert.match(waiting.stdout, /● @Alice #1 · act\/2 · .*\n    talked to @Bob/);
   assert.doesNotMatch(waiting.stdout, /please check @Bob/);
 
   const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });
-  assert.match(personal.stdout, /@Bob.*1 mention waiting/);
+  assert.match(personal.stdout, /@Bob.*1 attention waiting/);
   assert.match(personal.stdout, /please check @Bob/);
   assert.match(personal.stdout, /act\/\d+/);
   assert.doesNotMatch(personal.stdout, /@Alice.*caught up/);

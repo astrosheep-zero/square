@@ -113,7 +113,7 @@ export async function cmdActivity(
         const held = fresh.held;
         const ownActCount = fresh.ownActivityCount;
         const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
-        const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName)}` : '';
+        const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
         const hint = expressHintLine(ownActCount);
         const confirmation = `● heads turn your way — #${ownActCount}`;
         const withHint = hint ? `${confirmation}\n${hint}` : confirmation;

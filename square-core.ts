@@ -32,7 +32,9 @@ export type Act =
   | { kind: 'say'; actor: Participant; at?: number; body: string; reach?: Reach; reply?: number }
   | { kind: 'hold'; actor?: Participant; at?: number; body?: string }
   | { kind: 'resume'; actor?: Participant; at?: number }
-  | { kind: 'read'; actor: Participant; at?: number; through: number };
+  | { kind: 'read'; actor: Participant; at?: number; through: number }
+  | { kind: 'listen'; actor: Participant; target: Participant; at?: number }
+  | { kind: 'ignore'; actor: Participant; target: Participant; at?: number };
 
 export interface SquareValidationOptions {
   hardCap?: number | null;
@@ -59,6 +61,7 @@ export interface FoldedSquareState {
   done: Participant[];
   throttleActivityAts: number[];
   bellSayAtsByActor: Map<string, number[]>;
+  listening: Map<string, Participant[]>;
 }
 
 export type ValidationResult =
@@ -83,7 +86,7 @@ function sameName(a: string, b: string): boolean {
 
 export function extractMentions(body: string): string[] {
   const matches = [];
-  const re = /@([\p{L}\p{N}_-]+)/gu;
+  const re = /@([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gu;
   let match;
   while ((match = re.exec(body)) !== null) matches.push(match[1]);
   return matches;
@@ -118,6 +121,35 @@ export function resolveAudience(audience: Audience, candidateNames: readonly str
     }
   }
   return resolved;
+}
+
+export function activeListeners(state: FoldedSquareState, sender: string): string[] {
+  return state.participants
+    .filter((participant) => participant.joined && (state.listening.get(nameKey(participant.name)) ?? []).some((target) => sameName(target, sender)))
+    .map((participant) => participant.name);
+}
+
+export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: 'say' }>): string[] {
+  const position = acts.findIndex((act) => act === say || (
+    'index' in act && 'index' in say && act.index === say.index
+  ));
+  const before = fold(position < 0 ? acts : acts.slice(0, position));
+  const mentionTargets = resolveAudience(audienceOf(say), before.joined);
+  const listeners = activeListeners(before, say.actor);
+  const recipients: string[] = [];
+  for (const name of [...mentionTargets, ...listeners]) {
+    if (sameName(name, say.actor) || recipients.some((existing) => sameName(existing, name))) continue;
+    recipients.push(name);
+  }
+  return recipients;
+}
+
+export function listeningTo(state: FoldedSquareState, listener: string): string[] {
+  return [...(state.listening.get(nameKey(listener)) ?? [])];
+}
+
+export function isListening(state: FoldedSquareState, listener: string, sender: string): boolean {
+  return listeningTo(state, listener).some((target) => sameName(target, sender));
 }
 
 function actorOf(act: Act): Participant | undefined {
@@ -183,6 +215,7 @@ export function fold(acts: readonly Act[]): FoldedSquareState {
     done: [],
     throttleActivityAts: [],
     bellSayAtsByActor: new Map(),
+    listening: new Map(),
   };
 
   for (const act of acts) {
@@ -202,8 +235,22 @@ export function fold(acts: readonly Act[]): FoldedSquareState {
           snapshot.joined = false;
           snapshot.done = true;
           snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
+          state.listening.delete(nameKey(snapshot.name));
         }
         break;
+      case 'listen': {
+        const key = nameKey(act.actor);
+        const targets = state.listening.get(key) ?? [];
+        if (!targets.some((target) => sameName(target, act.target))) targets.push(act.target);
+        state.listening.set(key, targets);
+        break;
+      }
+      case 'ignore': {
+        const key = nameKey(act.actor);
+        const targets = (state.listening.get(key) ?? []).filter((target) => !sameName(target, act.target));
+        if (targets.length === 0) state.listening.delete(key); else state.listening.set(key, targets);
+        break;
+      }
       case 'say':
         if (snapshot !== undefined) {
           snapshot.activityCount += 1;
@@ -245,6 +292,11 @@ export function validate(state: FoldedSquareState, act: Act, options: SquareVali
     case 'join':
       return current?.joined ? { ok: false, reason: 'already_joined' } : { ok: true };
     case 'done':
+      if (current?.done) return { ok: false, reason: 'done' };
+      if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
+      return { ok: true };
+    case 'listen':
+    case 'ignore':
       if (current?.done) return { ok: false, reason: 'done' };
       if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
       return { ok: true };

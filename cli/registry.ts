@@ -1,4 +1,4 @@
-import { buildCommand, doneCommand, expressCommand, holdCommand, joinCommand, resumeCommand } from './square-commands.js';
+import { buildCommand, doneCommand, expressCommand, holdCommand, ignoreCommand, joinCommand, listenCommand, listeningCommand, resumeCommand } from './square-commands.js';
 import { doctorCommand } from './maintenance-commands.js';
 import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
@@ -31,6 +31,9 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['codex-hook'], spec: codexHookCommand },
   { names: ['catch'], spec: catchCommand },
   { names: ['express'], spec: expressCommand },
+  { names: ['listen'], spec: listenCommand },
+  { names: ['ignore'], spec: ignoreCommand },
+  { names: ['listening'], spec: listeningCommand },
   { names: ['done'], spec: doneCommand },
   { names: ['hold'], spec: holdCommand },
   { names: ['resume'], spec: resumeCommand },

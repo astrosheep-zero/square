@@ -60,6 +60,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
       now: Date.now(),
       preview: 200,
       actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
+      squareState: after.state,
     })).filter(Boolean).join('\n\n');
     return [`You joined the public square as ${participantIdentity(name)}.`, after.scene, after.context ? `context\n${after.context}` : '', activity ? `recent activity\n${activity}` : ''].filter(Boolean).join('\n\n');
   } finally {

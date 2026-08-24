@@ -28,8 +28,9 @@ export function displayAttentionPath(squarePath: string): string {
 }
 
 export function renderAttentionPreview(attention: AttentionPreview): string {
+  const attentionKind = attention.route === 'bell' ? 'bell' : 'attention';
   return [
-    `${notificationMessageId(attention.squarePath, attention.actIndex)} · ${displayAttentionPath(attention.squarePath)}: ${participantIdentity(attention.recipient)} from ${participantIdentity(attention.actor)} (${attention.route})`,
+    `${notificationMessageId(attention.squarePath, attention.actIndex)} · ${displayAttentionPath(attention.squarePath)}: ${participantIdentity(attention.recipient)} from ${participantIdentity(attention.actor)} (${attentionKind})`,
     previewAttentionBody(attention.body),
   ].join('\n');
 }

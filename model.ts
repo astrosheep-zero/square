@@ -98,7 +98,7 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
-export type DirectedNotificationRoute = 'mention' | 'bell';
+export type DirectedNotificationRoute = 'mention' | 'attention' | 'bell';
 
 export interface InboxNotification {
   actIndex: number;
@@ -174,7 +174,7 @@ export interface WatchOptions {
 }
 
 export type PublicAct = Extract<StoredAct, { kind: 'say' | 'done' }>;
-export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' }>;
+export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' }>;
 
 export interface HoldState {
   active: boolean;
@@ -206,7 +206,7 @@ export function findParticipantName(participants: string[], name: string): strin
 }
 
 export function validateName(name: string): void {
-  if (!name || !/^[\p{L}\p{N}_-]+$/u.test(name)) {
-    throw new SquareError('invalid_name', 'Invalid name: names must be non-empty and can only contain Unicode letters, digits, hyphens, and underscores.');
+  if (!name || !/^[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*$/u.test(name)) {
+    throw new SquareError('invalid_name', 'Invalid name: names must contain non-empty slash-separated segments using only Unicode letters, digits, hyphens, and underscores.');
   }
 }

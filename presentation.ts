@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, perceive } from './square-core.js';
+import { audienceIncludes, audienceOf, type Perception } from './square-core.js';
+import { perceiveActivity } from './delivery.js';
 import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
@@ -184,6 +185,10 @@ export function renderRoomChangeText(event: RoomChangeAct): string {
       return `${identity} raised a hand${event.body ? ` — ${event.body}` : ''}`;
     case 'resume':
       return `${identity} lowered the hand`;
+    case 'listen':
+      return `${identity} turns an ear toward ${participantIdentity(event.target)}`;
+    case 'ignore':
+      return `${identity} turns away from ${participantIdentity(event.target)}`;
   }
 }
 
@@ -210,6 +215,9 @@ export function renderEventCli(
       return `· ${renderRoomChangeText(event)}`;
     case 'resume':
       return `✓ ${renderRoomChangeText(event)}`;
+    case 'listen':
+    case 'ignore':
+      return `· ${renderRoomChangeText(event)}`;
     case 'say': {
       const body = renderedBody(event.body, maxBody);
       const mention = opts.mention;
@@ -242,10 +250,13 @@ function renderPresenceOnlySay(
 export function renderAmbientEvent(
   event: StoredAct,
   viewer: string,
-  opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
+  opts: { now?: number; preview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
 ): string {
   if (event.kind !== 'say') return renderEventCli(event, opts);
-  const seen = perceive(event, viewer);
+  if (opts.perception === undefined && opts.squareState === undefined) {
+    throw new Error('Ambient say rendering requires a settled perception or SquareState');
+  }
+  const seen = opts.perception ?? perceiveActivity(opts.squareState!, event, viewer);
   if (seen === 'presence') return renderPresenceOnlySay(event, opts);
   return renderEventCli(event, opts);
 }
@@ -262,9 +273,9 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
   return [
     ...opts.activitySummaries.flatMap((item) => [
       ...item.previews.slice(-1).map((preview) => {
-        const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number });
+        const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number, perception: preview.perception });
         if (rendered === '') return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
-        if (preview.act.kind === 'say' && perceive(preview.act, opts.viewer) === 'presence') {
+        if (preview.perception === 'presence') {
           return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`;
         }
         return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
@@ -278,12 +289,14 @@ export function renderPendingFeed(
   history: StoredAct[],
   publicItems: PublicAct[],
   roomChanges: RoomChangeAct[],
-  viewer = ''
+  viewer = '',
+  squareState: SquareState,
 ): string {
   const lines: string[] = [];
   for (const act of publicItems) {
     const rendered = renderAmbientEvent(act, viewer, {
       actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
+      ...(squareState === undefined ? {} : { squareState }),
     });
     if (rendered !== '') lines.push(rendered);
   }
@@ -338,12 +351,12 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
   return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount, held: opts.held });
 }
 
-export function renderPublicTail(events: StoredAct[], lastN: number | null | undefined, now?: number, viewer = ''): string {
+export function renderPublicTail(squareState: SquareState, events: StoredAct[], lastN: number | null | undefined, now?: number, viewer = ''): string {
   const publicItems = publicActs(events);
   const selected = lastN == null ? publicItems : publicItems.slice(-lastN);
   const preview = lastN == null ? undefined : BODY_PREVIEW_LENGTH;
   return selected
-    .map((event) => renderAmbientEvent(event, viewer, { now, preview, actNumber: event.kind === 'say' ? sayNumberFor(events, event) : undefined }))
+    .map((event) => renderAmbientEvent(event, viewer, { now, preview, actNumber: event.kind === 'say' ? sayNumberFor(events, event) : undefined, squareState }))
     .filter(Boolean)
     .join('\n\n');
 }
@@ -390,7 +403,7 @@ export function renderActivitiesView(
     };
     const rendered = mode === 'archive'
       ? renderEventCli(act, opts)
-      : renderAmbientEvent(act, viewer, opts);
+      : renderAmbientEvent(act, viewer, { ...opts, squareState });
     if (rendered !== '') chunks.push(rendered);
     for (const participant of markers.get(act.index) ?? []) {
       chunks.push(renderLastPresenceMarker(participant));
@@ -401,7 +414,7 @@ export function renderActivitiesView(
 
   if (previewLen !== undefined) {
     const truncated = shown.some((act) =>
-      act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceive(act, viewer) === 'full')
+      act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceiveActivity(squareState, act, viewer) === 'full')
     );
     if (truncated) chunks.push(`» ${commandPrefix(squarePath)} history --full`);
   }
@@ -536,7 +549,7 @@ export function renderWatchOutput(
   history: StoredAct[],
   publicItems: PublicAct[],
   roomChanges: RoomChangeAct[],
-  opts: { squarePath: string; stalePartial?: boolean; idleMs?: number; mention?: string; viewer: string; showCatchHint?: boolean }
+  opts: { squarePath: string; stalePartial?: boolean; idleMs?: number; mention?: string; viewer: string; showCatchHint?: boolean; squareState: SquareState }
 ): string {
   const sections: string[] = [];
   if (opts.stalePartial) {
@@ -565,6 +578,7 @@ export function renderWatchOutput(
         renderAmbientEvent(act, opts.viewer, {
           actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
           mention: opts.mention,
+          squareState: opts.squareState,
         })
       )
       .filter(Boolean)

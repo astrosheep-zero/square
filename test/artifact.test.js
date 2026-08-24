@@ -60,16 +60,18 @@ test('encode/decode roundtrip preserves Square state', () => {
     throttlePerMinute: 5,
     acts: [
       { kind: 'join', actor: 'Alice', at: 1700000000000 },
+      { kind: 'listen', actor: 'Alice', target: 'aku/riko/7a', at: 1700000000500 },
       { kind: 'say', actor: 'Alice', at: 1700000001000, body: 'hello @Bob' },
+      { kind: 'ignore', actor: 'Alice', target: 'aku/riko/7a', at: 1700000001500 },
       { kind: 'hold', actor: 'Host', at: 1700000002000, body: 'pause' },
       { kind: 'resume', actor: 'Host', at: 1700000003000 },
       { kind: 'done', actor: 'Alice', at: 1700000004000, body: 'bye' },
     ],
   });
-  squareState.runtime.observations.Alice = { [formatActivityId(4)]: { state: 'seen', at: 1700000004000 } };
-  squareState.runtime.observations.Bob = { [formatActivityId(1)]: { state: 'notified', at: 1700000001500 } };
+  squareState.runtime.observations.Alice = { [formatActivityId(6)]: { state: 'seen', at: 1700000004000 } };
+  squareState.runtime.observations.Bob = { [formatActivityId(2)]: { state: 'notified', at: 1700000001500 } };
   squareState.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
-  squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(1), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
+  squareState.runtime.notifyLeases[JSON.stringify([formatActivityId(2), 'bob'])] = { leaseId: 'n1', expiresAt: 9, phase: 'claimed' };
 
   const decoded = decodeSquare(encodeSquare(squareState));
   assert.deepEqual(decoded, squareState);
@@ -174,6 +176,12 @@ test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind h
   const beside = structuredClone(squareState);
   beside.acts[1].reach = { beside: 'Bob' };
   assert.throws(() => encodeSquare(beside), /snapshot schema is malformed/);
+
+  const malformedListen = makeState({ acts: [{ kind: 'listen', actor: 'Alice', at: 1 }] });
+  assert.throws(() => encodeSquare(malformedListen), /snapshot schema is malformed/);
+
+  const extraIgnore = makeState({ acts: [{ kind: 'ignore', actor: 'Alice', target: 'Bob', at: 1, route: 'mention' }] });
+  assert.throws(() => encodeSquare(extraIgnore), /snapshot schema is malformed/);
 });
 
 test('codec rejects future observation and notify-lease references', () => {

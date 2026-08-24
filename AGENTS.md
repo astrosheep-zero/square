@@ -15,11 +15,19 @@ Boundaries should be light and useful:
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
 - The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
+- Participant names contain one or more slash-separated segments. Each segment is non-empty and uses only Unicode letters, digits, hyphens, and underscores. Slash expresses a structured name without changing participant identity or lifecycle semantics.
 - If someone is speaking to a specific participant, they must mention them as `@name`.
   The speaker and mentioned participants perceive the full body; everyone else perceives only the
   speaker walking over to those participants.
-  Without any `@name`, the activity is refused unless it uses `--bell`; a bell reaches all participants
-  (everyone watching with `--mention` receives it).
+  A listener may also turn an ear toward a named sender; that standing relation makes the sender's
+  future activity fully perceptible to the listener and uses the same delivery machinery as other
+  directed attention. A listener turns away explicitly or loses every outgoing listening relation
+  when leaving the square. Audience is fixed when each activity lands; later listening changes never
+  rewrite history.
+  An activity without any `@name` or bell remains valid and lands even when nobody is listening. The
+  human CLI asks for `--force` only when such an activity has no current listener; the core library
+  never treats an empty audience as invalid. A bell reaches all joined participants (everyone watching
+  with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
 `history`; the binary artifact persists the square's state and is not participant-facing. Activity bodies,

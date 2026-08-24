@@ -189,6 +189,11 @@ function validateStoredAct(value: unknown): value is StoredAct {
       return hasExactKeys(value, ['kind', 'actor', 'at', 'through', 'index'])
         && validateActor(value.actor, true)
         && isNonNegativeInteger(value.through);
+    case 'listen':
+    case 'ignore':
+      return hasExactKeys(value, ['kind', 'actor', 'target', 'at', 'index'])
+        && validateActor(value.actor, true)
+        && validateActor(value.target, true);
     default:
       return false;
   }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { audienceIncludes, audienceOf, fold, formatActivityId, parseActivityId, perceive, resolveAudience, validate } from '../dist/square-core.js';
+import { audienceIncludes, audienceOf, fold, formatActivityId, listeningTo, parseActivityId, perceive, resolveAudience, validate } from '../dist/square-core.js';
+import { validateName } from '../dist/model.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -60,14 +61,37 @@ test('validation makes held, capped, and throttled activity uncommittable', () =
 });
 
 test('audience parsing keeps first-appearance spelling and case-insensitive uniqueness', () => {
-  assert.deepEqual(audienceOf({ body: 'hey @Bob and @cara then @BOB @Missing' }), {
+  assert.deepEqual(audienceOf({ body: 'hey @Bob and @aku/riko/7a then @BOB @Missing' }), {
     kind: 'mentions',
-    names: ['Bob', 'cara', 'Missing'],
+    names: ['Bob', 'aku/riko/7a', 'Missing'],
   });
   assert.deepEqual(audienceOf({ body: 'ignore @Bob', reach: 'bell' }), { kind: 'bell' });
   assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob' }), 'bob'), true);
   assert.deepEqual(resolveAudience(audienceOf({ body: '@cara then @BOB' }), ['Alice', 'Bob', 'Cara']), ['Cara', 'Bob']);
   assert.deepEqual(resolveAudience({ kind: 'bell' }, ['Alice', 'Bob']), ['Alice', 'Bob']);
+});
+
+test('participant names allow non-empty slash segments and reject malformed paths', () => {
+  for (const name of ['aku/riko/7a', 'Alice', '甲/乙-2']) assert.doesNotThrow(() => validateName(name));
+  for (const name of ['/aku', 'aku/', 'aku//riko', 'aku/riko!', '']) {
+    assert.throws(() => validateName(name), (error) => error.code === 'invalid_name');
+  }
+});
+
+test('done clears outgoing listening and rejoin starts with no old edges', () => {
+  const beforeDone = fold([
+    { kind: 'join', actor: 'Caller', at: 1 },
+    { kind: 'listen', actor: 'Caller', target: 'aku/riko', at: 2 },
+  ]);
+  assert.deepEqual(listeningTo(beforeDone, 'caller'), ['aku/riko']);
+
+  const afterRejoin = fold([
+    { kind: 'join', actor: 'Caller', at: 1 },
+    { kind: 'listen', actor: 'Caller', target: 'aku/riko', at: 2 },
+    { kind: 'done', actor: 'Caller', at: 3 },
+    { kind: 'join', actor: 'Caller', at: 4 },
+  ]);
+  assert.deepEqual(listeningTo(afterRejoin, 'Caller'), []);
 });
 
 test('perception is full for author, mentioned viewers, and every bell viewer', () => {

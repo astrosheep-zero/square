@@ -27,20 +27,12 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   fs.renameSync(path.join(unpack, 'package'), packageRoot);
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
-    import { Square, SquareError, captureRoute, express, type ActivityId, type Participant, type SquareRoute } from '@astrosheep/square';
+    import { Square, SquareError, type ActivityId, type Participant } from '@astrosheep/square';
     const square = Square.inMemory({ markdown: 'context' });
     const participant: Promise<Participant> = square.join('Alice');
     const id: ActivityId = 'act/1';
-    const route: SquareRoute | null = captureRoute({ cwd: '.', env: process.env });
-    const sent = express(route ?? Object.freeze({}), { as: 'Alice', body: 'hello' });
     const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'held', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
-    void participant; void id; void route; void sent; void codes;
-    // @ts-expect-error SquareRoute is opaque
-    void route?.name;
-    // @ts-expect-error SquareRoute is opaque
-    void route?.squarePath;
-    // @ts-expect-error SquareRoute is opaque
-    void route?.v;
+    void participant; void id; void codes;
   `);
   const typecheck = run(path.join(root, 'node_modules', '.bin', 'tsc'), [
     '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',

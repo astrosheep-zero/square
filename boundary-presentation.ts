@@ -22,7 +22,7 @@ export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
       return {
         ...membership,
         notifications: membership.notifications.filter(
-          (notification) => !leaseOwnsNotification(lease, notification)
+          (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.name })
         ),
       };
     })

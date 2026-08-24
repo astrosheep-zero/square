@@ -1,7 +1,4 @@
-import path from 'node:path';
-
 import {
-  SquareError,
   type DirectedNotificationRoute,
   type SquareState,
   type StoredAct,
@@ -13,8 +10,7 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
-import { canonicalSquarePath, localParticipantName } from './registry.js';
-import { audienceOf, formatActivityId, resolveAudience } from './square-core.js';
+import { audienceBefore, audienceOf, formatActivityId, type Perception } from './square-core.js';
 import { isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, observationFor, recordObservation, resolveRosterName, rosterNames } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
@@ -58,12 +54,14 @@ export interface RoutedNotification {
   actor: string;
   body: string;
   route: DirectedNotificationRoute;
+  recipient?: string;
 }
 
 export interface CatchFilterShape {
   actor: string;
   body: string;
   reach?: Reach;
+  recipients?: readonly string[];
 }
 
 export interface DeliveryModel {
@@ -86,15 +84,24 @@ export function isActivitySeen(squareState: SquareState, name: string, actOrInde
  */
 export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
   const roster = rosterNames(squareState).filter((name) => isCurrentlyJoined(squareState.acts, name));
+  const plannedByIndex = new Map<number, PlannedNotification[]>();
   let pendingByRecipient: Map<string, PlannedNotification[]> | undefined;
 
   function plan(item: StoredAct): PlannedNotification[] {
     if (item.kind !== 'say') return [];
+    const cached = plannedByIndex.get(item.index);
+    if (cached !== undefined) return [...cached];
     const sayItem = item as SayItem;
     const audience = audienceOf(sayItem);
-    const recipients = resolveAudience(audience, roster).filter((recipient) => !sameName(recipient, sayItem.actor));
-    const route = audience.kind === 'bell' ? 'bell' : 'mention';
-    return recipients.map((recipient) => ({ item: sayItem, recipient, route }));
+    const recipients = audienceBefore(squareState.acts, sayItem);
+    const planned = recipients.map((recipient) => {
+      const route: DirectedNotificationRoute = audience.kind === 'bell'
+        ? 'bell'
+        : matchesMentionTarget(sayItem, recipient) ? 'mention' : 'attention';
+      return { item: sayItem, recipient, route };
+    });
+    plannedByIndex.set(item.index, planned);
+    return [...planned];
   }
 
   function pendingFor(requestedRecipient: string): PlannedNotification[] {
@@ -106,8 +113,6 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
 
       for (const act of squareState.acts) {
         if (act.kind !== 'say') continue;
-        const audience = audienceOf(act);
-        if (audience.kind === 'mentions' && audience.names.length === 0) continue;
         for (const planned of plan(act)) {
           const joinedAt = joinedAfter.get(planned.recipient);
           if (joinedAt === undefined || act.index <= joinedAt) continue;
@@ -124,6 +129,13 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
 
 export function planActNotifications(squareState: SquareState, item: StoredAct): PlannedNotification[] {
   return deriveDeliveryModel(squareState).plan(item);
+}
+
+export function perceiveActivity(squareState: SquareState, item: StoredAct, viewer: string): Perception {
+  if (item.kind !== 'say' || sameName(item.actor, viewer)) return 'full';
+  return deriveDeliveryModel(squareState).plan(item).some((planned) => sameName(planned.recipient, viewer))
+    ? 'full'
+    : 'presence';
 }
 
 /** Mark only the notifications selected by the canonical catch projection as fully seen. */
@@ -146,66 +158,26 @@ export function matchesCatchFilter(activity: CatchFilterShape, filter: WatchLeas
   ) {
     return false;
   }
-  return filter.mention === undefined || matchesMentionTarget(activity, filter.mention);
+  if (filter.mention === undefined) return true;
+  return activity.recipients?.some((recipient) => sameName(recipient, filter.mention!)) === true
+    || matchesMentionTarget(activity, filter.mention);
 }
 
 /** True only when the live catch's own filters would deliver this notification. */
 export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNotification): boolean {
+  if (
+    lease.filter?.mention !== undefined
+    && notification.route !== 'bell'
+    && notification.recipient !== undefined
+    && !sameName(lease.filter.mention, notification.recipient)
+  ) return false;
   return matchesCatchFilter(
     {
       actor: notification.actor,
       body: notification.body,
+      ...(notification.recipient === undefined ? {} : { recipients: [notification.recipient] }),
       ...(notification.route === 'bell' ? { reach: 'bell' as const } : {}),
     },
     lease.filter ?? {}
   );
-}
-
-export type SquareRoute = Readonly<unknown>;
-
-const SQUARE_ROUTE_KEYS = ['name', 'squarePath', 'v'] as const;
-
-interface ParsedSquareRoute {
-  readonly v: 1;
-  readonly squarePath: string;
-  readonly name: string;
-}
-
-function publicSquareFromCwd(cwd: string): string {
-  return path.resolve(cwd, '.square', 'PUBLIC.square');
-}
-
-export function parseSquareRoute(value: unknown): ParsedSquareRoute {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new SquareError('invalid_args', 'Malformed Square route');
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  if (keys.length !== SQUARE_ROUTE_KEYS.length || keys.some((key, index) => key !== SQUARE_ROUTE_KEYS[index])) {
-    throw new SquareError('invalid_args', 'Malformed Square route');
-  }
-  if (
-    record.v !== 1 ||
-    typeof record.squarePath !== 'string' || record.squarePath === '' ||
-    typeof record.name !== 'string' || record.name === ''
-  ) {
-    throw new SquareError('invalid_args', 'Malformed Square route');
-  }
-  return {
-    v: 1,
-    squarePath: record.squarePath,
-    name: record.name,
-  };
-}
-
-export function captureRoute(input: { cwd: string; env?: NodeJS.ProcessEnv }): SquareRoute | null {
-  const env = input.env ?? process.env;
-  const squarePath = canonicalSquarePath(publicSquareFromCwd(input.cwd));
-  const name = localParticipantName(squarePath, env);
-  if (name === undefined) return null;
-  return Object.freeze({
-    v: 1,
-    squarePath,
-    name,
-  });
 }

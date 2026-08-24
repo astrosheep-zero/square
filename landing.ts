@@ -1,5 +1,5 @@
 import { extractMentions, formatActivityId, parseActivityId, type Act, type ActivityId } from './square-core.js';
-import { coreDone, coreHold, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
@@ -29,6 +29,7 @@ function exposeActivity(stored: StoredAct): Activity {
     id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
     mentions: stored.kind === 'say' ? extractMentions(stored.body) : [],
+    ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
   };
 }
@@ -87,6 +88,40 @@ export async function express(square: OpenSquare, name: string, body: string, op
   const activity = exposeActivity(committed.stored);
   await wakeAfterCommit(square, committed.recipients, activity);
   return { activity };
+}
+
+export interface ListenerChangeResult {
+  readonly activity: Activity | null;
+}
+
+async function landListenerChange(
+  square: OpenSquare,
+  verb: 'listen' | 'ignore',
+  actor: string,
+  target: string,
+): Promise<ListenerChangeResult> {
+  const now = square.clock();
+  const stored = await square.cell.transact<StoredAct | null>((state) => {
+    const act = verb === 'listen'
+      ? coreListen(state, actor, target, now)
+      : coreIgnore(state, actor, target, now);
+    if (act === undefined) return { result: null };
+    return { state, result: committedActivity(storeActs(state, [act]), verb) };
+  });
+  return { activity: stored === null ? null : exposeActivity(stored) };
+}
+
+export function listen(square: OpenSquare, actor: string, target: string): Promise<ListenerChangeResult> {
+  return landListenerChange(square, 'listen', actor, target);
+}
+
+export function ignore(square: OpenSquare, actor: string, target: string): Promise<ListenerChangeResult> {
+  return landListenerChange(square, 'ignore', actor, target);
+}
+
+export async function listening(square: OpenSquare, actor: string): Promise<readonly string[]> {
+  const { state } = await square.cell.read();
+  return coreListening(state, actor);
 }
 
 async function landCore(square: OpenSquare, verb: 'done' | 'hold' | 'resume', actor: string, body = ''): Promise<ExpressResult> {

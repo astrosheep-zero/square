@@ -1,6 +1,6 @@
-import { extractMentions, formatActivityId, perceive } from './square-core.js';
+import { extractMentions, formatActivityId } from './square-core.js';
 import { deliveryDelta, filteredRoomChanges, matchesFeedFilter, peerPublicActs } from './activity-feed.js';
-import { markSeenNotifications } from './delivery.js';
+import { deriveDeliveryModel, markSeenNotifications, perceiveActivity } from './delivery.js';
 import { SquareError, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { openSquare } from './square-file-adapter.js';
@@ -10,10 +10,10 @@ import { readCursor } from './runtime.js';
 import { recordObservation } from './runtime.js';
 import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
 
-function expose(activity: StoredAct, viewer: string): PerceivedActivity {
+function expose(squareState: import('./model.js').SquareState, activity: StoredAct, viewer: string): PerceivedActivity {
   if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);
-  const perception = perceive(activity, viewer);
-  const result = { id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor, mentions: activity.kind === 'say' ? extractMentions(activity.body) : [], ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}), ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}) };
+  const perception = perceiveActivity(squareState, activity, viewer);
+  const result = { id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor, mentions: activity.kind === 'say' ? extractMentions(activity.body) : [], ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}), ...('target' in activity ? { target: activity.target } : {}), ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}) };
   if (perception === 'full' || !('body' in result)) return { ...result, perception };
   const { body: _body, ...withoutBody } = result;
   return { ...withoutBody, perception };
@@ -29,13 +29,18 @@ export async function catchUp(square: OpenSquare, name: string, options: CatchOp
       const viewer = resolveKnownName(state, name);
       const delta = deliveryDelta(state, viewer);
       const filter = { ...(options.from === undefined ? {} : { participants: [...options.from] }), ...(options.mention === true ? { mention: viewer } : {}) };
-      const delivered = [...peerPublicActs(delta, viewer).filter((activity) => matchesFeedFilter(activity, filter)), ...filteredRoomChanges(delta, viewer, filter)]
+      const delivery = deriveDeliveryModel(state);
+      const delivered = [...peerPublicActs(delta, viewer).filter((activity) => matchesFeedFilter(
+        activity,
+        filter,
+        activity.kind === 'say' ? delivery.plan(activity).map((planned) => planned.recipient) : undefined,
+      )), ...filteredRoomChanges(delta, viewer, filter)]
         .filter((activity, index, activities) => activities.findIndex((candidate) => candidate.index === activity.index) === index)
         .sort((left, right) => left.index - right.index);
       const seenChanged = delivered.reduce((changed, activity) => recordObservation(state, viewer, activity.index, 'seen', at) || changed, false)
         || markSeenNotifications(state, viewer, delivered, at);
       const cursor = readCursor(state, viewer);
-      return { ...(seenChanged ? { state } : {}), result: { version, caught: { activities: delivered.map((activity) => expose(activity, viewer)), consumedThrough: cursor < 0 ? null : formatActivityId(cursor), idleExpired: false } satisfies CatchResult } };
+      return { ...(seenChanged ? { state } : {}), result: { version, caught: { activities: delivered.map((activity) => expose(state, activity, viewer)), consumedThrough: cursor < 0 ? null : formatActivityId(cursor), idleExpired: false } satisfies CatchResult } };
     });
     if (attempt.caught.activities.length > 0 || idle === 0) return attempt.caught;
     const remaining = deadline - Date.now();

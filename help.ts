@@ -28,12 +28,15 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--bell] [--reply <activity-id>] <activity | ->', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
-    details: ['Reach:', '  @name             Address someone in the square. They hear the body; everyone else sees you walk over.', "  --bell            Call every participant's attention to this activity without a mention.", '', 'Options:', '  -f, --force       Express without first catching unread activity.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <activity-id>   Mark this activity as a reply to an earlier activity (for example act/12).'],
+    details: ['Reach:', '  @name             Address someone in the square. They hear the body; everyone else sees you walk over.', "  --bell            Call every participant's attention to this activity without a mention.", '  listen             A participant turned toward you also hears your activity.', '', 'Options:', '  -f, --force       Express without first catching unread activity or attention etiquette.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <activity-id>   Mark this activity as a reply to an earlier activity (for example act/12).'],
   },
+  { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant.' },
+  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Turn away from one participant.' },
+  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.' },
   {
     names: ['catch'], usage: '--as <name> catch (--now | --idle <duration>) [--from <names>] [--mention [name]] [--replace]', usesSquare: true, group: 'participant',
     summary: 'Catch what others have said or done since you last looked.',
-    details: ['Modes:', '  --now             Catch up immediately.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention [name]  Match mentions of a name, or your own name when omitted.', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
+    details: ['Modes:', '  --now             Catch up immediately.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention [name]  Match direct attention for a name, or your own name when omitted.', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done [final | -]', usesSquare: true, group: 'participant', summary: 'Step out, optionally leaving a final note.' },
   {
@@ -50,7 +53,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['history'], usage: '[--as <name>] history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search the archive without changing what you have caught.',
-    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>, --until <time>  Match a time window.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match mentions.', '  --pending                       Match attention waiting for --as <name>.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --after <id>                    Match activities after an id.', '', 'Results:', '  --limit <N> | --all             Bound the newest matches (default 10).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --full  --json  --format <fields>', '  Without --as, the default view shows complete activity bodies.'],
+    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>, --until <time>  Match a time window.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match direct attention for a participant.', '  --pending                       Match attention waiting for --as <name>.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --after <id>                    Match activities after an id.', '', 'Results:', '  --limit <N> | --all             Bound the newest matches (default 10).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --full  --json  --format <fields>', '  Without --as, the default view shows complete activity bodies.'],
   },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
   { names: ['participants'], usage: 'participants', usesSquare: true, group: 'host', summary: 'Show the full participant roster and current states.' },
@@ -87,7 +90,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];

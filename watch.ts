@@ -67,6 +67,7 @@ function watchOutputResult(
       squarePath,
       viewer: name,
       showCatchHint: !hasAutomaticDeliveryIdentity(),
+      squareState: presentation.state,
     }),
     ...(opts.status ? { status: opts.status } : {}),
   };
