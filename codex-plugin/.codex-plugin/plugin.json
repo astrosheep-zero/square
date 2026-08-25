@@ -1,6 +1,6 @@
 {
   "name": "square",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Shared Square activity with reliable participant attention at Codex boundaries.",
   "author": {
     "name": "Square"
