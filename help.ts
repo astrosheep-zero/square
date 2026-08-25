@@ -30,13 +30,13 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Speak, gesture, or do both.',
     details: ['Reach:', '  @name             Address someone in the square. They hear the body; everyone else sees you walk over.', "  --bell            Call every participant's attention to this activity without a mention.", '  listen             A participant turned toward you also hears your activity.', '', 'Options:', '  -f, --force       Express without first catching unread activity or attention etiquette.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <activity-id>   Mark this activity as a reply to an earlier activity (for example act/12).'],
   },
-  { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant.' },
-  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Turn away from one participant.' },
-  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.' },
+  { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future bare says.' },
+  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Turn away from one participant\'s future bare says.' },
+  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening is future-only: the edge is fixed when a say lands; it never rewrites history.'] },
   {
     names: ['catch'], usage: '--as <name> catch (--now | --idle <duration>) [--from <names>] [--mention [name]] [--replace]', usesSquare: true, group: 'participant',
-    summary: 'Catch what others have said or done since you last looked.',
-    details: ['Modes:', '  --now             Catch up immediately.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention [name]  Match direct attention for a name, or your own name when omitted.', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
+    summary: 'Catch directed conversation since you last looked.',
+    details: ['Modes:', '  --now             Catch up immediately.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions, bells, and bare says from participants you are listening to arrive here.', '  Listener attention is future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention [name]  Match direct attention for a name, or your own name when omitted.', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done [final | -]', usesSquare: true, group: 'participant', summary: 'Step out, optionally leaving a final note.' },
   {

@@ -78,6 +78,17 @@ test('listen commands describe edge changes and listener attention admits bare e
   assert.match(absent.stdout, /is not turned toward @Alice/);
 });
 
+test('listener and catch help teach future-only directed attention', () => {
+  for (const command of ['listen', 'ignore', 'listening', 'catch']) {
+    const result = run([command, '--help']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /future|directed|listening/i);
+  }
+  const catchHelp = run(['catch', '--help']);
+  assert.doesNotMatch(catchHelp.stdout, /what others have said or done/);
+  assert.match(catchHelp.stdout, /fixed when each say lands/);
+});
+
 test('listener commands do not rejoin a participant who already left', async () => {
   const file = await persistSquare(async ({ square }) => {
     const bob = await square.join('Bob');
