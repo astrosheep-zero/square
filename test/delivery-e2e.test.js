@@ -206,7 +206,7 @@ test('a native boundary presents bounded awareness once and records the current 
 
     assert.equal(first, 'presented');
     assert.equal(second, undefined);
-    assert.match(payload, /@Bob x{195}\n… \[truncated; run catch --now\]/);
+    assert.match(payload, /@Bob x{115}\n… \[truncated; run catch --now\]/);
     assert.match(payload, /square --location .* --as 'Bob' catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
@@ -259,6 +259,39 @@ test('wake acceptance is durable and at most once across worker processes', asyn
     assert.equal(callCount(callLog), 1);
     assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
     assert.deepEqual(loadSquare(item.squarePath).runtime.notifyLeases, {});
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('an accepted native wake shares presentation with the later hook boundary', async () => {
+  const item = workshop();
+  try {
+    item.cli('Alice', ['express', '--force', 'native wake preview @Bob'], 30);
+    const act = loadSquare(item.squarePath).acts.at(-1);
+    registerRoute(item);
+    let payload;
+    const adapter = {
+      kind: 'paseo',
+      async dispatch(_route, value, beforeSend) {
+        payload = value;
+        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        return { outcome: 'accepted' };
+      },
+    };
+    await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
+      env: item.env,
+      adapters: [adapter],
+    }));
+    assert.match(payload, /act\//);
+    assert.match(payload, /native wake preview @Bob/);
+    const later = await withRegistry(item.env, () => presentPendingAtBoundary(
+      'bob-session',
+      () => { throw new Error('native wake presentation was repeated'); },
+      undefined,
+      item.env,
+    ));
+    assert.equal(later, undefined);
   } finally {
     item.cleanup();
   }
@@ -352,7 +385,7 @@ test('presented evidence is scoped to the current participant owner', async () =
     }));
 
     assert.equal(adapter.calls, 1);
-    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
+    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'presented-not-delivered');
   } finally {
     item.cleanup();
   }
@@ -441,7 +474,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     })))
-      .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
+      .find((item) => item.actIndex === act.index).kind, 'presented-not-delivered');
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       launchWorker: () => { throw new Error('terminal attention must not launch'); },

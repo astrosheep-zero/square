@@ -162,6 +162,33 @@ export function hasPresentedAttention(
   return [...ownerIds].some((ownerId) => hasPresentedForOwner(ownerId, squarePath, name, actIndex, env, now));
 }
 
+/** Record presentation by a transport that delivered the bounded attention body. */
+export function recordPresentedForOwner(
+  ownerId: string,
+  squarePath: string,
+  name: string,
+  actIndex: number,
+  env: NodeJS.ProcessEnv = process.env,
+  at = Date.now(),
+): void {
+  const filePath = presentedPath(env);
+  const row: PresentedRow = {
+    v: 2,
+    ts: at,
+    owner_id: ownerId,
+    square_path: canonicalSquarePath(squarePath),
+    name,
+    act_index: actIndex,
+  };
+  withAttentionLocks(filePath, [{ name, squarePath, notifications: [] }], () => {
+    withFileLockSync(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
+      const rows = readRows(filePath, at);
+      const known = new Set(rows.map(rowKey));
+      if (!known.has(rowKey(row))) writeRows(filePath, [...rows, row]);
+    });
+  });
+}
+
 /**
  * Serialize presentation only for the affected participants. Delivery runs
  * outside the short ledger-write lock, so unrelated owners never wait on an

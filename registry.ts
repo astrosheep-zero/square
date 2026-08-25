@@ -452,6 +452,8 @@ export function recordSessionDone(
   if (binding === undefined) return false;
   const at = Date.now();
   recordDone(sessionId, binding.name, binding.squarePath, { channel, at });
-  retireOwnerWakeRoutes(binding.ownerId, { at, env });
+  const remaining = lookupParticipant(squarePath, binding.name, at)
+    .some((candidate) => candidate.ownerId === binding.ownerId);
+  if (!remaining) retireOwnerWakeRoutes(binding.ownerId, { at, env });
   return true;
 }

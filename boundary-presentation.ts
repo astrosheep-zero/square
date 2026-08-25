@@ -1,10 +1,10 @@
-import { leaseOwnsNotification, notificationMessageId } from './delivery.js';
+import { leaseOwnsNotification } from './delivery.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { participantCommandPrefix, participantIdentity } from './presentation.js';
+import { renderAttentionPreview } from './attention-presentation.js';
+import { participantCommandPrefix } from './presentation.js';
 import { presentOnce } from './presented.js';
 
-const BODY_MAX = 200;
 const CONTEXT_MAX = 1200;
 
 function pendingCount(inbox: InboxMembership[]): number {
@@ -27,12 +27,6 @@ export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
     .filter((membership) => membership.notifications.length > 0);
 }
 
-function bodyPreview(body: string): string {
-  const compact = body.replace(/\r\n/g, '\n');
-  if (compact.length <= BODY_MAX) return compact;
-  return `${compact.slice(0, BODY_MAX).trimEnd()}\n… [truncated; run catch --now]`;
-}
-
 export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
   const count = pendingCount(inbox);
   const noun = count === 1 ? 'notification' : 'notifications';
@@ -50,10 +44,15 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
   for (const [index, entry] of queued.entries()) {
     const { membership, notification } = entry;
     const command = `${participantCommandPrefix(membership.squarePath, membership.name)} catch --now`;
-    const id = notificationMessageId(membership.squarePath, notification.actIndex);
     const block = [
-      `${id} · ${membership.squarePath}: ${participantIdentity(membership.name)} from ${participantIdentity(notification.actor)} (${notification.route})`,
-      bodyPreview(notification.body),
+      renderAttentionPreview({
+        squarePath: membership.squarePath,
+        actIndex: notification.actIndex,
+        recipient: membership.name,
+        actor: notification.actor,
+        route: notification.route,
+        body: notification.body,
+      }),
       `Ack with: ${command}`,
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;

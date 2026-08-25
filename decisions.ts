@@ -62,6 +62,12 @@ export interface DecideJoinResult {
   joinAct?: Extract<Act, { kind: 'join' }>;
 }
 
+export interface DecideImplicitJoinResult {
+  joinedName: string;
+  state: 'joined' | 'active' | 'done';
+  joinAct?: Extract<Act, { kind: 'join' }>;
+}
+
 export function decideJoin(squareState: SquareState, name: string, now: number): DecideJoinResult {
   validateName(name);
   const knownName = resolveRosterName(squareState, name);
@@ -74,6 +80,22 @@ export function decideJoin(squareState: SquareState, name: string, now: number):
   return {
     joinedName,
     addParticipant: knownName === undefined,
+    joinAct: { kind: 'join', actor: joinedName, at: now },
+  };
+}
+
+/** Automatic presence may enter only once; an explicit join remains the re-entry path. */
+export function decideImplicitJoin(squareState: SquareState, name: string, now: number): DecideImplicitJoinResult {
+  validateName(name);
+  const knownName = resolveRosterName(squareState, name);
+  const joinedName = knownName ?? name;
+  if (knownName !== undefined) {
+    const current = participantState(foldedState(squareState), knownName);
+    return { joinedName, state: current?.joined === true ? 'active' : 'done' };
+  }
+  return {
+    joinedName,
+    state: 'joined',
     joinAct: { kind: 'join', actor: joinedName, at: now },
   };
 }

@@ -4,7 +4,8 @@ import type { WakeRoute, WakeRouteKind } from './model.js';
 export interface WakePortHooks {
   nextAttemptN(): number;
   beforeSend(route: WakeRoute, attemptN: number): Promise<boolean>;
-  record(route: WakeRoute, attemptN: number, result: Exclude<WakeDispatchResult, { outcome: 'cancelled' }>): Promise<void>;
+  record(route: WakeRoute, attemptN: number, result: Exclude<WakeDispatchResult, { outcome: 'cancelled' | 'unavailable' }>): Promise<void>;
+  invalidate?(route: WakeRoute, result: Extract<WakeDispatchResult, { outcome: 'unavailable' }>): Promise<void>;
 }
 
 export type WakePortResult =
@@ -30,6 +31,10 @@ export class WakePort {
       const attemptN = hooks.nextAttemptN();
       const result = await adapter.dispatch(route.address, payload, () => hooks.beforeSend(route, attemptN));
       if (result.outcome === 'cancelled') return result;
+      if (result.outcome === 'unavailable') {
+        if (result.retainRoute !== true) await hooks.invalidate?.(route, result);
+        continue;
+      }
       await hooks.record(route, attemptN, result);
       if (result.outcome === 'accepted' || result.outcome === 'unknown') return { outcome: result.outcome };
     }

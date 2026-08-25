@@ -123,3 +123,42 @@ test('wake port falls through across kinds only after a provable failed', async 
   assert.equal(firstCalls.length, 1);
   assert.equal(secondCalls.length, 1);
 });
+
+test('wake port retires an unavailable route without recording an attempt', async () => {
+  const routeValue = route('paseo');
+  const records = [];
+  const invalidated = [];
+  const port = new WakePort([{
+    kind: 'paseo',
+    async dispatch() {
+      return { outcome: 'unavailable', signature: 'address_not_found', message: 'gone' };
+    },
+  }]);
+  const result = await port.dispatch([routeValue], 'wake', {
+    nextAttemptN: () => 1,
+    beforeSend: async () => true,
+    record: async (_route, _attemptN, value) => records.push(value),
+    invalidate: async (value) => invalidated.push(value),
+  });
+  assert.deepEqual(result, { outcome: 'exhausted' });
+  assert.deepEqual(records, []);
+  assert.deepEqual(invalidated, [routeValue]);
+});
+
+test('wake port retains an unavailable route when the adapter asks for retry', async () => {
+  const routeValue = route('paseo');
+  const invalidated = [];
+  const port = new WakePort([{
+    kind: 'paseo',
+    async dispatch() {
+      return { outcome: 'unavailable', signature: 'discovery_transient', message: 'daemon down', retainRoute: true };
+    },
+  }]);
+  await port.dispatch([routeValue], 'wake', {
+    nextAttemptN: () => 1,
+    beforeSend: async () => true,
+    record: async () => undefined,
+    invalidate: async (value) => invalidated.push(value),
+  });
+  assert.deepEqual(invalidated, []);
+});

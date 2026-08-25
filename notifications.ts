@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -15,9 +14,11 @@ import { hasPresentedAttention } from './presented.js';
 import { SquareError, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { PaseoAdapter } from './paseo-delivery.js';
-import { participantIdentity, quoteShell } from './presentation.js';
+import { quoteShell } from './presentation.js';
+import { renderAttentionPreview } from './attention-presentation.js';
 import { lookupParticipant } from './registry.js';
+import { retireWakeRoute } from './routes.js';
+import { recordPresentedForOwner } from './presented.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
@@ -52,14 +53,18 @@ function catchCommand(squarePath: string, recipient: string): string {
   return `square --as ${quoteShell(recipient)} --location ${quoteShell(squarePath)} catch --now`;
 }
 
-function renderWakePayload(request: WakeRequest): string {
-  const display = request.squarePath.startsWith(homedir())
-    ? `~${request.squarePath.slice(homedir().length)}`
-    : request.squarePath;
+function renderWakePayload(request: WakeRequest, body: string): string {
   return [
     '<system-reminder source="square">',
-    `${request.route === 'bell' ? 'Bell' : 'Mention'} from ${participantIdentity(request.actor)} in \`${display}\``,
-    'The native adapter will present it at the next boundary. If no native wake is available, pull from the square yourself.',
+    renderAttentionPreview({
+      squarePath: request.squarePath,
+      actIndex: request.actIndex,
+      recipient: request.recipient,
+      actor: request.actor,
+      route: request.route,
+      body,
+    }),
+    'The native adapter presented this attention. If you have not acted on it, pull from the square yourself.',
     `\`${catchCommand(request.squarePath, request.recipient)}\``,
     '</system-reminder>',
   ].join('\n');
@@ -132,6 +137,16 @@ interface ProcessNotificationOptions {
   now?: () => number;
 }
 
+async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
+  try {
+    const { PaseoAdapter } = await import('./paseo-delivery.js');
+    return [new PaseoAdapter()];
+  } catch {
+    // Paseo is an optional integration; a core-only install simply has no Paseo adapter.
+    return [];
+  }
+}
+
 async function claimNotifyLease(square: OpenSquare, recipient: string, actIndex: number) {
   const leaseId = randomUUID();
   return claimNotificationLease(square, recipient, actIndex, leaseId, NOTIFY_LEASE_MS);
@@ -189,7 +204,7 @@ async function processNotification(
     const dispatchAt = now();
     const evidence = await wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
     if (!wakeIsEligible(evidence)) return;
-    const port = new WakePort(opts.adapters ?? [new PaseoAdapter()]);
+    const port = new WakePort(opts.adapters ?? await defaultWakeAdapters());
     const request: WakeRequest = {
       squarePath,
       actIndex: notification.item.index,
@@ -199,7 +214,7 @@ async function processNotification(
     };
     await port.dispatch(
       evidence.attemptableRoutes,
-      renderWakePayload(request),
+      renderWakePayload(request, notification.item.body),
       {
         nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
         beforeSend: async (route, attemptN) => {
@@ -238,7 +253,13 @@ async function processNotification(
             ...('message' in outcome ? { message: outcome.message } : {}),
             ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
           }, env);
+          if (outcome.outcome === 'accepted') {
+            recordPresentedForOwner(route.ownerId, squarePath, notification.recipient, notification.item.index, env, now());
+          }
           if (outcome.outcome !== 'failed') releaseLease = true;
+        },
+        invalidate: async (route) => {
+          retireWakeRoute(route, { env, at: now() });
         },
       },
     );

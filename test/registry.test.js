@@ -17,7 +17,9 @@ import {
   recordJoin,
   recordLocalDone,
   recordLocalJoin,
+  recordSessionDone,
 } from '../dist/registry.js';
+import { readWakeRoutes } from '../dist/routes.js';
 import { streamProjection } from '../dist/views.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
@@ -121,6 +123,46 @@ test('one local command keeps its native and Paseo identities in the same owners
       'paseo-agent',
     ]);
     assert.equal(new Set(bindings.map((entry) => entry.ownerId)).size, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('ending one shared identity keeps the other wake route alive', () => {
+  const cleanup = withRegistry();
+  try {
+    const squarePath = path.join(os.tmpdir(), 'shared-owner-route-square.square');
+    const env = {
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
+      CODEX_THREAD_ID: 'codex-session',
+      PASEO_AGENT_ID: 'paseo-agent',
+    };
+    recordLocalJoin('Alice', squarePath, env);
+    const before = readWakeRoutes({ env, now: Date.now() }).filter((route) => route.kind === 'paseo');
+    assert.equal(before.length, 1);
+
+    assert.equal(recordSessionDone('codex-session', 'Alice', squarePath, 'codex', env), true);
+    const after = readWakeRoutes({ env, now: Date.now() }).filter((route) => route.kind === 'paseo');
+    assert.deepEqual(after.map((route) => route.address.agentId), ['paseo-agent']);
+    assert.deepEqual(lookupParticipant(squarePath, 'Alice').map((binding) => binding.sessionId), ['paseo-agent']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('ending the Paseo identity keeps a shared owner route alive for the native identity', () => {
+  const cleanup = withRegistry();
+  try {
+    const squarePath = path.join(os.tmpdir(), 'shared-owner-route-reverse-square.square');
+    const env = {
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
+      CODEX_THREAD_ID: 'codex-session',
+      PASEO_AGENT_ID: 'paseo-agent',
+    };
+    recordLocalJoin('Alice', squarePath, env);
+    assert.equal(recordSessionDone('paseo-agent', 'Alice', squarePath, 'paseo', env), true);
+    assert.deepEqual(readWakeRoutes({ env, now: Date.now() }).map((route) => route.address.agentId), ['paseo-agent']);
+    assert.deepEqual(lookupParticipant(squarePath, 'Alice').map((binding) => binding.sessionId), ['codex-session']);
   } finally {
     cleanup();
   }

@@ -6,7 +6,7 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
-import { canonicalSquarePath, lookupSession, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
+import { canonicalSquarePath, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
 import { participantIdentity, renderAmbientEvent } from './presentation.js';
 import { validateName } from './model.js';
 
@@ -44,16 +44,14 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     return undefined;
   }
   const name = automaticParticipant(provider, sessionId, env);
-  const bindings = lookupSession(sessionId);
-  const before = await entryPresentation(reader, name);
-  if (bindings.some((binding) => canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name) && before.joined) {
-    await closeOpenSquare(reader);
-    return undefined;
-  }
+  const alreadyBound = lookupSessionBindings(sessionId).some((binding) =>
+    canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name
+  );
   await closeOpenSquare(reader);
   const square = await Square.at({ path: squarePath });
   try {
-    await square.join(name);
+    const implicit = await square.implicitJoin(name);
+    if (implicit.state === 'done' || (implicit.state === 'active' && alreadyBound)) return undefined;
     const channel = provider === 'claude' ? 'claude-code' : provider;
     recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
     const afterSquare = await openSquare(squarePath);

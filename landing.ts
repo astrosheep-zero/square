@@ -1,5 +1,5 @@
 import { extractMentions, formatActivityId, parseActivityId, type Act, type ActivityId } from './square-core.js';
-import { coreDone, coreHold, coreResume, decideAct, decideJoin } from './decisions.js';
+import { coreDone, coreHold, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
@@ -54,6 +54,17 @@ export async function join(square: OpenSquare, name: string): Promise<{ readonly
     return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   });
   return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+}
+
+/** Automatic presence distinguishes first entry, current presence, and completed presence. */
+export async function implicitJoin(square: OpenSquare, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
+  const now = square.clock();
+  const committed = await square.cell.transact<{ name: string; state: 'joined' | 'active' | 'done'; stored: StoredAct | null }>((state) => {
+    const decision = decideImplicitJoin(state, name, now);
+    if (decision.joinAct === undefined) return { result: { name: decision.joinedName, state: decision.state, stored: null } };
+    return { state, result: { name: decision.joinedName, state: decision.state, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
+  });
+  return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
 export async function express(square: OpenSquare, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {

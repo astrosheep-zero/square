@@ -50,7 +50,7 @@ export class PaseoAdapter implements WakeAdapter {
     const agentId = address.agentId?.trim();
     if (!agentId) {
       return {
-        outcome: 'failed',
+        outcome: 'unavailable',
         signature: 'invalid_address',
         message: 'Paseo route has no agent id.',
         diagnostic: diagnostic('selection', address, 'invalid_address'),
@@ -60,28 +60,31 @@ export class PaseoAdapter implements WakeAdapter {
     const discovery = (this.opts.discover ?? discoverPaseoAgents)();
     if (discovery.error && discovery.agents.length === 0) {
       return {
-        outcome: 'failed',
+        outcome: 'unavailable',
         signature: discoveryRetryable(discovery.error) ? 'discovery_transient' : 'discovery_rejected',
         message: `Paseo unavailable: ${discovery.error}`,
         diagnostic: diagnostic('discovery', address, 'unavailable'),
+        retainRoute: true,
       };
     }
     const agent = discovery.agents.find((candidate) => candidate.id === agentId);
     if (agent === undefined || (agent.status !== 'idle' && agent.status !== 'running')) {
       return {
-        outcome: 'failed',
+        outcome: 'unavailable',
         signature: agent === undefined ? 'address_not_found' : 'agent_not_active',
         message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle or running.',
         diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_active'),
+        ...(agent === undefined ? {} : { retainRoute: true }),
       };
     }
 
     if (!(await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent))) {
       return {
-        outcome: 'failed',
+        outcome: 'unavailable',
         signature: 'boundary_unavailable',
         message: 'Paseo did not reach the current tool boundary before the wake timeout.',
         diagnostic: diagnostic('boundary', address, 'unavailable'),
+        retainRoute: true,
       };
     }
     if (!(await beforeSend())) return { outcome: 'cancelled' };

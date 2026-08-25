@@ -134,6 +134,26 @@ export function retireOwnerWakeRoutes(
   }
 }
 
+/** Retire one capability without touching sibling identities in the same claim. */
+export function retireWakeRoute(
+  route: Pick<WakeRoute, 'ownerId' | 'sessionId' | 'kind'>,
+  opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
+): void {
+  const at = opts.at ?? Date.now();
+  const env = opts.env ?? process.env;
+  const current = readWakeRoutes({ ownerId: route.ownerId, now: at, env })
+    .find((candidate) => candidate.sessionId === route.sessionId && candidate.kind === route.kind);
+  if (current === undefined) return;
+  appendRouteRow({
+    v: 1,
+    ts: at,
+    op: 'retire',
+    owner_id: route.ownerId,
+    session_id: route.sessionId,
+    kind: route.kind,
+  }, env);
+}
+
 export interface WakeRouteEvidence {
   sessionId: string;
   address: Record<string, string>;

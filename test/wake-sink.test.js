@@ -37,6 +37,32 @@ test('Paseo connection refusal is a transient pre-accept failure', () => {
   }
 });
 
+test('Paseo wake success forwards the agent and awareness prompt', () => {
+  const fake = fakePaseo('printf \'%s\\n\' "$@" > "$SQUARE_WAKE_ARGS"');
+  const previousBin = process.env.SQUARE_PASEO_BIN;
+  const previousArgs = process.env.SQUARE_WAKE_ARGS;
+  const argsFile = path.join(fake.dir, 'args');
+  process.env.SQUARE_PASEO_BIN = fake.file;
+  process.env.SQUARE_WAKE_ARGS = argsFile;
+  try {
+    sendPaseoWake({ agentId: 'agent-1', prompt: '<system-reminder>attention</system-reminder>' });
+    assert.deepEqual(fs.readFileSync(argsFile, 'utf8').trim().split('\n'), [
+      'send',
+      'agent-1',
+      '--prompt',
+      '<system-reminder>attention</system-reminder>',
+      '--no-wait',
+      '--json',
+    ]);
+  } finally {
+    if (previousBin === undefined) delete process.env.SQUARE_PASEO_BIN;
+    else process.env.SQUARE_PASEO_BIN = previousBin;
+    if (previousArgs === undefined) delete process.env.SQUARE_WAKE_ARGS;
+    else process.env.SQUARE_WAKE_ARGS = previousArgs;
+    fs.rmSync(fake.dir, { recursive: true, force: true });
+  }
+});
+
 test('Paseo authentication rejection is a proven pre-accept rejection', () => {
   const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"SEND_FAILED","message":"Incorrect password"}}' >&2\nexit 1`);
   const previous = process.env.SQUARE_PASEO_BIN;

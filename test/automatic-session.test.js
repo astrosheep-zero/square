@@ -8,6 +8,7 @@ import test from 'node:test';
 import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { runCodexHookAsync } from '../dist/codex-hook.js';
+import { lookupSessionBindings } from '../dist/registry.js';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-auto-'));
@@ -60,6 +61,27 @@ test('automatic session end writes ordinary done for its bound owner', { concurr
   assert.equal(loadSquare(item.publicPath).acts.length, 2);
 });
 
+test('automatic implicit join does not re-enter a participant that has done', { concurrency: false }, async () => {
+  const item = fixture();
+  await withEnv(item.env, async (env) => {
+    await automaticSessionStart('pi', 'pi-session', item.cwd, env);
+    await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
+    assert.equal(await automaticSessionStart('pi', 'pi-session', item.cwd, env), undefined);
+  });
+  assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join', 'done']);
+});
+
+test('automatic implicit join rebinds an active participant without another join', { concurrency: false }, async () => {
+  const item = fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('pi', 'first-session', item.cwd, env);
+    const resumed = await automaticSessionStart('pi', 'second-session', item.cwd, env);
+    assert.match(resumed, /You joined the public square/);
+    assert.equal(lookupSessionBindings('second-session').some((binding) => binding.name === 'shared'), true);
+  });
+  assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join']);
+});
+
 test('missing PUBLIC.square is a no-op', { concurrency: false }, async () => {
   const item = fixture();
   fs.unlinkSync(item.publicPath);
@@ -75,4 +97,20 @@ test('Codex hook command joins and ends through the real CLI boundary', { concur
     assert.equal(end, '');
   });
   assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join', 'done']);
+});
+
+test('Codex SessionResume uses the hook process cwd when the payload omits cwd', { concurrency: false }, async () => {
+  const item = fixture();
+  const previousCwd = process.cwd();
+  process.chdir(item.cwd);
+  try {
+    await withEnv(item.env, async (env) => {
+      const resume = await runCodexHookAsync(JSON.stringify({ session_id: 'resume-without-cwd', hook_event_name: 'SessionResume', source: 'resume' }), env);
+      assert.match(resume, /You joined the public square/);
+      assert.match(resume, /SessionResume/);
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+  assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join']);
 });

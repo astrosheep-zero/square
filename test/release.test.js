@@ -15,6 +15,14 @@ test('generated release artifacts expose the current identity and supported host
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');
 
   assert.equal(packageJson.name, '@astrosheep/square');
+  assert.equal(packageJson.dependencies['@getpaseo/client'], undefined);
+  assert.equal(packageJson.dependencies.ws, undefined);
+  assert.deepEqual(packageJson.exports['./paseo'], {
+    types: './dist/paseo.d.ts',
+    default: './dist/paseo.js',
+  });
+  assert.equal(packageJson.peerDependenciesMeta['@getpaseo/client'].optional, true);
+  assert.equal(packageJson.peerDependenciesMeta.ws.optional, true);
   assert.equal(SQUARE_IDENTITY.packageName, packageJson.name);
   assert.equal(SQUARE_IDENTITY.packageVersion, packageJson.version);
   assert.equal(claudePlugin.version, packageJson.version);

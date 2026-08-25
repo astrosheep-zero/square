@@ -46,6 +46,29 @@ test('explicit join publishes only complete provider evidence and done retires i
   }
 });
 
+test('a same-name takeover retires the old route and leaves the new route active', () => {
+  const item = files();
+  const previous = process.env.SQUARE_REGISTRY;
+  process.env.SQUARE_REGISTRY = item.env.SQUARE_REGISTRY;
+  try {
+    recordLocalJoin('Bob', item.square, {
+      ...item.env,
+      CODEX_THREAD_ID: 'old-codex',
+      PASEO_AGENT_ID: 'old-paseo',
+    });
+    recordLocalJoin('Bob', item.square, {
+      ...item.env,
+      CODEX_THREAD_ID: 'new-codex',
+      PASEO_AGENT_ID: 'new-paseo',
+    });
+    assert.deepEqual(readWakeRoutes({ env: item.env, now: Date.now() }).map((route) => route.address.agentId), ['new-paseo']);
+  } finally {
+    if (previous === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previous;
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
 test('session identity alone never publishes a wake route', () => {
   const item = files();
   const env = {

@@ -1,6 +1,6 @@
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
-import { done, express, hold, join, resume } from './landing.js';
+import { done, express, hold, implicitJoin, join, resume } from './landing.js';
 import { catchUp } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
@@ -52,6 +52,13 @@ export class Square {
   async join(name: string): Promise<Participant> {
     const joined = await join(this.square, name);
     return new ParticipantHandle(joined.name, this.square);
+  }
+
+  async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
+    const joined = await implicitJoin(this.square, name);
+    return joined.state === 'done'
+      ? { state: joined.state }
+      : { state: joined.state, participant: new ParticipantHandle(joined.name, this.square) };
   }
 
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }

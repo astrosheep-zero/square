@@ -14,15 +14,17 @@ export async function runClaudeHookAsync(inputText: string, env: NodeJS.ProcessE
   try { input = JSON.parse(inputText); } catch { return ''; }
   if (input === null || typeof input !== 'object') return '';
   const value = input as NativeHookInput;
-  if (typeof value.session_id !== 'string' || typeof value.cwd !== 'string') return runClaudeHook(inputText, env);
+  if (typeof value.session_id !== 'string') return runClaudeHook(inputText, env);
   if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
+    const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
     try {
-      const context = await automaticSessionStart('claude', value.session_id, value.cwd, env);
+      const context = await automaticSessionStart('claude', value.session_id, cwd, env);
       return context === undefined ? '' : `${JSON.stringify({ hookSpecificOutput: { hookEventName: value.hook_event_name, additionalContext: context } })}\n`;
     } catch { return ''; }
   }
   if (value.hook_event_name === 'SessionEnd') {
-    try { await automaticSessionEnd('claude', value.session_id, value.cwd, env); } catch { /* end remains bounded */ }
+    const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
+    try { await automaticSessionEnd('claude', value.session_id, cwd, env); } catch { /* end remains bounded */ }
     return '';
   }
   return runClaudeHook(inputText, env);

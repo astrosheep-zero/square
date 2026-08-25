@@ -36,15 +36,21 @@
   "author": "astrosheep",
   "license": "MIT",
   "devDependencies": {
+    "@getpaseo/client": "^0.3.1",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.8"
+    "typescript": "^5.8",
+    "ws": "^8.21.3"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./paseo": {
+      "types": "./dist/paseo.d.ts",
+      "default": "./dist/paseo.js"
     }
   },
   "main": "dist/index.js",
@@ -58,8 +64,18 @@
     ]
   },
   "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
+  "peerDependencies": {
     "@getpaseo/client": "^0.3.1",
-    "cross-spawn": "^7.0.6",
     "ws": "^8.21.3"
+  },
+  "peerDependenciesMeta": {
+    "@getpaseo/client": {
+      "optional": true
+    },
+    "ws": {
+      "optional": true
+    }
   }
 }
