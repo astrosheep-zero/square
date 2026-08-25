@@ -139,13 +139,20 @@ interface ProcessNotificationOptions {
 }
 
 async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
+  const adapters: WakeAdapter[] = [];
+  try {
+    const { CodexQueueAdapter } = await import('./codex-queue.js');
+    adapters.push(new CodexQueueAdapter());
+  } catch {
+    // Codex is unavailable only when this build omits its local adapter.
+  }
   try {
     const { PaseoAdapter } = await import('./paseo-delivery.js');
-    return [new PaseoAdapter()];
+    adapters.push(new PaseoAdapter());
   } catch {
     // Paseo is an optional integration; a core-only install simply has no Paseo adapter.
-    return [];
   }
+  return adapters;
 }
 
 async function claimNotifyLease(square: OpenSquare, recipient: string, actIndex: number) {

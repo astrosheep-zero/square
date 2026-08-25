@@ -2,6 +2,7 @@ import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
+import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
 
 export interface CodexHookInput {
   session_id?: unknown;
@@ -16,10 +17,13 @@ export async function codexHookResponse(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
-  if (input.hook_event_name !== 'PostToolUse') return undefined;
+  if (input.hook_event_name !== 'PostToolUse' && input.hook_event_name !== 'Stop') return undefined;
+  recordCodexBoundary(input.session_id, input.hook_event_name === 'Stop' ? 'Stop' : 'non-stop', env);
   return presentPendingAtBoundary(
     input.session_id,
-    (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }),
+    (context) => input.hook_event_name === 'Stop'
+      ? { systemMessage: context }
+      : { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } },
     lookup,
     env
   );
@@ -44,6 +48,7 @@ export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEn
   const value = input as CodexHookInput;
   if (typeof value.session_id !== 'string') return runCodexHook(inputText, env);
   if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
+    recordCodexBoundary(value.session_id, 'non-stop', env);
     const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
     try {
       const context = await automaticSessionStart('codex', value.session_id, cwd, env);
@@ -51,6 +56,7 @@ export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEn
     } catch { return ''; }
   }
   if (value.hook_event_name === 'SessionEnd') {
+    clearCodexBoundary(value.session_id, env);
     const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
     try { await automaticSessionEnd('codex', value.session_id, cwd, env); } catch { /* end remains bounded */ }
     return '';

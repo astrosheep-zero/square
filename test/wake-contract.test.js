@@ -112,9 +112,9 @@ test('wake port falls through across kinds only after a provable failed', async 
   const secondCalls = [];
   const port = new WakePort([
     scriptedAdapter('opencode-server', [{ outcome: 'failed', signature: 's', message: 'm' }], firstCalls),
-    scriptedAdapter('codex-app-server', [{ outcome: 'accepted' }], secondCalls),
+    scriptedAdapter('codex-queue', [{ outcome: 'accepted' }], secondCalls),
   ]);
-  const result = await port.dispatch([route('opencode-server'), route('codex-app-server')], 'wake', {
+  const result = await port.dispatch([route('opencode-server'), route('codex-queue')], 'wake', {
     nextAttemptN: () => 1,
     beforeSend: async () => true,
     record: async () => undefined,

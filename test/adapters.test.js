@@ -227,7 +227,9 @@ test('Claude installation leaves a diagnosable bundle that can be removed', asyn
   });
   try {
     const installed = await installClaudePlugin(home, runClaude);
-    assert.equal(fs.existsSync(path.join(installed.pluginRoot, 'SKILL.md')), true);
+    assert.equal(fs.existsSync(path.join(installed.pluginRoot, '.claude-plugin', 'plugin.json')), true);
+    assert.equal(fs.existsSync(path.join(installed.pluginRoot, 'hooks', 'hooks.json')), true);
+    assert.equal(fs.existsSync(path.join(installed.pluginRoot, 'skills', 'square', 'SKILL.md')), true);
     const marketplace = JSON.parse(fs.readFileSync(path.join(installed.marketplaceRoot, '.claude-plugin', 'marketplace.json'), 'utf8'));
     assert.deepEqual(marketplace.owner, { name: 'Square' });
     assert.match((await doctorClaudePlugin(home, runClaude)).join('\n'), /✓ square@astrosheep installed/);

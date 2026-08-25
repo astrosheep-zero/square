@@ -29,6 +29,8 @@ export function testEnv(overrides = {}) {
     SQUARE_PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_REGISTRY: path.join(TEST_STATE, `sessions-${id}.ndjsonl`),
+    SQUARE_ROUTES: path.join(TEST_STATE, `routes-${id}.ndjsonl`),
+    SQUARE_CODEX_BOUNDARIES: path.join(TEST_STATE, `codex-boundaries-${id}.json`),
     SQUARE_PRESENTED: path.join(TEST_STATE, `presented-${id}.ndjsonl`),
     SQUARE_SLEEP_MS: '1',
     SQUARE_STALE_MS: '2',

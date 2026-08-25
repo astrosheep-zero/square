@@ -180,7 +180,10 @@ function completeRouteEvidence(value: WakeRouteEvidence | undefined): value is W
  */
 export const WAKE_ROUTE_PROBES: Readonly<Record<WakeRouteKind, WakeRouteProbe>> = {
   'opencode-server': () => undefined,
-  'codex-app-server': () => undefined,
+  'codex-queue': (env) => {
+    const threadId = env.CODEX_THREAD_ID?.trim();
+    return threadId ? { sessionId: threadId, address: { threadId } } : undefined;
+  },
   'claude-native': () => undefined,
   'pi-extension': () => undefined,
   paseo: (env) => {

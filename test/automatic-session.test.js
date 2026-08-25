@@ -8,6 +8,7 @@ import test from 'node:test';
 import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { runCodexHookAsync } from '../dist/codex-hook.js';
+import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { lookupSessionBindings } from '../dist/registry.js';
 
 function fixture() {
@@ -16,7 +17,7 @@ function fixture() {
   const publicPath = path.join(cwd, '.square', 'PUBLIC.square');
   fs.mkdirSync(path.dirname(publicPath), { recursive: true });
   writeSquareFile(publicPath, createSquareState({ force: true, hardCap: null }, 'Host context'));
-  const env = { ...process.env, SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'), SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'), SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'), SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'), SQUARE_LOCATION: path.join(root, 'other.square') };
+  const env = { ...process.env, SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'), SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'), SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'), SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'), SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'), SQUARE_LOCATION: path.join(root, 'other.square') };
   return { root, cwd, publicPath, env };
 }
 
@@ -113,4 +114,21 @@ test('Codex SessionResume uses the hook process cwd when the payload omits cwd',
     process.chdir(previousCwd);
   }
   assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join']);
+});
+
+test('Codex hook boundary state follows Stop, non-Stop, and SessionEnd', { concurrency: false }, async () => {
+  const item = fixture();
+  await withEnv(item.env, async (env) => {
+    const thread = 'boundary-thread';
+    await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionStart', cwd: item.cwd }), env);
+    assert.equal(codexQueueEligible(thread, env), false);
+    await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), env);
+    assert.equal(codexQueueEligible(thread, env), true);
+    await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'PostToolUse' }), env);
+    assert.equal(codexQueueEligible(thread, env), false);
+    await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), env);
+    assert.equal(codexQueueEligible(thread, env), true);
+    await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionEnd' }), env);
+    assert.equal(codexQueueEligible(thread, env), false);
+  });
 });

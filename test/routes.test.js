@@ -35,8 +35,9 @@ test('explicit join publishes only complete provider evidence and done retires i
   try {
     recordLocalJoin('Bob', item.square, env);
     const routes = readWakeRoutes({ env, now: Date.now() + 1 });
-    assert.deepEqual(routes.map((route) => route.kind), ['paseo']);
-    assert.deepEqual(routes[0].address, { agentId: 'paseo-agent' });
+    assert.deepEqual(routes.map((route) => route.kind), ['codex-queue', 'paseo']);
+    assert.deepEqual(routes[0].address, { threadId: 'codex-thread' });
+    assert.deepEqual(routes[1].address, { agentId: 'paseo-agent' });
     recordLocalDone('Bob', item.square, env);
     assert.deepEqual(readWakeRoutes({ env, now: Date.now() + 2 }), []);
   } finally {
@@ -61,7 +62,10 @@ test('a same-name takeover retires the old route and leaves the new route active
       CODEX_THREAD_ID: 'new-codex',
       PASEO_AGENT_ID: 'new-paseo',
     });
-    assert.deepEqual(readWakeRoutes({ env: item.env, now: Date.now() }).map((route) => route.address.agentId), ['new-paseo']);
+    assert.deepEqual(readWakeRoutes({ env: item.env, now: Date.now() }).map((route) => [route.kind, route.address]), [
+      ['codex-queue', { threadId: 'new-codex' }],
+      ['paseo', { agentId: 'new-paseo' }],
+    ]);
   } finally {
     if (previous === undefined) delete process.env.SQUARE_REGISTRY;
     else process.env.SQUARE_REGISTRY = previous;
@@ -69,7 +73,7 @@ test('a same-name takeover retires the old route and leaves the new route active
   }
 });
 
-test('session identity alone never publishes a wake route', () => {
+test('Codex session identity publishes a queue route', () => {
   const item = files();
   const env = {
     ...item.env,
@@ -82,7 +86,9 @@ test('session identity alone never publishes a wake route', () => {
   process.env.SQUARE_REGISTRY = item.env.SQUARE_REGISTRY;
   try {
     recordLocalJoin('Bob', item.square, env);
-    assert.deepEqual(readWakeRoutes({ env, now: Date.now() + 1 }), []);
+    assert.deepEqual(readWakeRoutes({ env, now: Date.now() + 1 }).map((route) => [route.kind, route.address]), [
+      ['codex-queue', { threadId: 'codex-thread' }],
+    ]);
   } finally {
     if (previous === undefined) delete process.env.SQUARE_REGISTRY;
     else process.env.SQUARE_REGISTRY = previous;

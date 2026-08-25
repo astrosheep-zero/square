@@ -161,7 +161,10 @@ test('ending the Paseo identity keeps a shared owner route alive for the native 
     };
     recordLocalJoin('Alice', squarePath, env);
     assert.equal(recordSessionDone('paseo-agent', 'Alice', squarePath, 'paseo', env), true);
-    assert.deepEqual(readWakeRoutes({ env, now: Date.now() }).map((route) => route.address.agentId), ['paseo-agent']);
+    assert.deepEqual(readWakeRoutes({ env, now: Date.now() }).map((route) => [route.kind, route.address]), [
+      ['codex-queue', { threadId: 'codex-session' }],
+      ['paseo', { agentId: 'paseo-agent' }],
+    ]);
     assert.deepEqual(lookupParticipant(squarePath, 'Alice').map((binding) => binding.sessionId), ['codex-session']);
   } finally {
     cleanup();
