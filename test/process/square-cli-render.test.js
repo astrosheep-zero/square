@@ -204,6 +204,22 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
 
+test('presence rendering says spoke when a bare say has no visible mention target', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await square.join('Cara');
+    await bob.listen('Alice');
+    await alice.express('listener-only answer', { force: true });
+  });
+
+  const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(caraWatch.status, 0, caraWatch.stderr);
+  assert.match(caraWatch.stdout, /● @Alice #1 · act\/4 · .*\n  spoke/);
+  assert.doesNotMatch(caraWatch.stdout, /talked to(?:\s|$)/m);
+  assert.doesNotMatch(caraWatch.stdout, /listener-only answer/);
+});
+
 test('history without --as expands the newest ten activities in chronological order', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');

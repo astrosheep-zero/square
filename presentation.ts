@@ -243,7 +243,10 @@ function renderPresenceOnlySay(
 ): string {
   const audience = audienceOf(event);
   const targets = audience.kind === 'bell' ? [] : audience.names;
-  const dest = targets.length === 0 ? '' : ` ${targets.map((name) => participantIdentity(name)).join(' and ')}`;
+  if (targets.length === 0) {
+    return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  spoke`;
+  }
+  const dest = ` ${targets.map((name) => participantIdentity(name)).join(' and ')}`;
   return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
 }
 
