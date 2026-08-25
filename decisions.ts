@@ -23,7 +23,7 @@ import {
   rosterNames,
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
-import { actDelta, peerPublicActs, peerRoomChanges } from './activity-feed.js';
+import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js';
 import { formatActivityId, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, perceiveActivity } from './delivery.js';
 import { compileSearchPattern } from './search.js';
@@ -120,7 +120,7 @@ export type ActDecision =
       act: Act;
       confirmation: string;
       ownActCount: number;
-      pendingPublic: ReturnType<typeof peerPublicActs>;
+      pendingPublic: ReturnType<typeof directedPeerSays>;
       pendingRoomChanges: ReturnType<typeof peerRoomChanges>;
     }
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[]; unreadRoomChanges: ReturnType<typeof peerRoomChanges> }
@@ -169,17 +169,17 @@ export function decideAct(
   }
 
   const delta = actDelta(squareState.acts, readCursor(squareState, name));
-  const unreadPublic = peerPublicActs(delta, name);
-  const unreadRoomChanges = peerRoomChanges(delta, name);
+  const unreadPublic = directedPeerSays(squareState, delta, name);
+  const unreadRoomChanges: ReturnType<typeof peerRoomChanges> = [];
 
   const sayCountByActor = new Map<string, number>();
   const unreadByParticipant = new Map<string, { count: number; latestAt: number; previews: UnreadActivityPreview[] }>();
-  for (const item of delta) {
+  for (const item of unreadPublic) {
     if (item.kind === 'say') {
       const key = item.actor.toLocaleLowerCase();
       sayCountByActor.set(key, (sayCountByActor.get(key) ?? 0) + 1);
     }
-    if (item.kind !== 'say' || sameName(item.actor, name)) continue;
+    if (sameName(item.actor, name)) continue;
     const actorKey = item.actor.toLocaleLowerCase();
     const currentSummary = unreadByParticipant.get(item.actor);
     unreadByParticipant.set(item.actor, {
@@ -202,8 +202,7 @@ export function decideAct(
     .sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 
   const latestActivityAgeMs = activitySummaries[0]?.latestActivityAgeMs;
-  const hasUnreadBlockingChange = unreadRoomChanges.some((act) => act.kind !== 'join');
-  const hasUnread = unreadPublic.length > 0 || hasUnreadBlockingChange;
+  const hasUnread = unreadPublic.length > 0;
   const hasFreshUnreadActivity = latestActivityAgeMs !== undefined && latestActivityAgeMs <= UNREAD_BLOCK_GRACE_MS;
 
   if (!force && hasUnread && !hasFreshUnreadActivity) {
@@ -321,8 +320,8 @@ function buildParticipantStatuses(squareState: SquareState, now: number, state =
     let unreadActivityCount = 0;
     if (snapshot?.joined) {
       for (const act of squareState.acts) {
-        if (actStableIndex(act) <= consumedThrough || act.actor === undefined || sameName(act.actor, participant)) continue;
-        if (act.kind !== 'read') unreadActivityCount++;
+        if (actStableIndex(act) <= consumedThrough) continue;
+        if (directedPeerSays(squareState, [act], participant).length > 0) unreadActivityCount++;
       }
     }
     return {

@@ -1,6 +1,6 @@
 import { extractMentions, formatActivityId } from './square-core.js';
-import { deliveryDelta, filteredRoomChanges, matchesFeedFilter, peerPublicActs } from './activity-feed.js';
-import { deriveDeliveryModel, markSeenNotifications, perceiveActivity } from './delivery.js';
+import { deliveryDelta, directedPeerSays, matchesFeedFilter } from './activity-feed.js';
+import { markSeenNotifications, perceiveActivity } from './delivery.js';
 import { SquareError, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { openSquare } from './square-file-adapter.js';
@@ -29,12 +29,10 @@ export async function catchUp(square: OpenSquare, name: string, options: CatchOp
       const viewer = resolveKnownName(state, name);
       const delta = deliveryDelta(state, viewer);
       const filter = { ...(options.from === undefined ? {} : { participants: [...options.from] }), ...(options.mention === true ? { mention: viewer } : {}) };
-      const delivery = deriveDeliveryModel(state);
-      const delivered = [...peerPublicActs(delta, viewer).filter((activity) => matchesFeedFilter(
+      const delivered = directedPeerSays(state, delta, viewer).filter((activity) => matchesFeedFilter(
         activity,
         filter,
-        activity.kind === 'say' ? delivery.plan(activity).map((planned) => planned.recipient) : undefined,
-      )), ...filteredRoomChanges(delta, viewer, filter)]
+      ))
         .filter((activity, index, activities) => activities.findIndex((candidate) => candidate.index === activity.index) === index)
         .sort((left, right) => left.index - right.index);
       const seenChanged = delivered.reduce((changed, activity) => recordObservation(state, viewer, activity.index, 'seen', at) || changed, false)

@@ -1,4 +1,4 @@
-import { audienceIncludes, audienceOf, fold, formatActivityId, type ActivityId, type Reach } from './square-core.js';
+import { audienceIncludes, audienceOf, fold, formatActivityId, landedAudienceIncludes, type ActivityId, type Reach } from './square-core.js';
 import {
   SquareError,
   type StoredAct,
@@ -210,6 +210,10 @@ export function readCursor(squareState: SquareState, name: string): number {
   for (const act of squareState.acts) {
     if (act.index <= boundary || act.kind === 'read' || act.actor === undefined) continue;
     if (sameName(act.actor, name)) {
+      cursor = act.index;
+      continue;
+    }
+    if (!landedAudienceIncludes(squareState.acts, act, name)) {
       cursor = act.index;
       continue;
     }

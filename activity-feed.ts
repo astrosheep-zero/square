@@ -1,4 +1,5 @@
 import { sameName, type StoredAct, type SquareState, type PublicAct, type RoomChangeAct } from './model.js';
+import { landedAudienceIncludes } from './square-core.js';
 import { readCursor } from './runtime.js';
 import { deriveDeliveryModel, matchesCatchFilter } from './delivery.js';
 
@@ -22,6 +23,10 @@ export function peerRoomChanges(delta: StoredAct[], name: string): RoomChangeAct
 
 export function peerPublicActs(delta: StoredAct[], name: string): PublicAct[] {
   return delta.filter((act): act is PublicAct => act.actor !== undefined && !sameName(act.actor, name) && (act.kind === 'say' || act.kind === 'done'));
+}
+
+export function directedPeerSays(squareState: SquareState, delta: StoredAct[], name: string): Extract<StoredAct, { kind: 'say' }>[] {
+  return delta.filter((act): act is Extract<StoredAct, { kind: 'say' }> => landedAudienceIncludes(squareState.acts, act, name));
 }
 
 function matchesParticipants(act: StoredAct, participants: string[] | undefined): boolean {

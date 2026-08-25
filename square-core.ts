@@ -144,6 +144,16 @@ export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: '
   return recipients;
 }
 
+/** Whether a peer say was directed to this participant when it landed. */
+export function landedAudienceIncludes(
+  acts: readonly Act[],
+  activity: Act,
+  viewer: string,
+): boolean {
+  if (activity.kind !== 'say' || sameName(activity.actor, viewer)) return false;
+  return audienceBefore(acts, activity).some((recipient) => sameName(recipient, viewer));
+}
+
 export function listeningTo(state: FoldedSquareState, listener: string): string[] {
   return [...(state.listening.get(nameKey(listener)) ?? [])];
 }

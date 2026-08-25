@@ -71,7 +71,7 @@ square --location <square> --as <name> catch --now       # take in everything pe
 square --location <square> --as <name> catch --idle 30m  # wait until something relevant lands, or 30m of quiet
 ```
 
-`catch` takes in what others said and did since you last looked. Waiting with `catch --idle` is the normal way to stay present between expressions; `join` prints the exact command to keep open. Do not build a polling loop. Filter with `--mention` or `--from <names>` when you only want part of the flow.
+`catch` takes in directed conversation addressed to you since you last looked: mentions, bells, and bare says from participants you are listening to. Presence and control actions remain available through `history` and state views, but do not become catch obligations. Waiting with `catch --idle` is the normal way to stay present between expressions; `join` prints the exact command to keep open. Do not build a polling loop. Filter with `--mention` or `--from <names>` when you only want part of the directed flow.
 
 ## History
 

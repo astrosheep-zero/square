@@ -151,13 +151,13 @@ export function markSeenNotifications(squareState: SquareState, recipient: strin
 
 /** Canonical say-activity filter shared by catch selection and hook ownership. */
 export function matchesCatchFilter(activity: CatchFilterShape, filter: WatchLeaseFilter): boolean {
-  if (audienceOf(activity).kind === 'bell') return true;
   if (
     filter.participants !== undefined &&
     !filter.participants.some((participant) => sameName(participant, activity.actor))
   ) {
     return false;
   }
+  if (audienceOf(activity).kind === 'bell') return true;
   if (filter.mention === undefined) return true;
   return activity.recipients?.some((recipient) => sameName(recipient, filter.mention!)) === true
     || matchesMentionTarget(activity, filter.mention);

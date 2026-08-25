@@ -132,7 +132,7 @@ test('a catch lease owns only the notifications admitted by its filter', () => {
   assert.equal(leaseOwnsNotification(lease, mention), true);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'] } }, mention), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Cara' } }, mention), false);
-  assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'], mention: 'Cara' } }, bell), true);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'], mention: 'Cara' } }, bell), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, mention), true);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { actor: 'aku/riko', body: 'bare answer', route: 'attention', recipient: 'Bob' }), true);
 });
@@ -175,9 +175,9 @@ test('out-of-order observations advance only the continuous seen prefix', () => 
   const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'one' },
-    { kind: 'say', actor: 'Alice', at: 4, body: 'two' },
-    { kind: 'say', actor: 'Alice', at: 5, body: 'three' },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'one @Bob' },
+    { kind: 'say', actor: 'Alice', at: 4, body: 'two @Bob' },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'three @Bob' },
   ]);
   recordObservation(square, 'Bob', 3, 'seen', 8);
   recordObservation(square, 'Bob', 4, 'seen', 9);

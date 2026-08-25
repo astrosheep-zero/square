@@ -131,7 +131,7 @@ test('catch mention returns only matching says and omits peer room changes', asy
   await closeSquare(square);
 });
 
-test('catch from a named peer keeps that peer\'s public acts and room changes', async () => {
+test('catch from a named peer keeps that peer\'s directed says only', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
@@ -142,17 +142,13 @@ test('catch from a named peer keeps that peer\'s public acts and room changes', 
   const caught = await alice.catch({ from: ['Bob'] });
   assert.deepEqual(
     caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
-    [
-      { kind: 'join', actor: 'Bob', body: undefined },
-      { kind: 'say', actor: 'Bob', body: 'hello from bob @Alice' },
-      { kind: 'done', actor: 'Bob', body: 'bye' },
-    ],
+    [{ kind: 'say', actor: 'Bob', body: 'hello from bob @Alice' }],
   );
   assert.equal(caught.activities.some((activity) => activity.actor === 'Cara'), false);
   await closeSquare(square);
 });
 
-test('catch after a rejoin still includes the departure and the return', async () => {
+test('catch after a rejoin excludes departure and return presence', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
@@ -162,15 +158,12 @@ test('catch after a rejoin still includes the departure and the return', async (
   const caught = await alice.catch();
   assert.deepEqual(
     caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
-    [
-      { kind: 'done', actor: 'Bob' },
-      { kind: 'join', actor: 'Bob' },
-    ],
+    [],
   );
   await closeSquare(square);
 });
 
-test('unfiltered catch includes peer room changes', async () => {
+test('unfiltered catch excludes peer room changes', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   await square.join('Bob');
@@ -178,10 +171,7 @@ test('unfiltered catch includes peer room changes', async () => {
   const caught = await alice.catch();
   assert.deepEqual(
     caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
-    [
-      { kind: 'join', actor: 'Bob' },
-      { kind: 'join', actor: 'Cara' },
-    ],
+    [],
   );
   await closeSquare(square);
 });
@@ -196,6 +186,33 @@ test('catch still delivers an unreceipted mention behind a self-advanced cursor'
   assert.equal(caught.activities.some((activity) => activity.body === 'question @Bob'), true);
   const again = await bob.catch();
   assert.deepEqual(again.activities, []);
+  await closeSquare(square);
+});
+
+test('catch and express gating share directed-say attention', async () => {
+  const time = tickingClock();
+  const square = Square.inMemory({ markdown: 'context', clock: time.now });
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  await bob.express('direct @Alice', { force: true });
+  time.set(100000);
+  await assert.rejects(
+    () => alice.express('reply @Bob'),
+    (error) => error instanceof SquareError && error.code === 'behind',
+  );
+  const caught = await alice.catch();
+  assert.deepEqual(caught.activities.map((activity) => activity.body), ['direct @Alice']);
+  await closeSquare(square);
+});
+
+test('a listener receives a bare say through catch without presence obligations', async () => {
+  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  await bob.listen('Alice');
+  const expressed = await alice.express('bare attention', { force: true });
+  const caught = await bob.catch();
+  assert.deepEqual(caught.activities.map((activity) => activity.id), [expressed.activity.id]);
   await closeSquare(square);
 });
 
@@ -229,8 +246,7 @@ test('a mention target perceives the full body and everyone else perceives prese
   const bobCaught = await bob.catch();
   const bobMention = bobCaught.activities.find((activity) => activity.id === expressed.activity.id);
   assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full' });
-  const caraCaught = await cara.catch();
-  const caraMention = caraCaught.activities.find((activity) => activity.id === expressed.activity.id);
+  const caraMention = (await cara.history({ all: true })).find((activity) => activity.id === expressed.activity.id);
   assert.equal(caraMention.perception, 'presence');
   assert.equal('body' in caraMention, false);
   assert.equal((await square.history({ all: true })).find((activity) => activity.id === expressed.activity.id).body, 'secret reach phrase @Bob');
@@ -300,14 +316,11 @@ test('an unread directed body is not leaked when express is blocked', async () =
   time.set(4000);
   await alice.express('secret pending phrase @Bob', { force: true });
   time.set(100000);
-  await assert.rejects(
-    () => cara.express('cara tries after unread @Alice'),
-    (error) => error instanceof SquareError && error.code === 'behind' && !String(error.message).includes('secret pending phrase'),
-  );
+  await assert.doesNotReject(() => cara.express('cara tries after unrelated directed say @Alice'));
   await closeSquare(square);
 });
 
-test('a bell pierces catch filters and a second bell inside the hour is refused', async () => {
+test('a bell remains directed while catch filters still apply', async () => {
   const time = tickingClock();
   const square = Square.inMemory({ markdown: 'context', clock: time.now });
   time.set(1000);
@@ -321,7 +334,7 @@ test('a bell pierces catch filters and a second bell inside the hour is refused'
   const mentionWatch = await cara.catch({ mention: true });
   assert.equal(mentionWatch.activities.some((activity) => activity.body === 'bell one'), true);
   const fromWatch = await bob.catch({ from: ['Cara'] });
-  assert.equal(fromWatch.activities.some((activity) => activity.id === bell.activity.id), true);
+  assert.equal(fromWatch.activities.some((activity) => activity.id === bell.activity.id), false);
   assert.equal((await square.history({ from: ['Cara'], all: true })).some((activity) => activity.body === 'bell one'), false);
   time.set(7000);
   await assert.rejects(
@@ -378,7 +391,7 @@ test('snapshot counts only people still in the square and tracks done participan
   await closeSquare(square);
 });
 
-test('room changes and a final note land once through catch', async () => {
+test('room changes stay in history while a final note remains directed conversation', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
@@ -387,17 +400,13 @@ test('room changes and a final note land once through catch', async () => {
   const first = await alice.catch();
   assert.deepEqual(
     first.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
-    [
-      { kind: 'join', actor: 'Bob', body: undefined },
-      { kind: 'hold', actor: 'Bob', body: 'pause' },
-      { kind: 'resume', actor: 'Bob', body: undefined },
-    ],
+    [],
   );
   await bob.done('final note');
   const afterDone = await alice.catch();
   assert.deepEqual(
     afterDone.activities.map((activity) => ({ kind: activity.kind, body: activity.body })),
-    [{ kind: 'done', body: 'final note' }],
+    [],
   );
   assert.equal((await square.history({ all: true })).filter((activity) => activity.body === 'final note').length, 1);
   await closeSquare(square);
@@ -420,10 +429,7 @@ test('hold, unread room changes, and an unread join gate express independently',
   time.set(210000);
   await bob.resume();
   time.set(220000);
-  await assert.rejects(
-    () => alice.express('after resume @Bob'),
-    (error) => error instanceof SquareError && error.code === 'behind',
-  );
+  await assert.doesNotReject(() => alice.express('after resume @Bob'));
 
   const open = Square.inMemory({ markdown: 'context', clock: time.now });
   time.set(1000);
