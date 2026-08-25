@@ -214,6 +214,10 @@ test('a native boundary presents bounded awareness once and records the current 
     const rows = fs.readFileSync(item.env.SQUARE_PRESENTED, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].owner_id, 'bob-owner');
+
+    const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
+    assert.equal(evidence.presented, true);
+    assert.equal(wakeIsEligible(evidence), true);
   } finally {
     item.cleanup();
   }
@@ -265,7 +269,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
   }
 });
 
-test('an accepted native wake shares presentation with the later hook boundary', async () => {
+test('an accepted native wake does not write presented evidence or suppress the boundary', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', 'native wake preview @Bob'], 30);
@@ -286,13 +290,37 @@ test('an accepted native wake shares presentation with the later hook boundary',
     }));
     assert.match(payload, /act\//);
     assert.match(payload, /native wake preview @Bob/);
+    assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
+    assert.equal(loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(act.index)].state, 'notified');
     const later = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-session',
-      () => { throw new Error('native wake presentation was repeated'); },
+      () => 'presented',
       undefined,
       item.env,
     ));
-    assert.equal(later, undefined);
+    assert.equal(later, 'presented');
+    assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), true);
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('a current owner notified observation suppresses another wake', async () => {
+  const item = workshop();
+  try {
+    item.cli('Alice', ['express', '--force', 'notify current owner @Bob'], 30);
+    const act = loadSquare(item.squarePath).acts.at(-1);
+    registerRoute(item, 'current-owner', 'current-session');
+    const adapter = acceptedAdapter();
+    await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
+      env: item.env,
+      adapters: [adapter],
+    }));
+
+    const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
+    assert.equal(evidence.notified, true);
+    assert.equal(evidence.delivered, false);
+    assert.equal(wakeIsEligible(evidence), false);
   } finally {
     item.cleanup();
   }
@@ -335,7 +363,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
   }
 });
 
-test('presentation suppresses wake before worker start and at the final pre-send check', async () => {
+test('presentation does not suppress wake before worker start or at the final pre-send check', async () => {
   const item = workshop();
   try {
     registerRoute(item);
@@ -355,9 +383,9 @@ test('presentation suppresses wake before worker start and at the final pre-send
     )));
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, racing.index, { env: item.env, adapters: [second] }));
 
-    assert.equal(first.calls, 0);
-    assert.equal(second.calls, 0);
-    assert.deepEqual(readWakeAttempts({ env: item.env }), []);
+    assert.equal(first.calls, 1);
+    assert.equal(second.calls, 1);
+    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted', 'accepted']);
   } finally {
     item.cleanup();
   }
@@ -386,7 +414,7 @@ test('presented evidence is scoped to the current participant owner', async () =
     }));
 
     assert.equal(adapter.calls, 1);
-    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'presented-not-delivered');
+    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();
   }
@@ -475,7 +503,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     })))
-      .find((item) => item.actIndex === act.index).kind, 'presented-not-delivered');
+      .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       launchWorker: () => { throw new Error('terminal attention must not launch'); },

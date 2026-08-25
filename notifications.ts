@@ -18,7 +18,6 @@ import { quoteShell } from './presentation.js';
 import { renderAttentionPreview } from './attention-presentation.js';
 import { lookupParticipant } from './registry.js';
 import { retireWakeRoute } from './routes.js';
-import { recordPresentedForOwner } from './presented.js';
 import { openSquare } from './square-file-adapter.js';
 import { markNotificationNotified } from './square-wiring.js';
 import { closeOpenSquare } from './open-square.js';
@@ -257,7 +256,6 @@ async function processNotification(
           }, env);
           if (outcome.outcome === 'accepted') {
             await markNotificationNotified(square, notification.recipient, notification.item.index, route.ownerId, now());
-            recordPresentedForOwner(route.ownerId, squarePath, notification.recipient, notification.item.index, env, now());
           }
           if (outcome.outcome !== 'failed') releaseLease = true;
         },

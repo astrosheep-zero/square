@@ -10,10 +10,11 @@ import {
 } from './wake-attempts.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { notificationDelivered } from './views.js';
+import { notificationEvidence } from './views.js';
 
 export interface WakeEvidence {
   delivered: boolean;
+  notified: boolean;
   presented: boolean;
   attempts: WakeAttempt[];
   terminal?: WakeAttempt;
@@ -29,28 +30,36 @@ export async function wakeEvidence(
   env: NodeJS.ProcessEnv,
 ): Promise<WakeEvidence> {
   const square = await openSquare(squarePath, { clock: () => now });
-  const delivered = await notificationDelivered(square, recipient, actIndex).finally(() => closeOpenSquare(square));
-  const owners = new Set(
-    lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
-  );
-  const attempts = readWakeAttempts({ attention: { squarePath, recipient, actIndex }, env, now });
-  const terminal = terminalWakeEvidence(attempts);
-  const routes = readWakeRoutes({ freshOnly: true, now, env })
-    .filter((route) => owners.has(route.ownerId));
-  return {
-    delivered,
-    presented: hasPresentedAttention(squarePath, recipient, actIndex, env, now),
-    attempts,
-    ...(terminal === undefined ? {} : { terminal }),
-    attemptableRoutes: terminal === undefined
-      ? routes.filter((route) => isWakeRouteAttemptable(route, attempts))
-      : [],
-  };
+  try {
+    const { delivered, observation } = await notificationEvidence(square, recipient, actIndex);
+    const owners = new Set(
+      lookupParticipant(squarePath, recipient, now).map((binding) => binding.ownerId),
+    );
+    const notified = observation?.state === 'notified'
+      && observation.ownerId !== undefined
+      && owners.has(observation.ownerId);
+    const attempts = readWakeAttempts({ attention: { squarePath, recipient, actIndex }, env, now });
+    const terminal = terminalWakeEvidence(attempts);
+    const routes = readWakeRoutes({ freshOnly: true, now, env })
+      .filter((route) => owners.has(route.ownerId));
+    return {
+      delivered,
+      notified,
+      presented: hasPresentedAttention(squarePath, recipient, actIndex, env, now),
+      attempts,
+      ...(terminal === undefined ? {} : { terminal }),
+      attemptableRoutes: terminal === undefined
+        ? routes.filter((route) => isWakeRouteAttemptable(route, attempts))
+        : [],
+    };
+  } finally {
+    await closeOpenSquare(square);
+  }
 }
 
 export function wakeIsEligible(evidence: WakeEvidence): boolean {
   return !evidence.delivered
-    && !evidence.presented
+    && !evidence.notified
     && evidence.terminal === undefined
     && evidence.attemptableRoutes.length > 0;
 }
