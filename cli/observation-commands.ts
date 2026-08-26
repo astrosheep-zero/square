@@ -11,6 +11,7 @@ import {
   renderGrepActivitiesView,
   renderEventCli,
   renderAmbientEvent,
+  renderPresenceAnchor,
   withPathOutput,
 } from '../presentation.js';
 import { actId, nowMs } from '../runtime.js';
@@ -288,7 +289,8 @@ function renderHistoryProjection(
       ? renderEventCli(activity, options)
       : renderAmbientEvent(activity, viewer, options);
     if (rendered !== '') chunks.push(rendered);
-    for (const name of projection.presenceAnchors[activity.index] ?? []) chunks.push(`→ ${participantIdentity(name)} was here`);
+    const participants = projection.presenceAnchors[activity.index];
+    if (participants !== undefined) chunks.push(renderPresenceAnchor(participants));
   }
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
   if (preview !== undefined && shown.some((activity) =>

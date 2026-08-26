@@ -375,8 +375,9 @@ function lastPresenceAnchor(squareState: SquareState, name: string): number {
   return -1;
 }
 
-function renderLastPresenceMarker(name: string): string {
-  return `→ ${participantIdentity(name)} was here`;
+export function renderPresenceAnchor(names: readonly string[]): string {
+  const participants = names.map((name) => participantIdentity(name)).join(', ');
+  return names.length === 1 ? `→ ${participants} was here` : `→ ${participants} were here`;
 }
 
 export function renderActivitiesView(
@@ -408,9 +409,8 @@ export function renderActivitiesView(
       ? renderEventCli(act, opts)
       : renderAmbientEvent(act, viewer, { ...opts, squareState });
     if (rendered !== '') chunks.push(rendered);
-    for (const participant of markers.get(act.index) ?? []) {
-      chunks.push(renderLastPresenceMarker(participant));
-    }
+    const participants = markers.get(act.index);
+    if (participants !== undefined) chunks.push(renderPresenceAnchor(participants));
   }
 
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';

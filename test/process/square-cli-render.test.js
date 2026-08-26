@@ -180,8 +180,8 @@ test('ambient catch and history render full body to a mention target and presenc
   const ambient = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
   assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
-  assert.match(ambient.stdout, /→ @Bob was here/);
-  assert.match(ambient.stdout, /→ @Cara was here/);
+  assert.match(ambient.stdout, /→ @Alice, @Bob, @Cara were here/);
+  assert.doesNotMatch(ambient.stdout, /→ @(?:Alice|Bob|Cara) was here/);
 
   const archive = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(archive.status, 0, archive.stderr);
@@ -202,6 +202,23 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
   assert.doesNotMatch(laterJoin.stdout, /secret reach phrase/);
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
+});
+
+test('history groups every participant footprint at a shared projection anchor', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await square.join('Bob');
+    await square.join('Cara');
+    await alice.express('shared coordinate @Bob', { force: true });
+  });
+
+  const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(bobCatch.status, 0, bobCatch.stderr);
+
+  const history = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.equal(history.status, 0, history.stderr);
+  assert.match(history.stdout, /→ @Alice, @Bob, @Cara were here/);
+  assert.doesNotMatch(history.stdout, /→ @(?:Alice|Bob|Cara) was here/);
 });
 
 test('presence rendering omits a body when a bare say has no visible mention target', async () => {
