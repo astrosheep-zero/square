@@ -3,7 +3,7 @@ import { markBoundarySeen } from './square-wiring.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { ATTENTION_BODY_MAX, renderAttentionPreview } from './attention-presentation.js';
-import { presentOnce } from './presented.js';
+import { presentOnce, presentOnceAsync } from './presented.js';
 
 const CONTEXT_MAX = 1200;
 
@@ -114,6 +114,37 @@ export async function presentPendingAtBoundary<T>(
       return present(delivered.context);
     },
     env
+  );
+  if (result !== undefined && delivered !== undefined) {
+    for (const entry of delivered.complete) {
+      await markBoundarySeen(
+        entry.membership.squarePath,
+        entry.membership.name,
+        entry.membership.ownerId,
+        entry.actIndexes,
+      );
+    }
+  }
+  return result;
+}
+
+/** Async counterpart used by native adapters that acknowledge delivery asynchronously. */
+export async function presentPendingAtBoundaryAsync<T>(
+  sessionId: string,
+  present: (context: string) => T | Promise<T>,
+  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<T | undefined> {
+  const inbox = await lookup(sessionId);
+  let delivered: BoundaryRender | undefined;
+  const result = await presentOnceAsync(
+    sessionId,
+    () => pendingAtBoundary(inbox),
+    async (current) => {
+      delivered = renderBoundary(current);
+      return present(delivered.context);
+    },
+    env,
   );
   if (result !== undefined && delivered !== undefined) {
     for (const entry of delivered.complete) {

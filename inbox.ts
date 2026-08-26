@@ -3,6 +3,29 @@ import { lookupSessionBindings } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { inboxProjection } from './views.js';
+import { waitForSquareChanges } from './square-file-adapter.js';
+
+export interface PendingWaitOptions {
+  signal?: AbortSignal;
+  /** Ephemeral watcher de-duplication; never persisted or used by delivery derivation. */
+  excludeKeys?: ReadonlySet<string>;
+}
+
+function notificationKey(membership: InboxMembership, actIndex: number): string {
+  return `${membership.squarePath}\u0000${membership.name.toLocaleLowerCase()}\u0000${actIndex}`;
+}
+
+function withoutExcluded(inbox: InboxMembership[], excludeKeys?: ReadonlySet<string>): InboxMembership[] {
+  if (excludeKeys === undefined || excludeKeys.size === 0) return inbox;
+  return inbox
+    .map((membership) => ({
+      ...membership,
+      notifications: membership.notifications.filter(
+        (notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)),
+      ),
+    }))
+    .filter((membership) => membership.notifications.length > 0);
+}
 
 export async function sessionInbox(sessionId: string): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
@@ -26,4 +49,37 @@ export async function sessionInbox(sessionId: string): Promise<InboxMembership[]
     }
   }
   return inbox;
+}
+
+/** Wait for a bound square to produce a new pending notification without consuming it. */
+export async function waitForSessionPending(
+  sessionId: string,
+  timeoutMs: number,
+  options: PendingWaitOptions = {},
+): Promise<InboxMembership[]> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  const immediate = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+  if (immediate.some((membership) => membership.notifications.length > 0)) return immediate;
+  if (timeoutMs <= 0 || options.signal?.aborted) return [];
+
+  const bindings = lookupSessionBindings(sessionId);
+  const paths = [...new Set(bindings.map((binding) => binding.squarePath))];
+  const afterBinding = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+  if (afterBinding.some((membership) => membership.notifications.length > 0)) return afterBinding;
+  let aborted = false;
+  const onAbort = () => { aborted = true; };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    while (!aborted) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return [];
+      const changed = await waitForSquareChanges(paths, remaining, options.signal);
+      if (aborted || !changed) return [];
+      const current = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+      if (current.some((membership) => membership.notifications.length > 0)) return current;
+    }
+    return [];
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
+  }
 }

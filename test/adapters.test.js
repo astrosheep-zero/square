@@ -11,6 +11,7 @@ import squarePiExtension, {
   pendingInbox,
   renderPiInbox,
 } from '../extensions/square-pi.js';
+import { presentPendingAtBoundaryAsync } from '../dist/boundary-presentation.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
@@ -473,4 +474,45 @@ test('Pi presents each pending notification once to the current owner', async ()
     assert.equal(await handlers.get('before_agent_start')({}, context), undefined);
     await handlers.get('session_shutdown')({}, context);
   });
+});
+
+test('Pi idle watcher injects awareness through the native message API', async () => {
+  await withPiFixture('pi-wake-session', async () => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      async sendMessage(message, options) { sent.push({ message, options }); },
+    };
+    squarePiExtension(pi);
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-wake-session' },
+      cwd: process.cwd(),
+      isIdle: () => true,
+    };
+    await handlers.get('session_start')({}, context);
+    for (let attempt = 0; attempt < 20 && sent.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].message.customType, 'square');
+    assert.equal(sent[0].options.triggerTurn, true);
+    assert.match(sent[0].message.content, /source="square"/);
+    await handlers.get('session_shutdown')({}, context);
+  });
+});
+
+test('async presentation commits no evidence when native injection fails', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-async-presentation-'));
+  const presented = path.join(root, 'presented.ndjsonl');
+  const inbox = sampleInbox();
+  try {
+    await assert.rejects(
+      presentPendingAtBoundaryAsync('async-session', () => Promise.reject(new Error('send failed')), () => inbox, { SQUARE_PRESENTED: presented }),
+      /send failed/,
+    );
+    assert.equal(fs.existsSync(presented), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

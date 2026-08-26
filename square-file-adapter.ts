@@ -15,7 +15,7 @@ import {
   type HardCap,
   type SquareState,
 } from './model.js';
-import type { OpenSquare } from './open-square.js';
+import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import type { WakeNotifier } from './square-facade.js';
 
 /** The current CLI file mutation boundary. */
@@ -103,4 +103,33 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
   return { cell: createMemoryCell(squareState), clock: options.clock ?? Date.now, ...(options.notifier === undefined ? {} : { notifier: options.notifier }), location: 'memory' };
+}
+
+/** Wait for any bound artifact to change; delivery callers re-project after the edge. */
+export async function waitForSquareChanges(
+  squarePaths: readonly string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (timeoutMs <= 0 || signal?.aborted || squarePaths.length === 0) return false;
+  const squares: OpenSquare[] = [];
+  try {
+    for (const squarePath of [...new Set(squarePaths)]) {
+      try { squares.push(await openSquare(squarePath)); } catch { /* stale binding */ }
+    }
+    if (squares.length === 0) return false;
+    const waits = squares.map(async (square) => {
+      const { version } = await square.cell.read();
+      const changed = await square.cell.changed(version, timeoutMs).catch(() => false);
+      if (changed) return true;
+      throw new Error('square wait expired');
+    });
+    const abort = new Promise<boolean>((resolve) => {
+      if (signal?.aborted) resolve(false);
+      else signal?.addEventListener('abort', () => resolve(false), { once: true });
+    });
+    return await Promise.race([Promise.any(waits).catch(() => false), abort]);
+  } finally {
+    await Promise.all(squares.map((square) => closeOpenSquare(square)));
+  }
 }

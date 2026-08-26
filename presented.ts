@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { withFileLockSync } from './file-lock.js';
+import { withFileLock, withFileLockSync } from './file-lock.js';
 import { canonicalSquarePath, lookupParticipant, lookupSessionBindings } from './registry.js';
 import { sameName, type InboxMembership } from './model.js';
 
@@ -90,6 +90,23 @@ function withAttentionLocks<T>(filePath: string, inbox: InboxMembership[], fn: (
   function acquire(index: number): T {
     if (index >= lockPaths.length) return fn();
     return withFileLockSync(
+      lockPaths[index],
+      { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
+      () => acquire(index + 1),
+    );
+  }
+  return acquire(0);
+}
+
+async function withAttentionLocksAsync<T>(
+  filePath: string,
+  inbox: InboxMembership[],
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const lockPaths = [...new Set(inbox.map((membership) => attentionLockPath(filePath, membership)))].sort();
+  async function acquire(index: number): Promise<T> {
+    if (index >= lockPaths.length) return fn();
+    return withFileLock(
       lockPaths[index],
       { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
       () => acquire(index + 1),
@@ -213,6 +230,50 @@ export function presentOnce<T>(
 
     const result = deliver(selected.map(({ membership }) => membership));
     withFileLockSync(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
+      const rows = readRows(filePath, at);
+      const known = new Set(rows.map(rowKey));
+      for (const { membership, ownerId } of selected) {
+        for (const notification of membership.notifications) {
+          const row: PresentedRow = {
+            v: 2,
+            ts: at,
+            owner_id: ownerId,
+            square_path: canonicalSquarePath(membership.squarePath),
+            name: membership.name,
+            act_index: notification.actIndex,
+          };
+          const key = rowKey(row);
+          if (known.has(key)) continue;
+          rows.push(row);
+          known.add(key);
+        }
+      }
+      writeRows(filePath, rows);
+    });
+    return result;
+  });
+}
+
+/** Async presentation transaction for adapters whose delivery can fail asynchronously. */
+export async function presentOnceAsync<T>(
+  sessionId: string,
+  lookup: (sessionId: string) => InboxMembership[] | Promise<InboxMembership[]>,
+  deliver: (inbox: InboxMembership[]) => T | Promise<T>,
+  env: NodeJS.ProcessEnv = process.env,
+  at = Date.now(),
+): Promise<T | undefined> {
+  const filePath = presentedPath(env);
+  const initial = (await lookup(sessionId)).filter((membership) => membership.notifications.length > 0);
+  if (initial.length === 0) return undefined;
+  const lockedMemberships = new Set(initial.map(membershipKey));
+
+  return withAttentionLocksAsync(filePath, initial, async () => {
+    const current = (await lookup(sessionId)).filter((membership) => lockedMemberships.has(membershipKey(membership)));
+    const selected = selectUnpresented(sessionId, current, readRows(filePath, at));
+    if (selected.length === 0) return undefined;
+
+    const result = await deliver(selected.map(({ membership }) => membership));
+    await withFileLock(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
       const rows = readRows(filePath, at);
       const known = new Set(rows.map(rowKey));
       for (const { membership, ownerId } of selected) {
