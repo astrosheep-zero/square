@@ -108,6 +108,94 @@ test('file landing never reuses an index and publishes the complete next snapsho
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('file cells reuse unchanged snapshots without sharing caller state', async () => {
+  const { dir, squarePath, squareState } = writeFixture({ preamble: ['cached snapshot'] });
+  const cell = createFileCell(squarePath);
+
+  const first = await cell.read();
+  first.state.preamble[0] = 'caller mutation';
+  const second = await cell.read();
+
+  assert.equal(first.version, 0);
+  assert.equal(second.version, 0);
+  assert.notEqual(first.state, second.state);
+  assert.deepEqual(second.state, squareState);
+  await cell.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('file cells invalidate a cached snapshot for external writes, replacements, deletion, and recreation', async () => {
+  const { dir, squarePath } = writeFixture({ preamble: ['initial'] });
+  const cell = createFileCell(squarePath);
+  await cell.read();
+
+  fs.writeFileSync(squarePath, encodeSquare(makeState({ preamble: ['in-place write'] })));
+  const written = await cell.read();
+  assert.equal(written.version, 1);
+  assert.deepEqual(written.state.preamble, ['in-place write']);
+
+  writeSquareFile(squarePath, makeState({ preamble: ['replacement'] }));
+  const replaced = await cell.read();
+  assert.equal(replaced.version, 2);
+  assert.deepEqual(replaced.state.preamble, ['replacement']);
+
+  fs.unlinkSync(squarePath);
+  await assert.rejects(cell.read(), /square file not found/);
+
+  writeSquareFile(squarePath, makeState({ preamble: ['recreated'] }));
+  const recreated = await cell.read();
+  assert.equal(recreated.version, 4);
+  assert.deepEqual(recreated.state.preamble, ['recreated']);
+  await cell.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('file transactions retain cached authority until committing the current snapshot', async () => {
+  const { dir, squarePath } = writeFixture({ preamble: ['initial'] });
+  const cell = createFileCell(squarePath);
+  await cell.read();
+  writeSquareFile(squarePath, makeState({ preamble: ['external'] }));
+
+  const observedVersion = await cell.transact((state, version) => {
+    assert.deepEqual(state.preamble, ['external']);
+    return { result: version };
+  });
+  assert.equal(observedVersion, 1);
+
+  await cell.transact((state) => {
+    state.preamble[0] = 'uncommitted callback mutation';
+    return { result: undefined };
+  });
+  assert.deepEqual((await cell.read()).state.preamble, ['external']);
+  assert.deepEqual(loadSquare(squarePath).preamble, ['external']);
+
+  await cell.transact((state) => {
+    state.preamble[0] = 'committed';
+    return { state, result: undefined };
+  });
+  assert.deepEqual((await cell.read()).state.preamble, ['committed']);
+  assert.deepEqual(loadSquare(squarePath).preamble, ['committed']);
+  await cell.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('file cells do not cache missing or malformed artifacts', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-file-cell-failure-'));
+  const squarePath = path.join(dir, 'SQUARE.square');
+  const cell = createFileCell(squarePath);
+
+  await assert.rejects(cell.read(), /square file not found/);
+  writeSquareFile(squarePath, makeState({ preamble: ['repaired missing'] }));
+  assert.deepEqual((await cell.read()).state.preamble, ['repaired missing']);
+
+  fs.writeFileSync(squarePath, 'malformed artifact');
+  await assert.rejects(cell.read(), /Invalid square artifact/);
+  writeSquareFile(squarePath, makeState({ preamble: ['repaired malformed'] }));
+  assert.deepEqual((await cell.read()).state.preamble, ['repaired malformed']);
+  await cell.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('loadSquare rejects paths that are not .square artifacts', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ext-'));
   const file = path.join(dir, 'square.md');

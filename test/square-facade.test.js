@@ -30,6 +30,31 @@ test('fixed facade builds, opens, and exposes participant-scoped activity', asyn
   await reopened.close();
 });
 
+test('opening a file square validates and projects one unchanged artifact snapshot', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-cache-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const built = await Square.build({ path: squarePath, markdown: '# context' });
+  await built.close();
+
+  const originalReadFileSync = fs.readFileSync;
+  let artifactReads = 0;
+  fs.readFileSync = function (...args) {
+    if (args[0] === squarePath) artifactReads += 1;
+    return originalReadFileSync.apply(this, args);
+  };
+  try {
+    const square = await Square.at({ path: squarePath });
+    await square.snapshot();
+    await square.history();
+    await square.participants();
+    assert.equal(artifactReads, 1);
+    await square.close();
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('participant history defaults to the recent ten activities in ascending order', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });

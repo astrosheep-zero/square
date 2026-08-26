@@ -144,12 +144,25 @@ export function createFileCell(squarePath: string): StateCell {
   let closed = false;
   let version = 0;
   let fingerprint = fileFingerprint(squarePath);
+  let cached: { fingerprint: string; state: SquareState } | undefined;
 
-  function observe(): void {
+  function observe(): string {
     const next = fileFingerprint(squarePath);
-    if (next === fingerprint) return;
-    fingerprint = next;
-    version += 1;
+    if (next !== fingerprint) {
+      fingerprint = next;
+      cached = undefined;
+      version += 1;
+    }
+    return fingerprint;
+  }
+
+  function currentState(): SquareState {
+    const observed = observe();
+    if (cached?.fingerprint === observed) return cloneState(cached.state);
+
+    const decoded = readSquareFile(squarePath);
+    cached = { fingerprint: observed, state: cloneState(decoded) };
+    return cloneState(cached.state);
   }
 
   return {
@@ -157,13 +170,13 @@ export function createFileCell(squarePath: string): StateCell {
       assertCellOpen(closed);
       return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
         assertCellOpen(closed);
-        observe();
-        const current = readSquareFile(squarePath);
+        const current = currentState();
         const working = cloneState(current);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
           writeSquareSnapshot(squarePath, outcome.state);
           fingerprint = fileFingerprint(squarePath);
+          cached = { fingerprint, state: cloneState(outcome.state) };
           version += 1;
         }
         return outcome.result;
@@ -171,9 +184,7 @@ export function createFileCell(squarePath: string): StateCell {
     },
     async read() {
       assertCellOpen(closed);
-      observe();
-      const state = readSquareFile(squarePath);
-      return { state: cloneState(state), version };
+      return { state: currentState(), version };
     },
     async changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);
