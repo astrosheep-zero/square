@@ -44,7 +44,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     if (implicit.state === 'done' || (implicit.state === 'active' && alreadyBound)) return undefined;
     const channel = provider === 'claude' ? 'claude-code' : provider;
     recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
-    return `${name} came back`;
+    return undefined;
   } finally {
     await square.close();
   }
