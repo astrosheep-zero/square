@@ -25,6 +25,10 @@ const LENGTH_BYTES = 4;
 const DIGEST_BYTES = 32;
 const HEADER_BYTES = SQUARE_MAGIC.length + LENGTH_BYTES + DIGEST_BYTES;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
+const guideNames = ['participant', 'architect', 'brainstorm'];
+const guideContents = new Map<string, string>(await Promise.all(
+  guideNames.map(async (name) => [name, (await fs.promises.readFile(new URL(`../guides/${name}.md`, import.meta.url), 'utf8')).trim()] as const),
+));
 
 export interface DoctorProblem {
   kind: string;
@@ -290,7 +294,9 @@ function normalizedLines(value: string): string[] {
 
 function readGuide(name: string): string {
   try {
-    return fs.readFileSync(new URL(`../guides/${name}.md`, import.meta.url), 'utf8').trim();
+    const guide = guideContents.get(name);
+    if (guide === undefined) throw Object.assign(new Error('missing guide'), { code: 'ENOENT' });
+    return guide;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new SquareError('invalid_args', `Unknown square guide: ${name}`);
@@ -323,9 +329,9 @@ export function decodeSquare(bytes: Buffer): SquareState {
   return validateSquareState(decodeEnvelope(bytes, SQUARE_MAGIC));
 }
 
-function readArtifact(squarePath: string): Buffer {
+async function readArtifact(squarePath: string): Promise<Buffer> {
   try {
-    return fs.readFileSync(squarePath);
+    return await fs.promises.readFile(squarePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
@@ -340,55 +346,55 @@ function requireSquareExtension(squarePath: string): void {
   }
 }
 
-function atomicWrite(target: string, bytes: Buffer): void {
+async function atomicWrite(target: string, bytes: Buffer): Promise<void> {
   const temporary = path.join(
     path.dirname(target),
     `.${path.basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
   );
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
   try {
-    fs.writeFileSync(temporary, bytes);
-    fs.renameSync(temporary, target);
+    await fs.promises.writeFile(temporary, bytes);
+    await fs.promises.rename(temporary, target);
   } catch (error) {
-    try { fs.unlinkSync(temporary); } catch {}
+    try { await fs.promises.unlink(temporary); } catch {}
     throw error;
   }
 }
 
-export function writeSquareFile(squarePath: string, squareState: SquareState): void {
+export async function writeSquareFile(squarePath: string, squareState: SquareState): Promise<void> {
   requireSquareExtension(squarePath);
-  atomicWrite(squarePath, encodeSquare(squareState));
+  await atomicWrite(squarePath, encodeSquare(squareState));
 }
 
-export function loadSquare(squarePath: string): SquareState {
+export async function loadSquare(squarePath: string): Promise<SquareState> {
   requireSquareExtension(squarePath);
-  return decodeSquare(readArtifact(squarePath));
+  return decodeSquare(await readArtifact(squarePath));
 }
 
-export function probeSquare(squarePath: string): SquareState | undefined {
+export async function probeSquare(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
-  let descriptor: number | undefined;
+  let descriptor: fs.promises.FileHandle | undefined;
   try {
-    descriptor = fs.openSync(squarePath, 'r');
+    descriptor = await fs.promises.open(squarePath, 'r');
     const magic = Buffer.alloc(SQUARE_MAGIC.length);
-    if (fs.readSync(descriptor, magic, 0, magic.length, 0) !== magic.length || !magic.equals(SQUARE_MAGIC)) {
+    if ((await descriptor.read(magic, 0, magic.length, 0)).bytesRead !== magic.length || !magic.equals(SQUARE_MAGIC)) {
       return undefined;
     }
   } catch {
     return undefined;
   } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (descriptor !== undefined) await descriptor.close();
   }
   try {
-    return loadSquare(squarePath);
+    return await loadSquare(squarePath);
   } catch {
     return undefined;
   }
 }
 
-export function diagnoseSquareFile(squarePath: string): DiagnoseResult {
+export async function diagnoseSquareFile(squarePath: string): Promise<DiagnoseResult> {
   try {
-    return { problems: [], state: loadSquare(squarePath) };
+    return { problems: [], state: await loadSquare(squarePath) };
   } catch (error) {
     return {
       unfixable: error instanceof Error ? error.message : String(error),

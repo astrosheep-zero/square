@@ -199,7 +199,7 @@ test('package facade participant verbs persist through the shared application en
     acts: [],
     runtime: emptyRuntimeState(0),
   };
-  writeSquareFile(squarePath, squareState);
+  await writeSquareFile(squarePath, squareState);
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
@@ -210,7 +210,7 @@ test('package facade participant verbs persist through the shared application en
     await alice.resume();
     await alice.done('complete');
     await square.close();
-    const persisted = loadSquare(squarePath);
+    const persisted = await loadSquare(squarePath);
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
     assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2, 3, 4]);
   } finally {
@@ -357,7 +357,7 @@ test('Codex installation preserves the prior bundle when the host rejects it', a
 });
 
 test('OpenCode admits pending attention after a tool without replacing its output', async () => {
-  const item = piFixture('opencode-session');
+  const item = await piFixture('opencode-session');
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
     presented: process.env.SQUARE_PRESENTED,
@@ -415,7 +415,7 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.doesNotMatch(renderPiInbox(inbox), /catch --now/);
 });
 
-function piFixture(sessionId, pending = true) {
+async function piFixture(sessionId, pending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registry = path.join(root, 'sessions.ndjsonl');
@@ -426,12 +426,12 @@ function piFixture(sessionId, pending = true) {
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 }] : []),
   ];
-  writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
+  await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
   return { root, squarePath, registry, presented, sessionId };
 }
 
 async function withPiFixture(sessionId, fn, pending = true) {
-  const item = piFixture(sessionId, pending);
+  const item = await piFixture(sessionId, pending);
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
     presented: process.env.SQUARE_PRESENTED,
@@ -521,7 +521,7 @@ test('Pi idle watcher wakes only after a new directed activity lands', async () 
       assert.match(sent[0].message.content, /source="square"/);
       assert.match(sent[0].message.content, /native wake @Bob/);
       assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
-      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }
@@ -612,7 +612,7 @@ test('Pi retries failed native injection without committing presented or seen', 
       actIndex = await expressToPi(item, 'retry me @Bob');
       await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
       assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), false);
-      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
       const square = await Square.at({ path: item.squarePath });
@@ -628,7 +628,7 @@ test('Pi retries failed native injection without committing presented or seen', 
         () => hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex),
         'successful retry did not commit presentation',
       );
-      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
       releaseSecond();
       await handlers.get('session_shutdown')({}, context);
@@ -657,7 +657,7 @@ test('Pi presents a clipped body once without marking it seen', async () => {
       assert.match(sent[0].message.content, /… preview only/);
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
       assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
-      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       const square = await Square.at({ path: item.squarePath });
       try {

@@ -27,12 +27,12 @@ function contextLines(lines: string[]): string[] {
 async function readSquareListItem(filePath: string, root: string): Promise<SquareListItem | null> {
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(filePath);
+    stat = await fs.promises.stat(filePath);
   } catch {
     return null;
   }
 
-  const square = probeSquare(filePath);
+  const square = await probeSquare(filePath);
   if (square === undefined) return null;
   const projection = await listPresentation(square).finally(() => closeOpenSquare(square));
 
@@ -52,7 +52,7 @@ async function collectSquareList(root: string, maxDepth: number): Promise<Square
   async function walk(dir: string, depth: number): Promise<void> {
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       // Directory vanished or became unreadable mid-walk — skip it, don't abort the scan.
       return;

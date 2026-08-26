@@ -22,20 +22,20 @@ export {
   createSquareState,
 };
 
-export function readSquareFile(squarePath: string): SquareState {
+export async function readSquareFile(squarePath: string): Promise<SquareState> {
   return loadSquare(squarePath);
 }
 
-export function probeSquareFile(squarePath: string): SquareState | undefined {
+export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
   return probeSquare(squarePath);
 }
 
-export function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
+export async function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
   return diagnoseArtifactFile(squarePath);
 }
 
-export function writeSquareSnapshot(squarePath: string, squareState: SquareState): void {
-  writeSquareFile(squarePath, squareState);
+export async function writeSquareSnapshot(squarePath: string, squareState: SquareState): Promise<void> {
+  await writeSquareFile(squarePath, squareState);
 }
 
 export function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
@@ -130,9 +130,9 @@ export function createMemoryCell(initial: SquareState): StateCell {
   return cell;
 }
 
-function fileFingerprint(squarePath: string): string {
+async function fileFingerprint(squarePath: string): Promise<string> {
   try {
-    const stat = fs.statSync(squarePath);
+    const stat = await fs.promises.stat(squarePath);
     return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   } catch {
     return 'missing';
@@ -143,12 +143,14 @@ function fileFingerprint(squarePath: string): string {
 export function createFileCell(squarePath: string): StateCell {
   let closed = false;
   let version = 0;
-  let fingerprint = fileFingerprint(squarePath);
+  let fingerprint: string | undefined;
   let cached: { fingerprint: string; state: SquareState } | undefined;
 
-  function observe(): string {
-    const next = fileFingerprint(squarePath);
-    if (next !== fingerprint) {
+  async function observe(): Promise<string> {
+    const next = await fileFingerprint(squarePath);
+    if (fingerprint === undefined) {
+      fingerprint = next;
+    } else if (next !== fingerprint) {
       fingerprint = next;
       cached = undefined;
       version += 1;
@@ -156,11 +158,11 @@ export function createFileCell(squarePath: string): StateCell {
     return fingerprint;
   }
 
-  function currentState(): SquareState {
-    const observed = observe();
+  async function currentState(): Promise<SquareState> {
+    const observed = await observe();
     if (cached?.fingerprint === observed) return cloneState(cached.state);
 
-    const decoded = readSquareFile(squarePath);
+    const decoded = await readSquareFile(squarePath);
     cached = { fingerprint: observed, state: cloneState(decoded) };
     return cloneState(cached.state);
   }
@@ -168,14 +170,14 @@ export function createFileCell(squarePath: string): StateCell {
   return {
     async transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
       assertCellOpen(closed);
-      return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
+      return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
         assertCellOpen(closed);
-        const current = currentState();
+        const current = await currentState();
         const working = cloneState(current);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
-          writeSquareSnapshot(squarePath, outcome.state);
-          fingerprint = fileFingerprint(squarePath);
+          await writeSquareSnapshot(squarePath, outcome.state);
+          fingerprint = await fileFingerprint(squarePath);
           cached = { fingerprint, state: cloneState(outcome.state) };
           version += 1;
         }
@@ -184,13 +186,13 @@ export function createFileCell(squarePath: string): StateCell {
     },
     async read() {
       assertCellOpen(closed);
-      return { state: currentState(), version };
+      return { state: await currentState(), version };
     },
     async changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);
       const deadline = Date.now() + Math.max(0, timeoutMs);
       while (true) {
-        observe();
+        await observe();
         if (version > sinceVersion) return true;
         const remaining = deadline - Date.now();
         if (remaining <= 0) return false;

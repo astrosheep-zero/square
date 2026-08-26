@@ -34,8 +34,7 @@ import {
   fail,
   parseHardCap,
   parsePositiveInteger,
-  readPipedBodyFallback,
-  readStdinSync,
+  readStdin,
   requireParticipant,
   requireSquarePath,
   requireValue,
@@ -105,16 +104,16 @@ function parseBuild(argv: string[]): BuildIntent {
   if (options.throttlePerMinute !== undefined && options.throttlePerMinute <= 0) {
     fail('Invalid build option: --throttle must be a positive integer.');
   }
-  const snippet = readStdinSync();
-  if (snippet.trim() === '') fail('Missing Markdown body snippet on stdin.');
-  return { options, snippet };
+  return { options, snippet: '' };
 }
 
 export const buildCommand: CommandSpec<BuildIntent, string> = {
   parse: (argv) => parseBuild(argv),
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    await createSquare(squarePath, intent.options, intent.snippet);
+    const snippet = await readStdin();
+    if (snippet.trim() === '') fail('Missing Markdown body snippet on stdin.');
+    await createSquare(squarePath, intent.options, snippet);
     const cap = intent.options.hardCap === null ? 'unlimited' : formatHardCap(intent.options.hardCap);
     const throttle = intent.options.throttlePerMinute === undefined ? [] : [`  · throttle ${intent.options.throttlePerMinute}/min`];
     return withPathOutput(
@@ -227,8 +226,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   const reach = bell ? 'bell' : undefined;
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
-      const piped = readPipedBodyFallback();
-      if (piped !== undefined) return { name: requireParticipant(context.name), activity: piped, force, noWait, reach, reply };
+      if (!process.stdin.isTTY) return { name: requireParticipant(context.name), activity: '-', force, noWait, reach, reply };
     }
     fail("express requires a body argument (a quoted string or '-' with piped stdin)");
   }
@@ -240,7 +238,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     await sweepPendingNotifications(squarePath);
-    const body = resolveBody(intent.activity);
+    const body = await resolveBody(intent.activity);
     const reachArg = intent.reach === 'bell' ? ' --bell' : '';
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
@@ -340,14 +338,14 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
 
 function parseDone(argv: string[], context: CommandContext): BodyIntent {
   if (argv.length > 1) usage(context.command);
-  return { name: requireParticipant(context.name), body: argv.length === 1 ? argv[0] : readPipedBodyFallback() };
+  return { name: requireParticipant(context.name), body: argv.length === 1 ? argv[0] : undefined };
 }
 
 export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse: parseDone,
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const body = resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim();
+    const body = (await resolveBody(intent.body ?? (process.stdin.isTTY ? '' : '-'))).replace(/\r\n/g, '\n').trim();
     const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     const participant = await square.join(intent.name);
     const result = await participant.done(body);
@@ -373,7 +371,7 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
     const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
     try {
       const participant = await square.join(intent.name);
-      const result = await participant.hold(resolveBody(intent.body ?? '').replace(/\r\n/g, '\n').trim());
+      const result = await participant.hold((await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim());
       await square.close();
       const presentationSquare = await openSquare(squarePath, { clock: nowMs });
       const presentation = await eventPresentation(presentationSquare, result.activity.id);

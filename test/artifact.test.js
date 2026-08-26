@@ -38,11 +38,11 @@ function makeState(overrides = {}) {
   };
 }
 
-function writeFixture(overrides = {}) {
+async function writeFixture(overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-artifact-'));
   const squarePath = path.join(dir, 'SQUARE.square');
   const squareState = makeState(overrides);
-  writeSquareFile(squarePath, squareState);
+  await writeSquareFile(squarePath, squareState);
   return { dir, squarePath, squareState };
 }
 
@@ -78,8 +78,8 @@ test('encode/decode roundtrip preserves Square state', () => {
   assert.equal('version' in decoded.runtime, false);
 });
 
-test('a written snapshot is one SQUARE01 file with no runtime sidecar', () => {
-  const { dir, squarePath, squareState } = writeFixture({
+test('a written snapshot is one SQUARE01 file with no runtime sidecar', async () => {
+  const { dir, squarePath, squareState } = await writeFixture({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'say', actor: 'Alice', at: 2, body: 'hello' },
@@ -89,18 +89,18 @@ test('a written snapshot is one SQUARE01 file with no runtime sidecar', () => {
   const bytes = fs.readFileSync(squarePath);
   assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name !== path.basename(squarePath)), []);
-  assert.deepEqual(loadSquare(squarePath), squareState);
+  assert.deepEqual(await loadSquare(squarePath), squareState);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('file landing never reuses an index and publishes the complete next snapshot', async () => {
-  const { dir, squarePath } = writeFixture({
+  const { dir, squarePath } = await writeFixture({
     acts: [{ kind: 'join', actor: 'Alice', at: 1 }],
   });
   const cell = createFileCell(squarePath);
   const appended = await express({ cell, clock: () => 2, location: squarePath }, 'Alice', 'hello @Alice', { force: true });
   assert.equal(appended.activity.id, 'act/1');
-  const persisted = loadSquare(squarePath);
+  const persisted = await loadSquare(squarePath);
   assert.deepEqual(persisted.acts.map((act) => act.index), [0, 1]);
   assert.equal(persisted.runtime.nextActIndex, 2);
   assert.deepEqual(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock') && name !== path.basename(squarePath)), []);
@@ -109,7 +109,7 @@ test('file landing never reuses an index and publishes the complete next snapsho
 });
 
 test('file cells reuse unchanged snapshots without sharing caller state', async () => {
-  const { dir, squarePath, squareState } = writeFixture({ preamble: ['cached snapshot'] });
+  const { dir, squarePath, squareState } = await writeFixture({ preamble: ['cached snapshot'] });
   const cell = createFileCell(squarePath);
 
   const first = await cell.read();
@@ -125,7 +125,7 @@ test('file cells reuse unchanged snapshots without sharing caller state', async 
 });
 
 test('file cells invalidate a cached snapshot for external writes, replacements, deletion, and recreation', async () => {
-  const { dir, squarePath } = writeFixture({ preamble: ['initial'] });
+  const { dir, squarePath } = await writeFixture({ preamble: ['initial'] });
   const cell = createFileCell(squarePath);
   await cell.read();
 
@@ -134,7 +134,7 @@ test('file cells invalidate a cached snapshot for external writes, replacements,
   assert.equal(written.version, 1);
   assert.deepEqual(written.state.preamble, ['in-place write']);
 
-  writeSquareFile(squarePath, makeState({ preamble: ['replacement'] }));
+  await writeSquareFile(squarePath, makeState({ preamble: ['replacement'] }));
   const replaced = await cell.read();
   assert.equal(replaced.version, 2);
   assert.deepEqual(replaced.state.preamble, ['replacement']);
@@ -142,7 +142,7 @@ test('file cells invalidate a cached snapshot for external writes, replacements,
   fs.unlinkSync(squarePath);
   await assert.rejects(cell.read(), /square file not found/);
 
-  writeSquareFile(squarePath, makeState({ preamble: ['recreated'] }));
+  await writeSquareFile(squarePath, makeState({ preamble: ['recreated'] }));
   const recreated = await cell.read();
   assert.equal(recreated.version, 4);
   assert.deepEqual(recreated.state.preamble, ['recreated']);
@@ -151,10 +151,10 @@ test('file cells invalidate a cached snapshot for external writes, replacements,
 });
 
 test('file transactions retain cached authority until committing the current snapshot', async () => {
-  const { dir, squarePath } = writeFixture({ preamble: ['initial'] });
+  const { dir, squarePath } = await writeFixture({ preamble: ['initial'] });
   const cell = createFileCell(squarePath);
   await cell.read();
-  writeSquareFile(squarePath, makeState({ preamble: ['external'] }));
+  await writeSquareFile(squarePath, makeState({ preamble: ['external'] }));
 
   const observedVersion = await cell.transact((state, version) => {
     assert.deepEqual(state.preamble, ['external']);
@@ -167,14 +167,14 @@ test('file transactions retain cached authority until committing the current sna
     return { result: undefined };
   });
   assert.deepEqual((await cell.read()).state.preamble, ['external']);
-  assert.deepEqual(loadSquare(squarePath).preamble, ['external']);
+  assert.deepEqual((await loadSquare(squarePath)).preamble, ['external']);
 
   await cell.transact((state) => {
     state.preamble[0] = 'committed';
     return { state, result: undefined };
   });
   assert.deepEqual((await cell.read()).state.preamble, ['committed']);
-  assert.deepEqual(loadSquare(squarePath).preamble, ['committed']);
+  assert.deepEqual((await loadSquare(squarePath)).preamble, ['committed']);
   await cell.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -185,23 +185,23 @@ test('file cells do not cache missing or malformed artifacts', async () => {
   const cell = createFileCell(squarePath);
 
   await assert.rejects(cell.read(), /square file not found/);
-  writeSquareFile(squarePath, makeState({ preamble: ['repaired missing'] }));
+  await writeSquareFile(squarePath, makeState({ preamble: ['repaired missing'] }));
   assert.deepEqual((await cell.read()).state.preamble, ['repaired missing']);
 
   fs.writeFileSync(squarePath, 'malformed artifact');
   await assert.rejects(cell.read(), /Invalid square artifact/);
-  writeSquareFile(squarePath, makeState({ preamble: ['repaired malformed'] }));
+  await writeSquareFile(squarePath, makeState({ preamble: ['repaired malformed'] }));
   assert.deepEqual((await cell.read()).state.preamble, ['repaired malformed']);
   await cell.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('loadSquare rejects paths that are not .square artifacts', () => {
+test('loadSquare rejects paths that are not .square artifacts', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ext-'));
   const file = path.join(dir, 'square.md');
   fs.writeFileSync(file, 'not a square');
-  assert.throws(() => loadSquare(file), /must use the \.square extension/);
-  assert.equal(probeSquare(file), undefined);
+  await assert.rejects(() => loadSquare(file), /must use the \.square extension/);
+  assert.equal(await probeSquare(file), undefined);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -321,21 +321,21 @@ test('archived activity references remain valid below nextActIndex', () => {
 });
 
 test('a future observation cannot persist and suppress the next real mention', async () => {
-  const { dir, squarePath } = writeFixture({
+  const { dir, squarePath } = await writeFixture({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
     ],
   });
-  const poisoned = loadSquare(squarePath);
+  const poisoned = await loadSquare(squarePath);
   poisoned.runtime.observations.Bob = {
     [formatActivityId(poisoned.runtime.nextActIndex)]: { state: 'seen', at: 3 },
   };
-  assert.throws(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
+  await assert.rejects(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
 
   const cell = createFileCell(squarePath);
   await express({ cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true });
-  const persisted = loadSquare(squarePath);
+  const persisted = await loadSquare(squarePath);
   assert.equal(persisted.acts.at(-1).index, 2);
   assert.deepEqual(deriveDeliveryModel(persisted).pendingFor('Bob').map((item) => item.item.index), [2]);
   await cell.close();
@@ -358,22 +358,22 @@ test('say metadata roundtrips through the binary snapshot', () => {
   assert.equal(decoded.acts[3].reply, 2);
 });
 
-test('doctor reports unreadable snapshots without repairing them', () => {
-  const { dir, squarePath } = writeFixture();
-  const clean = diagnoseSquareFile(squarePath);
+test('doctor reports unreadable snapshots without repairing them', async () => {
+  const { dir, squarePath } = await writeFixture();
+  const clean = await diagnoseSquareFile(squarePath);
   assert.equal(clean.unfixable, undefined);
   assert.equal(clean.state.runtime.nextActIndex, 0);
 
   fs.writeFileSync(squarePath, 'not a snapshot');
-  const broken = diagnoseSquareFile(squarePath);
+  const broken = await diagnoseSquareFile(squarePath);
   assert.match(broken.unfixable, /Invalid square artifact/);
   assert.equal(broken.state, undefined);
   assert.equal(fs.readFileSync(squarePath, 'utf8'), 'not a snapshot');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('createSquareState builds a snapshot from options and stdin without Markdown markers', () => {
-  const squareState = createSquareState({ force: true, hardCap: null, throttlePerMinute: 4 }, '## Topic\n\nHost context');
+test('createSquareState builds a snapshot from options and stdin without Markdown markers', async () => {
+  const squareState = await createSquareState({ force: true, hardCap: null, throttlePerMinute: 4 }, '## Topic\n\nHost context');
   assert.equal(squareState.hardCap, null);
   assert.equal(squareState.throttlePerMinute, 4);
   assert.deepEqual(squareState.preamble, ['## Topic', '', 'Host context']);

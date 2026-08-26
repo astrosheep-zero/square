@@ -29,7 +29,7 @@ import {
   parseDurationMs,
   parseNameList,
   parseNonNegativeInteger,
-  readStdinSync,
+  readStdin,
   requireParticipant,
   requireSquarePath,
   requireValue,
@@ -460,7 +460,7 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
 function hookCommand(runHook: (input: string) => string | Promise<string>): CommandSpec<undefined, string> {
   return {
     parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-    execute: () => runHook(readStdinSync()),
+    execute: async () => runHook(await readStdin()),
     present: (result) => process.stdout.write(result),
   };
 }

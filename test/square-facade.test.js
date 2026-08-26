@@ -36,11 +36,11 @@ test('opening a file square validates and projects one unchanged artifact snapsh
   const built = await Square.build({ path: squarePath, markdown: '# context' });
   await built.close();
 
-  const originalReadFileSync = fs.readFileSync;
+  const originalReadFile = fs.promises.readFile;
   let artifactReads = 0;
-  fs.readFileSync = function (...args) {
+  fs.promises.readFile = async function (...args) {
     if (args[0] === squarePath) artifactReads += 1;
-    return originalReadFileSync.apply(this, args);
+    return originalReadFile.apply(this, args);
   };
   try {
     const square = await Square.at({ path: squarePath });
@@ -50,7 +50,7 @@ test('opening a file square validates and projects one unchanged artifact snapsh
     assert.equal(artifactReads, 1);
     await square.close();
   } finally {
-    fs.readFileSync = originalReadFileSync;
+    fs.promises.readFile = originalReadFile;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

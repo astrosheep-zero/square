@@ -14,9 +14,9 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     if (argv.length > 0) usage(context.command);
     return undefined;
   },
-  execute(_intent, context) {
+  async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const diagnosis = diagnoseSquareFile(squarePath);
+    const diagnosis = await diagnoseSquareFile(squarePath);
     if (diagnosis.unfixable !== undefined || diagnosis.state === undefined) {
       return {
         output: withPathOutput(

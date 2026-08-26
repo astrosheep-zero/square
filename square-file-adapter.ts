@@ -18,22 +18,17 @@ import {
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import type { WakeNotifier } from './square-facade.js';
 
-/** The current CLI file mutation boundary. */
-function writeSquareState(squarePath: string, squareState: SquareState): void {
-  writeSquareSnapshot(squarePath, squareState);
-}
-
 /** File-owned artifact creation for the CLI and path-backed public facade. */
 export async function createSquare(
   squarePath: string,
   options: BuildOptions & { hardCap: HardCap },
   snippet: string
 ): Promise<void> {
-  await withSquareFileLock(squarePath, () => {
-    if (fs.existsSync(squarePath) && !options.force) {
+  await withSquareFileLock(squarePath, async () => {
+    if (await fs.promises.access(squarePath).then(() => true, () => false) && !options.force) {
       throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
     }
-    writeSquareSnapshot(squarePath, createSquareState(options, snippet));
+    await writeSquareSnapshot(squarePath, await createSquareState(options, snippet));
   });
 }
 
@@ -73,8 +68,8 @@ export async function openSquare(
   }
 }
 
-export function probeSquare(squarePath: string): OpenSquare | undefined {
-  const state = probeSquareFile(squarePath);
+export async function probeSquare(squarePath: string): Promise<OpenSquare | undefined> {
+  const state = await probeSquareFile(squarePath);
   return state === undefined ? undefined : { cell: createMemoryCell(state), clock: Date.now, location: squarePath };
 }
 

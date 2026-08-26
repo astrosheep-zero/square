@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { decodeSquare, loadSquare } from '../dist/artifact.js';
 import {
   canonicalSquarePath,
   bindCurrentParticipant,
@@ -221,7 +221,7 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
   }
 });
 
-test('only explicit join claims local ownership and done closes the current owner', () => {
+test('only explicit join claims local ownership and done closes the current owner', async () => {
   const cleanup = withRegistry();
   try {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-cli-'));
@@ -241,13 +241,13 @@ test('only explicit join claims local ownership and done closes the current owne
     });
     assert.equal(built.status, 0, built.stderr);
     assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env }).status, 0);
-    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
+    assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const reconnected = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env });
     assert.equal(reconnected.status, 0, reconnected.stderr);
     assert.match(reconnected.stdout, /already in the square/);
     assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
-    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
+    assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const observerEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
@@ -303,7 +303,7 @@ test('only explicit join claims local ownership and done closes the current owne
     assert.match(takeover.stdout, /you banished the original @Alice/);
     assert.deepEqual(lookupSession('resume-session'), []);
     assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
-    assert.equal(loadSquare(squarePath).acts.filter((act) => act.kind === 'join').length, 1);
+    assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const unboundJoin = runCli(['--location', squarePath, '--as', 'Bob', 'join'], {
       env: noIdentityEnv,
@@ -363,7 +363,7 @@ test('registry pruning removes only bindings disproved by their square artifacts
     assert.deepEqual(pruneRegistry((candidate) => {
       if (!fs.existsSync(candidate)) return [];
       try {
-        return loadSquare(candidate).acts;
+        return decodeSquare(fs.readFileSync(candidate)).acts;
       } catch {
         return undefined;
       }

@@ -353,7 +353,7 @@ test('stored say omits mention reach while bell persists explicitly', async () =
   await alice.express('mention @Bob', { force: true });
   await bob.express('bell line', { force: true, reach: 'bell' });
   await closeSquare(square);
-  const persisted = loadSquare(squarePath);
+  const persisted = await loadSquare(squarePath);
   assert.equal(persisted.acts[2].reach, undefined);
   assert.equal(persisted.acts[3].reach, 'bell');
   assert.doesNotMatch(JSON.stringify(persisted), /beside/);

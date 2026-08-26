@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import os from 'node:os';
 
 import { commandUsageHint } from '../help.js';
@@ -18,21 +17,23 @@ export interface CommandSpec<Intent = unknown, Result = void> {
   present(result: Result, context: CommandContext): void;
 }
 
-export function readStdinSync(): string {
+export async function readStdin(): Promise<string> {
   try {
-    return fs.readFileSync(0, 'utf8');
+    let content = '';
+    for await (const chunk of process.stdin.setEncoding('utf8')) content += chunk;
+    return content;
   } catch {
     return '';
   }
 }
 
-export function resolveBody(arg: string): string {
-  return arg === '-' ? readStdinSync() : arg;
+export async function resolveBody(arg: string): Promise<string> {
+  return arg === '-' ? readStdin() : arg;
 }
 
-export function readPipedBodyFallback(): string | undefined {
+export async function readPipedBodyFallback(): Promise<string | undefined> {
   if (process.stdin.isTTY) return undefined;
-  const content = readStdinSync();
+  const content = await readStdin();
   return content.trim() === '' ? undefined : content;
 }
 
