@@ -67,6 +67,11 @@ export class Square {
     return new ParticipantHandle(joined.name, this.square);
   }
 
+  async joinWithActivity(name: string): Promise<{ readonly participant: Participant; readonly activity: Activity | null }> {
+    const joined = await join(this.square, name);
+    return { participant: new ParticipantHandle(joined.name, this.square), activity: joined.activity };
+  }
+
   async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
     const joined = await implicitJoin(this.square, name);
     return joined.state === 'done'

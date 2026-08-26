@@ -3,6 +3,7 @@ import { Square } from './square-wiring.js';
 
 export { Square } from './square-wiring.js';
 export { SquareError } from './model.js';
+export { bindCurrentParticipant, squareAssignedParticipantName, unbindCurrentParticipant } from './registry.js';
 export type { ActivityId } from './square-core.js';
 export type {
   Activity,

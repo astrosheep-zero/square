@@ -8,6 +8,9 @@ import test from 'node:test';
 import { loadSquare } from '../dist/artifact.js';
 import {
   canonicalSquarePath,
+  bindCurrentParticipant,
+  squareAssignedParticipantName,
+  unbindCurrentParticipant,
   hasAutomaticDeliveryIdentity,
   localSessionIdentities,
   lookupParticipant,
@@ -397,6 +400,42 @@ test('local session discovery never guesses participant identity', () => {
       },
     ]
   );
+});
+
+test('Square-assigned participant name is computed from current harness identity, not registry history', () => {
+  const cleanup = withRegistry();
+  try {
+    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, CODEX_THREAD_ID: 'current-session' };
+    assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
+    recordJoin('current-session', 'Alice', path.join(os.tmpdir(), 'public.square'), { channel: 'codex' });
+    assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
+    assert.equal(squareAssignedParticipantName({ SQUARE_PARTICIPANT_NAME: 'Alice' }), 'Alice');
+    assert.equal(squareAssignedParticipantName({ CODEX_THREAD_ID: 'one', OPENCODE_SESSION_ID: 'two' }), undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test('current participant binding uses the Square-assigned name and is idempotent', () => {
+  const cleanup = withRegistry();
+  try {
+    const squarePath = path.join(os.tmpdir(), 'current-binding.square');
+    const env = {
+      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
+      CODEX_THREAD_ID: 'current-session',
+    };
+    const name = squareAssignedParticipantName(env);
+    assert.equal(name, 'codex-0392bc3a1701');
+    const first = bindCurrentParticipant(squarePath, name, env);
+    const second = bindCurrentParticipant(squarePath, name, env);
+    assert.equal(first.created, true);
+    assert.deepEqual(second, { created: false, ownerId: first.ownerId });
+    assert.equal(unbindCurrentParticipant(squarePath, name, env), true);
+    assert.deepEqual(lookupParticipant(squarePath, name), []);
+  } finally {
+    cleanup();
+  }
 });
 
 test('local session discovery recognizes native Codex, OpenCode, and Pi session ids', () => {

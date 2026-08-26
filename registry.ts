@@ -11,9 +11,10 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-import { nameKey, sameName, type StoredAct } from './model.js';
+import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { publishWakeRoutes, retireOwnerWakeRoutes } from './routes.js';
+import { squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 
@@ -306,6 +307,48 @@ export function localParticipantName(squarePath: string, env: NodeJS.ProcessEnv 
     identities.flatMap((identity) => lookupSession(identity.sessionId).filter((item) => canonicalSquarePath(item.squarePath) === canonicalSquarePath(squarePath)).map((item) => item.name))
   );
   return names.size === 1 ? [...names][0] : undefined;
+}
+
+/** Compute the current participant from the live harness identity, without registry history. */
+export function squareAssignedParticipantName(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return computeSquareAssignedParticipantName(env);
+}
+
+export type CurrentParticipantBinding = Readonly<{ created: boolean; ownerId: string }>;
+
+/** Bind the current harness to one explicit Square participant. */
+export function bindCurrentParticipant(
+  squarePath: string,
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CurrentParticipantBinding {
+  if (squareAssignedParticipantName(env) !== name) {
+    throw new SquareError('invalid_args', `The current session is not assigned ${name}`);
+  }
+  const localOwner = localParticipantOwner(squarePath, name, env);
+  if (localOwner !== undefined) return { created: false, ownerId: localOwner };
+  const occupied = lookupParticipant(squarePath, name).at(0);
+  if (occupied !== undefined) {
+    throw new SquareError('already_joined', `${name} is already bound to another session`);
+  }
+  recordLocalJoin(name, squarePath, env);
+  const ownerId = localParticipantOwner(squarePath, name, env);
+  if (ownerId === undefined) throw new Error(`Current participant binding did not commit for ${name}`);
+  return { created: true, ownerId };
+}
+
+/** Retire only this harness's binding for one Square participant. */
+export function unbindCurrentParticipant(
+  squarePath: string,
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId));
+  const current = lookupParticipant(squarePath, name).filter((binding) => identities.has(binding.sessionId));
+  for (const binding of current) {
+    recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel, env);
+  }
+  return current.length > 0;
 }
 
 export interface RegistryPruneResult {

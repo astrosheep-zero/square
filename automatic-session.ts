@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -8,9 +7,11 @@ import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { canonicalSquarePath, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
 import { participantIdentity, renderAmbientEvent } from './presentation.js';
-import { validateName } from './model.js';
+import { automaticParticipant } from './participant-identity.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
+
+export { automaticParticipant } from './participant-identity.js';
 
 const providerEnv: Record<AutomaticProvider, string> = {
   codex: 'CODEX_THREAD_ID',
@@ -21,16 +22,6 @@ const providerEnv: Record<AutomaticProvider, string> = {
 
 export function publicSquarePath(cwd: string): string {
   return path.join(cwd, '.square', 'PUBLIC.square');
-}
-
-export function automaticParticipant(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): string {
-  const configured = env.SQUARE_PARTICIPANT_NAME?.trim();
-  if (configured) {
-    validateName(configured);
-    return configured;
-  }
-  const digest = createHash('sha256').update(sessionId, 'utf8').digest('hex').slice(0, 12);
-  return `${provider}-${digest}`;
 }
 
 export async function automaticSessionStart(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
