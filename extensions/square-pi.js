@@ -44,6 +44,14 @@ export default function squarePiExtension(pi) {
     });
   };
 
+  // A transport may keep its promise pending while Pi is shutting down or
+  // replacing a session. Never make a lifecycle hook wait for that transport.
+  const stopWatcher = () => {
+    watcherAbort?.abort();
+    watcher = undefined;
+    watcherAbort = undefined;
+  };
+
   const wake = async (piContext, token, signal) => {
     while (sessionId !== undefined && token === generation && !signal.aborted) {
       const deferredRetry = retryAfterChange;
@@ -91,10 +99,7 @@ export default function squarePiExtension(pi) {
 
   pi.on('session_start', async (_event, ctx) => {
     generation += 1;
-    watcherAbort?.abort();
-    if (watcher) await watcher;
-    watcher = undefined;
-    watcherAbort = undefined;
+    stopWatcher();
     handledPending.clear();
     retryAfterChange = false;
     sessionId = ctx.sessionManager.getSessionId();
@@ -130,10 +135,7 @@ export default function squarePiExtension(pi) {
 
   pi.on('session_shutdown', async () => {
     generation += 1;
-    watcherAbort?.abort();
-    if (watcher) await watcher;
-    watcher = undefined;
-    watcherAbort = undefined;
+    stopWatcher();
     for (const waiter of settledWaiters) waiter.resolve();
     settledWaiters = [];
     if (sessionId && sessionCwd) await automaticSessionEnd('pi', sessionId, sessionCwd);

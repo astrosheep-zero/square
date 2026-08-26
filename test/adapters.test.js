@@ -558,6 +558,34 @@ test('Pi keeps directed activity pending while busy and wakes after agent_settle
   }, false);
 });
 
+test('Pi lifecycle hooks do not wait for a stuck native injection', async () => {
+  await withPiFixture('pi-stuck-session', async () => {
+    const handlers = new Map();
+    let calls = 0;
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage() {
+        calls += 1;
+        return new Promise(() => {});
+      },
+    };
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-stuck-session' },
+      cwd: '/tmp/no-public-square',
+      isIdle: () => true,
+    };
+    squarePiExtension(pi);
+    await handlers.get('session_start')({}, context);
+    await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
+
+    const shutdown = handlers.get('session_shutdown')({}, context);
+    await Promise.race([
+      shutdown,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('session_shutdown blocked on sendMessage')), 100)),
+    ]);
+  });
+});
+
 test('Pi retries failed native injection without committing presented or seen', async () => {
   await withPiFixture('pi-retry-session', async (item) => {
     const handlers = new Map();
