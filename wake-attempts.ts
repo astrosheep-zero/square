@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { withFileLockSync } from './file-lock.js';
+import { withFileLock } from './file-lock.js';
 import { isWakeRouteKind, nameKey, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
@@ -47,8 +47,8 @@ export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_WAKE_ATTEMPTS || path.join(os.homedir(), '.square', 'wake-attempts.ndjsonl');
 }
 
-export function wakeAttentionKey(attention: WakeAttention): string {
-  return JSON.stringify([canonicalSquarePath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
+export async function wakeAttentionKey(attention: WakeAttention): Promise<string> {
+  return JSON.stringify([await canonicalSquarePath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
 }
 
 function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
@@ -71,9 +71,9 @@ function parseRow(raw: string, now: number): WakeAttemptRow | undefined {
   return row as WakeAttemptRow;
 }
 
-function readRowsFromFile(filePath: string, now: number): WakeAttemptRow[] {
+async function readRowsFromFile(filePath: string, now: number): Promise<WakeAttemptRow[]> {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf8'); }
+  try { raw = await fs.promises.readFile(filePath, 'utf8'); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -81,26 +81,26 @@ function readRowsFromFile(filePath: string, now: number): WakeAttemptRow[] {
   return raw.split('\n').filter(Boolean).map((line) => parseRow(line, now)).filter((row): row is WakeAttemptRow => row !== undefined);
 }
 
-function readRows(env: NodeJS.ProcessEnv, now: number): WakeAttemptRow[] {
+async function readRows(env: NodeJS.ProcessEnv, now: number): Promise<WakeAttemptRow[]> {
   return readRowsFromFile(wakeAttemptsPath(env), now);
 }
 
-function writeRows(filePath: string, rows: WakeAttemptRow[]): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+async function writeRows(filePath: string, rows: WakeAttemptRow[]): Promise<void> {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
+  await fs.promises.writeFile(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
     mode: 0o600,
   });
-  fs.renameSync(temporary, filePath);
+  await fs.promises.rename(temporary, filePath);
 }
 
-function fromRow(row: WakeAttemptRow): WakeAttempt {
+async function fromRow(row: WakeAttemptRow): Promise<WakeAttempt> {
   const actIndex = parseActivityId(row.attention.act_id);
   if (actIndex === undefined) throw new Error(`Invalid wake activity id: ${row.attention.act_id}`);
   return {
     at: row.ts,
     attention: {
-      squarePath: canonicalSquarePath(row.attention.square_path),
+      squarePath: await canonicalSquarePath(row.attention.square_path),
       actIndex,
       recipient: row.attention.recipient,
     },
@@ -113,25 +113,26 @@ function fromRow(row: WakeAttemptRow): WakeAttempt {
   };
 }
 
-export function readWakeAttempts(
+export async function readWakeAttempts(
   opts: { attention?: WakeAttention; now?: number; env?: NodeJS.ProcessEnv } = {}
-): WakeAttempt[] {
+): Promise<WakeAttempt[]> {
   const now = opts.now ?? Date.now();
-  const expected = opts.attention === undefined ? undefined : wakeAttentionKey(opts.attention);
-  return readRows(opts.env ?? process.env, now)
-    .map(fromRow)
-    .filter((attempt) => expected === undefined || wakeAttentionKey(attempt.attention) === expected);
+  const expected = opts.attention === undefined ? undefined : await wakeAttentionKey(opts.attention);
+  const attempts = await Promise.all((await readRows(opts.env ?? process.env, now)).map(fromRow));
+  if (expected === undefined) return attempts;
+  const keys = await Promise.all(attempts.map((attempt) => wakeAttentionKey(attempt.attention)));
+  return attempts.filter((_, index) => keys[index] === expected);
 }
 
 export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined {
   return attempts.findLast((attempt) => attempt.outcome === 'accepted' || attempt.outcome === 'unknown');
 }
 
-export function terminalWakeAttempt(
+export async function terminalWakeAttempt(
   attention: WakeAttention,
   opts: { now?: number; env?: NodeJS.ProcessEnv } = {}
-): WakeAttempt | undefined {
-  return terminalWakeEvidence(readWakeAttempts({ attention, ...opts }));
+): Promise<WakeAttempt | undefined> {
+  return terminalWakeEvidence(await readWakeAttempts({ attention, ...opts }));
 }
 
 export function isWakeRouteAttemptable(
@@ -152,11 +153,11 @@ export function hasAttemptableWakeRoute(
   return routes.some((route) => isWakeRouteAttemptable(route, attempts));
 }
 
-export function nextWakeAttemptNumber(
+export async function nextWakeAttemptNumber(
   attention: WakeAttention,
   opts: { now?: number; env?: NodeJS.ProcessEnv } = {}
-): number {
-  return readWakeAttempts({ attention, ...opts }).reduce((highest, attempt) => Math.max(highest, attempt.attemptN), 0) + 1;
+): Promise<number> {
+  return (await readWakeAttempts({ attention, ...opts })).reduce((highest, attempt) => Math.max(highest, attempt.attemptN), 0) + 1;
 }
 
 function redact(value: unknown, secret: string | undefined): unknown {
@@ -171,13 +172,13 @@ function redact(value: unknown, secret: string | undefined): unknown {
   return value;
 }
 
-function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
+async function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): Promise<WakeAttemptRow> {
   const safe = redact(attempt, env.PASEO_PASSWORD) as WakeAttempt;
   return {
     v: 1,
     ts: safe.at,
     attention: {
-      square_path: canonicalSquarePath(safe.attention.squarePath),
+      square_path: await canonicalSquarePath(safe.attention.squarePath),
       act_id: formatActivityId(safe.attention.actIndex),
       recipient: safe.attention.recipient,
     },
@@ -190,36 +191,36 @@ function toRow(attempt: WakeAttempt, env: NodeJS.ProcessEnv): WakeAttemptRow {
   };
 }
 
-export function recordWakeAttempt(
+export async function recordWakeAttempt(
   attempt: Omit<WakeAttempt, 'at'> & { at?: number },
   env: NodeJS.ProcessEnv = process.env
-): WakeAttempt {
+): Promise<WakeAttempt> {
   const value = { ...attempt, at: attempt.at ?? Date.now() } as WakeAttempt;
   if (!isWakeRouteKind(value.routeKind)) throw new Error('Wake attempts require a real adapter route kind.');
   if (value.outcome !== 'accepted' && !value.signature) {
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
   const file = wakeAttemptsPath(env);
-  withFileLockSync(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
-    writeRows(file, [...readRowsFromFile(file, value.at), toRow(value, env)]);
+  await withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+    await writeRows(file, [...await readRowsFromFile(file, value.at), await toRow(value, env)]);
   });
   return value;
 }
 
-export function recordRecoveredUnknown(
+export async function recordRecoveredUnknown(
   attention: WakeAttention,
   lease: Pick<NotifyLease, 'attemptN' | 'routeKind'>,
   env: NodeJS.ProcessEnv = process.env,
   at = Date.now()
-): WakeAttempt | undefined {
+): Promise<WakeAttempt | undefined> {
   const routeKind = lease.routeKind;
   if (lease.attemptN === undefined || !isWakeRouteKind(routeKind)) return undefined;
   const file = wakeAttemptsPath(env);
-  return withFileLockSync(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
-    const rows = readRowsFromFile(file, at);
-    const attempts = rows.map(fromRow).filter(
-      (attempt) => wakeAttentionKey(attempt.attention) === wakeAttentionKey(attention),
-    );
+  return withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+    const rows = await readRowsFromFile(file, at);
+    const expected = await wakeAttentionKey(attention);
+    const attempts: WakeAttempt[] = [];
+    for (const row of rows) { const attempt = await fromRow(row); if (await wakeAttentionKey(attempt.attention) === expected) attempts.push(attempt); }
     const terminal = terminalWakeEvidence(attempts);
     if (terminal !== undefined) return terminal;
     const value: WakeAttempt = {
@@ -231,7 +232,7 @@ export function recordRecoveredUnknown(
       attemptN: lease.attemptN!,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
-    writeRows(file, [...rows, toRow(value, env)]);
+    await writeRows(file, [...rows, await toRow(value, env)]);
     return value;
   });
 }

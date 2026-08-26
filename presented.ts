@@ -1,275 +1,35 @@
-import fs from 'node:fs';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { withFileLock, withFileLockSync } from './file-lock.js';
+import { withFileLock } from './file-lock.js';
 import { canonicalSquarePath, lookupParticipant, lookupSessionBindings } from './registry.js';
 import { sameName, type InboxMembership } from './model.js';
 
-interface PresentedRow {
-  v: 2;
-  ts: number;
-  owner_id: string;
-  square_path: string;
-  name: string;
-  act_index: number;
-}
-
-export interface PresentedAttention {
-  ownerId: string;
-  squarePath: string;
-  name: string;
-  actIndex: number;
-}
-
-interface SelectedMembership {
-  membership: InboxMembership;
-  ownerId: string;
-}
-
+interface PresentedRow { v: 2; ts: number; owner_id: string; square_path: string; name: string; act_index: number; }
+export interface PresentedAttention { ownerId: string; squarePath: string; name: string; actIndex: number; }
+interface SelectedMembership { membership: InboxMembership; ownerId: string; }
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5 * 60_000;
 const LOCK_RETRY_MS = 10;
 
-export function presentedPath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SQUARE_PRESENTED || path.join(os.homedir(), '.square', 'presented.ndjsonl');
-}
-
-function rowKey(row: Pick<PresentedRow, 'owner_id' | 'square_path' | 'name' | 'act_index'>): string {
-  return `${row.owner_id}\u0000${canonicalSquarePath(row.square_path)}\u0000${row.name.toLocaleLowerCase()}\u0000${row.act_index}`;
-}
-
-function readRows(filePath: string, now = Date.now()): PresentedRow[] {
-  let text: string;
-  try {
-    text = fs.readFileSync(filePath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
-
-  const cutoff = now - RETENTION_MS;
-  const rows: PresentedRow[] = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line) as Partial<PresentedRow>;
-      if (
-        parsed.v !== 2 ||
-        typeof parsed.ts !== 'number' || !Number.isFinite(parsed.ts) ||
-        typeof parsed.owner_id !== 'string' ||
-        typeof parsed.square_path !== 'string' ||
-        typeof parsed.name !== 'string' ||
-        typeof parsed.act_index !== 'number' ||
-        parsed.ts < cutoff
-      ) {
-        continue;
-      }
-      rows.push(parsed as PresentedRow);
-    } catch {
-      // The presented ledger is a disposable cache; malformed rows are ignored.
-    }
-  }
+export function presentedPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_PRESENTED || path.join(os.homedir(), '.square', 'presented.ndjsonl'); }
+async function rowKey(row: Pick<PresentedRow, 'owner_id' | 'square_path' | 'name' | 'act_index'>): Promise<string> { return `${row.owner_id}\u0000${await canonicalSquarePath(row.square_path)}\u0000${row.name.toLocaleLowerCase()}\u0000${row.act_index}`; }
+async function readRows(filePath: string, now = Date.now()): Promise<PresentedRow[]> {
+  let text: string; try { text = await fs.readFile(filePath, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  const cutoff = now - RETENTION_MS; const rows: PresentedRow[] = [];
+  for (const line of text.split('\n')) { if (!line.trim()) continue; try { const parsed = JSON.parse(line) as Partial<PresentedRow>; if (parsed.v !== 2 || typeof parsed.ts !== 'number' || !Number.isFinite(parsed.ts) || typeof parsed.owner_id !== 'string' || typeof parsed.square_path !== 'string' || typeof parsed.name !== 'string' || typeof parsed.act_index !== 'number' || parsed.ts < cutoff) continue; rows.push(parsed as PresentedRow); } catch {} }
   return rows;
 }
-
-/** Read the current presentation facts once for a derived evidence projection. */
-export function readPresentedAttentions(
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
-): PresentedAttention[] {
-  return readRows(presentedPath(env), now).map((row) => ({
-    ownerId: row.owner_id,
-    squarePath: canonicalSquarePath(row.square_path),
-    name: row.name,
-    actIndex: row.act_index,
-  }));
-}
-
-function writeRows(filePath: string, rows: PresentedRow[]): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
-    mode: 0o600,
-  });
-  fs.renameSync(temp, filePath);
-}
-
-function membershipKey(membership: Pick<InboxMembership, 'squarePath' | 'name'>): string {
-  return `${canonicalSquarePath(membership.squarePath)}\u0000${membership.name.toLocaleLowerCase()}`;
-}
-
-function attentionLockPath(filePath: string, membership: InboxMembership): string {
-  const digest = createHash('sha256').update(membershipKey(membership)).digest('hex');
-  return `${filePath}.${digest}.lock`;
-}
-
-function withAttentionLocks<T>(filePath: string, inbox: InboxMembership[], fn: () => T): T {
-  const lockPaths = [...new Set(inbox.map((membership) => attentionLockPath(filePath, membership)))].sort();
-  function acquire(index: number): T {
-    if (index >= lockPaths.length) return fn();
-    return withFileLockSync(
-      lockPaths[index],
-      { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
-      () => acquire(index + 1),
-    );
-  }
-  return acquire(0);
-}
-
-async function withAttentionLocksAsync<T>(
-  filePath: string,
-  inbox: InboxMembership[],
-  fn: () => T | Promise<T>,
-): Promise<T> {
-  const lockPaths = [...new Set(inbox.map((membership) => attentionLockPath(filePath, membership)))].sort();
-  async function acquire(index: number): Promise<T> {
-    if (index >= lockPaths.length) return fn();
-    return withFileLock(
-      lockPaths[index],
-      { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
-      () => acquire(index + 1),
-    );
-  }
-  return acquire(0);
-}
-
-function ownerFor(sessionId: string, membership: InboxMembership): string {
-  const squarePath = canonicalSquarePath(membership.squarePath);
-  const binding = lookupSessionBindings(sessionId).find(
-    (candidate) => candidate.squarePath === squarePath && sameName(candidate.name, membership.name)
-  );
-  return binding?.ownerId ?? `session:${sessionId}`;
-}
-
-function selectUnpresented(
-  sessionId: string,
-  inbox: InboxMembership[],
-  rows: PresentedRow[]
-): SelectedMembership[] {
-  const known = new Set(rows.map(rowKey));
-  return inbox.flatMap((membership) => {
-    const ownerId = ownerFor(sessionId, membership);
-    const notifications = membership.notifications.filter(
-      (notification) =>
-        !known.has(
-          rowKey({
-            owner_id: ownerId,
-            square_path: membership.squarePath,
-            name: membership.name,
-            act_index: notification.actIndex,
-          })
-        )
-    );
-    return notifications.length === 0
-      ? []
-      : [{ membership: { ...membership, notifications }, ownerId }];
-  });
-}
-
-export function hasPresentedForOwner(
-  ownerId: string,
-  squarePath: string,
-  name: string,
-  actIndex: number,
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
-): boolean {
-  const resolved = canonicalSquarePath(squarePath);
-  return readRows(presentedPath(env), now).some(
-    (row) =>
-      row.owner_id === ownerId &&
-      canonicalSquarePath(row.square_path) === resolved &&
-      sameName(row.name, name) &&
-      row.act_index === actIndex
-  );
-}
-
-/** True when any current participant owner has already received this attention. */
-export function hasPresentedAttention(
-  squarePath: string,
-  name: string,
-  actIndex: number,
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
-): boolean {
-  const ownerIds = new Set(lookupParticipant(squarePath, name, now).map((binding) => binding.ownerId));
-  if (ownerIds.size === 0) return false;
-  return [...ownerIds].some((ownerId) => hasPresentedForOwner(ownerId, squarePath, name, actIndex, env, now));
-}
-
-/** Record presentation by a transport that delivered the bounded attention body. */
-export function recordPresentedForOwner(
-  ownerId: string,
-  squarePath: string,
-  name: string,
-  actIndex: number,
-  env: NodeJS.ProcessEnv = process.env,
-  at = Date.now(),
-): void {
-  const filePath = presentedPath(env);
-  const row: PresentedRow = {
-    v: 2,
-    ts: at,
-    owner_id: ownerId,
-    square_path: canonicalSquarePath(squarePath),
-    name,
-    act_index: actIndex,
-  };
-  withAttentionLocks(filePath, [{ name, squarePath, notifications: [] }], () => {
-    withFileLockSync(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
-      const rows = readRows(filePath, at);
-      const known = new Set(rows.map(rowKey));
-      if (!known.has(rowKey(row))) writeRows(filePath, [...rows, row]);
-    });
-  });
-}
-
-/**
- * Serialize presentation only for the affected participants. Delivery runs
- * outside the short ledger-write lock, so unrelated owners never wait on an
- * adapter. A throwing or rejecting callback leaves no row and remains unpresented.
- */
-export async function presentOnce<T>(
-  sessionId: string,
-  lookup: (sessionId: string) => InboxMembership[] | Promise<InboxMembership[]>,
-  deliver: (inbox: InboxMembership[]) => T | Promise<T>,
-  env: NodeJS.ProcessEnv = process.env,
-  at = Date.now()
-): Promise<T | undefined> {
-  const filePath = presentedPath(env);
-  const initial = (await lookup(sessionId)).filter((membership) => membership.notifications.length > 0);
-  if (initial.length === 0) return undefined;
-  const lockedMemberships = new Set(initial.map(membershipKey));
-
-  return withAttentionLocksAsync(filePath, initial, async () => {
-    const current = (await lookup(sessionId)).filter((membership) => lockedMemberships.has(membershipKey(membership)));
-    const selected = selectUnpresented(sessionId, current, readRows(filePath, at));
-    if (selected.length === 0) return undefined;
-
-    const result = await deliver(selected.map(({ membership }) => membership));
-    await withFileLock(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
-      const rows = readRows(filePath, at);
-      const known = new Set(rows.map(rowKey));
-      for (const { membership, ownerId } of selected) {
-        for (const notification of membership.notifications) {
-          const row: PresentedRow = {
-            v: 2,
-            ts: at,
-            owner_id: ownerId,
-            square_path: canonicalSquarePath(membership.squarePath),
-            name: membership.name,
-            act_index: notification.actIndex,
-          };
-          const key = rowKey(row);
-          if (known.has(key)) continue;
-          rows.push(row);
-          known.add(key);
-        }
-      }
-      writeRows(filePath, rows);
-    });
-    return result;
-  });
-}
+export async function readPresentedAttentions(env: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<PresentedAttention[]> { return Promise.all((await readRows(presentedPath(env), now)).map(async (row) => ({ ownerId: row.owner_id, squarePath: await canonicalSquarePath(row.square_path), name: row.name, actIndex: row.act_index }))); }
+async function writeRows(filePath: string, rows: PresentedRow[]): Promise<void> { await fs.mkdir(path.dirname(filePath), { recursive: true }); const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), { mode: 0o600 }); await fs.rename(temp, filePath); }
+async function membershipKey(membership: Pick<InboxMembership, 'squarePath' | 'name'>): Promise<string> { return `${await canonicalSquarePath(membership.squarePath)}\u0000${membership.name.toLocaleLowerCase()}`; }
+async function attentionLockPath(filePath: string, membership: InboxMembership): Promise<string> { return `${filePath}.${createHash('sha256').update(await membershipKey(membership)).digest('hex')}.lock`; }
+async function withAttentionLocks<T>(filePath: string, inbox: InboxMembership[], fn: () => T | Promise<T>, signal?: AbortSignal): Promise<T> { const lockPaths = [...new Set(await Promise.all(inbox.map((membership) => attentionLockPath(filePath, membership))))].sort(); async function acquire(index: number): Promise<T> { if (signal?.aborted) throw signal.reason ?? new Error('Presentation aborted'); if (index >= lockPaths.length) return fn(); return withFileLock(lockPaths[index], { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS, signal }, () => acquire(index + 1)); } return acquire(0); }
+async function ownerFor(sessionId: string, membership: InboxMembership): Promise<string> { const squarePath = await canonicalSquarePath(membership.squarePath); const binding = (await lookupSessionBindings(sessionId)).find((candidate) => candidate.squarePath === squarePath && sameName(candidate.name, membership.name)); return binding?.ownerId ?? `session:${sessionId}`; }
+async function selectUnpresented(sessionId: string, inbox: InboxMembership[], rows: PresentedRow[]): Promise<SelectedMembership[]> { const known = new Set(await Promise.all(rows.map(rowKey))); const selected: SelectedMembership[] = []; for (const membership of inbox) { const ownerId = await ownerFor(sessionId, membership); const notifications = []; for (const notification of membership.notifications) { if (!known.has(await rowKey({ owner_id: ownerId, square_path: membership.squarePath, name: membership.name, act_index: notification.actIndex }))) notifications.push(notification); } if (notifications.length > 0) selected.push({ membership: { ...membership, notifications }, ownerId }); } return selected; }
+export async function hasPresentedForOwner(ownerId: string, squarePath: string, name: string, actIndex: number, env: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<boolean> { const resolved = await canonicalSquarePath(squarePath); for (const row of await readRows(presentedPath(env), now)) if (row.owner_id === ownerId && await canonicalSquarePath(row.square_path) === resolved && sameName(row.name, name) && row.act_index === actIndex) return true; return false; }
+export async function hasPresentedAttention(squarePath: string, name: string, actIndex: number, env: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<boolean> { const ownerIds = new Set((await lookupParticipant(squarePath, name, now)).map((binding) => binding.ownerId)); for (const ownerId of ownerIds) if (await hasPresentedForOwner(ownerId, squarePath, name, actIndex, env, now)) return true; return false; }
+export async function recordPresentedForOwner(ownerId: string, squarePath: string, name: string, actIndex: number, env: NodeJS.ProcessEnv = process.env, at = Date.now()): Promise<void> { const filePath = presentedPath(env); const row: PresentedRow = { v: 2, ts: at, owner_id: ownerId, square_path: await canonicalSquarePath(squarePath), name, act_index: actIndex }; await withAttentionLocks(filePath, [{ name, squarePath, notifications: [] }], () => withFileLock(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => { const rows = await readRows(filePath, at); const known = new Set(await Promise.all(rows.map(rowKey))); if (!known.has(await rowKey(row))) await writeRows(filePath, [...rows, row]); })); }
+export async function presentOnce<T>(sessionId: string, lookup: (sessionId: string) => InboxMembership[] | Promise<InboxMembership[]>, deliver: (inbox: InboxMembership[]) => T | Promise<T>, env: NodeJS.ProcessEnv = process.env, at = Date.now(), signal?: AbortSignal): Promise<T | undefined> { const filePath = presentedPath(env); const initial = (await lookup(sessionId)).filter((membership) => membership.notifications.length > 0); if (initial.length === 0) return undefined; const lockedMemberships = new Set(await Promise.all(initial.map(membershipKey))); return withAttentionLocks(filePath, initial, async () => { const current: InboxMembership[] = []; for (const membership of await lookup(sessionId)) if (lockedMemberships.has(await membershipKey(membership))) current.push(membership); const selected = await selectUnpresented(sessionId, current, await readRows(filePath, at)); if (selected.length === 0) return undefined; if (signal?.aborted) throw signal.reason ?? new Error('Presentation aborted'); const result = await deliver(selected.map(({ membership }) => membership)); if (signal?.aborted) throw signal.reason ?? new Error('Presentation aborted'); await withFileLock(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS, signal }, async () => { const rows = await readRows(filePath, at); const known = new Set(await Promise.all(rows.map(rowKey))); for (const { membership, ownerId } of selected) for (const notification of membership.notifications) { const row: PresentedRow = { v: 2, ts: at, owner_id: ownerId, square_path: await canonicalSquarePath(membership.squarePath), name: membership.name, act_index: notification.actIndex }; const key = await rowKey(row); if (!known.has(key)) { rows.push(row); known.add(key); } } await writeRows(filePath, rows); }); return result; }, signal); }

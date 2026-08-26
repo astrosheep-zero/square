@@ -42,7 +42,7 @@ function row(item, overrides = {}) {
   };
 }
 
-test('wake attempt reads accept only real adapter outcomes inside retention', () => {
+test('wake attempt reads accept only real adapter outcomes inside retention', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
   fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
@@ -54,16 +54,16 @@ test('wake attempt reads accept only real adapter outcomes inside retention', ()
     JSON.stringify(row(item, { ts: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attempt_n: 2 })),
   ].join('\n'));
 
-  assert.deepEqual(readWakeAttempts({ env: item.env, now }).map((attempt) => [attempt.outcome, attempt.attemptN]), [
+  assert.deepEqual((await readWakeAttempts({ env: item.env, now })).map((attempt) => [attempt.outcome, attempt.attemptN]), [
     ['accepted', 2],
   ]);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('wake attempt persistence redacts transport credentials recursively', () => {
+test('wake attempt persistence redacts transport credentials recursively', async () => {
   const item = fixture();
   const env = { ...item.env, PASEO_PASSWORD: 'very-secret' };
-  recordWakeAttempt({
+  await recordWakeAttempt({
     attention: item.attention,
     routeKind: 'paseo',
     outcome: 'unknown',
@@ -79,7 +79,7 @@ test('wake attempt persistence redacts transport credentials recursively', () =>
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('a wake attempt write drops expired and malformed ledger rows', () => {
+test('a wake attempt write drops expired and malformed ledger rows', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
   fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
@@ -88,7 +88,7 @@ test('a wake attempt write drops expired and malformed ledger rows', () => {
     JSON.stringify(row(item, { ts: now - DAY_MS, attempt_n: 2 })),
   ].join('\n'));
 
-  recordWakeAttempt({
+  await recordWakeAttempt({
     at: now,
     attention: item.attention,
     routeKind: 'paseo',
@@ -102,7 +102,7 @@ test('a wake attempt write drops expired and malformed ledger rows', () => {
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('a wake attempt write immediately recovers a lock abandoned by a dead process', () => {
+test('a wake attempt write immediately recovers a lock abandoned by a dead process', async () => {
   const item = fixture();
   const exited = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
   assert.equal(exited.status, 0, exited.stderr);
@@ -111,7 +111,7 @@ test('a wake attempt write immediately recovers a lock abandoned by a dead proce
   const moduleUrl = new URL('../dist/wake-attempts.js', import.meta.url).href;
   const writer = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { recordWakeAttempt } from ${JSON.stringify(moduleUrl)};
-    recordWakeAttempt({
+    await recordWakeAttempt({
       attention: { squarePath: process.env.TEST_SQUARE_PATH, actIndex: 4, recipient: 'Faye' },
       routeKind: 'paseo',
       outcome: 'accepted',
@@ -124,7 +124,7 @@ test('a wake attempt write immediately recovers a lock abandoned by a dead proce
   });
 
   assert.equal(writer.status, 0, writer.stderr);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map((attempt) => attempt.outcome), ['accepted']);
+  assert.deepEqual((await readWakeAttempts({ env: item.env })).map((attempt) => attempt.outcome), ['accepted']);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 

@@ -21,7 +21,7 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
       return;
     }
 
-    const parsed = parseGlobalArgs(rawArgs);
+    const parsed = await parseGlobalArgs(rawArgs);
     if (parsed.args.length === 0 || parsed.args[0] === '--help' || parsed.args[0] === '-h') {
       await executeRegisteredCommand('help', [], defaultContext('help', parsed.squarePath, parsed.name));
       return;

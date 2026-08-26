@@ -387,7 +387,7 @@ test('OpenCode admits pending attention after a tool without replacing its outpu
   };
   process.env.SQUARE_REGISTRY = item.registry;
   process.env.SQUARE_PRESENTED = item.presented;
-  recordJoin('opencode-session', 'Bob', item.squarePath, { channel: 'opencode' });
+  await recordJoin('opencode-session', 'Bob', item.squarePath, { channel: 'opencode' });
   try {
     const hooks = await squareOpenCodePlugin({});
 
@@ -463,7 +463,7 @@ async function withPiFixture(sessionId, fn, pending = true) {
   process.env.SQUARE_REGISTRY = item.registry;
   process.env.SQUARE_PRESENTED = item.presented;
   delete process.env.SQUARE_PI_SESSION_ID;
-  recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
+  await recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
   try {
     await fn(item);
   } finally {
@@ -490,7 +490,7 @@ async function expressToPi(item, body) {
 
 async function waitUntil(predicate, message) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail(message);
@@ -538,12 +538,14 @@ test('Pi idle watcher wakes only after a new directed activity lands', async () 
       assert.equal(sent.length, 0);
       const actIndex = await expressToPi(item, 'native wake @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not wake for new directed activity');
+      await waitUntil(async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), 'Pi did not commit presentation');
+      await waitUntil(async () => (await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)]?.state === 'seen', 'Pi did not mark notification seen');
       assert.equal(sent.length, 1);
       assert.equal(sent[0].message.customType, 'square');
       assert.equal(sent[0].options.triggerTurn, true);
       assert.match(sent[0].message.content, /source="square"/);
       assert.match(sent[0].message.content, /native wake @Bob/);
-      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
       await handlers.get('session_shutdown')({}, context);
@@ -634,7 +636,7 @@ test('Pi retries failed native injection without committing presented or seen', 
     try {
       actIndex = await expressToPi(item, 'retry me @Bob');
       await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
-      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), false);
+      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -648,7 +650,7 @@ test('Pi retries failed native injection without committing presented or seen', 
       await waitUntil(() => calls === 2, 'Pi did not retry after the next Square change');
       releaseSecond();
       await waitUntil(
-        () => hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex),
+        async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex),
         'successful retry did not commit presentation',
       );
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
@@ -677,9 +679,10 @@ test('Pi presents a clipped body once without marking it seen', async () => {
     try {
       const actIndex = await expressToPi(item, `${'x'.repeat(140)} @Bob`);
       await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
+      await waitUntil(async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), 'Pi did not commit clipped presentation');
       assert.match(sent[0].message.content, /… preview only/);
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
-      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       const square = await Square.at({ path: item.squarePath });

@@ -2,7 +2,7 @@ import type { WakeAdapter, WakeDispatchResult } from './delivery.js';
 import type { WakeRoute, WakeRouteKind } from './model.js';
 
 export interface WakePortHooks {
-  nextAttemptN(): number;
+  nextAttemptN(): number | Promise<number>;
   beforeSend(route: WakeRoute, attemptN: number): Promise<boolean>;
   record(route: WakeRoute, attemptN: number, result: Exclude<WakeDispatchResult, { outcome: 'cancelled' | 'unavailable' }>): Promise<void>;
   invalidate?(route: WakeRoute, result: Extract<WakeDispatchResult, { outcome: 'unavailable' }>): Promise<void>;
@@ -28,7 +28,7 @@ export class WakePort {
     for (const route of routes) {
       const adapter = this.adapters.get(route.kind);
       if (adapter === undefined) continue;
-      const attemptN = hooks.nextAttemptN();
+      const attemptN = await hooks.nextAttemptN();
       const result = await adapter.dispatch(
         route.address,
         typeof payload === 'function' ? payload(route) : payload,

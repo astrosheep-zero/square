@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -56,9 +56,9 @@ function parseRow(raw: string, now: number): RouteRow | undefined {
   return row as RouteRow;
 }
 
-function readRows(env: NodeJS.ProcessEnv, now: number): RouteRow[] {
+async function readRows(env: NodeJS.ProcessEnv, now: number): Promise<RouteRow[]> {
   let raw: string;
-  try { raw = fs.readFileSync(routesPath(env), 'utf8'); }
+  try { raw = await fs.readFile(routesPath(env), 'utf8'); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -66,12 +66,12 @@ function readRows(env: NodeJS.ProcessEnv, now: number): RouteRow[] {
   return raw.split('\n').filter(Boolean).map((line) => parseRow(line, now)).filter((row): row is RouteRow => row !== undefined);
 }
 
-export function readWakeRoutes(
+export async function readWakeRoutes(
   opts: { ownerId?: string; freshOnly?: boolean; now?: number; env?: NodeJS.ProcessEnv } = {}
-): WakeRoute[] {
+): Promise<WakeRoute[]> {
   const now = opts.now ?? Date.now();
   const state = new Map<string, RouteRow>();
-  for (const row of readRows(opts.env ?? process.env, now)) {
+  for (const row of await readRows(opts.env ?? process.env, now)) {
     const key = routeKey(row.owner_id, row.kind);
     const current = state.get(key);
     if (current === undefined || row.ts >= current.ts) state.set(key, row);
@@ -94,18 +94,18 @@ export function readWakeRoutes(
     );
 }
 
-function appendRouteRow(row: RouteRow, env: NodeJS.ProcessEnv): void {
+async function appendRouteRow(row: RouteRow, env: NodeJS.ProcessEnv): Promise<void> {
   const file = routesPath(env);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.appendFile(file, `${JSON.stringify(row)}\n`, { mode: 0o600 });
 }
 
-export function upsertWakeRoute(
+export async function upsertWakeRoute(
   route: Omit<WakeRoute, 'updatedAt'>,
   opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
-): void {
+): Promise<void> {
   const at = opts.at ?? Date.now();
-  appendRouteRow({
+  await appendRouteRow({
     v: 1,
     ts: at,
     op: 'upsert',
@@ -116,14 +116,14 @@ export function upsertWakeRoute(
   }, opts.env ?? process.env);
 }
 
-export function retireOwnerWakeRoutes(
+export async function retireOwnerWakeRoutes(
   ownerId: string,
   opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
-): void {
+): Promise<void> {
   const at = opts.at ?? Date.now();
   const env = opts.env ?? process.env;
-  for (const route of readWakeRoutes({ ownerId, now: at, env })) {
-    appendRouteRow({
+  for (const route of await readWakeRoutes({ ownerId, now: at, env })) {
+    await appendRouteRow({
       v: 1,
       ts: at,
       op: 'retire',
@@ -135,16 +135,16 @@ export function retireOwnerWakeRoutes(
 }
 
 /** Retire one capability without touching sibling identities in the same claim. */
-export function retireWakeRoute(
+export async function retireWakeRoute(
   route: Pick<WakeRoute, 'ownerId' | 'sessionId' | 'kind'>,
   opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
-): void {
+): Promise<void> {
   const at = opts.at ?? Date.now();
   const env = opts.env ?? process.env;
-  const current = readWakeRoutes({ ownerId: route.ownerId, now: at, env })
+  const current = (await readWakeRoutes({ ownerId: route.ownerId, now: at, env }))
     .find((candidate) => candidate.sessionId === route.sessionId && candidate.kind === route.kind);
   if (current === undefined) return;
-  appendRouteRow({
+  await appendRouteRow({
     v: 1,
     ts: at,
     op: 'retire',
@@ -193,24 +193,24 @@ export const WAKE_ROUTE_PROBES: Readonly<Record<WakeRouteKind, WakeRouteProbe>> 
 };
 
 /** The kind-neutral publication loop; probes supply complete evidence per kind. */
-export function publishWakeRoutesFrom(
+export async function publishWakeRoutesFrom(
   ownerId: string,
   probes: Readonly<Record<WakeRouteKind, WakeRouteProbe>>,
   opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
-): void {
+): Promise<void> {
   const at = opts.at ?? Date.now();
   const env = opts.env ?? process.env;
   for (const kind of WAKE_ROUTE_KINDS) {
     const evidence = probes[kind](env);
     if (!completeRouteEvidence(evidence)) continue;
-    upsertWakeRoute({ ownerId, sessionId: evidence.sessionId, kind, address: evidence.address }, { at, env });
+    await upsertWakeRoute({ ownerId, sessionId: evidence.sessionId, kind, address: evidence.address }, { at, env });
   }
 }
 
 /** Publication boundary: every route written is complete provider evidence. */
-export function publishWakeRoutes(
+export async function publishWakeRoutes(
   ownerId: string,
   opts: { at?: number; env?: NodeJS.ProcessEnv } = {}
-): void {
-  publishWakeRoutesFrom(ownerId, WAKE_ROUTE_PROBES, opts);
+): Promise<void> {
+  await publishWakeRoutesFrom(ownerId, WAKE_ROUTE_PROBES, opts);
 }

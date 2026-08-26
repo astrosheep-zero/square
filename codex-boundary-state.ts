@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { withFileLockSync } from './file-lock.js';
+import { withFileLock } from './file-lock.js';
 
 export interface CodexBoundary {
   lastStop: number;
@@ -27,9 +27,9 @@ function emptyFile(): BoundaryFile {
   return { v: 1, nextSequence: 0, threads: {} };
 }
 
-function readFile(filePath: string): BoundaryFile {
+async function readFile(filePath: string): Promise<BoundaryFile> {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf8'); }
+  try { raw = await fs.promises.readFile(filePath, 'utf8'); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyFile();
     throw error;
@@ -54,49 +54,49 @@ function readFile(filePath: string): BoundaryFile {
   }
 }
 
-function writeFile(filePath: string, value: BoundaryFile): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+async function writeFile(filePath: string, value: BoundaryFile): Promise<void> {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-  fs.renameSync(temporary, filePath);
+  await fs.promises.writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  await fs.promises.rename(temporary, filePath);
 }
 
-export function readCodexBoundary(threadId: string, env: NodeJS.ProcessEnv = process.env): CodexBoundary | undefined {
+export async function readCodexBoundary(threadId: string, env: NodeJS.ProcessEnv = process.env): Promise<CodexBoundary | undefined> {
   if (!threadId) return undefined;
   const filePath = statePath(env);
-  return readFile(filePath).threads[threadId];
+  return (await readFile(filePath)).threads[threadId];
 }
 
-export function codexQueueEligible(threadId: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const boundary = readCodexBoundary(threadId, env);
+export async function codexQueueEligible(threadId: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const boundary = await readCodexBoundary(threadId, env);
   return boundary !== undefined && boundary.lastStop > boundary.lastNonStop;
 }
 
-export function recordCodexBoundary(
+export async function recordCodexBoundary(
   threadId: string,
   event: 'Stop' | 'non-stop',
   env: NodeJS.ProcessEnv = process.env,
-): void {
+): Promise<void> {
   if (!threadId) return;
   const filePath = statePath(env);
-  withFileLockSync(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, () => {
-    const value = readFile(filePath);
+  await withFileLock(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, async () => {
+    const value = await readFile(filePath);
     value.nextSequence += 1;
     const current = value.threads[threadId] ?? { lastStop: 0, lastNonStop: 0 };
     value.threads[threadId] = event === 'Stop'
       ? { ...current, lastStop: value.nextSequence }
       : { ...current, lastNonStop: value.nextSequence };
-    writeFile(filePath, value);
+    await writeFile(filePath, value);
   });
 }
 
-export function clearCodexBoundary(threadId: string, env: NodeJS.ProcessEnv = process.env): void {
+export async function clearCodexBoundary(threadId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (!threadId) return;
   const filePath = statePath(env);
-  withFileLockSync(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, () => {
-    const value = readFile(filePath);
+  await withFileLock(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, async () => {
+    const value = await readFile(filePath);
     if (!(threadId in value.threads)) return;
     delete value.threads[threadId];
-    writeFile(filePath, value);
+    await writeFile(filePath, value);
   });
 }

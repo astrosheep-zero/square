@@ -31,7 +31,7 @@ function withoutExcluded(inbox: InboxMembership[], excludeKeys?: ReadonlySet<str
 
 export async function sessionInbox(sessionId: string): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
-  for (const binding of lookupSessionBindings(sessionId)) {
+  for (const binding of await lookupSessionBindings(sessionId)) {
     let square;
     try {
       square = await openSquare(binding.squarePath);
@@ -66,7 +66,7 @@ export async function waitForSessionPending(
   }
   if (timeoutMs <= 0 || options.signal?.aborted) return [];
 
-  const bindings = lookupSessionBindings(sessionId);
+  const bindings = await lookupSessionBindings(sessionId);
   const paths = [...new Set(bindings.map((binding) => binding.squarePath))];
   let aborted = false;
   let projectAfterReady = !options.skipImmediate;

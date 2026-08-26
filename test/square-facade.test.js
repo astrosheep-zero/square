@@ -145,12 +145,12 @@ test('recognize returns only the current locally bound participant without chang
     const square = await Square.build({ path: squarePath, markdown: 'context' });
     const alice = await square.join('Alice');
     const before = (await square.snapshot()).actCount;
-    recordJoin('alice-session', alice.name, squarePath, { channel: 'codex' });
+    await recordJoin('alice-session', alice.name, squarePath, { channel: 'codex' });
     assert.equal((await square.recognize({ CODEX_THREAD_ID: 'alice-session' }))?.name, 'Alice');
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);
     assert.equal((await square.snapshot()).actCount, before);
     await square.join('Bob');
-    recordJoin('alice-session', 'Bob', squarePath, { channel: 'codex' });
+    await recordJoin('alice-session', 'Bob', squarePath, { channel: 'codex' });
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'alice-session' }), null);
     await alice.done();
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);

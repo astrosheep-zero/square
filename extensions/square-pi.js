@@ -4,6 +4,12 @@ import { waitForSessionPending } from '../dist/inbox.js';
 import { lookupSessionBindings } from '../dist/registry.js';
 
 const PI_SEND_TIMEOUT_MS = 5_000;
+const DEFAULT_PI_BOUNDARY_TIMEOUT_MS = 2_000;
+
+function piBoundaryTimeoutMs() {
+  const configured = Number.parseInt(process.env.SQUARE_PI_BOUNDARY_TIMEOUT_MS || '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PI_BOUNDARY_TIMEOUT_MS;
+}
 
 export function pendingInbox(inbox) {
   return inbox.filter((item) => item.notifications?.length > 0);
@@ -32,7 +38,18 @@ export default function squarePiExtension(pi) {
   let settledWaiters = [];
   const handledPending = new Set();
   let retryAfterChange = false;
-  const present = (deliver) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver);
+  const present = (deliver, signal) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver, undefined, undefined, signal);
+
+  const presentAtBoundary = (deliver) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('Pi boundary presentation timed out')), piBoundaryTimeoutMs());
+    const pending = present(deliver, controller.signal);
+    if (pending === undefined) {
+      clearTimeout(timer);
+      return undefined;
+    }
+    return pending.finally(() => clearTimeout(timer));
+  };
 
   const waitForSettled = (serial, signal) => {
     if (settledSerial !== serial) return Promise.resolve();
@@ -67,7 +84,7 @@ export default function squarePiExtension(pi) {
 
   const wake = async (piContext, token, signal) => {
     while (sessionId !== undefined && token === generation && !signal.aborted) {
-      if (lookupSessionBindings(sessionId).length === 0) {
+      if ((await lookupSessionBindings(sessionId)).length === 0) {
         await pause(signal, 1_000);
         continue;
       }
@@ -104,6 +121,13 @@ export default function squarePiExtension(pi) {
               await Promise.race([
                 send,
                 new Promise((_, reject) => {
+                  if (signal.aborted) {
+                    reject(signal.reason || new Error('Pi native injection aborted'));
+                    return;
+                  }
+                  signal.addEventListener('abort', () => reject(signal.reason || new Error('Pi native injection aborted')), { once: true });
+                }),
+                new Promise((_, reject) => {
                   timer = setTimeout(() => reject(new Error('Pi native injection timed out')), PI_SEND_TIMEOUT_MS);
                 }),
               ]);
@@ -112,6 +136,9 @@ export default function squarePiExtension(pi) {
             }
             return true;
           },
+          undefined,
+          undefined,
+          signal,
         );
         if (delivered === true || delivered === undefined) {
           for (const key of keys) handledPending.add(key);
@@ -156,7 +183,7 @@ export default function squarePiExtension(pi) {
         return { message: { customType: 'square', content: context, display: true } };
       }
       if (presenting) return undefined;
-      return present((context) => ({ message: { customType: 'square', content: context, display: true } }));
+      return await presentAtBoundary((context) => ({ message: { customType: 'square', content: context, display: true } }));
     } catch {
       return undefined;
     }

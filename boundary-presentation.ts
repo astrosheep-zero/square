@@ -102,7 +102,8 @@ export async function presentPendingAtBoundary<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,
   lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal
 ): Promise<T | undefined> {
   const inbox = await lookup(sessionId);
   let delivered: BoundaryRender | undefined;
@@ -113,7 +114,9 @@ export async function presentPendingAtBoundary<T>(
       delivered = renderBoundary(inbox);
       return present(delivered.context);
     },
-    env
+    env,
+    Date.now(),
+    signal
   );
   if (result !== undefined && delivered !== undefined) {
     for (const entry of delivered.complete) {

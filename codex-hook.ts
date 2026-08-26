@@ -25,7 +25,7 @@ export async function codexHookResponse(
   if (typeof input.hook_event_name !== 'string') return undefined;
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
   if (hookEventName === undefined) return undefined;
-  recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
+  await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
   return presentPendingAtBoundary(
     input.session_id,
     (context) => hookEventName === 'Stop'
@@ -55,7 +55,7 @@ export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEn
   const value = input as CodexHookInput;
   if (typeof value.session_id !== 'string') return runCodexHook(inputText, env);
   if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
-    recordCodexBoundary(value.session_id, 'non-stop', env);
+    await recordCodexBoundary(value.session_id, 'non-stop', env);
     const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
     try {
       const context = await automaticSessionStart('codex', value.session_id, cwd, env);
@@ -63,7 +63,7 @@ export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEn
     } catch { return ''; }
   }
   if (value.hook_event_name === 'SessionEnd') {
-    clearCodexBoundary(value.session_id, env);
+    await clearCodexBoundary(value.session_id, env);
     const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
     try { await automaticSessionEnd('codex', value.session_id, cwd, env); } catch { /* end remains bounded */ }
     return '';

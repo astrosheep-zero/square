@@ -88,14 +88,14 @@ function restoreRegistry(previous) {
   else process.env.SQUARE_REGISTRY = previous;
 }
 
-function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-session', at = Date.now()) {
-  withRegistry(item.env, () => recordJoin(sessionId, 'Bob', item.squarePath, {
+async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-session', at = Date.now()) {
+  await withRegistry(item.env, async () => await recordJoin(sessionId, 'Bob', item.squarePath, {
     channel: 'paseo',
     paseoAgentId: sessionId,
     ownerId,
     at,
   }));
-  upsertWakeRoute({
+  await upsertWakeRoute({
     ownerId,
     sessionId,
     kind: 'paseo',
@@ -189,7 +189,7 @@ test('a native boundary presents bounded awareness once and records the current 
     const body = `@Bob ${'x'.repeat(400)}`;
     item.cli('Alice', ['express', '--force', body], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item, 'bob-owner', 'bob-native');
+    await registerRoute(item, 'bob-owner', 'bob-native');
     let payload;
 
     const first = await withRegistry(item.env, () => presentPendingAtBoundary(
@@ -229,7 +229,7 @@ test('a native boundary marks a fully presented body seen', async () => {
   try {
     item.cli('Alice', ['express', '--force', 'short attention @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item, 'bob-owner', 'bob-native');
+    await registerRoute(item, 'bob-owner', 'bob-native');
 
     const result = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-native',
@@ -256,7 +256,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
   try {
     item.cli('Alice', ['express', '--force', 'please catch @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item);
+    await registerRoute(item);
     await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, act), () => true, item.env));
 
     item.cli('Bob', ['catch', '--now'], 40);
@@ -268,7 +268,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
     const worker = await runWorker(item, act.index);
     assert.equal(worker.code, 0, worker.stderr);
     assert.equal(callCount(worker.callLog), 0);
-    assert.deepEqual(readWakeAttempts({ env: item.env }), []);
+    assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   } finally {
     item.cleanup();
   }
@@ -279,7 +279,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
   try {
     item.cli('Alice', ['express', '--force', 'wake once @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item);
+    await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
 
     const workers = await Promise.all([
@@ -290,7 +290,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
     for (const worker of [...workers, later]) assert.equal(worker.code, 0, worker.stderr);
 
     assert.equal(callCount(callLog), 1);
-    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
+    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
     assert.deepEqual((await loadSquare(item.squarePath)).runtime.notifyLeases, {});
   } finally {
     item.cleanup();
@@ -302,7 +302,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
   try {
     item.cli('Alice', ['express', '--force', 'native wake preview @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item);
+    await registerRoute(item);
     let payload;
     const adapter = {
       kind: 'paseo',
@@ -338,7 +338,7 @@ test('a current owner notified observation suppresses another wake', async () =>
   try {
     item.cli('Alice', ['express', '--force', 'notify current owner @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item, 'current-owner', 'current-session');
+    await registerRoute(item, 'current-owner', 'current-session');
     const adapter = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
       env: item.env,
@@ -359,7 +359,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
   try {
     item.cli('Alice', ['express', '--force', 'crash window @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item);
+    await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
     const held = spawnHeldWorker(item, act.index, callLog);
 
@@ -378,7 +378,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
     assert.equal(recovery.code, 0, recovery.stderr);
     assert.equal(later.code, 0, later.stderr);
     assert.equal(callCount(callLog), 1);
-    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome, signature }) => [outcome, signature]), [
+    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
     const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
@@ -394,7 +394,7 @@ test('a crash after send recovers unknown and permanently prevents a second send
 test('presentation does not suppress wake before worker start or at the final pre-send check', async () => {
   const item = workshop();
   try {
-    registerRoute(item);
+    await registerRoute(item);
     item.cli('Alice', ['express', '--force', 'already visible @Bob'], 30);
     const visible = (await loadSquare(item.squarePath)).acts.at(-1);
     await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, visible), () => true, item.env));
@@ -413,7 +413,7 @@ test('presentation does not suppress wake before worker start or at the final pr
 
     assert.equal(first.calls, 1);
     assert.equal(second.calls, 1);
-    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted', 'accepted']);
+    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted', 'accepted']);
   } finally {
     item.cleanup();
   }
@@ -424,13 +424,13 @@ test('presented evidence is scoped to the current participant owner', async () =
   try {
     item.cli('Alice', ['express', '--force', 'new owner must see this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    registerRoute(item, 'old-owner', 'old-session');
+    await registerRoute(item, 'old-owner', 'old-session');
     await withRegistry(item.env, () => presentOnce('old-session', () => inboxFor(item, act), () => true, item.env));
-    withRegistry(item.env, () => {
-      recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
-      recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', ownerId: 'new-owner', at: Date.now() - 1 });
+    await withRegistry(item.env, async () => {
+      await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
+      await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', ownerId: 'new-owner', at: Date.now() - 1 });
     });
-    upsertWakeRoute({
+    await upsertWakeRoute({
       ownerId: 'new-owner', sessionId: 'new-session', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env });
     const adapter = acceptedAdapter();
@@ -454,7 +454,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
     item.cli('Alice', ['express', '--force', 'recover this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     const firstAttemptAt = Date.now() - 2_000;
-    registerRoute(item, 'bob-owner', 'bob-session', firstAttemptAt - 1_000);
+    await registerRoute(item, 'bob-owner', 'bob-session', firstAttemptAt - 1_000);
     const failed = {
       kind: 'paseo',
       async dispatch(_route, _request, beforeSend) {
@@ -475,7 +475,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
     }));
     assert.equal(unreachable.find((item) => item.actIndex === act.index).kind, 'unreachable');
 
-    upsertWakeRoute({
+    await upsertWakeRoute({
       ownerId: 'bob-owner', sessionId: 'bob-session', kind: 'paseo', address: { agentId: 'bob-session' },
     }, { env: item.env, at: firstAttemptAt + 1_000 });
     const launched = [];
@@ -489,7 +489,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
 
     const worker = await runWorker(item, act.index);
     assert.equal(worker.code, 0, worker.stderr);
-    assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['failed', 'accepted']);
+    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['failed', 'accepted']);
   } finally {
     item.cleanup();
   }
@@ -501,7 +501,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
     item.cli('Alice', ['express', '--force', 'shared evidence @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     const now = Date.now();
-    registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
+    await registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
 
     const before = snapshotFiles(item.root);
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env));
@@ -545,15 +545,15 @@ test('one sweep projects every candidate from one ledger read and keeps individu
   const item = workshop();
   const now = Date.now();
   try {
-    withRegistry(item.env, () => {
-      recordJoin('carol-session', 'Carol', item.squarePath, {
+    await withRegistry(item.env, async () => {
+      await recordJoin('carol-session', 'Carol', item.squarePath, {
         channel: 'paseo', paseoAgentId: 'carol-session', ownerId: 'carol-owner', at: now - 200,
       });
     });
-    upsertWakeRoute({
+    await upsertWakeRoute({
       ownerId: 'carol-owner', sessionId: 'carol-session', kind: 'paseo', address: { agentId: 'carol-session' },
     }, { env: item.env, at: now - 100 });
-    registerRoute(item, 'bob-owner', 'bob-session', now - 100);
+    await registerRoute(item, 'bob-owner', 'bob-session', now - 100);
 
     item.cli('Carol', ['join'], now - 90);
     item.cli('Alice', ['express', '--force', 'terminal attempt @Bob'], now - 80_000);
@@ -579,12 +579,12 @@ test('one sweep projects every candidate from one ledger read and keeps individu
       [formatActivityId(notified.index)]: { state: 'notified', at: now - 1, ownerId: 'bob-owner' },
     };
     await writeSquareFile(item.squarePath, state);
-    recordPresentedForOwner('carol-owner', item.squarePath, 'Carol', presented.index, item.env, now - 1);
-    recordWakeAttempt({
+    await recordPresentedForOwner('carol-owner', item.squarePath, 'Carol', presented.index, item.env, now - 1);
+    await recordWakeAttempt({
       attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: terminal.index },
       routeKind: 'paseo', outcome: 'accepted', signature: 'accepted', attemptN: 1, at: now - 1,
     }, item.env);
-    recordWakeAttempt({
+    await recordWakeAttempt({
       attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: failed.index },
       routeKind: 'paseo', outcome: 'failed', signature: 'failed', attemptN: 1, at: now - 1,
     }, item.env);

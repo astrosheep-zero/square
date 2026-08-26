@@ -63,7 +63,7 @@ export class CodexQueueAdapter implements WakeAdapter {
       return { outcome: 'unavailable', signature: 'invalid_address', message: 'Codex route has no thread id.' };
     }
     const env = this.opts.env ?? process.env;
-    if (!codexQueueEligible(threadId, env)) {
+    if (!await codexQueueEligible(threadId, env)) {
       return {
         outcome: 'unavailable',
         signature: 'boundary_not_stopped',
@@ -72,7 +72,7 @@ export class CodexQueueAdapter implements WakeAdapter {
       };
     }
     if (!(await beforeSend())) return { outcome: 'cancelled' };
-    if (!codexQueueEligible(threadId, env)) {
+    if (!await codexQueueEligible(threadId, env)) {
       return {
         outcome: 'unavailable',
         signature: 'boundary_not_stopped',

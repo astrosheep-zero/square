@@ -78,7 +78,7 @@ test('automatic implicit join rebinds an active participant without another join
     await automaticSessionStart('pi', 'first-session', item.cwd, env);
     const resumed = await automaticSessionStart('pi', 'second-session', item.cwd, env);
     assert.equal(resumed, undefined);
-    assert.equal(lookupSessionBindings('second-session').some((binding) => binding.name === 'shared'), true);
+    assert.equal((await lookupSessionBindings('second-session')).some((binding) => binding.name === 'shared'), true);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
 });
@@ -138,14 +138,14 @@ test('Codex hook boundary state follows Stop, non-Stop, and SessionEnd', { concu
   await withEnv(item.env, async (env) => {
     const thread = 'boundary-thread';
     await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionStart', cwd: item.cwd }), env);
-    assert.equal(codexQueueEligible(thread, env), false);
+    assert.equal(await codexQueueEligible(thread, env), false);
     await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), env);
-    assert.equal(codexQueueEligible(thread, env), true);
+    assert.equal(await codexQueueEligible(thread, env), true);
     await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'PostToolUse' }), env);
-    assert.equal(codexQueueEligible(thread, env), false);
+    assert.equal(await codexQueueEligible(thread, env), false);
     await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), env);
-    assert.equal(codexQueueEligible(thread, env), true);
+    assert.equal(await codexQueueEligible(thread, env), true);
     await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionEnd' }), env);
-    assert.equal(codexQueueEligible(thread, env), false);
+    assert.equal(await codexQueueEligible(thread, env), false);
   });
 });

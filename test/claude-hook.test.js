@@ -48,7 +48,7 @@ async function fixture() {
   const runtime = { ...emptyRuntimeState(5), nextActIndex: 5 };
   const squareState = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };
   await writeSquareFile(squarePath, squareState);
-  recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code' });
+  await recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code' });
   return {
     squarePath,
     runtime,
@@ -102,7 +102,7 @@ test('session inbox never resurrects a mention from before the recipient joined'
     ];
     const runtime = { ...emptyRuntimeState(4), nextActIndex: 4 };
     await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
-    recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code' });
+    await recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code' });
 
     const inbox = await sessionInbox('prejoin-session');
     assert.deepEqual(inbox[0].notifications.map((notification) => notification.actIndex), [3]);
@@ -118,13 +118,13 @@ test('session inbox does not inherit an active catch lease after ownership chang
   try {
     item.runtime.leases.Bob = {
       leaseId: 'old-owner-catch',
-      ownerId: lookupParticipant(item.squarePath, 'Bob')[0].ownerId,
+      ownerId: (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId,
       heartbeatAt: Date.now(),
       expiresAt: Date.now() + 60_000,
     };
     await item.persist();
 
-    recordJoin('replacement-session', 'Bob', item.squarePath, {
+    await recordJoin('replacement-session', 'Bob', item.squarePath, {
       channel: 'claude-code',
       ownerId: 'replacement-owner',
     });
@@ -175,8 +175,8 @@ test('concurrent native sessions produce one presentation for their shared owner
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-concurrent-${Date.now()}.ndjsonl`);
   try {
-    const ownerId = lookupParticipant(item.squarePath, 'Bob')[0].ownerId;
-    recordJoin('second-session', 'Bob', item.squarePath, { channel: 'codex', ownerId });
+    const ownerId = (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId;
+    await recordJoin('second-session', 'Bob', item.squarePath, { channel: 'codex', ownerId });
     const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_PRESENTED: presented };
     const results = await Promise.all([
       spawnHook('claude-session', env),
@@ -241,11 +241,11 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-nested-${Date.now()}.ndjsonl`);
   try {
-    recordJoin('paseo-agent', 'Bob', item.squarePath, {
+    await recordJoin('paseo-agent', 'Bob', item.squarePath, {
       channel: 'paseo',
       paseoAgentId: 'paseo-agent',
     });
-    const paseoOwner = lookupParticipant(item.squarePath, 'Bob')[0].ownerId;
+    const paseoOwner = (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId;
 
     const response = await claudeHookResponse(
       { session_id: 'nested-claude', hook_event_name: 'PostToolBatch' },
@@ -254,10 +254,10 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
     );
     // No membership for the nested session => nothing to present.
     assert.equal(response, undefined);
-    const bindings = lookupParticipant(item.squarePath, 'Bob');
+    const bindings = await lookupParticipant(item.squarePath, 'Bob');
     assert.deepEqual(bindings.map((binding) => binding.sessionId), ['paseo-agent']);
     assert.equal(bindings[0].ownerId, paseoOwner);
-    assert.deepEqual(lookupParticipant(item.squarePath, 'Bob').map((b) => b.sessionId), ['paseo-agent']);
+    assert.deepEqual((await lookupParticipant(item.squarePath, 'Bob')).map((b) => b.sessionId), ['paseo-agent']);
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();
@@ -271,7 +271,7 @@ test('active catch owns matching attention at every adapter boundary', async () 
     const now = Date.now();
     item.runtime.leases.Bob = {
       leaseId: 'watch-active',
-      ownerId: lookupParticipant(item.squarePath, 'Bob')[0].ownerId,
+      ownerId: (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId,
       heartbeatAt: now,
       expiresAt: now + 60_000,
     };

@@ -45,7 +45,7 @@ test('large catch and pending sweep share one chronological delivery replay per 
   }
 });
 
-test('large frozen wake sweep uses one delivery replay across every pending candidate', () => {
+test('large frozen wake sweep uses one delivery replay across every pending candidate', async () => {
   const acts = [{ kind: 'join', actor: 'Alice', at: 0 }];
   for (let index = 0; index < 96; index++) acts.push({ kind: 'join', actor: `P${index}`, at: index + 1 });
   for (let index = 0; index < 900; index++) {
@@ -55,7 +55,7 @@ test('large frozen wake sweep uses one delivery replay across every pending cand
   const state = squareState(acts);
   let derivations = 0;
 
-  const selected = pendingNotificationSweepFromState('memory-square', state, 100_000, {
+  const selected = await pendingNotificationSweepFromState('memory-square', state, 100_000, {
     ...process.env,
     SQUARE_NOTIFY_DELIVERY_WAIT_MS: '1',
   }, 1_000, (snapshot) => {

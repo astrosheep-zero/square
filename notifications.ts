@@ -74,7 +74,7 @@ function renderWakePayload(request: WakeRequest, body: string, kind: WakeRouteKi
 }
 
 async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
-  const binding = lookupParticipant(request.squarePath, request.recipient)
+  const binding = (await lookupParticipant(request.squarePath, request.recipient))
     .find((item) => item.ownerId === route.ownerId);
   const activeCatch = binding && (await sessionInbox(binding.sessionId))
     .find((item) => item.name === request.recipient)?.catchLease;
@@ -88,7 +88,7 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (await hasDeliveredNotification(request.squarePath, request.recipient, request.actIndex)) return true;
-    const currentBinding = lookupParticipant(request.squarePath, request.recipient)
+    const currentBinding = (await lookupParticipant(request.squarePath, request.recipient))
       .find((item) => item.ownerId === route.ownerId);
     const lease = currentBinding && (await sessionInbox(currentBinding.sessionId))
       .find((item) => item.name === request.recipient)?.catchLease;
@@ -120,7 +120,7 @@ export async function hasAttentionNotification(squarePath: string, name: string,
   try {
     const recipient = (await resolveParticipant(square, name)).name;
     const index = notificationIndex(ref);
-    return await notificationDelivered(square, recipient, index) || hasPresentedAttention(squarePath, recipient, index, env);
+    return await notificationDelivered(square, recipient, index) || await hasPresentedAttention(squarePath, recipient, index, env);
   } finally {
     await closeOpenSquare(square);
   }
@@ -201,7 +201,7 @@ async function processNotification(
     return;
   }
   if (claim.type === 'ambiguous') {
-    const recovered = recordRecoveredUnknown(attention, claim.lease, env);
+    const recovered = await recordRecoveredUnknown(attention, claim.lease, env);
     if (recovered !== undefined) {
       await releaseNotifyLease(square, notification.recipient, notification.item.index, claim.lease.leaseId);
     }
@@ -227,7 +227,7 @@ async function processNotification(
       evidence.attemptableRoutes,
       (route) => renderWakePayload(request, notification.item.body, route.kind),
       {
-        nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
+        nextAttemptN: async () => nextWakeAttemptNumber(attention, { env, now: now() }),
         beforeSend: async (route, attemptN) => {
           if (await waitForCatch(route, request, notification.item.body)) return false;
           const currentAt = now();
@@ -254,7 +254,7 @@ async function processNotification(
             await transitionNotifyLease(square, notification.recipient, notification.item.index, leaseId, 'claimed');
             releaseLease = true;
           }
-          recordWakeAttempt({
+          await recordWakeAttempt({
             attention,
             routeKind: route.kind,
             outcome: outcome.outcome,
@@ -270,7 +270,7 @@ async function processNotification(
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
         invalidate: async (route) => {
-          retireWakeRoute(route, { env, at: now() });
+          await retireWakeRoute(route, { env, at: now() });
         },
       },
     );
@@ -315,17 +315,17 @@ export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {
 }
 
 /** Select sweep candidates from one frozen snapshot and one delivery replay. */
-export function pendingNotificationSweepFromState(
+export async function pendingNotificationSweepFromState(
   squarePath: string,
   state: SquareState,
   now: number,
   env: NodeJS.ProcessEnv,
   limit: number,
   deriveDelivery: (snapshot: SquareState) => DeliveryModel = deriveDeliveryModel,
-): number[] {
+): Promise<number[]> {
   const delivery = deriveDelivery(state);
   const pending = pendingDeliveriesFromState(state, delivery);
-  const evidence = wakeEvidenceProjectionFromState(squarePath, state, now, env, delivery);
+  const evidence = await wakeEvidenceProjectionFromState(squarePath, state, now, env, delivery);
   const indexes = new Set<number>();
   for (const recipient of pending) {
     for (const note of recipient.notifications) {
@@ -353,7 +353,7 @@ export async function sweepPendingNotifications(
   } finally {
     await closeOpenSquare(square);
   }
-  const selected = pendingNotificationSweepFromState(squarePath, state, now, env, limit);
+  const selected = await pendingNotificationSweepFromState(squarePath, state, now, env, limit);
   const workerPath = fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url));
   for (const actIndex of selected) {
     (opts.launchWorker ?? launchWorker)(workerPath, ['--location', squarePath, '--act-index', String(actIndex)]);

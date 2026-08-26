@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { openSquare } from './square-file-adapter.js';
@@ -23,9 +23,18 @@ export function publicSquarePath(cwd: string): string {
   return path.join(cwd, '.square', 'PUBLIC.square');
 }
 
+async function squareExists(squarePath: string): Promise<boolean> {
+  try {
+    await fs.access(squarePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function automaticSessionStart(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
   const squarePath = publicSquarePath(cwd);
-  if (!fs.existsSync(squarePath)) return undefined;
+  if (!await squareExists(squarePath)) return undefined;
   let reader;
   try {
     reader = await openSquare(squarePath);
@@ -34,8 +43,9 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     return undefined;
   }
   const name = automaticParticipant(provider, sessionId, env);
-  const alreadyBound = lookupSessionBindings(sessionId).some((binding) =>
-    canonicalSquarePath(binding.squarePath) === canonicalSquarePath(squarePath) && binding.name === name
+  const canonicalPath = await canonicalSquarePath(squarePath);
+  const alreadyBound = (await lookupSessionBindings(sessionId)).some((binding) =>
+    binding.squarePath === canonicalPath && binding.name === name
   );
   await closeOpenSquare(reader);
   const square = await Square.at({ path: squarePath });
@@ -43,7 +53,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     const implicit = await square.implicitJoin(name);
     if (implicit.state === 'done' || (implicit.state === 'active' && alreadyBound)) return undefined;
     const channel = provider === 'claude' ? 'claude-code' : provider;
-    recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
+    await recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
     return undefined;
   } finally {
     await square.close();
@@ -53,8 +63,9 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
 export async function automaticSessionEnd(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const squarePath = publicSquarePath(cwd);
   const channel = provider === 'claude' ? 'claude-code' : provider;
-  const binding = lookupSessionBindings(sessionId).find((item) => canonicalSquarePath(item.squarePath) === canonicalSquarePath(squarePath) && item.channel === channel);
-  if (binding === undefined || !fs.existsSync(squarePath)) return;
+  const canonicalPath = await canonicalSquarePath(squarePath);
+  const binding = (await lookupSessionBindings(sessionId)).find((item) => item.squarePath === canonicalPath && item.channel === channel);
+  if (binding === undefined || !await squareExists(squarePath)) return;
   const reader = await openSquare(squarePath);
   const joined = await entryPresentation(reader, binding.name).finally(() => closeOpenSquare(reader));
   if (!joined.joined) return;
@@ -65,5 +76,5 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   } finally {
     await square.close();
   }
-  recordSessionDone(sessionId, binding.name, squarePath, channel, env);
+  await recordSessionDone(sessionId, binding.name, squarePath, channel, env);
 }

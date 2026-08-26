@@ -137,7 +137,7 @@ export interface ParsedGlobalArgs {
   args: string[];
 }
 
-export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
+export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalArgs> {
   const args = [...rawArgs];
   let requestedPath: string | undefined;
   let name: string | undefined;
@@ -162,7 +162,7 @@ export function parseGlobalArgs(rawArgs: string[]): ParsedGlobalArgs {
   }
   const squarePath = requestedPath ?? configured;
   if (name === undefined && squarePath !== undefined && command !== undefined && locationIsRequired(command)) {
-    name = localParticipantName(squarePath);
+    name = await localParticipantName(squarePath);
   }
   return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
 }

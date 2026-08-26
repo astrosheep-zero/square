@@ -156,7 +156,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const joinedName = participant.name;
       const isRejoin = before.joined;
       const reconnect = isRejoin
-        && localParticipantOwner(squarePath, joinedName) !== undefined;
+        && await localParticipantOwner(squarePath, joinedName) !== undefined;
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
           [
@@ -170,7 +170,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);
-      recordLocalJoin(joinedName, squarePath);
+      await recordLocalJoin(joinedName, squarePath);
       await sweepPendingNotifications(squarePath);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
         now: nowMs(),
@@ -351,7 +351,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const result = await participant.done(body);
     await square.close();
     const name = result.activity.actor;
-    recordLocalDone(name, squarePath);
+    await recordLocalDone(name, squarePath);
     const presentation = await openSquare(squarePath, { clock: nowMs });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
     return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });

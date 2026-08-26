@@ -21,30 +21,30 @@ function fixture() {
   return { root, env: { SQUARE_CODEX_BOUNDARIES: path.join(root, 'boundaries.json') } };
 }
 
-test('Codex boundary state allows queue only after the latest Stop', () => {
+test('Codex boundary state allows queue only after the latest Stop', async () => {
   const item = fixture();
   try {
-    assert.equal(codexQueueEligible('thread-a', item.env), false);
-    recordCodexBoundary('thread-a', 'Stop', item.env);
-    assert.equal(codexQueueEligible('thread-a', item.env), true);
-    recordCodexBoundary('thread-a', 'non-stop', item.env);
-    assert.equal(codexQueueEligible('thread-a', item.env), false);
-    recordCodexBoundary('thread-a', 'Stop', item.env);
-    assert.equal(codexQueueEligible('thread-a', item.env), true);
-    assert.deepEqual(readCodexBoundary('thread-a', item.env), { lastStop: 3, lastNonStop: 2 });
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+    await recordCodexBoundary('thread-a', 'Stop', item.env);
+    assert.equal(await codexQueueEligible('thread-a', item.env), true);
+    await recordCodexBoundary('thread-a', 'non-stop', item.env);
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+    await recordCodexBoundary('thread-a', 'Stop', item.env);
+    assert.equal(await codexQueueEligible('thread-a', item.env), true);
+    assert.deepEqual(await readCodexBoundary('thread-a', item.env), { lastStop: 3, lastNonStop: 2 });
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
-test('Codex boundary state is isolated per thread and SessionEnd clears it', () => {
+test('Codex boundary state is isolated per thread and SessionEnd clears it', async () => {
   const item = fixture();
   try {
-    recordCodexBoundary('thread-a', 'Stop', item.env);
-    recordCodexBoundary('thread-b', 'non-stop', item.env);
-    assert.equal(codexQueueEligible('thread-a', item.env), true);
-    assert.equal(codexQueueEligible('thread-b', item.env), false);
-    clearCodexBoundary('thread-a', item.env);
-    assert.equal(codexQueueEligible('thread-a', item.env), false);
-    assert.equal(readCodexBoundary('thread-a', item.env), undefined);
+    await recordCodexBoundary('thread-a', 'Stop', item.env);
+    await recordCodexBoundary('thread-b', 'non-stop', item.env);
+    assert.equal(await codexQueueEligible('thread-a', item.env), true);
+    assert.equal(await codexQueueEligible('thread-b', item.env), false);
+    await clearCodexBoundary('thread-a', item.env);
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+    assert.equal(await readCodexBoundary('thread-a', item.env), undefined);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
@@ -70,7 +70,7 @@ test('Codex queue adapter sends only after the final boundary check', async () =
   const item = fixture();
   const requests = [];
   try {
-    recordCodexBoundary('thread-a', 'Stop', item.env);
+    await recordCodexBoundary('thread-a', 'Stop', item.env);
     const result = await new CodexQueueAdapter({
       env: item.env,
       sendQueue: (request) => { requests.push(request); },

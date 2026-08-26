@@ -83,7 +83,7 @@ export class Square {
   snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
   history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
-    const registered = localParticipantName(this.square.location, env);
+    const registered = await localParticipantName(this.square.location, env);
     if (registered === undefined) return null;
     const canonicalName = await currentParticipant(this.square, registered);
     return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square);

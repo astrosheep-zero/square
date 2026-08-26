@@ -1,20 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export interface FileLockOptions {
   retryMs: number;
   staleMs: number;
+  signal?: AbortSignal;
 }
 
-const lockWait = new Int32Array(new SharedArrayBuffer(4));
-const heldSyncLocks = new Set<string>();
-
-function ownerState(lockPath: string): 'alive' | 'dead' | 'unknown' {
+async function ownerState(lockPath: string): Promise<'alive' | 'dead' | 'unknown'> {
   let pid: number;
   try {
-    pid = Number.parseInt(fs.readFileSync(lockPath, 'utf8').split('\n')[0], 10);
+    pid = Number.parseInt((await fs.readFile(lockPath, 'utf8')).split('\n')[0], 10);
   } catch {
     return 'unknown';
   }
@@ -27,10 +25,10 @@ function ownerState(lockPath: string): 'alive' | 'dead' | 'unknown' {
   }
 }
 
-function createLock(lockPath: string): string | undefined {
-  let fd: number;
+async function createLock(lockPath: string): Promise<string | undefined> {
+  let fd: Awaited<ReturnType<typeof fs.open>>;
   try {
-    fd = fs.openSync(lockPath, 'wx', 0o600);
+    fd = await fs.open(lockPath, 'wx', 0o600);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
     throw error;
@@ -38,60 +36,31 @@ function createLock(lockPath: string): string | undefined {
 
   const token = `${process.pid}\n${Date.now()}\n${randomUUID()}\n`;
   try {
-    fs.writeFileSync(fd, token, 'utf8');
+    await fd.writeFile(token, 'utf8');
     return token;
   } catch (error) {
-    try { fs.unlinkSync(lockPath); } catch {}
+    await fs.unlink(lockPath).catch(() => undefined);
     throw error;
   } finally {
-    fs.closeSync(fd);
+    await fd.close();
   }
 }
 
-function reclaimLock(lockPath: string, staleMs: number): boolean {
+async function reclaimLock(lockPath: string, staleMs: number): Promise<boolean> {
   try {
-    const stale = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;
-    if (ownerState(lockPath) !== 'dead' && !stale) return false;
-    fs.unlinkSync(lockPath);
+    const stale = Date.now() - (await fs.stat(lockPath)).mtimeMs > staleMs;
+    if (await ownerState(lockPath) !== 'dead' && !stale) return false;
+    await fs.unlink(lockPath);
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }
 
-function releaseLock(lockPath: string, token: string): void {
+async function releaseLock(lockPath: string, token: string): Promise<void> {
   try {
-    if (fs.readFileSync(lockPath, 'utf8') === token) fs.unlinkSync(lockPath);
+    if (await fs.readFile(lockPath, 'utf8') === token) await fs.unlink(lockPath);
   } catch {}
-}
-
-function prepare(lockPath: string): void {
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-}
-
-export function withFileLockSync<T>(
-  lockPath: string,
-  options: FileLockOptions,
-  fn: () => T,
-): T {
-  if (heldSyncLocks.has(lockPath)) throw new Error(`Reentrant file lock: ${lockPath}`);
-  prepare(lockPath);
-
-  let token: string | undefined;
-  while (token === undefined) {
-    token = createLock(lockPath);
-    if (token !== undefined) break;
-    if (reclaimLock(lockPath, options.staleMs)) continue;
-    Atomics.wait(lockWait, 0, 0, options.retryMs);
-  }
-
-  heldSyncLocks.add(lockPath);
-  try {
-    return fn();
-  } finally {
-    heldSyncLocks.delete(lockPath);
-    releaseLock(lockPath, token);
-  }
 }
 
 export async function withFileLock<T>(
@@ -99,19 +68,20 @@ export async function withFileLock<T>(
   options: FileLockOptions,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  prepare(lockPath);
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
   let token: string | undefined;
   while (token === undefined) {
-    token = createLock(lockPath);
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error('File lock acquisition aborted');
+    token = await createLock(lockPath);
     if (token !== undefined) break;
-    if (reclaimLock(lockPath, options.staleMs)) continue;
-    await sleep(options.retryMs);
+    if (await reclaimLock(lockPath, options.staleMs)) continue;
+    await sleep(options.retryMs, undefined, { signal: options.signal });
   }
 
   try {
     return await fn();
   } finally {
-    releaseLock(lockPath, token);
+    await releaseLock(lockPath, token);
   }
 }

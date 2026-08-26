@@ -53,36 +53,36 @@ function withRegistry() {
   };
 }
 
-test('registry folds lifecycle by session, square, and participant name', () => {
+test('registry folds lifecycle by session, square, and participant name', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'triple-key-square.square');
     const now = Date.now();
-    recordJoin('session-1', 'Alice', squarePath, {
+    await recordJoin('session-1', 'Alice', squarePath, {
       channel: 'claude-code',
       paseoAgentId: 'paseo-alice',
       at: now - 3,
     });
-    recordJoin('session-1', 'Bob', squarePath, { channel: 'claude-code', at: now - 2 });
-    recordDone('session-1', 'Alice', squarePath, { channel: 'claude-code', at: now - 1 });
+    await recordJoin('session-1', 'Bob', squarePath, { channel: 'claude-code', at: now - 2 });
+    await recordDone('session-1', 'Alice', squarePath, { channel: 'claude-code', at: now - 1 });
 
-    assert.deepEqual(lookupSession('session-1', now), [
-      { name: 'Bob', squarePath: canonicalSquarePath(squarePath) },
+    assert.deepEqual(await lookupSession('session-1', now), [
+      { name: 'Bob', squarePath: await canonicalSquarePath(squarePath) },
     ]);
-    assert.deepEqual(lookupParticipant(squarePath, 'Alice', now), []);
+    assert.deepEqual(await lookupParticipant(squarePath, 'Alice', now), []);
 
-    recordJoin('session-1', 'ALICE', squarePath, {
+    await recordJoin('session-1', 'ALICE', squarePath, {
       channel: 'claude-code',
       paseoAgentId: 'paseo-alice',
       at: now,
     });
-    const alice = lookupParticipant(squarePath, 'alice', now);
+    const alice = await lookupParticipant(squarePath, 'alice', now);
     assert.equal(alice.length, 1);
     assert.equal(alice[0].name, 'ALICE');
     assert.equal(alice[0].paseoAgentId, 'paseo-alice');
     assert.equal(alice[0].channel, 'claude-code');
     assert.deepEqual(
-      lookupSession('session-1', now).map((entry) => entry.name).sort(),
+      (await lookupSession('session-1', now)).map((entry) => entry.name).sort(),
       ['ALICE', 'Bob']
     );
   } finally {
@@ -90,19 +90,19 @@ test('registry folds lifecycle by session, square, and participant name', () => 
   }
 });
 
-test('the latest ownership claim exclusively routes a participant name', () => {
+test('the latest ownership claim exclusively routes a participant name', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'exclusive-owner-square.square');
     const now = Date.now();
-    recordJoin('session-a', 'Alice', squarePath, { channel: 'codex', at: now });
-    recordJoin('session-b', 'alice', squarePath, { channel: 'claude-code', at: now });
+    await recordJoin('session-a', 'Alice', squarePath, { channel: 'codex', at: now });
+    await recordJoin('session-b', 'alice', squarePath, { channel: 'claude-code', at: now });
 
-    assert.deepEqual(lookupSession('session-a', now), []);
-    assert.deepEqual(lookupSession('session-b', now), [
-      { name: 'alice', squarePath: canonicalSquarePath(squarePath) },
+    assert.deepEqual(await lookupSession('session-a', now), []);
+    assert.deepEqual(await lookupSession('session-b', now), [
+      { name: 'alice', squarePath: await canonicalSquarePath(squarePath) },
     ]);
-    assert.deepEqual(lookupParticipant(squarePath, 'ALICE', now).map((entry) => entry.sessionId), [
+    assert.deepEqual((await lookupParticipant(squarePath, 'ALICE', now)).map((entry) => entry.sessionId), [
       'session-b',
     ]);
   } finally {
@@ -110,17 +110,17 @@ test('the latest ownership claim exclusively routes a participant name', () => {
   }
 });
 
-test('one local command keeps its native and Paseo identities in the same ownership claim', () => {
+test('one local command keeps its native and Paseo identities in the same ownership claim', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'multi-channel-owner-square.square');
-    recordLocalJoin('Alice', squarePath, {
+    await recordLocalJoin('Alice', squarePath, {
       SQUARE_ROUTES: process.env.SQUARE_ROUTES,
       CLAUDE_CODE_SESSION_ID: 'claude-session',
       PASEO_AGENT_ID: 'paseo-agent',
     });
 
-    const bindings = lookupParticipant(squarePath, 'Alice');
+    const bindings = await lookupParticipant(squarePath, 'Alice');
     assert.deepEqual(bindings.map((entry) => entry.sessionId).sort(), [
       'claude-session',
       'paseo-agent',
@@ -131,7 +131,7 @@ test('one local command keeps its native and Paseo identities in the same owners
   }
 });
 
-test('ending one shared identity keeps the other wake route alive', () => {
+test('ending one shared identity keeps the other wake route alive', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'shared-owner-route-square.square');
@@ -140,20 +140,20 @@ test('ending one shared identity keeps the other wake route alive', () => {
       CODEX_THREAD_ID: 'codex-session',
       PASEO_AGENT_ID: 'paseo-agent',
     };
-    recordLocalJoin('Alice', squarePath, env);
-    const before = readWakeRoutes({ env, now: Date.now() }).filter((route) => route.kind === 'paseo');
+    await recordLocalJoin('Alice', squarePath, env);
+    const before = (await readWakeRoutes({ env, now: Date.now() })).filter((route) => route.kind === 'paseo');
     assert.equal(before.length, 1);
 
-    assert.equal(recordSessionDone('codex-session', 'Alice', squarePath, 'codex', env), true);
-    const after = readWakeRoutes({ env, now: Date.now() }).filter((route) => route.kind === 'paseo');
+    assert.equal(await recordSessionDone('codex-session', 'Alice', squarePath, 'codex', env), true);
+    const after = (await readWakeRoutes({ env, now: Date.now() })).filter((route) => route.kind === 'paseo');
     assert.deepEqual(after.map((route) => route.address.agentId), ['paseo-agent']);
-    assert.deepEqual(lookupParticipant(squarePath, 'Alice').map((binding) => binding.sessionId), ['paseo-agent']);
+    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).map((binding) => binding.sessionId), ['paseo-agent']);
   } finally {
     cleanup();
   }
 });
 
-test('ending the Paseo identity keeps a shared owner route alive for the native identity', () => {
+test('ending the Paseo identity keeps a shared owner route alive for the native identity', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'shared-owner-route-reverse-square.square');
@@ -162,19 +162,19 @@ test('ending the Paseo identity keeps a shared owner route alive for the native 
       CODEX_THREAD_ID: 'codex-session',
       PASEO_AGENT_ID: 'paseo-agent',
     };
-    recordLocalJoin('Alice', squarePath, env);
-    assert.equal(recordSessionDone('paseo-agent', 'Alice', squarePath, 'paseo', env), true);
-    assert.deepEqual(readWakeRoutes({ env, now: Date.now() }).map((route) => [route.kind, route.address]), [
+    await recordLocalJoin('Alice', squarePath, env);
+    assert.equal(await recordSessionDone('paseo-agent', 'Alice', squarePath, 'paseo', env), true);
+    assert.deepEqual((await readWakeRoutes({ env, now: Date.now() })).map((route) => [route.kind, route.address]), [
       ['codex-queue', { threadId: 'codex-session' }],
       ['paseo', { agentId: 'paseo-agent' }],
     ]);
-    assert.deepEqual(lookupParticipant(squarePath, 'Alice').map((binding) => binding.sessionId), ['codex-session']);
+    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).map((binding) => binding.sessionId), ['codex-session']);
   } finally {
     cleanup();
   }
 });
 
-test('inherited PASEO_AGENT_ID alone does not adopt a native session into the parent owner', () => {
+test('inherited PASEO_AGENT_ID alone does not adopt a native session into the parent owner', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'nested-owner-square.square');
@@ -183,10 +183,10 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
       PASEO_AGENT_ID: 'paseo-agent',
       CODEX_THREAD_ID: 'parent-codex',
     };
-    recordLocalJoin('root', squarePath, parentEnv);
-    const parentOwner = lookupParticipant(squarePath, 'root')[0].ownerId;
+    await recordLocalJoin('root', squarePath, parentEnv);
+    const parentOwner = (await lookupParticipant(squarePath, 'root'))[0].ownerId;
     assert.deepEqual(
-      lookupParticipant(squarePath, 'root').map((binding) => binding.sessionId).sort(),
+      (await lookupParticipant(squarePath, 'root')).map((binding) => binding.sessionId).sort(),
       ['parent-codex', 'paseo-agent']
     );
 
@@ -196,16 +196,16 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
       PASEO_AGENT_ID: 'paseo-agent',
       CODEX_THREAD_ID: 'child-codex',
     };
-    assert.deepEqual(lookupSession('child-codex'), []);
+    assert.deepEqual(await lookupSession('child-codex'), []);
     assert.deepEqual(
-      lookupParticipant(squarePath, 'root').map((binding) => binding.sessionId).sort(),
+      (await lookupParticipant(squarePath, 'root')).map((binding) => binding.sessionId).sort(),
       ['parent-codex', 'paseo-agent']
     );
-    assert.equal(lookupParticipant(squarePath, 'root')[0].ownerId, parentOwner);
+    assert.equal((await lookupParticipant(squarePath, 'root'))[0].ownerId, parentOwner);
 
     // Explicit claim on the same process identities still shares one owner.
-    recordLocalJoin('root', squarePath, parentEnv);
-    const refreshed = lookupParticipant(squarePath, 'root');
+    await recordLocalJoin('root', squarePath, parentEnv);
+    const refreshed = await lookupParticipant(squarePath, 'root');
     assert.deepEqual(refreshed.map((binding) => binding.sessionId).sort(), [
       'parent-codex',
       'paseo-agent',
@@ -213,9 +213,9 @@ test('inherited PASEO_AGENT_ID alone does not adopt a native session into the pa
     assert.equal(new Set(refreshed.map((binding) => binding.ownerId)).size, 1);
     assert.notEqual(refreshed[0].ownerId, parentOwner);
 
-    recordLocalDone('root', squarePath, parentEnv);
-    assert.deepEqual(lookupParticipant(squarePath, 'root'), []);
-    assert.deepEqual(lookupSession('child-codex'), []);
+    await recordLocalDone('root', squarePath, parentEnv);
+    assert.deepEqual(await lookupParticipant(squarePath, 'root'), []);
+    assert.deepEqual(await lookupSession('child-codex'), []);
   } finally {
     cleanup();
   }
@@ -246,7 +246,7 @@ test('only explicit join claims local ownership and done closes the current owne
     const reconnected = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env });
     assert.equal(reconnected.status, 0, reconnected.stderr);
     assert.match(reconnected.stdout, /already in the square/);
-    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const observerEnv = {
@@ -260,27 +260,27 @@ test('only explicit join claims local ownership and done closes the current owne
     };
     const status = runCli(['--location', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
     assert.equal(status.status, 0, status.stderr);
-    assert.deepEqual(lookupSession('observer-session'), []);
-    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await lookupSession('observer-session'), []);
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
     const catchNow = runCli(['--location', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
     assert.equal(catchNow.status, 0, catchNow.stderr);
-    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
-    assert.equal(lookupParticipant(squarePath, 'Alice')[0].paseoAgentId, 'resume-paseo-agent');
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.equal((await lookupParticipant(squarePath, 'Alice'))[0].paseoAgentId, 'resume-paseo-agent');
 
     const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner @alice'], {
       env: observerEnv,
     });
     assert.equal(expressed.status, 0, expressed.stderr);
-    assert.deepEqual(lookupSession('observer-session'), []);
-    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await lookupSession('observer-session'), []);
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
     const refused = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.equal(refused.status, 2, refused.stderr);
     assert.match(refused.stderr, /@Alice shoos you out of the square/);
     assert.match(refused.stderr, /join --kick/);
-    assert.deepEqual(lookupSession('resume-session').map((entry) => entry.name), ['Alice']);
-    assert.deepEqual(lookupSession('observer-session'), []);
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await lookupSession('observer-session'), []);
 
     const noIdentityEnv = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
@@ -296,47 +296,47 @@ test('only explicit join claims local ownership and done closes the current owne
     });
     assert.equal(unboundRefused.status, 2, unboundRefused.stderr);
     assert.match(unboundRefused.stderr, /join --kick/);
-    assert.deepEqual(lookupParticipant(squarePath, 'Alice').length, 2);
+    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).length, 2);
 
     const takeover = runCli(['--location', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
     assert.equal(takeover.status, 0, takeover.stderr);
     assert.match(takeover.stdout, /you banished the original @Alice/);
-    assert.deepEqual(lookupSession('resume-session'), []);
-    assert.deepEqual(lookupSession('observer-session').map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await lookupSession('resume-session'), []);
+    assert.deepEqual((await lookupSession('observer-session')).map((entry) => entry.name), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const unboundJoin = runCli(['--location', squarePath, '--as', 'Bob', 'join'], {
       env: noIdentityEnv,
     });
     assert.equal(unboundJoin.status, 0, unboundJoin.stderr);
-    assert.deepEqual(lookupParticipant(squarePath, 'Bob'), []);
+    assert.deepEqual(await lookupParticipant(squarePath, 'Bob'), []);
 
     const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], {
       env: observerEnv,
     });
     assert.equal(done.status, 0, done.stderr);
-    assert.deepEqual(lookupSession('resume-session'), []);
-    assert.deepEqual(lookupSession('observer-session'), []);
+    assert.deepEqual(await lookupSession('resume-session'), []);
+    assert.deepEqual(await lookupSession('observer-session'), []);
     fs.rmSync(root, { recursive: true, force: true });
   } finally {
     cleanup();
   }
 });
 
-test('registry ignores stale and malformed cache rows', () => {
+test('registry ignores stale and malformed cache rows', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'stale-square.square');
     const now = Date.now();
-    recordJoin('stale-session', 'Alice', squarePath, { at: now - 8 * 24 * 60 * 60 * 1000 });
+    await recordJoin('stale-session', 'Alice', squarePath, { at: now - 8 * 24 * 60 * 60 * 1000 });
     fs.appendFileSync(process.env.SQUARE_REGISTRY, '{bad json}\n');
-    assert.deepEqual(lookupSession('stale-session', now), []);
+    assert.deepEqual(await lookupSession('stale-session', now), []);
   } finally {
     cleanup();
   }
 });
 
-test('registry pruning removes only bindings disproved by their square artifacts', () => {
+test('registry pruning removes only bindings disproved by their square artifacts', async () => {
   const cleanup = withRegistry();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-prune-'));
   try {
@@ -355,12 +355,12 @@ test('registry pruning removes only bindings disproved by their square artifacts
     assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env: isolatedEnv }).status, 0);
     fs.writeFileSync(brokenPath, 'not a square\n');
 
-    recordJoin('valid-session', 'Alice', squarePath);
-    recordJoin('not-joined-session', 'Cara', squarePath);
-    recordJoin('missing-session', 'Bob', missingPath);
-    recordJoin('uncertain-session', 'Dave', brokenPath);
+    await recordJoin('valid-session', 'Alice', squarePath);
+    await recordJoin('not-joined-session', 'Cara', squarePath);
+    await recordJoin('missing-session', 'Bob', missingPath);
+    await recordJoin('uncertain-session', 'Dave', brokenPath);
 
-    assert.deepEqual(pruneRegistry((candidate) => {
+    assert.deepEqual(await pruneRegistry((candidate) => {
       if (!fs.existsSync(candidate)) return [];
       try {
         return decodeSquare(fs.readFileSync(candidate)).acts;
@@ -368,17 +368,17 @@ test('registry pruning removes only bindings disproved by their square artifacts
         return undefined;
       }
     }), { removed: 2, kept: 2 });
-    assert.equal(lookupSession('valid-session').length, 1);
-    assert.equal(lookupSession('uncertain-session').length, 1);
-    assert.deepEqual(lookupSession('not-joined-session'), []);
-    assert.deepEqual(lookupSession('missing-session'), []);
+    assert.equal((await lookupSession('valid-session')).length, 1);
+    assert.equal((await lookupSession('uncertain-session')).length, 1);
+    assert.deepEqual(await lookupSession('not-joined-session'), []);
+    assert.deepEqual(await lookupSession('missing-session'), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
   }
 });
 
-test('local session discovery never guesses participant identity', () => {
+test('local session discovery never guesses participant identity', async () => {
   assert.deepEqual(
     localSessionIdentities({
       CLAUDE_CODE_SESSION_ID: 'claude-session',
@@ -402,12 +402,12 @@ test('local session discovery never guesses participant identity', () => {
   );
 });
 
-test('Square-assigned participant name is computed from current harness identity, not registry history', () => {
+test('Square-assigned participant name is computed from current harness identity, not registry history', async () => {
   const cleanup = withRegistry();
   try {
     const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, CODEX_THREAD_ID: 'current-session' };
     assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
-    recordJoin('current-session', 'Alice', path.join(os.tmpdir(), 'public.square'), { channel: 'codex' });
+    await recordJoin('current-session', 'Alice', path.join(os.tmpdir(), 'public.square'), { channel: 'codex' });
     assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
     assert.equal(squareAssignedParticipantName({ SQUARE_PARTICIPANT_NAME: 'Alice' }), 'Alice');
     assert.equal(squareAssignedParticipantName({ CODEX_THREAD_ID: 'one', OPENCODE_SESSION_ID: 'two' }), undefined);
@@ -416,7 +416,7 @@ test('Square-assigned participant name is computed from current harness identity
   }
 });
 
-test('current participant binding uses the Square-assigned name and is idempotent', () => {
+test('current participant binding uses the Square-assigned name and is idempotent', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'current-binding.square');
@@ -427,18 +427,18 @@ test('current participant binding uses the Square-assigned name and is idempoten
     };
     const name = squareAssignedParticipantName(env);
     assert.equal(name, 'codex-0392bc3a1701');
-    const first = bindCurrentParticipant(squarePath, name, env);
-    const second = bindCurrentParticipant(squarePath, name, env);
+    const first = await bindCurrentParticipant(squarePath, name, env);
+    const second = await bindCurrentParticipant(squarePath, name, env);
     assert.equal(first.created, true);
     assert.deepEqual(second, { created: false, ownerId: first.ownerId });
-    assert.equal(unbindCurrentParticipant(squarePath, name, env), true);
-    assert.deepEqual(lookupParticipant(squarePath, name), []);
+    assert.equal(await unbindCurrentParticipant(squarePath, name, env), true);
+    assert.deepEqual(await lookupParticipant(squarePath, name), []);
   } finally {
     cleanup();
   }
 });
 
-test('local session discovery recognizes native Codex, OpenCode, and Pi session ids', () => {
+test('local session discovery recognizes native Codex, OpenCode, and Pi session ids', async () => {
   assert.deepEqual(
     localSessionIdentities({
       CODEX_THREAD_ID: 'codex-thread',
@@ -453,7 +453,7 @@ test('local session discovery recognizes native Codex, OpenCode, and Pi session 
   );
 });
 
-test('automatic delivery capability follows native and Paseo session identities', () => {
+test('automatic delivery capability follows native and Paseo session identities', async () => {
   assert.equal(hasAutomaticDeliveryIdentity({}), false);
   assert.equal(hasAutomaticDeliveryIdentity({ CODEX_THREAD_ID: 'codex-thread' }), true);
   assert.equal(hasAutomaticDeliveryIdentity({ CLAUDE_CODE_SESSION_ID: 'claude-session' }), true);

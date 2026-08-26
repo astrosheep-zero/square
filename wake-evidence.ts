@@ -28,20 +28,20 @@ export interface WakeEvidenceProjection {
   evidence(recipient: string, actIndex: number): WakeEvidence;
 }
 
-function attentionKey(squarePath: string, recipient: string, actIndex: number): string {
-  return JSON.stringify([canonicalSquarePath(squarePath), nameKey(recipient), actIndex]);
+async function attentionKey(squarePath: string, recipient: string, actIndex: number): Promise<string> {
+  return JSON.stringify([await canonicalSquarePath(squarePath), nameKey(recipient), actIndex]);
 }
 
-function projectionFromState(
+async function projectionFromState(
   squarePath: string,
   state: SquareState,
   now: number,
   env: NodeJS.ProcessEnv,
   delivery = deriveDeliveryModel(state),
-): WakeEvidenceProjection {
-  const canonicalPath = canonicalSquarePath(squarePath);
+): Promise<WakeEvidenceProjection> {
+  const canonicalPath = await canonicalSquarePath(squarePath);
   const owners = new Map<string, Set<string>>();
-  for (const binding of readActiveBindings(now)) {
+  for (const binding of await readActiveBindings(now)) {
     if (binding.squarePath !== canonicalPath) continue;
     const key = nameKey(binding.name);
     const recipientOwners = owners.get(key) ?? new Set<string>();
@@ -50,23 +50,23 @@ function projectionFromState(
   }
 
   const routesByOwner = new Map<string, WakeRoute[]>();
-  for (const route of readWakeRoutes({ freshOnly: true, now, env })) {
+  for (const route of await readWakeRoutes({ freshOnly: true, now, env })) {
     const routes = routesByOwner.get(route.ownerId) ?? [];
     routes.push(route);
     routesByOwner.set(route.ownerId, routes);
   }
 
   const attemptsByAttention = new Map<string, WakeAttempt[]>();
-  for (const attempt of readWakeAttempts({ env, now })) {
-    const key = attentionKey(attempt.attention.squarePath, attempt.attention.recipient, attempt.attention.actIndex);
+  for (const attempt of await readWakeAttempts({ env, now })) {
+    const key = await attentionKey(attempt.attention.squarePath, attempt.attention.recipient, attempt.attention.actIndex);
     const attempts = attemptsByAttention.get(key) ?? [];
     attempts.push(attempt);
     attemptsByAttention.set(key, attempts);
   }
 
   const presentedByAttention = new Map<string, Set<string>>();
-  for (const presented of readPresentedAttentions(env, now)) {
-    const key = attentionKey(presented.squarePath, presented.name, presented.actIndex);
+  for (const presented of await readPresentedAttentions(env, now)) {
+    const key = await attentionKey(presented.squarePath, presented.name, presented.actIndex);
     const presentedOwners = presentedByAttention.get(key) ?? new Set<string>();
     presentedOwners.add(presented.ownerId);
     presentedByAttention.set(key, presentedOwners);
@@ -75,7 +75,7 @@ function projectionFromState(
   return {
     evidence(recipient: string, actIndex: number): WakeEvidence {
       const recipientOwners = owners.get(nameKey(recipient)) ?? new Set<string>();
-      const key = attentionKey(squarePath, recipient, actIndex);
+      const key = JSON.stringify([canonicalPath, nameKey(recipient), actIndex]);
       const attempts = attemptsByAttention.get(key) ?? [];
       const terminal = terminalWakeEvidence(attempts);
       const routes = [...recipientOwners].flatMap((ownerId) => routesByOwner.get(ownerId) ?? []);
@@ -121,7 +121,7 @@ export function wakeEvidenceProjectionFromState(
   now: number,
   env: NodeJS.ProcessEnv,
   delivery?: DeliveryModel,
-): WakeEvidenceProjection {
+): Promise<WakeEvidenceProjection> {
   return projectionFromState(squarePath, state, now, env, delivery);
 }
 

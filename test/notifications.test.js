@@ -55,16 +55,16 @@ function withRegistry(env, fn) {
   }
 }
 
-function route(item, options = {}) {
+async function route(item, options = {}) {
   const ownerId = options.ownerId ?? 'bob-owner';
   const agentId = options.agentId ?? 'bob-agent';
   const sessionId = options.sessionId ?? agentId;
-  withRegistry(item.env, () => recordJoin(sessionId, 'Bob', item.squarePath, {
+  await withRegistry(item.env, async () => await recordJoin(sessionId, 'Bob', item.squarePath, {
     channel: 'paseo',
     paseoAgentId: agentId,
     ownerId,
   }));
-  upsertWakeRoute({
+  await upsertWakeRoute({
     ownerId,
     sessionId,
     kind: 'paseo',
@@ -78,7 +78,7 @@ function fakeAdapter(kind, dispatch) {
 
 test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async () => {
   const item = await fixture();
-  route(item, { agentId: 'exact-agent' });
+  await route(item, { agentId: 'exact-agent' });
   const registered = { ownerId: 'bob-owner', sessionId: 'exact-agent', kind: 'paseo', address: { agentId: 'exact-agent' }, updatedAt: Date.now() };
   let boundary = false;
   let sent;
@@ -105,7 +105,7 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
 
 test('PaseoAdapter does not wake a running agent', async () => {
   const item = await fixture();
-  route(item, { agentId: 'running-agent' });
+  await route(item, { agentId: 'running-agent' });
   let boundary = false;
   let sent = false;
   const outcome = await new PaseoAdapter({
@@ -123,7 +123,7 @@ test('PaseoAdapter does not wake a running agent', async () => {
 
 test('the notification worker records an accepted wake through the real Paseo adapter', async () => {
   const item = await fixture();
-  route(item, { agentId: 'integrated-agent' });
+  await route(item, { agentId: 'integrated-agent' });
   let sent;
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
     env: item.env,
@@ -141,14 +141,14 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.doesNotMatch(sent.prompt, /catch --now/);
   assert.match(sent.prompt, /private payload @Bob/);
   assert.match(sent.prompt, /✓ shown in full/);
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
+  assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.notifyLeases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
 test('PaseoAdapter records transport certainty without leaking retry policy', async () => {
   const item = await fixture();
-  route(item);
+  await route(item);
   const registered = { ownerId: 'bob-owner', sessionId: 'bob-agent', kind: 'paseo', address: { agentId: 'bob-agent' }, updatedAt: Date.now() };
   const payload = '<system-reminder source="square">awareness</system-reminder>';
   const base = {
@@ -173,7 +173,7 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
 
 test('PaseoAdapter treats a closed agent as unavailable instead of a failed send', async () => {
   const item = await fixture();
-  route(item, { agentId: 'closed-agent' });
+  await route(item, { agentId: 'closed-agent' });
   const registered = { ownerId: 'bob-owner', sessionId: 'closed-agent', kind: 'paseo', address: { agentId: 'closed-agent' }, updatedAt: Date.now() };
   const outcome = await new PaseoAdapter({
     discover: () => ({ agents: [] }),
@@ -185,28 +185,28 @@ test('PaseoAdapter treats a closed agent as unavailable instead of a failed send
 
 test('a closed Paseo route is retired without consuming pending attention', async () => {
   const item = await fixture();
-  route(item, { agentId: 'gone-agent' });
+  await route(item, { agentId: 'gone-agent' });
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
     env: item.env,
     adapters: [new PaseoAdapter({ discover: () => ({ agents: [] }) })],
   }));
-  assert.deepEqual(readWakeAttempts({ env: item.env }), []);
+  assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   const { readWakeRoutes } = await import('../dist/routes.js');
-  assert.deepEqual(readWakeRoutes({ env: item.env, now: Date.now() }), []);
+  assert.deepEqual(await readWakeRoutes({ env: item.env, now: Date.now() }), []);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
 test('a refreshed Paseo route wakes the old pending notification', async () => {
   const item = await fixture();
-  route(item, { agentId: 'gone-agent' });
+  await route(item, { agentId: 'gone-agent' });
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
     env: item.env,
     adapters: [new PaseoAdapter({ discover: () => ({ agents: [] }) })],
   }));
 
   const refreshedAt = Date.now();
-  upsertWakeRoute({
+  await upsertWakeRoute({
     ownerId: 'bob-owner',
     sessionId: 'gone-agent',
     kind: 'paseo',
@@ -222,7 +222,7 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
   }));
 
   assert.equal(sent.agentId, 'gone-agent');
-  assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
+  assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob['act/2'].state, 'notified');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -234,7 +234,7 @@ test('a worker with no route writes no synthetic attempt', async () => {
     adapters: [fakeAdapter('paseo', async () => { throw new Error('no route must not dispatch'); })],
   }));
 
-  assert.deepEqual(readWakeAttempts({ env: item.env }), []);
+  assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.notifyLeases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
