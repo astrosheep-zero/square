@@ -191,7 +191,7 @@ test('concurrent native sessions produce one presentation for their shared owner
   }
 });
 
-test('failed presentation remains available to the next guarantee path', () => {
+test('failed presentation remains available to the next guarantee path', async () => {
   const presented = path.join(os.tmpdir(), `square-presented-retry-${Date.now()}.ndjsonl`);
   const inbox = [{
     name: 'Bob',
@@ -199,18 +199,18 @@ test('failed presentation remains available to the next guarantee path', () => {
     notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
-    assert.throws(
+    await assert.rejects(
       () => presentOnce('session', () => inbox, () => { throw new Error('inject failed'); }, { SQUARE_PRESENTED: presented }),
       /inject failed/
     );
-    assert.equal(presentOnce('session', () => inbox, () => 'delivered', { SQUARE_PRESENTED: presented }), 'delivered');
-    assert.equal(presentOnce('session', () => inbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
+    assert.equal(await presentOnce('session', () => inbox, () => 'delivered', { SQUARE_PRESENTED: presented }), 'delivered');
+    assert.equal(await presentOnce('session', () => inbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
   } finally {
     fs.rmSync(presented, { force: true });
   }
 });
 
-test('unrelated participants do not share an adapter delivery lock', () => {
+test('unrelated participants do not share an adapter delivery lock', async () => {
   const presented = path.join(os.tmpdir(), `square-presented-independent-${Date.now()}.ndjsonl`);
   const aliceInbox = [{
     name: 'Alice',
@@ -223,15 +223,15 @@ test('unrelated participants do not share an adapter delivery lock', () => {
     notifications: [{ actIndex: 2, actor: 'Cara', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
-    const result = presentOnce(
+    const result = await presentOnce(
       'alice-session',
       () => aliceInbox,
       () => presentOnce('bob-session', () => bobInbox, () => 'bob delivered', { SQUARE_PRESENTED: presented }),
       { SQUARE_PRESENTED: presented }
     );
     assert.equal(result, 'bob delivered');
-    assert.equal(presentOnce('alice-session', () => aliceInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
-    assert.equal(presentOnce('bob-session', () => bobInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
+    assert.equal(await presentOnce('alice-session', () => aliceInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
+    assert.equal(await presentOnce('bob-session', () => bobInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
   } finally {
     fs.rmSync(presented, { force: true });
   }

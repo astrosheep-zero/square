@@ -1,4 +1,4 @@
-import { presentPendingAtBoundary, presentPendingAtBoundaryAsync, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { waitForSessionPending } from '../dist/inbox.js';
 
@@ -28,6 +28,7 @@ export default function squarePiExtension(pi) {
   let settledSerial = 0;
   let settledWaiters = [];
   const handledPending = new Set();
+  let retryAfterChange = false;
   const present = (deliver) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver);
 
   const waitForSettled = (serial, signal) => {
@@ -45,9 +46,18 @@ export default function squarePiExtension(pi) {
 
   const wake = async (piContext, token, signal) => {
     while (sessionId !== undefined && token === generation && !signal.aborted) {
-      const pending = await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending });
+      const deferredRetry = retryAfterChange;
+      const pending = await waitForSessionPending(sessionId, 30_000, {
+        signal,
+        excludeKeys: handledPending,
+        skipImmediate: deferredRetry,
+      });
       if (sessionId === undefined || token !== generation || signal.aborted) return;
-      if (pending.length === 0) continue;
+      if (pending.length === 0) {
+        if (deferredRetry) retryAfterChange = false;
+        continue;
+      }
+      retryAfterChange = false;
       if (!piContext.isIdle()) {
         const serial = settledSerial;
         await waitForSettled(serial, signal);
@@ -57,7 +67,7 @@ export default function squarePiExtension(pi) {
       const keys = inboxKeys(pending);
       presenting = true;
       try {
-        const delivered = await presentPendingAtBoundaryAsync(
+        const delivered = await presentPendingAtBoundary(
           sessionId,
           async (content) => {
             await pi.sendMessage(
@@ -72,6 +82,7 @@ export default function squarePiExtension(pi) {
         }
       } catch {
         // Leave pending evidence untouched so the next state change can retry.
+        retryAfterChange = true;
       } finally {
         presenting = false;
       }
@@ -79,12 +90,18 @@ export default function squarePiExtension(pi) {
   };
 
   pi.on('session_start', async (_event, ctx) => {
+    generation += 1;
+    watcherAbort?.abort();
+    if (watcher) await watcher;
+    watcher = undefined;
+    watcherAbort = undefined;
+    handledPending.clear();
+    retryAfterChange = false;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     previousSessionId = process.env.SQUARE_PI_SESSION_ID;
     process.env.SQUARE_PI_SESSION_ID = sessionId;
     try { joiningContext = await automaticSessionStart('pi', sessionId, sessionCwd); } catch { joiningContext = undefined; }
-    generation += 1;
     watcherAbort = new AbortController();
     const token = generation;
     watcher = wake(ctx, token, watcherAbort.signal).catch(() => undefined);

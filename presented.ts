@@ -209,58 +209,14 @@ export function recordPresentedForOwner(
 /**
  * Serialize presentation only for the affected participants. Delivery runs
  * outside the short ledger-write lock, so unrelated owners never wait on an
- * adapter. A throwing callback leaves no row and remains unpresented.
+ * adapter. A throwing or rejecting callback leaves no row and remains unpresented.
  */
-export function presentOnce<T>(
-  sessionId: string,
-  lookup: (sessionId: string) => InboxMembership[],
-  deliver: (inbox: InboxMembership[]) => T,
-  env: NodeJS.ProcessEnv = process.env,
-  at = Date.now()
-): T | undefined {
-  const filePath = presentedPath(env);
-  const initial = lookup(sessionId).filter((membership) => membership.notifications.length > 0);
-  if (initial.length === 0) return undefined;
-  const lockedMemberships = new Set(initial.map(membershipKey));
-
-  return withAttentionLocks(filePath, initial, () => {
-    const current = lookup(sessionId).filter((membership) => lockedMemberships.has(membershipKey(membership)));
-    const selected = selectUnpresented(sessionId, current, readRows(filePath, at));
-    if (selected.length === 0) return undefined;
-
-    const result = deliver(selected.map(({ membership }) => membership));
-    withFileLockSync(`${filePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, () => {
-      const rows = readRows(filePath, at);
-      const known = new Set(rows.map(rowKey));
-      for (const { membership, ownerId } of selected) {
-        for (const notification of membership.notifications) {
-          const row: PresentedRow = {
-            v: 2,
-            ts: at,
-            owner_id: ownerId,
-            square_path: canonicalSquarePath(membership.squarePath),
-            name: membership.name,
-            act_index: notification.actIndex,
-          };
-          const key = rowKey(row);
-          if (known.has(key)) continue;
-          rows.push(row);
-          known.add(key);
-        }
-      }
-      writeRows(filePath, rows);
-    });
-    return result;
-  });
-}
-
-/** Async presentation transaction for adapters whose delivery can fail asynchronously. */
-export async function presentOnceAsync<T>(
+export async function presentOnce<T>(
   sessionId: string,
   lookup: (sessionId: string) => InboxMembership[] | Promise<InboxMembership[]>,
   deliver: (inbox: InboxMembership[]) => T | Promise<T>,
   env: NodeJS.ProcessEnv = process.env,
-  at = Date.now(),
+  at = Date.now()
 ): Promise<T | undefined> {
   const filePath = presentedPath(env);
   const initial = (await lookup(sessionId)).filter((membership) => membership.notifications.length > 0);

@@ -257,7 +257,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
     item.cli('Alice', ['express', '--force', 'please catch @Bob'], 30);
     const act = loadSquare(item.squarePath).acts.at(-1);
     registerRoute(item);
-    withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, act), () => true, item.env));
+    await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, act), () => true, item.env));
 
     item.cli('Bob', ['catch', '--now'], 40);
     const caught = loadSquare(item.squarePath);
@@ -397,7 +397,7 @@ test('presentation does not suppress wake before worker start or at the final pr
     registerRoute(item);
     item.cli('Alice', ['express', '--force', 'already visible @Bob'], 30);
     const visible = loadSquare(item.squarePath).acts.at(-1);
-    withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, visible), () => true, item.env));
+    await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, visible), () => true, item.env));
     const first = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, visible.index, { env: item.env, adapters: [first] }));
 
@@ -425,7 +425,7 @@ test('presented evidence is scoped to the current participant owner', async () =
     item.cli('Alice', ['express', '--force', 'new owner must see this @Bob'], 30);
     const act = loadSquare(item.squarePath).acts.at(-1);
     registerRoute(item, 'old-owner', 'old-session');
-    withRegistry(item.env, () => presentOnce('old-session', () => inboxFor(item, act), () => true, item.env));
+    await withRegistry(item.env, () => presentOnce('old-session', () => inboxFor(item, act), () => true, item.env));
     withRegistry(item.env, () => {
       recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
       recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', ownerId: 'new-owner', at: Date.now() - 1 });

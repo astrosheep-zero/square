@@ -9,6 +9,8 @@ export interface PendingWaitOptions {
   signal?: AbortSignal;
   /** Ephemeral watcher de-duplication; never persisted or used by delivery derivation. */
   excludeKeys?: ReadonlySet<string>;
+  /** After a delivery failure, wait for a new state edge before retrying the same pending work. */
+  skipImmediate?: boolean;
 }
 
 function notificationKey(membership: InboxMembership, actIndex: number): string {
@@ -58,25 +60,30 @@ export async function waitForSessionPending(
   options: PendingWaitOptions = {},
 ): Promise<InboxMembership[]> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
-  const immediate = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
-  if (immediate.some((membership) => membership.notifications.length > 0)) return immediate;
+  if (!options.skipImmediate) {
+    const immediate = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+    if (immediate.some((membership) => membership.notifications.length > 0)) return immediate;
+  }
   if (timeoutMs <= 0 || options.signal?.aborted) return [];
 
   const bindings = lookupSessionBindings(sessionId);
   const paths = [...new Set(bindings.map((binding) => binding.squarePath))];
-  const afterBinding = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
-  if (afterBinding.some((membership) => membership.notifications.length > 0)) return afterBinding;
   let aborted = false;
+  let projectAfterReady = !options.skipImmediate;
   const onAbort = () => { aborted = true; };
   options.signal?.addEventListener('abort', onAbort, { once: true });
   try {
     while (!aborted) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return [];
-      const changed = await waitForSquareChanges(paths, remaining, options.signal);
-      if (aborted || !changed) return [];
-      const current = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
-      if (current.some((membership) => membership.notifications.length > 0)) return current;
+      const change = await waitForSquareChanges(paths, remaining, options.signal, async () => {
+        if (!projectAfterReady) return undefined;
+        const current = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+        return current.some((membership) => membership.notifications.length > 0) ? current : undefined;
+      });
+      if (aborted || change.status === 'expired') return [];
+      if (change.status === 'ready') return change.value;
+      projectAfterReady = true;
     }
     return [];
   } finally {

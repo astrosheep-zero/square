@@ -106,29 +106,47 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
 }
 
 /** Wait for any bound artifact to change; delivery callers re-project after the edge. */
-export async function waitForSquareChanges(
+export type SquareChangeWaitResult<T> =
+  | { status: 'ready'; value: T }
+  | { status: 'changed' }
+  | { status: 'expired' };
+
+export async function waitForSquareChanges<T>(
   squarePaths: readonly string[],
   timeoutMs: number,
   signal?: AbortSignal,
-): Promise<boolean> {
-  if (timeoutMs <= 0 || signal?.aborted || squarePaths.length === 0) return false;
+  afterReady?: () => Promise<T | undefined>,
+): Promise<SquareChangeWaitResult<T>> {
+  if (timeoutMs <= 0 || signal?.aborted || squarePaths.length === 0) return { status: 'expired' };
   const squares: OpenSquare[] = [];
   try {
     for (const squarePath of [...new Set(squarePaths)]) {
       try { squares.push(await openSquare(squarePath)); } catch { /* stale binding */ }
     }
-    if (squares.length === 0) return false;
-    const waits = squares.map(async (square) => {
-      const { version } = await square.cell.read();
+    if (squares.length === 0) return { status: 'expired' };
+    const baselines = await Promise.all(squares.map(async (square) => ({
+      square,
+      version: (await square.cell.read()).version,
+    })));
+    const ready = await afterReady?.();
+    if (ready !== undefined) return { status: 'ready', value: ready };
+    const waits = baselines.map(async ({ square, version }) => {
       const changed = await square.cell.changed(version, timeoutMs).catch(() => false);
       if (changed) return true;
       throw new Error('square wait expired');
     });
+    let abortWait: (() => void) | undefined;
     const abort = new Promise<boolean>((resolve) => {
-      if (signal?.aborted) resolve(false);
-      else signal?.addEventListener('abort', () => resolve(false), { once: true });
+      abortWait = () => resolve(false);
+      if (signal?.aborted) abortWait();
+      else signal?.addEventListener('abort', abortWait, { once: true });
     });
-    return await Promise.race([Promise.any(waits).catch(() => false), abort]);
+    try {
+      const changed = await Promise.race([Promise.any(waits).catch(() => false), abort]);
+      return changed ? { status: 'changed' } : { status: 'expired' };
+    } finally {
+      if (abortWait) signal?.removeEventListener('abort', abortWait);
+    }
   } finally {
     await Promise.all(squares.map((square) => closeOpenSquare(square)));
   }

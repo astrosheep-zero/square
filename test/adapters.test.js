@@ -11,7 +11,6 @@ import squarePiExtension, {
   pendingInbox,
   renderPiInbox,
 } from '../extensions/square-pi.js';
-import { presentPendingAtBoundaryAsync } from '../dist/boundary-presentation.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
@@ -35,6 +34,8 @@ import {
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
+import { hasPresentedForOwner } from '../dist/presented.js';
+import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/index.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
@@ -414,23 +415,23 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.doesNotMatch(renderPiInbox(inbox), /catch --now/);
 });
 
-function piFixture(sessionId) {
+function piFixture(sessionId, pending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registry = path.join(root, 'sessions.ndjsonl');
   const presented = path.join(root, 'presented.ndjsonl');
-  const runtime = { ...emptyRuntimeState(3), nextActIndex: 3 };
+  const runtime = { ...emptyRuntimeState(pending ? 3 : 2), nextActIndex: pending ? 3 : 2 };
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
+    ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 }] : []),
   ];
   writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
   return { root, squarePath, registry, presented, sessionId };
 }
 
-async function withPiFixture(sessionId, fn) {
-  const item = piFixture(sessionId);
+async function withPiFixture(sessionId, fn, pending = true) {
+  const item = piFixture(sessionId, pending);
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
     presented: process.env.SQUARE_PRESENTED,
@@ -439,7 +440,7 @@ async function withPiFixture(sessionId, fn) {
   process.env.SQUARE_REGISTRY = item.registry;
   process.env.SQUARE_PRESENTED = item.presented;
   delete process.env.SQUARE_PI_SESSION_ID;
-  recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi' });
+  recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
   try {
     await fn(item);
   } finally {
@@ -451,6 +452,25 @@ async function withPiFixture(sessionId, fn) {
     else process.env.SQUARE_PI_SESSION_ID = previous.piSession;
     fs.rmSync(item.root, { recursive: true, force: true });
   }
+}
+
+async function expressToPi(item, body) {
+  const square = await Square.at({ path: item.squarePath });
+  try {
+    const alice = await square.join('Alice');
+    const result = await alice.express(body);
+    return Number(result.activity.id.slice('act/'.length));
+  } finally {
+    await square.close();
+  }
+}
+
+async function waitUntil(predicate, message) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(message);
 }
 
 test('Pi presents each pending notification once to the current owner', async () => {
@@ -476,8 +496,8 @@ test('Pi presents each pending notification once to the current owner', async ()
   });
 });
 
-test('Pi idle watcher injects awareness through the native message API', async () => {
-  await withPiFixture('pi-wake-session', async () => {
+test('Pi idle watcher wakes only after a new directed activity lands', async () => {
+  await withPiFixture('pi-wake-session', async (item) => {
     const handlers = new Map();
     const sent = [];
     const pi = {
@@ -487,32 +507,141 @@ test('Pi idle watcher injects awareness through the native message API', async (
     squarePiExtension(pi);
     const context = {
       sessionManager: { getSessionId: () => 'pi-wake-session' },
-      cwd: process.cwd(),
+      cwd: '/tmp/no-public-square',
       isIdle: () => true,
     };
     await handlers.get('session_start')({}, context);
-    for (let attempt = 0; attempt < 20 && sent.length === 0; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    try {
+      assert.equal(sent.length, 0);
+      const actIndex = await expressToPi(item, 'native wake @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not wake for new directed activity');
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].message.customType, 'square');
+      assert.equal(sent[0].options.triggerTurn, true);
+      assert.match(sent[0].message.content, /source="square"/);
+      assert.match(sent[0].message.content, /native wake @Bob/);
+      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
     }
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].message.customType, 'square');
-    assert.equal(sent[0].options.triggerTurn, true);
-    assert.match(sent[0].message.content, /source="square"/);
-    await handlers.get('session_shutdown')({}, context);
-  });
+  }, false);
 });
 
-test('async presentation commits no evidence when native injection fails', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-async-presentation-'));
-  const presented = path.join(root, 'presented.ndjsonl');
-  const inbox = sampleInbox();
-  try {
-    await assert.rejects(
-      presentPendingAtBoundaryAsync('async-session', () => Promise.reject(new Error('send failed')), () => inbox, { SQUARE_PRESENTED: presented }),
-      /send failed/,
-    );
-    assert.equal(fs.existsSync(presented), false);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test('Pi keeps directed activity pending while busy and wakes after agent_settled', async () => {
+  await withPiFixture('pi-busy-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    let idle = false;
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      async sendMessage(message, options) { sent.push({ message, options }); },
+    };
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-busy-session' },
+      cwd: '/tmp/no-public-square',
+      isIdle: () => idle,
+    };
+    squarePiExtension(pi);
+    await handlers.get('session_start')({}, context);
+    try {
+      await expressToPi(item, 'wait until settled @Bob');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(sent.length, 0);
+      idle = true;
+      await handlers.get('agent_settled')({}, context);
+      await waitUntil(() => sent.length === 1, 'Pi did not wake after agent_settled');
+      assert.match(sent[0].message.content, /wait until settled @Bob/);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi retries failed native injection without committing presented or seen', async () => {
+  await withPiFixture('pi-retry-session', async (item) => {
+    const handlers = new Map();
+    let calls = 0;
+    let releaseSecond;
+    const secondSend = new Promise((resolve) => { releaseSecond = resolve; });
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage() {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new Error('native injection failed'));
+        return secondSend;
+      },
+    };
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-retry-session' },
+      cwd: '/tmp/no-public-square',
+      isIdle: () => true,
+    };
+    squarePiExtension(pi);
+    await handlers.get('session_start')({}, context);
+    let actIndex;
+    try {
+      actIndex = await expressToPi(item, 'retry me @Bob');
+      await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
+      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), false);
+      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const square = await Square.at({ path: item.squarePath });
+      try {
+        const alice = await square.join('Alice');
+        await alice.listen('Bob');
+      } finally {
+        await square.close();
+      }
+      await waitUntil(() => calls === 2, 'Pi did not retry after the next Square change');
+      releaseSecond();
+      await waitUntil(
+        () => hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex),
+        'successful retry did not commit presentation',
+      );
+      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+    } finally {
+      releaseSecond();
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi presents a clipped body once without marking it seen', async () => {
+  await withPiFixture('pi-preview-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      async sendMessage(message, options) { sent.push({ message, options }); },
+    };
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-preview-session' },
+      cwd: '/tmp/no-public-square',
+      isIdle: () => true,
+    };
+    squarePiExtension(pi);
+    await handlers.get('session_start')({}, context);
+    try {
+      const actIndex = await expressToPi(item, `${'x'.repeat(140)} @Bob`);
+      await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
+      assert.match(sent[0].message.content, /… preview only/);
+      assert.doesNotMatch(sent[0].message.content, /shown in full/);
+      assert.equal(hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(loadSquare(item.squarePath).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+
+      const square = await Square.at({ path: item.squarePath });
+      try {
+        const alice = await square.join('Alice');
+        await alice.listen('Bob');
+      } finally {
+        await square.close();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(sent.length, 1);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
 });
