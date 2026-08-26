@@ -50,6 +50,44 @@ test('status stays compact and focuses on the current square', async () => {
   assert.doesNotMatch(status.stdout, /─/);
 });
 
+test('status previews ten active participants and links to the complete roster', async () => {
+  const peers = Array.from({ length: 12 }, (_value, index) => `Peer${String(index + 1).padStart(2, '0')}`);
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Viewer');
+    for (const name of peers) {
+      const participant = await square.join(name);
+      await participant.express(`recent activity from ${name}`, { force: true });
+    }
+  }, { hardCap: 100 });
+
+  const status = run(withName(file, 'Viewer', ['status']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(status.status, 0, status.stderr);
+  const around = status.stdout.slice(status.stdout.indexOf('around the square'), status.stdout.indexOf('\n\nlatest'));
+  const participantRows = around.split('\n').filter((line) => /^  [◎●○] @/.test(line));
+  assert.equal(participantRows.length, 10);
+  assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), ['Viewer', ...peers.slice(3).reverse()]);
+  assert.match(status.stdout, /^  ○ … 3 more participants$/m);
+  assert.ok(status.stdout.includes(`» square --location '${file}' participants\n`));
+  assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
+
+  const participants = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(participants.status, 0, participants.stderr);
+  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] @/.test(line)).length, 13);
+  assert.match(participants.stdout, /@Peer01/);
+  assert.match(participants.stdout, /@Peer12/);
+});
+
+test('status has no participant preview affordance at ten active participants', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    for (let index = 1; index <= 10; index += 1) await square.join(`Peer${String(index).padStart(2, '0')}`);
+  }, { hardCap: 100 });
+
+  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(status.status, 0, status.stderr);
+  assert.doesNotMatch(status.stdout, /^  ○ … \d+ more participants$/m);
+  assert.doesNotMatch(status.stdout, /^» square --location .* participants$/m);
+});
+
 test('express does not surface delivery-health diagnostics during normal use', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');

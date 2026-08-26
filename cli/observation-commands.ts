@@ -36,6 +36,8 @@ import {
   usage,
 } from './context.js';
 
+const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
+
 export const listCommand: CommandSpec<string[]> = {
   parse: (argv) => argv,
   async execute(argv, context) {
@@ -377,7 +379,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       if (aViewer !== bViewer) return aViewer ? -1 : 1;
       return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
     });
-    const people = active.length === 0 ? ['  ○ nobody in the square'] : active.map((participant) => {
+    const people = active.length === 0 ? ['  ○ nobody in the square'] : active.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map((participant) => {
       const glyph = participant.presence === 'watching'
         ? '◎'
         : participant.activityCount > 0 ? '●' : '○';
@@ -396,6 +398,10 @@ export const statusCommand: CommandSpec<undefined, string> = {
             : 'caught up';
       return `  ${glyph} ${participantIdentity(participant.name)} · ${summary}${attention === '' ? '' : ` · ${attention}`}`;
     });
+    if (active.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
+      people.push(`  ○ … ${active.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more participants`);
+      people.push(`» ${commandPrefix(squarePath)} participants`);
+    }
     const cap = result.hardCap === null ? 'unlimited' : String(result.hardCap);
     const hold = result.holdActive
       ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''} · ${result.holdAt === undefined
