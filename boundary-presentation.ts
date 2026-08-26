@@ -1,10 +1,8 @@
 import { leaseOwnsNotification } from './delivery.js';
-import { sessionInbox } from './inbox.js';
-import { notificationMessageId } from './delivery.js';
 import { markBoundarySeen } from './square-wiring.js';
+import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { renderAttentionPreview } from './attention-presentation.js';
-import { participantCommandPrefix } from './presentation.js';
+import { ATTENTION_BODY_MAX, renderAttentionPreview } from './attention-presentation.js';
 import { presentOnce } from './presented.js';
 
 const CONTEXT_MAX = 1200;
@@ -30,22 +28,33 @@ export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
 }
 
 export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
+  return renderBoundary(inbox).context;
+}
+
+interface CompleteBoundaryMembership {
+  membership: InboxMembership;
+  actIndexes: number[];
+}
+
+interface BoundaryRender {
+  context: string;
+  complete: CompleteBoundaryMembership[];
+}
+
+function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const count = pendingCount(inbox);
   const noun = count === 1 ? 'notification' : 'notifications';
   const header = `<system-reminder source="square">You have ${count} unread Square ${noun}.`;
-  const footer = [
-    'Ids are stable across boundaries. If you already acted on an id, do not repeat the action; still run catch --now to mark delivered.',
-    'Read and respond in the square when appropriate.</system-reminder>',
-  ];
+  const footer = ['Read and respond in the square when appropriate.</system-reminder>'];
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
   const blocks: string[] = [];
+  const complete: CompleteBoundaryMembership[] = [];
   let omitted = 0;
 
   for (const [index, entry] of queued.entries()) {
     const { membership, notification } = entry;
-    const command = `${participantCommandPrefix(membership.squarePath, membership.name)} catch --now`;
     const block = [
       renderAttentionPreview({
         squarePath: membership.squarePath,
@@ -55,7 +64,6 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
         route: notification.route,
         body: notification.body,
       }),
-      `Ack with: ${command}`,
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;
     const prospective = [
@@ -63,7 +71,7 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
       ...blocks,
       block,
       ...(omittedAfter > 0
-        ? [`… ${omittedAfter} unread ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted. Run catch --now to receive them.`]
+        ? [`… ${omittedAfter} unread ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
       ...footer,
     ].join('\n');
@@ -72,16 +80,22 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
       continue;
     }
     blocks.push(block);
+    if (notification.body.replace(/\r\n/g, '\n').length <= ATTENTION_BODY_MAX) {
+      complete.push({ membership, actIndexes: [notification.actIndex] });
+    }
   }
 
-  return [
-    header,
-    ...blocks,
-    ...(omitted > 0
-      ? [`… ${omitted} unread ${omitted === 1 ? 'notification' : 'notifications'} omitted. Run catch --now to receive them.`]
-      : []),
-    ...footer,
-  ].join('\n');
+  return {
+    context: [
+      header,
+      ...blocks,
+      ...(omitted > 0
+        ? [`… ${omitted} unread ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
+        : []),
+      ...footer,
+    ].join('\n'),
+    complete,
+  };
 }
 
 export async function presentPendingAtBoundary<T>(
@@ -91,30 +105,25 @@ export async function presentPendingAtBoundary<T>(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<T | undefined> {
   const inbox = await lookup(sessionId);
-  let deliveredInbox: InboxMembership[] | undefined;
-  let deliveredContext: string | undefined;
+  let delivered: BoundaryRender | undefined;
   const result = presentOnce(
     sessionId,
     () => pendingAtBoundary(inbox),
     (inbox) => {
-      const context = renderPendingAtBoundary(inbox);
-      deliveredInbox = inbox;
-      deliveredContext = context;
-      return present(context);
+      delivered = renderBoundary(inbox);
+      return present(delivered.context);
     },
     env
   );
-  if (result !== undefined && deliveredInbox !== undefined && deliveredContext !== undefined) {
-    await markCompleteBoundaryObservations(deliveredInbox, deliveredContext);
+  if (result !== undefined && delivered !== undefined) {
+    for (const entry of delivered.complete) {
+      await markBoundarySeen(
+        entry.membership.squarePath,
+        entry.membership.name,
+        entry.membership.ownerId,
+        entry.actIndexes,
+      );
+    }
   }
   return result;
-}
-
-async function markCompleteBoundaryObservations(inbox: InboxMembership[], context: string): Promise<void> {
-  for (const membership of inbox) {
-    const complete = membership.notifications
-      .filter((notification) => context.includes(notificationMessageId(membership.squarePath, notification.actIndex)) && notification.body.length <= 120)
-      .map((notification) => notification.actIndex);
-    if (complete.length > 0) await markBoundarySeen(membership.squarePath, membership.name, membership.ownerId, complete);
-  }
 }

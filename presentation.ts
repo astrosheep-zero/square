@@ -244,7 +244,7 @@ function renderPresenceOnlySay(
   const audience = audienceOf(event);
   const targets = audience.kind === 'bell' ? [] : audience.names;
   if (targets.length === 0) {
-    return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  spoke`;
+    return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}`;
   }
   const dest = ` ${targets.map((name) => participantIdentity(name)).join(' and ')}`;
   return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;

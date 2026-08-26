@@ -62,6 +62,8 @@ export interface FoldedSquareState {
   throttleActivityAts: number[];
   bellSayAtsByActor: Map<string, number[]>;
   listening: Map<string, Participant[]>;
+  /** Derived sender blocks; kept outside the artifact schema. */
+  ignored: Map<string, Participant[]>;
 }
 
 export type ValidationResult =
@@ -125,8 +127,14 @@ export function resolveAudience(audience: Audience, candidateNames: readonly str
 
 export function activeListeners(state: FoldedSquareState, sender: string): string[] {
   return state.participants
-    .filter((participant) => participant.joined && (state.listening.get(nameKey(participant.name)) ?? []).some((target) => sameName(target, sender)))
+    .filter((participant) => participant.joined
+      && !(state.ignored.get(nameKey(participant.name)) ?? []).some((target) => sameName(target, sender))
+      && (state.listening.get(nameKey(participant.name)) ?? []).some((target) => sameName(target, sender)))
     .map((participant) => participant.name);
+}
+
+export function isIgnored(state: FoldedSquareState, listener: string, sender: string): boolean {
+  return (state.ignored.get(nameKey(listener)) ?? []).some((target) => sameName(target, sender));
 }
 
 export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: 'say' }>): string[] {
@@ -134,11 +142,13 @@ export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: '
     'index' in act && 'index' in say && act.index === say.index
   ));
   const before = fold(position < 0 ? acts : acts.slice(0, position));
-  const mentionTargets = resolveAudience(audienceOf(say), before.joined);
+  const audience = audienceOf(say);
+  const mentionTargets = resolveAudience(audience, before.joined);
   const listeners = activeListeners(before, say.actor);
   const recipients: string[] = [];
   for (const name of [...mentionTargets, ...listeners]) {
     if (sameName(name, say.actor) || recipients.some((existing) => sameName(existing, name))) continue;
+    if (audience.kind !== 'bell' && isIgnored(before, name, say.actor)) continue;
     recipients.push(name);
   }
   return recipients;
@@ -226,6 +236,7 @@ export function fold(acts: readonly Act[]): FoldedSquareState {
     throttleActivityAts: [],
     bellSayAtsByActor: new Map(),
     listening: new Map(),
+    ignored: new Map(),
   };
 
   for (const act of acts) {
@@ -253,12 +264,17 @@ export function fold(acts: readonly Act[]): FoldedSquareState {
         const targets = state.listening.get(key) ?? [];
         if (!targets.some((target) => sameName(target, act.target))) targets.push(act.target);
         state.listening.set(key, targets);
+        const ignored = (state.ignored.get(key) ?? []).filter((target) => !sameName(target, act.target));
+        if (ignored.length === 0) state.ignored.delete(key); else state.ignored.set(key, ignored);
         break;
       }
       case 'ignore': {
         const key = nameKey(act.actor);
         const targets = (state.listening.get(key) ?? []).filter((target) => !sameName(target, act.target));
         if (targets.length === 0) state.listening.delete(key); else state.listening.set(key, targets);
+        const ignored = state.ignored.get(key) ?? [];
+        if (!ignored.some((target) => sameName(target, act.target))) ignored.push(act.target);
+        state.ignored.set(key, ignored);
         break;
       }
       case 'say':

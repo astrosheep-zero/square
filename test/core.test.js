@@ -166,7 +166,9 @@ test('listener decisions are idempotent and preserve active target spelling orde
   assert.deepEqual(coreIgnore(listening, 'Caller', 'AKU/RIKO/7A', 5), {
     kind: 'ignore', actor: 'Caller', target: 'AKU/RIKO/7A', at: 5,
   });
-  assert.equal(coreIgnore(listening, 'Caller', 'aku/missing', 5), undefined);
+  assert.deepEqual(coreIgnore(listening, 'Caller', 'aku/missing', 5), {
+    kind: 'ignore', actor: 'Caller', target: 'aku/missing', at: 5,
+  });
 });
 
 test('listener landings append only real edge changes', async () => {

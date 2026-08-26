@@ -22,14 +22,18 @@ export class WakePort {
 
   async dispatch(
     routes: readonly WakeRoute[],
-    payload: string,
+    payload: string | ((route: WakeRoute) => string),
     hooks: WakePortHooks,
   ): Promise<WakePortResult> {
     for (const route of routes) {
       const adapter = this.adapters.get(route.kind);
       if (adapter === undefined) continue;
       const attemptN = hooks.nextAttemptN();
-      const result = await adapter.dispatch(route.address, payload, () => hooks.beforeSend(route, attemptN));
+      const result = await adapter.dispatch(
+        route.address,
+        typeof payload === 'function' ? payload(route) : payload,
+        () => hooks.beforeSend(route, attemptN),
+      );
       if (result.outcome === 'cancelled') return result;
       if (result.outcome === 'unavailable') {
         if (result.retainRoute !== true) await hooks.invalidate?.(route, result);

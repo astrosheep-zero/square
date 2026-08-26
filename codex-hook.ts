@@ -11,17 +11,24 @@ export interface CodexHookInput {
   source?: unknown;
 }
 
+const CODEX_HOOK_EVENTS: Readonly<Record<string, 'PostToolUse' | 'Stop'>> = {
+  PostToolUse: 'PostToolUse',
+  Stop: 'Stop',
+};
+
 export async function codexHookResponse(
   input: CodexHookInput,
   lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
-  if (input.hook_event_name !== 'PostToolUse' && input.hook_event_name !== 'Stop') return undefined;
-  recordCodexBoundary(input.session_id, input.hook_event_name === 'Stop' ? 'Stop' : 'non-stop', env);
+  if (typeof input.hook_event_name !== 'string') return undefined;
+  const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
+  if (hookEventName === undefined) return undefined;
+  recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
   return presentPendingAtBoundary(
     input.session_id,
-    (context) => input.hook_event_name === 'Stop'
+    (context) => hookEventName === 'Stop'
       ? { systemMessage: context }
       : { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } },
     lookup,

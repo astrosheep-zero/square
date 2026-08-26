@@ -99,6 +99,23 @@ test('listener audience is historical across ignore, done, and rejoin', () => {
   assert.equal(perceiveActivity(square, square.acts[3], 'Observer'), 'presence');
 });
 
+test('ignore blocks future mentions and bare delivery until listen clears it', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'ignore', actor: 'Bob', target: 'Alice', at: 3 },
+    { kind: 'say', actor: 'Alice', body: 'blocked @Bob', at: 4 },
+    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 5 },
+    { kind: 'say', actor: 'Alice', body: 'bare after listen', at: 6 },
+    { kind: 'say', actor: 'Alice', body: 'mention after listen @Bob', at: 7 },
+  ]);
+  const delivery = deriveDeliveryModel(square);
+
+  assert.deepEqual(plannedRecipients(delivery, square.acts[3]), []);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[5]), ['Bob:attention']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[6]), ['Bob:mention']);
+});
+
 test('listener delivery attention does not claim a listener was mentioned', () => {
   const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1 },

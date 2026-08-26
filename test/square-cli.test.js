@@ -50,14 +50,17 @@ test('participant identities include leading @ in human-readable output', () => 
   assert.match(roster.stdout, /@Alice/);
 });
 
-test('listen commands describe edge changes and listener attention admits bare express', async () => {
+test('listen and ignore commands control future bare delivery without gating express', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
-  const rejected = run(withName(file, 'Alice', ['express', 'bare thought']));
-  assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /no one is turned toward you/);
+  const bareWithoutListener = run(withName(file, 'Alice', ['express', 'bare thought']));
+  assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);
+
+  const ignoredBeforeListening = run(withName(file, 'Bob', ['ignore', 'Alice']));
+  assert.equal(ignoredBeforeListening.status, 0, ignoredBeforeListening.stderr);
+  assert.match(ignoredBeforeListening.stdout, /@Bob turns away from @Alice/);
 
   const listened = run(withName(file, 'Bob', ['listen', 'Alice']));
   assert.equal(listened.status, 0, listened.stderr);

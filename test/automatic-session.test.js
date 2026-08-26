@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
-import { runCodexHookAsync } from '../dist/codex-hook.js';
+import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { lookupSessionBindings } from '../dist/registry.js';
 
@@ -116,6 +116,24 @@ test('Codex SessionResume uses the hook process cwd when the payload omits cwd',
   assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join']);
 });
 
+test('Codex Stop presents pending attention through the stop wire', { concurrency: false }, async () => {
+  const item = fixture();
+  await withEnv(item.env, async (env) => {
+    const result = await codexHookResponse(
+      { session_id: 'stop-session', hook_event_name: 'Stop' },
+      () => [{
+        name: 'Bob',
+        squarePath: item.publicPath,
+        ownerId: 'stop-owner',
+        notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: `stop answer ${'x'.repeat(121)}` }],
+      }],
+      env,
+    );
+    assert.ok(result);
+    assert.equal(result.hookSpecificOutput, undefined);
+    assert.match(result.systemMessage, /stop answer/);
+  });
+});
 test('Codex hook boundary state follows Stop, non-Stop, and SessionEnd', { concurrency: false }, async () => {
   const item = fixture();
   await withEnv(item.env, async (env) => {

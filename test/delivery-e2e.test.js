@@ -207,17 +207,45 @@ test('a native boundary presents bounded awareness once and records the current 
 
     assert.equal(first, 'presented');
     assert.equal(second, undefined);
-    assert.match(payload, /@Bob x{115}\n… \[truncated; run catch --now\]/);
-    assert.match(payload, /square --location .* --as 'Bob' catch --now/);
+    assert.match(payload, /@Bob x{115}\n… preview only/);
+    assert.doesNotMatch(payload, /catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(item.env.SQUARE_PRESENTED, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].owner_id, 'bob-owner');
+    assert.equal(loadSquare(item.squarePath).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
     assert.equal(evidence.presented, true);
     assert.equal(wakeIsEligible(evidence), true);
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('a native boundary marks a fully presented body seen', async () => {
+  const item = workshop();
+  try {
+    item.cli('Alice', ['express', '--force', 'short attention @Bob'], 30);
+    const act = loadSquare(item.squarePath).acts.at(-1);
+    registerRoute(item, 'bob-owner', 'bob-native');
+
+    const result = await withRegistry(item.env, () => presentPendingAtBoundary(
+      'bob-native',
+      () => 'presented',
+      () => [{ ...inboxFor(item, act)[0], ownerId: 'bob-owner' }],
+      item.env,
+    ));
+
+    assert.equal(result, 'presented');
+    const observation = loadSquare(item.squarePath).runtime.observations.Bob[formatActivityId(act.index)];
+    assert.equal(observation.state, 'seen');
+    assert.equal(observation.ownerId, 'bob-owner');
+    assert.equal(typeof observation.at, 'number');
+    const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
+    assert.equal(evidence.delivered, true);
+    assert.equal(wakeIsEligible(evidence), false);
   } finally {
     item.cleanup();
   }

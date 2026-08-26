@@ -24,7 +24,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js';
-import { formatActivityId, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
+import { formatActivityId, isIgnored, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, perceiveActivity } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
@@ -237,7 +237,7 @@ export function coreListen(squareState: SquareState, actor: string, target: stri
   const state = foldedState(squareState);
   const act = { kind: 'listen' as const, actor: resolvedActor, target, at: now };
   requireStanding(squareState, act);
-  return isListening(state, resolvedActor, target) ? undefined : act;
+  return isListening(state, resolvedActor, target) && !isIgnored(state, resolvedActor, target) ? undefined : act;
 }
 
 export function coreIgnore(squareState: SquareState, actor: string, target: string, now: number): Extract<Act, { kind: 'ignore' }> | undefined {
@@ -246,7 +246,7 @@ export function coreIgnore(squareState: SquareState, actor: string, target: stri
   const state = foldedState(squareState);
   const act = { kind: 'ignore' as const, actor: resolvedActor, target, at: now };
   requireStanding(squareState, act);
-  return isListening(state, resolvedActor, target) ? act : undefined;
+  return isIgnored(state, resolvedActor, target) ? undefined : act;
 }
 
 export function coreListening(squareState: SquareState, actor: string): readonly string[] {

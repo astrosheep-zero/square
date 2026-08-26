@@ -155,7 +155,8 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
     assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/SQUARE\.square#act\/2/);
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
-    assert.match(response.hookSpecificOutput.additionalContext, /square --location '\/tmp\/SQUARE\.square' --as 'Bob' catch --now/);
+    assert.match(response.hookSpecificOutput.additionalContext, /✓ shown in full/);
+    assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /catch --now/);
     assert.equal(
       await claudeHookResponse(
         { session_id: 'session', hook_event_name: 'PostToolBatch' },

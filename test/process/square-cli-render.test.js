@@ -204,7 +204,7 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
 
-test('presence rendering says spoke when a bare say has no visible mention target', async () => {
+test('presence rendering omits a body when a bare say has no visible mention target', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
@@ -215,7 +215,8 @@ test('presence rendering says spoke when a bare say has no visible mention targe
 
   const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
-  assert.match(caraWatch.stdout, /● @Alice #1 · act\/4 · .*\n  spoke/);
+  assert.match(caraWatch.stdout, /● @Alice #1 · act\/4 · .*\n\n»/);
+  assert.doesNotMatch(caraWatch.stdout, /\n  spoke/);
   assert.doesNotMatch(caraWatch.stdout, /talked to(?:\s|$)/m);
   assert.doesNotMatch(caraWatch.stdout, /listener-only answer/);
 });
@@ -341,6 +342,24 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   });
   assert.equal(duplicate.status, 0, duplicate.stderr);
   assert.equal(duplicate.stdout, '');
+
+  const fresh = run(withName(file, 'Alice', ['express', '--force', 'stop answer @Bob']), { env });
+  assert.equal(fresh.status, 0, fresh.stderr);
+
+  const registerStop = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { recordJoin } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
+    recordJoin('sid-cli-stop', 'Bob', ${JSON.stringify(file)}, { channel: 'codex' });
+  `], { encoding: 'utf8', env: testEnv(env) });
+  assert.equal(registerStop.status, 0, registerStop.stderr);
+
+  const stop = spawnSync(process.execPath, [CLI, 'codex-hook'], {
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'sid-cli-stop', hook_event_name: 'Stop' }),
+    env: testEnv(env),
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.match(stop.stdout, /"systemMessage":/);
+  assert.match(stop.stdout, /stop answer @Bob/);
 });
 
 test('history power filters and jsonl stay read-only', async () => {

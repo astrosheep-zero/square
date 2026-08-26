@@ -14,8 +14,7 @@ import { hasPresentedAttention } from './presented.js';
 import { SquareError, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { quoteShell } from './presentation.js';
-import { renderAttentionPreview } from './attention-presentation.js';
+import { displayAttentionPath, renderAttentionPreview } from './attention-presentation.js';
 import { lookupParticipant } from './registry.js';
 import { retireWakeRoute } from './routes.js';
 import { openSquare } from './square-file-adapter.js';
@@ -49,13 +48,16 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
   return value;
 }
 
-function catchCommand(squarePath: string, recipient: string): string {
-  return `square --as ${quoteShell(recipient)} --location ${quoteShell(squarePath)} catch --now`;
+function wakeLabel(kind: WakeRouteKind): string {
+  if (kind === 'paseo') return 'paseo';
+  if (kind.startsWith('codex')) return 'codex-queue';
+  return kind;
 }
 
-function renderWakePayload(request: WakeRequest, body: string): string {
+function renderWakePayload(request: WakeRequest, body: string, kind: WakeRouteKind): string {
   return [
-    '<system-reminder source="square">',
+    `<system-reminder source="square" wake="${wakeLabel(kind)}">`,
+    `square: ${displayAttentionPath(request.squarePath)}`,
     renderAttentionPreview({
       squarePath: request.squarePath,
       actIndex: request.actIndex,
@@ -63,9 +65,8 @@ function renderWakePayload(request: WakeRequest, body: string): string {
       actor: request.actor,
       route: request.route,
       body,
+      compact: true,
     }),
-    'The native adapter presented this attention. If you have not acted on it, pull from the square yourself.',
-    `\`${catchCommand(request.squarePath, request.recipient)}\``,
     '</system-reminder>',
   ].join('\n');
 }
@@ -222,7 +223,7 @@ async function processNotification(
     };
     await port.dispatch(
       evidence.attemptableRoutes,
-      renderWakePayload(request, notification.item.body),
+      (route) => renderWakePayload(request, notification.item.body, route.kind),
       {
         nextAttemptN: () => nextWakeAttemptNumber(attention, { env, now: now() }),
         beforeSend: async (route, attemptN) => {

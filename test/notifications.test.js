@@ -76,7 +76,7 @@ function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
 }
 
-test('PaseoAdapter waits for the current boundary and sends supplied awareness only', async () => {
+test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async () => {
   const item = fixture();
   route(item, { agentId: 'exact-agent' });
   const registered = { ownerId: 'bob-owner', sessionId: 'exact-agent', kind: 'paseo', address: { agentId: 'exact-agent' }, updatedAt: Date.now() };
@@ -85,7 +85,7 @@ test('PaseoAdapter waits for the current boundary and sends supplied awareness o
   const adapter = new PaseoAdapter({
     discover: () => ({ agents: [
       { id: 'decoy', name: 'Bob', status: 'idle' },
-      { id: 'exact-agent', name: 'Other', status: 'running' },
+      { id: 'exact-agent', name: 'Other', status: 'idle' },
     ] }),
     waitForBoundary: async () => { boundary = true; return true; },
     sendWake: (request) => { sent = request; },
@@ -103,6 +103,24 @@ test('PaseoAdapter waits for the current boundary and sends supplied awareness o
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
+test('PaseoAdapter does not wake a running agent', async () => {
+  const item = fixture();
+  route(item, { agentId: 'running-agent' });
+  let boundary = false;
+  let sent = false;
+  const outcome = await new PaseoAdapter({
+    discover: () => ({ agents: [{ id: 'running-agent', name: 'Bob', status: 'running' }] }),
+    waitForBoundary: async () => { boundary = true; return true; },
+    sendWake: () => { sent = true; },
+  }).dispatch({ agentId: 'running-agent' }, '<system-reminder source="square">awareness</system-reminder>', async () => true);
+
+  assert.equal(outcome.outcome, 'unavailable');
+  assert.equal(outcome.signature, 'agent_not_idle');
+  assert.equal(boundary, false);
+  assert.equal(sent, false);
+  fs.rmSync(item.root, { recursive: true, force: true });
+});
+
 test('the notification worker records an accepted wake through the real Paseo adapter', async () => {
   const item = fixture();
   route(item, { agentId: 'integrated-agent' });
@@ -116,9 +134,13 @@ test('the notification worker records an accepted wake through the real Paseo ad
   }));
 
   assert.equal(sent.agentId, 'integrated-agent');
-  assert.match(sent.prompt, /<system-reminder source="square">/);
+  assert.match(sent.prompt, /<system-reminder source="square" wake="paseo">/);
+  assert.doesNotMatch(sent.prompt, /native adapter presented/);
+  assert.match(sent.prompt, /square: \/[^\n]+/);
+  assert.doesNotMatch(sent.prompt, /<square>[^<]+<\/square>/);
+  assert.doesNotMatch(sent.prompt, /catch --now/);
   assert.match(sent.prompt, /private payload @Bob/);
-  assert.match(sent.prompt, /catch --now/);
+  assert.match(sent.prompt, /✓ shown in full/);
   assert.deepEqual(readWakeAttempts({ env: item.env }).map(({ outcome }) => outcome), ['accepted']);
   assert.deepEqual(loadSquare(item.squarePath).runtime.notifyLeases, {});
   fs.rmSync(item.root, { recursive: true, force: true });

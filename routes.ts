@@ -174,9 +174,9 @@ function completeRouteEvidence(value: WakeRouteEvidence | undefined): value is W
 
 /**
  * One probe per kind. A probe publishes only when its provider's complete
- * endpoint evidence is present; session identity alone never publishes. The
- * four native transports have no endpoint lifecycle in this delivery, so
- * their probes publish nothing until those transports land.
+ * endpoint evidence is present; Codex uses its thread id as that evidence.
+ * The other native transports have no endpoint lifecycle in this delivery,
+ * so their probes publish nothing until those transports land.
  */
 export const WAKE_ROUTE_PROBES: Readonly<Record<WakeRouteKind, WakeRouteProbe>> = {
   'opencode-server': () => undefined,

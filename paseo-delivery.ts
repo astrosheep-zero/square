@@ -68,12 +68,12 @@ export class PaseoAdapter implements WakeAdapter {
       };
     }
     const agent = discovery.agents.find((candidate) => candidate.id === agentId);
-    if (agent === undefined || (agent.status !== 'idle' && agent.status !== 'running')) {
+    if (agent === undefined || agent.status !== 'idle') {
       return {
         outcome: 'unavailable',
-        signature: agent === undefined ? 'address_not_found' : 'agent_not_active',
-        message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle or running.',
-        diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_active'),
+        signature: agent === undefined ? 'address_not_found' : 'agent_not_idle',
+        message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle.',
+        diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_idle'),
         ...(agent === undefined ? {} : { retainRoute: true }),
       };
     }

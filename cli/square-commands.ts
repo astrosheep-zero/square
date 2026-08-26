@@ -26,7 +26,7 @@ import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
 import { openParticipant, Square } from '../square-wiring.js';
-import { admitsBareExpress, entryPresentation, eventPresentation } from '../views.js';
+import { entryPresentation, eventPresentation } from '../views.js';
 
 import {
   type CommandContext,
@@ -241,16 +241,6 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
     const squarePath = requireSquarePath(context);
     await sweepPendingNotifications(squarePath);
     const body = resolveBody(intent.activity);
-    if (!intent.force && intent.reach !== 'bell') {
-      const reader = await openSquare(squarePath, { clock: nowMs });
-      try {
-        if (!await admitsBareExpress(reader, intent.name, body)) {
-          fail(`✕ no one is turned toward you\n  · address someone with @name, ring the bell, or use --force\n» ${participantCommandPrefix(squarePath, intent.name)} express --force -`);
-        }
-      } finally {
-        await closeOpenSquare(reader);
-      }
-    }
     const reachArg = intent.reach === 'bell' ? ' --bell' : '';
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
