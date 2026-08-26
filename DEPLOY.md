@@ -1,6 +1,7 @@
 # Deploy
 
-Clone the repo as `square`, build it, then link the square skill into Claude Code and Agents.
+Install the published Square CLI, then install its integrations through the
+native harness commands. Pi receives Square as the published npm package.
 
 ## Requirements
 
@@ -11,21 +12,16 @@ Clone the repo as `square`, build it, then link the square skill into Claude Cod
 ## Steps
 
 ```bash
-git clone <repo-url> square
-cd square
-npm install
-npm run build
-npm link
+npm install -g @astrosheep/square
 square install --all -f
 ```
 
 ## Update
 
 ```bash
-git pull
-npm run build
-npm link
+npm install -g @astrosheep/square@latest
 square install --all -f
 ```
 
-No restart is needed. Claude Code and Agents read the skill link on demand.
+No restart is needed. Claude Code and Agents read their installed support on
+demand.
