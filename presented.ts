@@ -16,6 +16,13 @@ interface PresentedRow {
   act_index: number;
 }
 
+export interface PresentedAttention {
+  ownerId: string;
+  squarePath: string;
+  name: string;
+  actIndex: number;
+}
+
 interface SelectedMembership {
   membership: InboxMembership;
   ownerId: string;
@@ -65,6 +72,19 @@ function readRows(filePath: string, now = Date.now()): PresentedRow[] {
     }
   }
   return rows;
+}
+
+/** Read the current presentation facts once for a derived evidence projection. */
+export function readPresentedAttentions(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): PresentedAttention[] {
+  return readRows(presentedPath(env), now).map((row) => ({
+    ownerId: row.owner_id,
+    squarePath: canonicalSquarePath(row.square_path),
+    name: row.name,
+    actIndex: row.act_index,
+  }));
 }
 
 function writeRows(filePath: string, rows: PresentedRow[]): void {

@@ -12,10 +12,10 @@ import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-h
 import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
-import { presentOnce } from '../dist/presented.js';
+import { presentOnce, recordPresentedForOwner } from '../dist/presented.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
-import { readWakeAttempts } from '../dist/wake-attempts.js';
+import { readWakeAttempts, recordWakeAttempt } from '../dist/wake-attempts.js';
 import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
 import { readCursor } from '../dist/runtime.js';
 
@@ -536,6 +536,114 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       launchWorker: () => { throw new Error('terminal attention must not launch'); },
     })), []);
+  } finally {
+    item.cleanup();
+  }
+});
+
+test('one sweep projects every candidate from one ledger read and keeps individual selection semantics', async () => {
+  const item = workshop();
+  const now = Date.now();
+  try {
+    withRegistry(item.env, () => {
+      recordJoin('carol-session', 'Carol', item.squarePath, {
+        channel: 'paseo', paseoAgentId: 'carol-session', ownerId: 'carol-owner', at: now - 200,
+      });
+    });
+    upsertWakeRoute({
+      ownerId: 'carol-owner', sessionId: 'carol-session', kind: 'paseo', address: { agentId: 'carol-session' },
+    }, { env: item.env, at: now - 100 });
+    registerRoute(item, 'bob-owner', 'bob-session', now - 100);
+
+    item.cli('Carol', ['join'], now - 90);
+    item.cli('Alice', ['express', '--force', 'terminal attempt @Bob'], now - 80_000);
+    item.cli('Alice', ['express', '--force', 'eligible first @Bob'], now - 70_000);
+    item.cli('Alice', ['express', '--force', 'already notified @Bob'], now - 60_000);
+    item.cli('Alice', ['express', '--force', 'already presented @Carol'], now - 50_000);
+    item.cli('Alice', ['express', '--force', 'failed route @Bob'], now - 40_000);
+    item.cli('Alice', ['express', '--force', 'eligible later @Bob'], now - 30_000);
+    item.cli('Alice', ['express', '--force', 'one activity two recipients @Bob @Carol'], now - 20_000);
+    item.cli('Alice', ['express', '--force', 'inside grace @Bob'], now - wakeGraceMs(item.env));
+
+    const acts = loadSquare(item.squarePath).acts.filter((act) => act.kind === 'say');
+    const byBody = new Map(acts.map((act) => [act.body, act]));
+    const notified = byBody.get('already notified @Bob');
+    const terminal = byBody.get('terminal attempt @Bob');
+    const failed = byBody.get('failed route @Bob');
+    const presented = byBody.get('already presented @Carol');
+    const grace = byBody.get('inside grace @Bob');
+    assert.ok(notified && terminal && failed && presented && grace);
+
+    const state = loadSquare(item.squarePath);
+    state.runtime.observations.Bob = {
+      [formatActivityId(notified.index)]: { state: 'notified', at: now - 1, ownerId: 'bob-owner' },
+    };
+    writeSquareFile(item.squarePath, state);
+    recordPresentedForOwner('carol-owner', item.squarePath, 'Carol', presented.index, item.env, now - 1);
+    recordWakeAttempt({
+      attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: terminal.index },
+      routeKind: 'paseo', outcome: 'accepted', signature: 'accepted', attemptN: 1, at: now - 1,
+    }, item.env);
+    recordWakeAttempt({
+      attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: failed.index },
+      routeKind: 'paseo', outcome: 'failed', signature: 'failed', attemptN: 1, at: now - 1,
+    }, item.env);
+
+    const candidates = [
+      ['Bob', byBody.get('eligible first @Bob')],
+      ['Bob', notified],
+      ['Carol', presented],
+      ['Bob', terminal],
+      ['Bob', failed],
+      ['Bob', byBody.get('eligible later @Bob')],
+      ['Bob', byBody.get('one activity two recipients @Bob @Carol')],
+      ['Carol', byBody.get('one activity two recipients @Bob @Carol')],
+      ['Bob', grace],
+    ];
+    const expected = new Set();
+    for (const [recipient, act] of candidates) {
+      assert.ok(act);
+      if (now - act.at <= wakeGraceMs(item.env)) continue;
+      const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, recipient, act.index, now, item.env));
+      if (wakeIsEligible(evidence)) expected.add(act.index);
+    }
+    const expectedSelected = [...expected].sort((left, right) => left - right);
+    assert.ok(terminal.index < expectedSelected[0]);
+    assert.equal(expectedSelected.includes(grace.index), false);
+
+    const reads = new Map([
+      [item.squarePath, 0],
+      [item.env.SQUARE_REGISTRY, 0],
+      [item.env.SQUARE_ROUTES, 0],
+      [item.env.SQUARE_WAKE_ATTEMPTS, 0],
+      [item.env.SQUARE_PRESENTED, 0],
+    ]);
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = function countedRead(file, ...args) {
+      const filePath = typeof file === 'string' ? file : file.toString();
+      if (reads.has(filePath)) reads.set(filePath, reads.get(filePath) + 1);
+      return originalReadFileSync.call(this, file, ...args);
+    };
+    const launched = [];
+    try {
+      const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+        env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+        now,
+        limit: 10,
+        launchWorker: (_workerPath, args) => launched.push(Number(args.at(-1))),
+      }));
+      assert.deepEqual(selected, expectedSelected);
+      assert.deepEqual(launched, expectedSelected);
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+    assert.deepEqual([...reads.values()], [2, 1, 1, 1, 1]);
+    assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+      now,
+      limit: 1,
+      launchWorker: () => {},
+    })), expectedSelected.slice(0, 1));
   } finally {
     item.cleanup();
   }

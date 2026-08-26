@@ -265,7 +265,7 @@ export function recordDone(
   writeLifecycle('done', sessionId, name, squarePath, options);
 }
 
-function readActiveBindings(now = Date.now()): RegistryBinding[] {
+export function readActiveBindings(now = Date.now()): RegistryBinding[] {
   try {
     return foldRegistry(fs.readFileSync(registryPath(), 'utf8'), now);
   } catch (error) {

@@ -22,7 +22,7 @@ import { markNotificationNotified } from './square-wiring.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import type { Activity, WakeNotifier } from './square-facade.js';
-import { entryPresentation, notificationDelivered, notificationForAct, pendingDeliveries, resolveParticipant } from './views.js';
+import { entryPresentation, notificationDelivered, notificationForAct, pendingDeliveriesFromState, resolveParticipant } from './views.js';
 import { claimNotificationLease, releaseNotificationLease, transitionNotificationLease } from './wakes.js';
 import {
   nextWakeAttemptNumber,
@@ -30,7 +30,7 @@ import {
   recordWakeAttempt,
   type WakeAttention,
 } from './wake-attempts.js';
-import { wakeEvidence, wakeIsEligible } from './wake-evidence.js';
+import { wakeEvidence, wakeEvidenceProjectionFromState, wakeIsEligible } from './wake-evidence.js';
 import { WakePort } from './wake-port.js';
 
 const NOTIFY_LEASE_MS = 5 * 60 * 1000;
@@ -322,12 +322,19 @@ export async function sweepPendingNotifications(
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
   const square = await openSquare(squarePath, { clock: () => now });
-  const pending = await pendingDeliveries(square).finally(() => closeOpenSquare(square));
+  let state: Awaited<ReturnType<typeof entryPresentation>>['state'];
+  try {
+    ({ state } = await entryPresentation(square, ''));
+  } finally {
+    await closeOpenSquare(square);
+  }
+  const pending = pendingDeliveriesFromState(state);
+  const evidence = wakeEvidenceProjectionFromState(squarePath, state, now, env);
   const indexes = new Set<number>();
   for (const delivery of pending) {
     for (const note of delivery.notifications) {
       if (now - note.item.at <= wakeGraceMs(env)) continue;
-      if (!wakeIsEligible(await wakeEvidence(squarePath, delivery.recipient, note.item.index, now, env))) continue;
+      if (!wakeIsEligible(evidence.evidence(delivery.recipient, note.item.index))) continue;
       indexes.add(note.item.index);
     }
   }
