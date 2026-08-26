@@ -23,6 +23,10 @@ test('generated release artifacts expose the current identity and supported host
     types: './dist/paseo.d.ts',
     default: './dist/paseo.js',
   });
+  assert.deepEqual(packageJson.exports['./server'], {
+    types: './dist/opencode.d.ts',
+    default: './dist/opencode.js',
+  });
   assert.equal(packageJson.peerDependenciesMeta['@getpaseo/client'].optional, true);
   assert.equal(packageJson.peerDependenciesMeta.ws.optional, true);
   assert.equal(SQUARE_IDENTITY.packageName, packageJson.name);

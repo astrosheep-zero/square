@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
-import squareOpenCodePlugin from '../extensions/square-opencode.js';
+import squareOpenCodePlugin from '../dist/opencode.js';
 import squarePiExtension, {
   inboxKeys,
   pendingInbox,
@@ -39,8 +38,9 @@ import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/index.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
+  installOpenCodePlugin,
   installHarnessLinks,
-  opencodeExtensionLink,
+  uninstallOpenCodePlugin,
   skillLinks,
   verifyOpenCodeRuntime,
 } from '../dist/harness-links.js';
@@ -143,19 +143,42 @@ test('managed link installation validates sources before replacing forced target
 
 test('OpenCode doctor runs debug config through its runtime boundary', () => {
   const home = '/tmp/square-opencode';
-  const pluginUrl = pathToFileURL(opencodeExtensionLink(home).target).href;
   const loaded = verifyOpenCodeRuntime(home, () => {
-    return { status: 0, stdout: JSON.stringify({ config: { plugin: [pluginUrl] } }), stderr: '' };
+    return { status: 0, stdout: JSON.stringify({ config: { plugin: ['@astrosheep/square'] } }), stderr: '' };
   });
-  assert.equal(loaded, '✓ OpenCode debug config loaded');
+  assert.equal(loaded, '✓ OpenCode npm plugin loaded');
   assert.match(
     verifyOpenCodeRuntime(home, () => ({ status: 0, stdout: JSON.stringify({ config: { plugin: [] } }), stderr: '' })),
-    /plugin not loaded/
+    /npm plugin not loaded/
   );
   assert.match(
     verifyOpenCodeRuntime(home, () => ({ status: 1, stdout: '', stderr: 'extension failed' })),
     /OpenCode debug config failed: extension failed/
   );
+});
+
+test('OpenCode installation delegates plugin ownership to OpenCode npm config', () => {
+  const calls = [];
+  const result = installOpenCodePlugin('/tmp/square-opencode', true, (_home, args) => {
+    calls.push(args);
+    return { status: 0, stdout: '', stderr: '' };
+  });
+  assert.deepEqual(calls, [['plugin', '@astrosheep/square', '--global', '--force']]);
+  assert.deepEqual(result, ['@astrosheep/square']);
+});
+
+test('OpenCode uninstall removes only the Square npm plugin entry', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-uninstall-'));
+  const config = path.join(home, '.config', 'opencode');
+  fs.mkdirSync(config, { recursive: true });
+  const configPath = path.join(config, 'opencode.jsonc');
+  fs.writeFileSync(configPath, JSON.stringify({ plugin: ['@astrosheep/square@0.3.27', 'other-plugin'] }, null, 2));
+  try {
+    assert.deepEqual(uninstallOpenCodePlugin(home), ['@astrosheep/square']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), { plugin: ['other-plugin'] });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('Pi package lifecycle uses Pi installation as the single extension owner', () => {

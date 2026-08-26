@@ -112,14 +112,14 @@ test('install and uninstall manage an explicit OpenCode target', () => {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(result.status, 0, result.stderr);
-    const plugin = path.join(config, 'opencode', 'plugins', 'square.js');
-    assert.equal(fs.realpathSync(plugin), path.join(ROOT, 'extensions', 'square-opencode.js'));
+    const plugin = path.join(config, 'opencode', 'opencode.jsonc');
+    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, ['@astrosheep/square']);
 
     const removed = run(['uninstall', 'opencode'], {
       env: { HOME: home, XDG_CONFIG_HOME: config },
     });
     assert.equal(removed.status, 0, removed.stderr);
-    assert.equal(fs.existsSync(plugin), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, []);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

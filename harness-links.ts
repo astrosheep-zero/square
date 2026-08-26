@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import crossSpawn from 'cross-spawn';
+
+import { SQUARE_IDENTITY } from './identity.js';
 
 export interface HarnessLink {
   source: string;
@@ -91,6 +93,39 @@ function runOpenCode(homeDir: string, args: string[]): { status: number; stdout:
   return { status: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
+function requireOpenCodeSuccess(result: { status: number; stdout: string; stderr: string }, action: string): void {
+  if (result.status === 0) return;
+  throw new Error(`OpenCode ${action} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
+}
+
+export function installOpenCodePlugin(homeDir: string, force = false, run: OpenCodeCommandRunner = runOpenCode): string[] {
+  const args = ['plugin', SQUARE_IDENTITY.packageName, '--global'];
+  if (force) args.push('--force');
+  requireOpenCodeSuccess(run(homeDir, args), 'plugin install');
+  return [SQUARE_IDENTITY.packageName];
+}
+
+function configPath(homeDir: string): string {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config');
+  return path.join(configHome, 'opencode', 'opencode.jsonc');
+}
+
+function removeConfiguredPlugin(homeDir: string): boolean {
+  const target = configPath(homeDir);
+  let source: string;
+  try { source = fs.readFileSync(target, 'utf8'); } catch { return false; }
+  const escaped = SQUARE_IDENTITY.packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const packageLine = new RegExp(`^\\s*"${escaped}(?:@[^"\\n]+)?"\\s*,?\\s*$`, 'm');
+  const next = source.replace(packageLine, '');
+  if (next === source) return false;
+  fs.writeFileSync(target, next);
+  return true;
+}
+
+export function uninstallOpenCodePlugin(homeDir: string): string[] {
+  return removeConfiguredPlugin(homeDir) ? [SQUARE_IDENTITY.packageName] : [];
+}
+
 /** Verify that OpenCode accepts its resolved runtime configuration after links are installed. */
 export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunner = runOpenCode): string {
   try {
@@ -105,9 +140,9 @@ export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunne
       return '✕ OpenCode debug config returned invalid JSON';
     }
     const plugin = config.config?.plugin;
-    const expected = pathToFileURL(opencodeExtensionLink(homeDir).target).href;
-    if (Array.isArray(plugin) && plugin.includes(expected)) return '✓ OpenCode debug config loaded';
-    return `○ OpenCode plugin not loaded: ${expected}`;
+    const expected = SQUARE_IDENTITY.packageName;
+    if (Array.isArray(plugin) && plugin.includes(expected)) return '✓ OpenCode npm plugin loaded';
+    return `○ OpenCode npm plugin not loaded: ${expected}`;
   } catch (error) {
     return `○ OpenCode runtime unavailable (${error instanceof Error ? error.message : String(error)})`;
   }
@@ -119,13 +154,4 @@ export function skillLinks(homeDir = os.homedir(), parents: Array<'.claude' | '.
     target: path.join(homeDir, parent, 'skills', name),
     kind: 'skill' as const,
   })));
-}
-
-export function opencodeExtensionLink(homeDir = os.homedir()): HarnessLink {
-  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config');
-  return {
-    source: path.join(packageRoot(), 'extensions', 'square-opencode.js'),
-    target: path.join(configHome, 'opencode', 'plugins', 'square.js'),
-    kind: 'extension',
-  };
 }

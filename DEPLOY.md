@@ -16,6 +16,11 @@ npm install -g @astrosheep/square
 square install --all -f
 ```
 
+The OpenCode integration is installed from the published `@astrosheep/square`
+package through OpenCode's npm plugin loader. The package's `exports["./server"]`
+entry tells OpenCode which server plugin to load. Square still links its skills
+into the local agent configuration.
+
 ## Update
 
 ```bash

@@ -52,6 +52,10 @@
     "./paseo": {
       "types": "./dist/paseo.d.ts",
       "default": "./dist/paseo.js"
+    },
+    "./server": {
+      "types": "./dist/opencode.d.ts",
+      "default": "./dist/opencode.js"
     }
   },
   "main": "dist/index.js",
