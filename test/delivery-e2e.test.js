@@ -637,7 +637,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     } finally {
       fs.readFileSync = originalReadFileSync;
     }
-    assert.deepEqual([...reads.values()], [2, 1, 1, 1, 1]);
+    assert.deepEqual([...reads.values()], [1, 1, 1, 1, 1]);
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now,
