@@ -109,8 +109,8 @@ export const catchCommand: CommandSpec<WatchOptions> = {
   },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    await cmdWatch(squarePath, requireParticipant(context.name), intent);
-    await sweepPendingNotifications(squarePath);
+    const caught = await cmdWatch(squarePath, requireParticipant(context.name), intent);
+    if (caught !== false) await sweepPendingNotifications(squarePath);
   },
   present: () => {},
 };

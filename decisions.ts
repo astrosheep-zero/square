@@ -18,14 +18,13 @@ import {
   foldedState,
   freshWatchLease,
   publicActs,
-  readCursor,
   resolveRosterName,
   rosterNames,
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js';
 import { formatActivityId, isIgnored, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
-import { deriveDeliveryModel, perceiveActivity } from './delivery.js';
+import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
 export interface UnreadActivitySummary {
@@ -168,8 +167,9 @@ export function decideAct(
     if (result.reason === 'not_joined') throw new SquareError('not_joined', `${name} has not joined this square`);
   }
 
-  const delta = actDelta(squareState.acts, readCursor(squareState, name));
-  const unreadPublic = directedPeerSays(squareState, delta, name);
+  const delivery = deriveDeliveryModel(squareState);
+  const delta = actDelta(squareState.acts, delivery.cursorFor(name));
+  const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
   const unreadRoomChanges: ReturnType<typeof peerRoomChanges> = [];
 
   const sayCountByActor = new Map<string, number>();
@@ -187,7 +187,7 @@ export function decideAct(
       latestAt: currentSummary === undefined ? item.at : Math.max(currentSummary.latestAt, item.at),
       previews: [
         ...(currentSummary?.previews ?? []),
-        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: perceiveActivity(squareState, item, name) },
+        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: delivery.perceive(item, name) },
       ].slice(-UNREAD_PREVIEW_LIMIT),
     });
   }
@@ -282,12 +282,12 @@ export interface ParticipantStatus {
 
 export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
 
-function presenceFor(squareState: SquareState, snapshot: FoldedSquareState['participants'][number] | undefined, name: string, now: number): {
+function presenceFor(squareState: SquareState, snapshot: FoldedSquareState['participants'][number] | undefined, name: string, now: number, delivery: DeliveryModel): {
   state: CorePresenceState;
   lastAt: number | undefined;
 } {
   if (snapshot?.done) return { state: 'done', lastAt: snapshot.lastActiveAt };
-  const cursorAt = squareState.acts.findLast((act) => act.index <= readCursor(squareState, name))?.at;
+  const cursorAt = squareState.acts.findLast((act) => act.index <= delivery.cursorFor(name))?.at;
   const lease = freshWatchLease(squareState, name, now);
   if (lease !== undefined) return { state: 'watching', lastAt: cursorAt ?? lease.heartbeatAt };
   const lastAt = cursorAt ?? (snapshot?.joined ? snapshot.lastActiveAt : undefined);
@@ -310,18 +310,18 @@ export interface StatusResult {
   now: number;
 }
 
-function buildParticipantStatuses(squareState: SquareState, now: number, state = foldedState(squareState)): ParticipantStatus[] {
-  const delivery = deriveDeliveryModel(squareState);
+function buildParticipantStatuses(squareState: SquareState, now: number, state = foldedState(squareState), suppliedDelivery?: DeliveryModel): ParticipantStatus[] {
+  const delivery = suppliedDelivery ?? deriveDeliveryModel(squareState);
   return state.participants.map((snapshot) => {
     const participant = snapshot.name;
-    const presence = presenceFor(squareState, snapshot, participant, now);
+    const presence = presenceFor(squareState, snapshot, participant, now, delivery);
     const participantStatus = snapshot?.done ? 'done' : snapshot?.joined ? 'active' : 'not joined';
-    const consumedThrough = readCursor(squareState, participant);
+    const consumedThrough = delivery.cursorFor(participant);
     let unreadActivityCount = 0;
     if (snapshot?.joined) {
       for (const act of squareState.acts) {
         if (actStableIndex(act) <= consumedThrough) continue;
-        if (directedPeerSays(squareState, [act], participant).length > 0) unreadActivityCount++;
+        if (directedPeerSays(squareState, [act], participant, delivery).length > 0) unreadActivityCount++;
       }
     }
     return {
@@ -338,7 +338,7 @@ function buildParticipantStatuses(squareState: SquareState, now: number, state =
   });
 }
 
-export function coreStatus(squareState: SquareState, now: number): StatusResult {
+export function coreStatus(squareState: SquareState, now: number, delivery?: DeliveryModel): StatusResult {
   const state = foldedState(squareState);
   const latestAct = publicActs(squareState.acts).at(-1);
   return {
@@ -350,21 +350,23 @@ export function coreStatus(squareState: SquareState, now: number): StatusResult 
     holdReason: state.hold.reason,
     holdActor: state.hold.actor,
     holdAt: state.hold.at,
-    participants: buildParticipantStatuses(squareState, now, state),
+    participants: buildParticipantStatuses(squareState, now, state, delivery),
     latestAct,
     now,
   };
 }
 
-export function coreParticipants(squareState: SquareState, now: number): ParticipantStatus[] {
-  return buildParticipantStatuses(squareState, now);
+export function coreParticipants(squareState: SquareState, now: number, delivery?: DeliveryModel): ParticipantStatus[] {
+  return buildParticipantStatuses(squareState, now, undefined, delivery);
 }
 
-export function coreActivities(squareState: SquareState, opts: ActivitiesOptions): StoredAct[] {
+export function coreActivities(squareState: SquareState, opts: ActivitiesOptions, suppliedDelivery?: DeliveryModel): StoredAct[] {
   const participants = opts.participants ?? [];
   const canonicalParticipants = participants.map((participant) => resolveKnownName(squareState, participant));
   const viewer = opts.viewer !== undefined ? resolveKnownName(squareState, opts.viewer) : undefined;
   let acts = [...squareState.acts];
+  let delivery = suppliedDelivery;
+  const projected = (): DeliveryModel => delivery ??= deriveDeliveryModel(squareState);
 
   // --at establishes one or more context windows first; other filters AND inside their union.
   if (opts.atIndexes !== undefined && opts.atIndexes.length > 0) {
@@ -389,12 +391,11 @@ export function coreActivities(squareState: SquareState, opts: ActivitiesOptions
   if (opts.after != null) acts = acts.filter((act) => act.at > opts.after!);
   if (opts.mention != null) {
     const mention = resolveKnownName(squareState, opts.mention);
-    const delivery = deriveDeliveryModel(squareState);
-    acts = acts.filter((act) => act.kind === 'say' && delivery.plan(act).some((item) => sameName(item.recipient, mention)));
+    acts = acts.filter((act) => act.kind === 'say' && projected().plan(act).some((item) => sameName(item.recipient, mention)));
   }
   if (opts.pending) {
     if (viewer === undefined) return [];
-    const pendingIndexes = new Set(deriveDeliveryModel(squareState).pendingFor(viewer).map((notification) => notification.item.index));
+    const pendingIndexes = new Set(projected().pendingFor(viewer).map((notification) => notification.item.index));
     acts = acts.filter((act) => pendingIndexes.has(act.index));
   }
   const search = opts.grep !== undefined ? { pattern: opts.grep, fixed: false } : opts.fixed !== undefined ? { pattern: opts.fixed, fixed: true } : undefined;

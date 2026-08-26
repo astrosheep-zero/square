@@ -10,8 +10,8 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
-import { audienceBefore, audienceOf, formatActivityId, type Perception } from './square-core.js';
-import { isCurrentlyJoined, lastJoinIndex, matchesMentionTarget, observationFor, recordObservation, resolveRosterName, rosterNames } from './runtime.js';
+import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } from './square-core.js';
+import { matchesMentionTarget, readCursor, recordObservation } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
@@ -67,15 +67,18 @@ export interface CatchFilterShape {
 export interface DeliveryModel {
   plan(item: StoredAct): PlannedNotification[];
   pendingFor(recipient: string): PlannedNotification[];
-}
-
-function canonicalRecipient(squareState: SquareState, name: string): string {
-  return resolveRosterName(squareState, name) ?? name;
+  directedTo(item: StoredAct, recipient: string): boolean;
+  perceive(item: StoredAct, viewer: string): Perception;
+  cursorFor(recipient: string): number;
+  isSeen(recipient: string, actOrIndex: StoredAct | number): boolean;
+  knownParticipant(name: string): string | undefined;
+  participants(): readonly string[];
+  joinedRecipients(): readonly string[];
+  readonly replayedActivityCount: number;
 }
 
 export function isActivitySeen(squareState: SquareState, name: string, actOrIndex: StoredAct | number): boolean {
-  const index = typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index;
-  return observationFor(squareState, canonicalRecipient(squareState, name), index)?.state === 'seen';
+  return deriveDeliveryModel(squareState).isSeen(name, actOrIndex);
 }
 
 /**
@@ -83,9 +86,20 @@ export function isActivitySeen(squareState: SquareState, name: string, actOrInde
  * All consumers share these targets instead of reinterpreting artifact text or cursor state.
  */
 export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
-  const roster = rosterNames(squareState).filter((name) => isCurrentlyJoined(squareState.acts, name));
+  const landed = replayLandedAudiences(squareState.acts);
+  const roster = [...landed.joined];
   const plannedByIndex = new Map<number, PlannedNotification[]>();
   let pendingByRecipient: Map<string, PlannedNotification[]> | undefined;
+
+  function canonicalRecipient(name: string): string {
+    return landed.resolveParticipant(name) ?? name;
+  }
+
+  function isSeen(requestedRecipient: string, actOrIndex: StoredAct | number): boolean {
+    const recipient = canonicalRecipient(requestedRecipient);
+    const index = typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index;
+    return squareState.runtime.observations?.[recipient]?.[formatActivityId(index)]?.state === 'seen';
+  }
 
   function plan(item: StoredAct): PlannedNotification[] {
     if (item.kind !== 'say') return [];
@@ -93,7 +107,7 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     if (cached !== undefined) return [...cached];
     const sayItem = item as SayItem;
     const audience = audienceOf(sayItem);
-    const recipients = audienceBefore(squareState.acts, sayItem);
+    const recipients = landed.recipientsFor(sayItem);
     const planned = recipients.map((recipient) => {
       const route: DirectedNotificationRoute = audience.kind === 'bell'
         ? 'bell'
@@ -109,14 +123,14 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     if (recipient === undefined) return [];
     if (pendingByRecipient === undefined) {
       pendingByRecipient = new Map(roster.map((name) => [name, []]));
-      const joinedAfter = new Map(roster.map((name) => [name, lastJoinIndex(squareState.acts, name)]));
+      const joinedAfter = new Map(roster.map((name) => [name, landed.lastJoinIndex(name)]));
 
       for (const act of squareState.acts) {
         if (act.kind !== 'say') continue;
         for (const planned of plan(act)) {
           const joinedAt = joinedAfter.get(planned.recipient);
           if (joinedAt === undefined || act.index <= joinedAt) continue;
-          if (isActivitySeen(squareState, planned.recipient, act.index)) continue;
+          if (isSeen(planned.recipient, act.index)) continue;
           pendingByRecipient.get(planned.recipient)?.push(planned);
         }
       }
@@ -124,25 +138,42 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     return [...(pendingByRecipient.get(recipient) ?? [])];
   }
 
-  return { plan, pendingFor };
+  function directedTo(item: StoredAct, recipient: string): boolean {
+    return item.kind === 'say' && landed.includes(item, recipient);
+  }
+
+  function perceive(item: StoredAct, viewer: string): Perception {
+    if (item.kind !== 'say' || sameName(item.actor, viewer)) return 'full';
+    return directedTo(item, viewer) ? 'full' : 'presence';
+  }
+
+  return {
+    plan,
+    pendingFor,
+    directedTo,
+    perceive,
+    cursorFor: (recipient) => readCursor(squareState, recipient, landed),
+    isSeen,
+    knownParticipant: (name) => landed.resolveParticipant(name),
+    participants: () => landed.participants,
+    joinedRecipients: () => roster,
+    replayedActivityCount: landed.replayedActivityCount,
+  };
 }
 
-export function planActNotifications(squareState: SquareState, item: StoredAct): PlannedNotification[] {
-  return deriveDeliveryModel(squareState).plan(item);
+export function planActNotifications(squareState: SquareState, item: StoredAct, delivery = deriveDeliveryModel(squareState)): PlannedNotification[] {
+  return delivery.plan(item);
 }
 
-export function perceiveActivity(squareState: SquareState, item: StoredAct, viewer: string): Perception {
-  if (item.kind !== 'say' || sameName(item.actor, viewer)) return 'full';
-  return deriveDeliveryModel(squareState).plan(item).some((planned) => sameName(planned.recipient, viewer))
-    ? 'full'
-    : 'presence';
+export function perceiveActivity(squareState: SquareState, item: StoredAct, viewer: string, delivery = deriveDeliveryModel(squareState)): Perception {
+  return delivery.perceive(item, viewer);
 }
 
 /** Mark only the notifications selected by the canonical catch projection as fully seen. */
-export function markSeenNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now()): boolean {
+export function markSeenNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now(), delivery = deriveDeliveryModel(squareState)): boolean {
   const deliveredIndexes = new Set(delivered.map((item) => item.index));
   let changed = false;
-  for (const notification of deriveDeliveryModel(squareState).pendingFor(recipient)) {
+  for (const notification of delivery.pendingFor(recipient)) {
     if (!deliveredIndexes.has(notification.item.index)) continue;
     changed = recordObservation(squareState, notification.recipient, notification.item.index, 'seen', at) || changed;
   }

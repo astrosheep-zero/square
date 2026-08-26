@@ -552,7 +552,7 @@ export function renderWatchOutput(
   history: StoredAct[],
   publicItems: PublicAct[],
   roomChanges: RoomChangeAct[],
-  opts: { squarePath: string; stalePartial?: boolean; idleMs?: number; mention?: string; viewer: string; showCatchHint?: boolean; squareState: SquareState }
+  opts: { squarePath: string; stalePartial?: boolean; idleMs?: number; mention?: string; viewer: string; showCatchHint?: boolean; squareState?: SquareState; perceptions?: ReadonlyMap<number, Perception> }
 ): string {
   const sections: string[] = [];
   if (opts.stalePartial) {
@@ -581,7 +581,8 @@ export function renderWatchOutput(
         renderAmbientEvent(act, opts.viewer, {
           actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
           mention: opts.mention,
-          squareState: opts.squareState,
+          ...(opts.perceptions?.has(act.index) ? { perception: opts.perceptions.get(act.index)! } : {}),
+          ...(opts.squareState === undefined ? {} : { squareState: opts.squareState }),
         })
       )
       .filter(Boolean)

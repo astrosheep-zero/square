@@ -1,5 +1,5 @@
 import { type WakeRoute } from './model.js';
-import { isActivitySeen } from './delivery.js';
+import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { nameKey, type SquareState } from './model.js';
 import { readPresentedAttentions } from './presented.js';
 import { canonicalSquarePath, readActiveBindings } from './registry.js';
@@ -37,6 +37,7 @@ function projectionFromState(
   state: SquareState,
   now: number,
   env: NodeJS.ProcessEnv,
+  delivery = deriveDeliveryModel(state),
 ): WakeEvidenceProjection {
   const canonicalPath = canonicalSquarePath(squarePath);
   const owners = new Map<string, Set<string>>();
@@ -81,7 +82,7 @@ function projectionFromState(
       const presented = [...(presentedByAttention.get(key) ?? [])]
         .some((ownerId) => recipientOwners.has(ownerId));
       return {
-        delivered: isActivitySeen(state, recipient, actIndex),
+        delivered: delivery.isSeen(recipient, actIndex),
         notified: (() => {
           const observation = observationFor(state, recipient, actIndex);
           return observation?.state === 'notified'
@@ -119,8 +120,9 @@ export function wakeEvidenceProjectionFromState(
   state: SquareState,
   now: number,
   env: NodeJS.ProcessEnv,
+  delivery?: DeliveryModel,
 ): WakeEvidenceProjection {
-  return projectionFromState(squarePath, state, now, env);
+  return projectionFromState(squarePath, state, now, env, delivery);
 }
 
 /** Project every wake decision from the same primary evidence. */

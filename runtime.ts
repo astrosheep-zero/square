@@ -1,4 +1,4 @@
-import { audienceIncludes, audienceOf, fold, formatActivityId, landedAudienceIncludes, type ActivityId, type Reach } from './square-core.js';
+import { audienceIncludes, audienceOf, fold, formatActivityId, replayLandedAudiences, type ActivityId, type LandedAudienceReplay, type Reach } from './square-core.js';
 import {
   SquareError,
   type StoredAct,
@@ -204,20 +204,21 @@ export function recordObservation(
   return true;
 }
 
-export function readCursor(squareState: SquareState, name: string): number {
-  const boundary = lastJoinIndex(squareState.acts, name) ?? -1;
+export function readCursor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
+  const recipient = landed.resolveParticipant(name) ?? name;
+  const boundary = landed.lastJoinIndex(recipient) ?? -1;
   let cursor = boundary;
   for (const act of squareState.acts) {
     if (act.index <= boundary || act.kind === 'read' || act.actor === undefined) continue;
-    if (sameName(act.actor, name)) {
+    if (sameName(act.actor, recipient)) {
       cursor = act.index;
       continue;
     }
-    if (!landedAudienceIncludes(squareState.acts, act, name)) {
+    if (!landed.includes(act, recipient)) {
       cursor = act.index;
       continue;
     }
-    if (observationFor(squareState, name, act.index)?.state !== 'seen') break;
+    if (squareState.runtime.observations?.[recipient]?.[formatActivityId(act.index)]?.state !== 'seen') break;
     cursor = act.index;
   }
   return cursor;

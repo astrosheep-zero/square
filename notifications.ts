@@ -4,14 +4,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
+  deriveDeliveryModel,
   leaseOwnsNotification,
   planActNotifications,
+  type DeliveryModel,
   type WakeAdapter,
   type WakeRequest,
 } from './delivery.js';
 import { sessionInbox } from './inbox.js';
 import { hasPresentedAttention } from './presented.js';
-import { SquareError, type WakeRoute, type WakeRouteKind } from './model.js';
+import { SquareError, type SquareState, type WakeRoute, type WakeRouteKind } from './model.js';
 import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { displayAttentionPath, renderAttentionPreview } from './attention-presentation.js';
@@ -312,6 +314,29 @@ export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {
   limit?: number;
 }
 
+/** Select sweep candidates from one frozen snapshot and one delivery replay. */
+export function pendingNotificationSweepFromState(
+  squarePath: string,
+  state: SquareState,
+  now: number,
+  env: NodeJS.ProcessEnv,
+  limit: number,
+  deriveDelivery: (snapshot: SquareState) => DeliveryModel = deriveDeliveryModel,
+): number[] {
+  const delivery = deriveDelivery(state);
+  const pending = pendingDeliveriesFromState(state, delivery);
+  const evidence = wakeEvidenceProjectionFromState(squarePath, state, now, env, delivery);
+  const indexes = new Set<number>();
+  for (const recipient of pending) {
+    for (const note of recipient.notifications) {
+      if (now - note.item.at <= wakeGraceMs(env)) continue;
+      if (!wakeIsEligible(evidence.evidence(recipient.recipient, note.item.index))) continue;
+      indexes.add(note.item.index);
+    }
+  }
+  return [...indexes].sort((left, right) => left - right).slice(0, Math.max(0, limit));
+}
+
 /** Reconsider old pending attention at a bounded action boundary using the existing worker. */
 export async function sweepPendingNotifications(
   squarePath: string,
@@ -328,17 +353,7 @@ export async function sweepPendingNotifications(
   } finally {
     await closeOpenSquare(square);
   }
-  const pending = pendingDeliveriesFromState(state);
-  const evidence = wakeEvidenceProjectionFromState(squarePath, state, now, env);
-  const indexes = new Set<number>();
-  for (const delivery of pending) {
-    for (const note of delivery.notifications) {
-      if (now - note.item.at <= wakeGraceMs(env)) continue;
-      if (!wakeIsEligible(evidence.evidence(delivery.recipient, note.item.index))) continue;
-      indexes.add(note.item.index);
-    }
-  }
-  const selected = [...indexes].sort((a, b) => a - b).slice(0, Math.max(0, limit));
+  const selected = pendingNotificationSweepFromState(squarePath, state, now, env, limit);
   const workerPath = fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url));
   for (const actIndex of selected) {
     (opts.launchWorker ?? launchWorker)(workerPath, ['--location', squarePath, '--act-index', String(actIndex)]);

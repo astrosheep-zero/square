@@ -56,10 +56,15 @@ function watchOutputResult(
   const delivered = caught.activities.flatMap((activity) => {
     const index = parseActivityId(activity.id);
     const stored = index === undefined ? undefined : presentation.activities.find((item) => item.index === index);
-    return stored === undefined ? [] : [stored];
+    return stored === undefined ? [] : [{ activity: stored, perception: activity.perception }];
   });
-  const publicItems = delivered.filter((item) => item.kind === 'say' || item.kind === 'done');
-  const roomChanges = delivered.filter((item) => item.kind === 'join' || item.kind === 'done' || item.kind === 'hold' || item.kind === 'resume');
+  const publicItems = delivered
+    .map(({ activity }) => activity)
+    .filter((item) => item.kind === 'say' || item.kind === 'done');
+  const roomChanges = delivered
+    .map(({ activity }) => activity)
+    .filter((item) => item.kind === 'join' || item.kind === 'done' || item.kind === 'hold' || item.kind === 'resume');
+  const perceptions = new Map(delivered.map(({ activity, perception }) => [activity.index, perception]));
   return {
     type: 'output',
     stdout: renderWatchOutput([...presentation.activities], publicItems, roomChanges, {
@@ -67,7 +72,7 @@ function watchOutputResult(
       squarePath,
       viewer: name,
       showCatchHint: !hasAutomaticDeliveryIdentity(),
-      squareState: presentation.state,
+      perceptions,
     }),
     ...(opts.status ? { status: opts.status } : {}),
   };
@@ -173,7 +178,7 @@ function installWatchInterruptHandler(square: OpenSquare, squarePath: string, na
   };
 }
 
-async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions): Promise<void> {
+async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions): Promise<boolean> {
   const square = await openSquare(squarePath, { clock: nowMs });
   const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
   try {
@@ -187,13 +192,15 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions)
       ? watchOutputResult(squarePath, presentation, name, caught, { mention: opts.mention, ...(status ? { status } : {}) })
       : { type: 'terminal' as const, status: status ?? 'empty-now' as WatchStatus };
     await finishWatchResult(square, squarePath, name, result, undefined);
+    return caught.activities.length > 0;
   } finally {
     await facade.close();
     await closeOpenSquare(square);
   }
 }
 
-export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions): Promise<void> {
+/** `false` is reserved for a quiet --now; idle completion preserves its existing sweep boundary. */
+export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions): Promise<boolean | undefined> {
   let square: OpenSquare;
   try {
     square = await openSquare(squarePath, { clock: nowMs });
@@ -211,8 +218,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   }
   if (opts.now) {
     await closeOpenSquare(square);
-    await cmdWatchNow(squarePath, name, opts);
-    return;
+    return cmdWatchNow(squarePath, name, opts);
   }
 
   const start = await beginWatch(square, squarePath, name, opts);

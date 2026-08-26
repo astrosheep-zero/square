@@ -66,6 +66,16 @@ export interface FoldedSquareState {
   ignored: Map<string, Participant[]>;
 }
 
+export interface LandedAudienceReplay {
+  readonly participants: readonly Participant[];
+  readonly joined: readonly Participant[];
+  readonly replayedActivityCount: number;
+  recipientsFor(activity: Act): readonly Participant[];
+  includes(activity: Act, participant: Participant): boolean;
+  lastJoinIndex(participant: Participant): number | undefined;
+  resolveParticipant(name: Participant): Participant | undefined;
+}
+
 export type ValidationResult =
   | { ok: true }
   | { ok: false; reason: 'already_joined' }
@@ -137,13 +147,9 @@ export function isIgnored(state: FoldedSquareState, listener: string, sender: st
   return (state.ignored.get(nameKey(listener)) ?? []).some((target) => sameName(target, sender));
 }
 
-export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: 'say' }>): string[] {
-  const position = acts.findIndex((act) => act === say || (
-    'index' in act && 'index' in say && act.index === say.index
-  ));
-  const before = fold(position < 0 ? acts : acts.slice(0, position));
+function recipientsAtLanding(before: FoldedSquareState, say: Extract<Act, { kind: 'say' }>): string[] {
   const audience = audienceOf(say);
-  const mentionTargets = resolveAudience(audience, before.joined);
+  const mentionTargets = resolveAudience(audience, before.participants.filter((participant) => participant.joined).map((participant) => participant.name));
   const listeners = activeListeners(before, say.actor);
   const recipients: string[] = [];
   for (const name of [...mentionTargets, ...listeners]) {
@@ -152,16 +158,6 @@ export function audienceBefore(acts: readonly Act[], say: Extract<Act, { kind: '
     recipients.push(name);
   }
   return recipients;
-}
-
-/** Whether a peer say was directed to this participant when it landed. */
-export function landedAudienceIncludes(
-  acts: readonly Act[],
-  activity: Act,
-  viewer: string,
-): boolean {
-  if (activity.kind !== 'say' || sameName(activity.actor, viewer)) return false;
-  return audienceBefore(acts, activity).some((recipient) => sameName(recipient, viewer));
 }
 
 export function listeningTo(state: FoldedSquareState, listener: string): string[] {
@@ -224,11 +220,20 @@ function bellRecentAt(state: FoldedSquareState, actor: Participant, at: number, 
   return latest;
 }
 
-export function fold(acts: readonly Act[]): FoldedSquareState {
+interface FoldAccumulator {
+  readonly state: FoldedSquareState;
+  readonly byKey: Map<string, MutableParticipantSnapshot>;
+  readonly ordered: MutableParticipantSnapshot[];
+}
+
+function createFoldAccumulator(): FoldAccumulator {
   const ordered: MutableParticipantSnapshot[] = [];
   const byKey = new Map<string, MutableParticipantSnapshot>();
   const hold: Hold = { active: false };
-  const state: FoldedSquareState = {
+  return {
+    byKey,
+    ordered,
+    state: {
     participants: ordered,
     hold,
     joined: [],
@@ -237,77 +242,132 @@ export function fold(acts: readonly Act[]): FoldedSquareState {
     bellSayAtsByActor: new Map(),
     listening: new Map(),
     ignored: new Map(),
+    },
   };
+}
 
-  for (const act of acts) {
-    const actor = actorOf(act);
-    const snapshot = actor === undefined ? undefined : touchParticipant(byKey, ordered, actor);
+function applyActivity(accumulator: FoldAccumulator, act: Act): void {
+  const { state, byKey, ordered } = accumulator;
+  const actor = actorOf(act);
+  const snapshot = actor === undefined ? undefined : touchParticipant(byKey, ordered, actor);
 
-    switch (act.kind) {
-      case 'join':
-        if (snapshot !== undefined) {
-          snapshot.joined = true;
-          snapshot.done = false;
-          snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
-        }
-        break;
-      case 'done':
-        if (snapshot !== undefined) {
-          snapshot.joined = false;
-          snapshot.done = true;
-          snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
-          state.listening.delete(nameKey(snapshot.name));
-        }
-        break;
-      case 'listen': {
-        const key = nameKey(act.actor);
-        const targets = state.listening.get(key) ?? [];
-        if (!targets.some((target) => sameName(target, act.target))) targets.push(act.target);
-        state.listening.set(key, targets);
-        const ignored = (state.ignored.get(key) ?? []).filter((target) => !sameName(target, act.target));
-        if (ignored.length === 0) state.ignored.delete(key); else state.ignored.set(key, ignored);
-        break;
+  switch (act.kind) {
+    case 'join':
+      if (snapshot !== undefined) {
+        snapshot.joined = true;
+        snapshot.done = false;
+        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
       }
-      case 'ignore': {
-        const key = nameKey(act.actor);
-        const targets = (state.listening.get(key) ?? []).filter((target) => !sameName(target, act.target));
-        if (targets.length === 0) state.listening.delete(key); else state.listening.set(key, targets);
-        const ignored = state.ignored.get(key) ?? [];
-        if (!ignored.some((target) => sameName(target, act.target))) ignored.push(act.target);
-        state.ignored.set(key, ignored);
-        break;
+      break;
+    case 'done':
+      if (snapshot !== undefined) {
+        snapshot.joined = false;
+        snapshot.done = true;
+        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
+        state.listening.delete(nameKey(snapshot.name));
       }
-      case 'say':
-        if (snapshot !== undefined) {
-          snapshot.activityCount += 1;
-          snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
-        }
-        pushThrottleAt(state, act.at);
-        if (act.reach === 'bell') pushBellAt(state, act.actor, act.at);
-        break;
-      case 'hold':
-        hold.active = true;
-        hold.at = act.at;
-        hold.reason = act.body;
-        hold.actor = act.actor;
-        break;
-      case 'resume':
-        hold.active = false;
-        delete hold.at;
-        delete hold.reason;
-        delete hold.actor;
-        break;
-      case 'read':
-        if (snapshot !== undefined) {
-          snapshot.lastReadThrough = Math.max(snapshot.lastReadThrough, act.through);
-        }
-        break;
+      break;
+    case 'listen': {
+      const key = nameKey(act.actor);
+      const targets = state.listening.get(key) ?? [];
+      if (!targets.some((target) => sameName(target, act.target))) targets.push(act.target);
+      state.listening.set(key, targets);
+      const ignored = (state.ignored.get(key) ?? []).filter((target) => !sameName(target, act.target));
+      if (ignored.length === 0) state.ignored.delete(key); else state.ignored.set(key, ignored);
+      break;
     }
+    case 'ignore': {
+      const key = nameKey(act.actor);
+      const targets = (state.listening.get(key) ?? []).filter((target) => !sameName(target, act.target));
+      if (targets.length === 0) state.listening.delete(key); else state.listening.set(key, targets);
+      const ignored = state.ignored.get(key) ?? [];
+      if (!ignored.some((target) => sameName(target, act.target))) ignored.push(act.target);
+      state.ignored.set(key, ignored);
+      break;
+    }
+    case 'say':
+      if (snapshot !== undefined) {
+        snapshot.activityCount += 1;
+        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
+      }
+      pushThrottleAt(state, act.at);
+      if (act.reach === 'bell') pushBellAt(state, act.actor, act.at);
+      break;
+    case 'hold':
+      state.hold.active = true;
+      state.hold.at = act.at;
+      state.hold.reason = act.body;
+      state.hold.actor = act.actor;
+      break;
+    case 'resume':
+      state.hold.active = false;
+      delete state.hold.at;
+      delete state.hold.reason;
+      delete state.hold.actor;
+      break;
+    case 'read':
+      if (snapshot !== undefined) {
+        snapshot.lastReadThrough = Math.max(snapshot.lastReadThrough, act.through);
+      }
+      break;
   }
+}
 
+function finishFold(accumulator: FoldAccumulator): FoldedSquareState {
+  const { state, ordered } = accumulator;
   state.joined = ordered.filter((item) => item.joined).map((item) => item.name);
   state.done = ordered.filter((item) => item.done).map((item) => item.name);
   return state;
+}
+
+export function fold(acts: readonly Act[]): FoldedSquareState {
+  const accumulator = createFoldAccumulator();
+  for (const act of acts) applyActivity(accumulator, act);
+  return finishFold(accumulator);
+}
+
+/** Replay the activity stream once to fix every say's audience at landing. */
+export function replayLandedAudiences(acts: readonly Act[]): LandedAudienceReplay {
+  const accumulator = createFoldAccumulator();
+  const byActivity = new Map<Act, readonly Participant[]>();
+  const byIndex = new Map<number, readonly Participant[]>();
+  const lastJoinByKey = new Map<string, number>();
+
+  for (const act of acts) {
+    if (act.kind === 'say') {
+      const recipients = recipientsAtLanding(accumulator.state, act);
+      byActivity.set(act, recipients);
+      const index = 'index' in act ? act.index : undefined;
+      if (typeof index === 'number') byIndex.set(index, recipients);
+    }
+    if (act.kind === 'join' && 'index' in act && typeof act.index === 'number') {
+      lastJoinByKey.set(nameKey(act.actor), act.index);
+    }
+    applyActivity(accumulator, act);
+  }
+
+  const state = finishFold(accumulator);
+  const participants = state.participants.map((participant) => participant.name);
+  function recipientsFor(activity: Act): readonly Participant[] {
+    const direct = byActivity.get(activity);
+    if (direct !== undefined) return direct;
+    const index = 'index' in activity ? activity.index : undefined;
+    return typeof index === 'number' ? byIndex.get(index) ?? [] : [];
+  }
+  function resolveParticipant(name: Participant): Participant | undefined {
+    return participants.find((participant) => sameName(participant, name));
+  }
+  return {
+    participants,
+    joined: state.joined,
+    replayedActivityCount: acts.length,
+    recipientsFor,
+    includes: (activity, participant) => activity.kind === 'say'
+      && !sameName(activity.actor, participant)
+      && recipientsFor(activity).some((recipient) => sameName(recipient, participant)),
+    lastJoinIndex: (participant) => lastJoinByKey.get(nameKey(participant)),
+    resolveParticipant,
+  };
 }
 
 export function validate(state: FoldedSquareState, act: Act, options: SquareValidationOptions = {}): ValidationResult {
