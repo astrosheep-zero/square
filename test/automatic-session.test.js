@@ -40,7 +40,7 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
   const item = fixture();
   await withEnv(item.env, async (env) => {
     const first = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
-    assert.match(first, /codex-/);
+    assert.match(first, /^codex-[a-f0-9]{12} came back$/);
     const second = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(second, undefined);
   });
@@ -77,7 +77,7 @@ test('automatic implicit join rebinds an active participant without another join
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
     await automaticSessionStart('pi', 'first-session', item.cwd, env);
     const resumed = await automaticSessionStart('pi', 'second-session', item.cwd, env);
-    assert.match(resumed, /You joined the public square/);
+    assert.equal(resumed, 'shared came back');
     assert.equal(lookupSessionBindings('second-session').some((binding) => binding.name === 'shared'), true);
   });
   assert.deepEqual(loadSquare(item.publicPath).acts.map((act) => act.kind), ['join']);
@@ -93,7 +93,7 @@ test('Codex hook command joins and ends through the real CLI boundary', { concur
   const item = fixture();
   await withEnv(item.env, async (env) => {
     const start = await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: item.cwd, hook_event_name: 'SessionStart', source: 'startup' }), env);
-    assert.match(start, /You joined the public square/);
+    assert.match(start, /came back/);
     const end = await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: item.cwd, hook_event_name: 'SessionEnd' }), env);
     assert.equal(end, '');
   });
@@ -107,8 +107,8 @@ test('Codex SessionResume uses the hook process cwd when the payload omits cwd',
   try {
     await withEnv(item.env, async (env) => {
       const resume = await runCodexHookAsync(JSON.stringify({ session_id: 'resume-without-cwd', hook_event_name: 'SessionResume', source: 'resume' }), env);
-      assert.match(resume, /You joined the public square/);
-      assert.match(resume, /SessionResume/);
+      assert.match(resume, /"hookEventName":"SessionResume"/);
+      assert.match(resume, /"additionalContext":"codex-[a-f0-9]{12} came back"/);
     });
   } finally {
     process.chdir(previousCwd);

@@ -6,7 +6,6 @@ import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { canonicalSquarePath, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
-import { participantIdentity, renderAmbientEvent } from './presentation.js';
 import { automaticParticipant } from './participant-identity.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
@@ -45,15 +44,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     if (implicit.state === 'done' || (implicit.state === 'active' && alreadyBound)) return undefined;
     const channel = provider === 'claude' ? 'claude-code' : provider;
     recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
-    const afterSquare = await openSquare(squarePath);
-    const after = await entryPresentation(afterSquare, name, 10).finally(() => closeOpenSquare(afterSquare));
-    const activity = after.recentActivities.map((event) => renderAmbientEvent(event, name, {
-      now: Date.now(),
-      preview: 200,
-      actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
-      squareState: after.state,
-    })).filter(Boolean).join('\n\n');
-    return [`You joined the public square as ${participantIdentity(name)}.`, after.scene, after.context ? `context\n${after.context}` : '', activity ? `recent activity\n${activity}` : ''].filter(Boolean).join('\n\n');
+    return `${name} came back`;
   } finally {
     await square.close();
   }
