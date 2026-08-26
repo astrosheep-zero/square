@@ -1,6 +1,9 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { waitForSessionPending } from '../dist/inbox.js';
+import { lookupSessionBindings } from '../dist/registry.js';
+
+const PI_SEND_TIMEOUT_MS = 5_000;
 
 export function pendingInbox(inbox) {
   return inbox.filter((item) => item.notifications?.length > 0);
@@ -52,8 +55,22 @@ export default function squarePiExtension(pi) {
     watcherAbort = undefined;
   };
 
+  const pause = (signal, delayMs) => new Promise((resolve) => {
+    const finish = () => {
+      signal.removeEventListener('abort', finish);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+
   const wake = async (piContext, token, signal) => {
     while (sessionId !== undefined && token === generation && !signal.aborted) {
+      if (lookupSessionBindings(sessionId).length === 0) {
+        await pause(signal, 1_000);
+        continue;
+      }
       const deferredRetry = retryAfterChange;
       const pending = await waitForSessionPending(sessionId, 30_000, {
         signal,
@@ -78,10 +95,21 @@ export default function squarePiExtension(pi) {
         const delivered = await presentPendingAtBoundary(
           sessionId,
           async (content) => {
-            await pi.sendMessage(
+            const send = Promise.resolve(pi.sendMessage(
               { customType: 'square', content, display: true },
               { deliverAs: 'steer', triggerTurn: true },
-            );
+            ));
+            let timer;
+            try {
+              await Promise.race([
+                send,
+                new Promise((_, reject) => {
+                  timer = setTimeout(() => reject(new Error('Pi native injection timed out')), PI_SEND_TIMEOUT_MS);
+                }),
+              ]);
+            } finally {
+              if (timer !== undefined) clearTimeout(timer);
+            }
             return true;
           },
         );
@@ -106,7 +134,8 @@ export default function squarePiExtension(pi) {
     sessionCwd = ctx.cwd || process.cwd();
     previousSessionId = process.env.SQUARE_PI_SESSION_ID;
     process.env.SQUARE_PI_SESSION_ID = sessionId;
-    try { joiningContext = await automaticSessionStart('pi', sessionId, sessionCwd); } catch { joiningContext = undefined; }
+    joiningContext = undefined;
+    void automaticSessionStart('pi', sessionId, sessionCwd).catch(() => undefined);
     watcherAbort = new AbortController();
     const token = generation;
     watcher = wake(ctx, token, watcherAbort.signal).catch(() => undefined);
@@ -138,7 +167,7 @@ export default function squarePiExtension(pi) {
     stopWatcher();
     for (const waiter of settledWaiters) waiter.resolve();
     settledWaiters = [];
-    if (sessionId && sessionCwd) await automaticSessionEnd('pi', sessionId, sessionCwd);
+    if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd).catch(() => undefined);
     if (process.env.SQUARE_PI_SESSION_ID === sessionId) {
       if (previousSessionId === undefined) delete process.env.SQUARE_PI_SESSION_ID;
       else process.env.SQUARE_PI_SESSION_ID = previousSessionId;
