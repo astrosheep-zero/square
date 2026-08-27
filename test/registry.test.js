@@ -22,7 +22,6 @@ import {
   recordLocalJoin,
   recordSessionDone,
 } from '../dist/registry.js';
-import { readWakeRoutes } from '../dist/routes.js';
 import { streamProjection } from '../dist/views.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
@@ -79,7 +78,6 @@ test('registry folds lifecycle by session, square, and participant name', async 
     const alice = await lookupParticipant(squarePath, 'alice', now);
     assert.equal(alice.length, 1);
     assert.equal(alice[0].name, 'ALICE');
-    assert.equal(alice[0].paseoAgentId, 'paseo-alice');
     assert.equal(alice[0].channel, 'claude-code');
     assert.deepEqual(
       (await lookupSession('session-1', now)).map((entry) => entry.name).sort(),
@@ -90,138 +88,7 @@ test('registry folds lifecycle by session, square, and participant name', async 
   }
 });
 
-test('the latest ownership claim exclusively routes a participant name', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'exclusive-owner-square.square');
-    const now = Date.now();
-    await recordJoin('session-a', 'Alice', squarePath, { channel: 'codex', at: now });
-    await recordJoin('session-b', 'alice', squarePath, { channel: 'claude-code', at: now });
-
-    assert.deepEqual(await lookupSession('session-a', now), []);
-    assert.deepEqual(await lookupSession('session-b', now), [
-      { name: 'alice', squarePath: await canonicalSquarePath(squarePath) },
-    ]);
-    assert.deepEqual((await lookupParticipant(squarePath, 'ALICE', now)).map((entry) => entry.sessionId), [
-      'session-b',
-    ]);
-  } finally {
-    cleanup();
-  }
-});
-
-test('one local command keeps its native and Paseo identities in the same ownership claim', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'multi-channel-owner-square.square');
-    await recordLocalJoin('Alice', squarePath, {
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      CLAUDE_CODE_SESSION_ID: 'claude-session',
-      PASEO_AGENT_ID: 'paseo-agent',
-    });
-
-    const bindings = await lookupParticipant(squarePath, 'Alice');
-    assert.deepEqual(bindings.map((entry) => entry.sessionId).sort(), [
-      'claude-session',
-      'paseo-agent',
-    ]);
-    assert.equal(new Set(bindings.map((entry) => entry.ownerId)).size, 1);
-  } finally {
-    cleanup();
-  }
-});
-
-test('ending one shared identity keeps the other wake route alive', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'shared-owner-route-square.square');
-    const env = {
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      CODEX_THREAD_ID: 'codex-session',
-      PASEO_AGENT_ID: 'paseo-agent',
-    };
-    await recordLocalJoin('Alice', squarePath, env);
-    const before = (await readWakeRoutes({ env, now: Date.now() })).filter((route) => route.kind === 'paseo');
-    assert.equal(before.length, 1);
-
-    assert.equal(await recordSessionDone('codex-session', 'Alice', squarePath, 'codex', env), true);
-    const after = (await readWakeRoutes({ env, now: Date.now() })).filter((route) => route.kind === 'paseo');
-    assert.deepEqual(after.map((route) => route.address.agentId), ['paseo-agent']);
-    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).map((binding) => binding.sessionId), ['paseo-agent']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('ending the Paseo identity keeps a shared owner route alive for the native identity', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'shared-owner-route-reverse-square.square');
-    const env = {
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      CODEX_THREAD_ID: 'codex-session',
-      PASEO_AGENT_ID: 'paseo-agent',
-    };
-    await recordLocalJoin('Alice', squarePath, env);
-    assert.equal(await recordSessionDone('paseo-agent', 'Alice', squarePath, 'paseo', env), true);
-    assert.deepEqual((await readWakeRoutes({ env, now: Date.now() })).map((route) => [route.kind, route.address]), [
-      ['codex-queue', { threadId: 'codex-session' }],
-      ['paseo', { agentId: 'paseo-agent' }],
-    ]);
-    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).map((binding) => binding.sessionId), ['codex-session']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('inherited PASEO_AGENT_ID alone does not adopt a native session into the parent owner', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'nested-owner-square.square');
-    const parentEnv = {
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      PASEO_AGENT_ID: 'paseo-agent',
-      CODEX_THREAD_ID: 'parent-codex',
-    };
-    await recordLocalJoin('root', squarePath, parentEnv);
-    const parentOwner = (await lookupParticipant(squarePath, 'root'))[0].ownerId;
-    assert.deepEqual(
-      (await lookupParticipant(squarePath, 'root')).map((binding) => binding.sessionId).sort(),
-      ['parent-codex', 'paseo-agent']
-    );
-
-    // Nested/detached child inherits PASEO_AGENT_ID but never claims root.
-    const childEnv = {
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      PASEO_AGENT_ID: 'paseo-agent',
-      CODEX_THREAD_ID: 'child-codex',
-    };
-    assert.deepEqual(await lookupSession('child-codex'), []);
-    assert.deepEqual(
-      (await lookupParticipant(squarePath, 'root')).map((binding) => binding.sessionId).sort(),
-      ['parent-codex', 'paseo-agent']
-    );
-    assert.equal((await lookupParticipant(squarePath, 'root'))[0].ownerId, parentOwner);
-
-    // Explicit claim on the same process identities still shares one owner.
-    await recordLocalJoin('root', squarePath, parentEnv);
-    const refreshed = await lookupParticipant(squarePath, 'root');
-    assert.deepEqual(refreshed.map((binding) => binding.sessionId).sort(), [
-      'parent-codex',
-      'paseo-agent',
-    ]);
-    assert.equal(new Set(refreshed.map((binding) => binding.ownerId)).size, 1);
-    assert.notEqual(refreshed[0].ownerId, parentOwner);
-
-    await recordLocalDone('root', squarePath, parentEnv);
-    assert.deepEqual(await lookupParticipant(squarePath, 'root'), []);
-    assert.deepEqual(await lookupSession('child-codex'), []);
-  } finally {
-    cleanup();
-  }
-});
-
-test('only explicit join claims local ownership and done closes the current owner', async () => {
+test('presence follows active session lifecycle without delivery routes', async () => {
   const cleanup = withRegistry();
   try {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-cli-'));
@@ -266,56 +133,23 @@ test('only explicit join claims local ownership and done closes the current owne
     const catchNow = runCli(['--location', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
     assert.equal(catchNow.status, 0, catchNow.stderr);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
-    assert.equal((await lookupParticipant(squarePath, 'Alice'))[0].paseoAgentId, 'resume-paseo-agent');
 
     const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner @alice'], {
       env: observerEnv,
     });
     assert.equal(expressed.status, 0, expressed.stderr);
-    assert.deepEqual(await lookupSession('observer-session'), []);
+    assert.deepEqual((await lookupSession('observer-session')).map((entry) => entry.name), ['Alice']);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
-    const refused = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
-    assert.equal(refused.status, 2, refused.stderr);
-    assert.match(refused.stderr, /@Alice shoos you out of the square/);
-    assert.match(refused.stderr, /join --kick/);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-
-    const noIdentityEnv = {
-      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      CLAUDE_CODE_SESSION_ID: '',
-      CODEX_THREAD_ID: '',
-      OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
-      PASEO_AGENT_ID: '',
-    };
-    const unboundRefused = runCli(['--location', squarePath, '--as', 'Alice', 'join'], {
-      env: noIdentityEnv,
-    });
-    assert.equal(unboundRefused.status, 2, unboundRefused.stderr);
-    assert.match(unboundRefused.stderr, /join --kick/);
-    assert.deepEqual((await lookupParticipant(squarePath, 'Alice')).length, 2);
-
-    const takeover = runCli(['--location', squarePath, '--as', 'alice', 'join', '--kick'], { env: observerEnv });
-    assert.equal(takeover.status, 0, takeover.stderr);
-    assert.match(takeover.stdout, /you banished the original @Alice/);
+    const repeated = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
+    assert.equal(repeated.status, 0, repeated.stderr);
     assert.deepEqual(await lookupSession('resume-session'), []);
     assert.deepEqual((await lookupSession('observer-session')).map((entry) => entry.name), ['Alice']);
-    assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
-
-    const unboundJoin = runCli(['--location', squarePath, '--as', 'Bob', 'join'], {
-      env: noIdentityEnv,
-    });
-    assert.equal(unboundJoin.status, 0, unboundJoin.stderr);
-    assert.deepEqual(await lookupParticipant(squarePath, 'Bob'), []);
 
     const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], {
       env: observerEnv,
     });
     assert.equal(done.status, 0, done.stderr);
-    assert.deepEqual(await lookupSession('resume-session'), []);
     assert.deepEqual(await lookupSession('observer-session'), []);
     fs.rmSync(root, { recursive: true, force: true });
   } finally {
@@ -430,7 +264,7 @@ test('current participant binding uses the Square-assigned name and is idempoten
     const first = await bindCurrentParticipant(squarePath, name, env);
     const second = await bindCurrentParticipant(squarePath, name, env);
     assert.equal(first.created, true);
-    assert.deepEqual(second, { created: false, ownerId: first.ownerId });
+    assert.deepEqual(second, { created: false, sessionId: first.sessionId });
     assert.equal(await unbindCurrentParticipant(squarePath, name, env), true);
     assert.deepEqual(await lookupParticipant(squarePath, name), []);
   } finally {

@@ -6,6 +6,7 @@ import { withFileLock } from './file-lock.js';
 import { isWakeRouteKind, nameKey, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 export type WakeOutcome = 'accepted' | 'unknown' | 'failed';
 
@@ -106,7 +107,8 @@ async function readRowsFromFile(filePath: string, now: number): Promise<WakeAtte
 }
 
 async function readRows(env: NodeJS.ProcessEnv, now: number): Promise<WakeAttemptRow[]> {
-  return readRowsFromFile(wakeAttemptsPath(env), now);
+  const records = await createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(wakeAttemptsPath(env)), writableScope: 'user', readableScopes: ['user'] }).listEvidence({ kind: 'wake', now });
+  return records.flatMap((record) => { const index = parseActivityId(record.activity); if (index === undefined || !isWakeRouteKind(record.routeKind) || !VALID_OUTCOMES.has(record.outcome as WakeOutcome) || typeof record.attemptN !== 'number') return []; return [{ v: 1, ts: record.at ?? now, attention: { square_path: record.location, act_id: record.activity, recipient: record.participant }, route_kind: record.routeKind, outcome: record.outcome as WakeOutcome, ...(record.signature === undefined ? {} : { signature: record.signature }), attempt_n: record.attemptN, ...(record.message === undefined ? {} : { message: record.message }), ...(record.diagnostic === undefined ? {} : { diagnostic: record.diagnostic }) }]; });
 }
 
 async function writeRows(filePath: string, rows: WakeAttemptRow[]): Promise<void> {
@@ -309,10 +311,8 @@ export async function recordWakeAttempt(
   if (value.outcome !== 'accepted' && !value.signature) {
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
-  const file = wakeAttemptsPath(env);
-  await withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
-    await writeRows(file, [...await readRowsFromFile(file, value.at), await toRow(value, env)]);
-  });
+  const safe = redact(value, env.PASEO_PASSWORD) as WakeAttempt;
+  await createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(wakeAttemptsPath(env)), readableScopes: ['user'], writableScope: 'user' }).appendEvidence({ location: safe.attention.squarePath, participant: safe.attention.recipient, session: safe.signature ?? `route:${safe.routeKind}`, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', outcome: safe.outcome, routeKind: safe.routeKind, signature: safe.signature, attemptN: safe.attemptN, message: safe.message, diagnostic: safe.diagnostic, at: safe.at });
   return value;
 }
 
@@ -324,9 +324,8 @@ export async function recordRecoveredUnknown(
 ): Promise<WakeAttempt | undefined> {
   const routeKind = lease.routeKind;
   if (lease.attemptN === undefined || !isWakeRouteKind(routeKind)) return undefined;
-  const file = wakeAttemptsPath(env);
-  return withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
-    const rows = await readRowsFromFile(file, at);
+  const rows = await readRows(env, at);
+  {
     const expected = await wakeAttentionKey(attention);
     const attempts: WakeAttempt[] = [];
     for (const row of rows) { const attempt = await fromRow(row); if (await wakeAttentionKey(attempt.attention) === expected) attempts.push(attempt); }
@@ -341,7 +340,7 @@ export async function recordRecoveredUnknown(
       attemptN: lease.attemptN!,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
-    await writeRows(file, [...rows, await toRow(value, env)]);
+    await createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(wakeAttemptsPath(env)), readableScopes: ['user'], writableScope: 'user' }).appendEvidence({ location: attention.squarePath, participant: attention.recipient, session: value.signature!, activity: formatActivityId(attention.actIndex), kind: 'wake', outcome: 'unknown', routeKind, signature: value.signature, attemptN: value.attemptN, message: value.message, at });
     return value;
-  });
+  }
 }

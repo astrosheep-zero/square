@@ -44,7 +44,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   }
   const name = automaticParticipant(provider, sessionId, env);
   const canonicalPath = await canonicalSquarePath(squarePath);
-  const alreadyBound = (await lookupSessionBindings(sessionId)).some((binding) =>
+  const alreadyBound = (await lookupSessionBindings(sessionId, Date.now(), env)).some((binding) =>
     binding.squarePath === canonicalPath && binding.name === name
   );
   await closeOpenSquare(reader);
@@ -64,7 +64,7 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   const squarePath = publicSquarePath(cwd);
   const channel = provider === 'claude' ? 'claude-code' : provider;
   const canonicalPath = await canonicalSquarePath(squarePath);
-  const binding = (await lookupSessionBindings(sessionId)).find((item) => item.squarePath === canonicalPath && item.channel === channel);
+  const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonicalPath && item.channel === channel);
   if (binding === undefined || !await squareExists(squarePath)) return;
   const reader = await openSquare(squarePath);
   const joined = await entryPresentation(reader, binding.name).finally(() => closeOpenSquare(reader));

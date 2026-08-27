@@ -76,17 +76,16 @@ function isStringArray(value: unknown): value is string[] {
 
 function validateObservation(value: unknown): value is ActivityObservation {
   return isObject(value)
-    && hasExactKeys(value, ['state', 'at'], ['ownerId'])
+    && hasExactKeys(value, ['state', 'at'])
     && value.state === 'seen'
     && isFiniteNumber(value.at)
-    && (value.ownerId === undefined || isNonblankString(value.ownerId));
+    ;
 }
 
 function validateWatchLease(value: unknown): value is WatchLease {
   if (!isObject(value)
-    || !hasExactKeys(value, ['leaseId', 'heartbeatAt', 'expiresAt'], ['ownerId', 'filter'])
+    || !hasExactKeys(value, ['leaseId', 'heartbeatAt', 'expiresAt'], ['filter'])
     || !isNonblankString(value.leaseId)
-    || (value.ownerId !== undefined && !isNonblankString(value.ownerId))
     || !isFiniteNumber(value.heartbeatAt)
     || !isFiniteNumber(value.expiresAt)
     || value.expiresAt < value.heartbeatAt) return false;

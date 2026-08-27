@@ -123,7 +123,6 @@ export async function presentPendingAtBoundary<T>(
       await markBoundarySeen(
         entry.membership.squarePath,
         entry.membership.name,
-        entry.membership.ownerId,
         entry.actIndexes,
       );
     }

@@ -188,17 +188,15 @@ export function recordObservation(
   index: number,
   state: ObservationState,
   at = Date.now(),
-  ownerId?: string,
 ): boolean {
   if (!Number.isSafeInteger(index) || index < 0 || !Number.isFinite(at)) return false;
   const key = observationRecipient(squareState, name);
   const id = formatActivityId(index);
   const current = squareState.runtime.observations[key]?.[id];
-  if (current?.state === 'seen' || (current?.state === state && current.at >= at && current.ownerId === ownerId)) return false;
+  if (current?.state === 'seen' || (current?.state === state && current.at >= at)) return false;
   const next: ActivityObservation = {
     state: 'seen',
     at: Math.max(current?.at ?? -Infinity, at),
-    ...(ownerId === undefined ? (current?.ownerId === undefined ? {} : { ownerId: current.ownerId }) : { ownerId }),
   };
   ((squareState.runtime.observations ??= {})[key] ??= {})[id] = next;
   return true;

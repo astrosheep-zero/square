@@ -2,12 +2,18 @@ import { extractMentions, formatActivityId, parseActivityId, type Act, type Acti
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
-import type { SquareArtifactPort } from './ports.js';
+import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
 import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
 
-export interface OperationContext { readonly artifact: SquareArtifactPort; readonly clock: () => number }
+export interface OperationContext {
+  readonly artifact: SquareArtifactPort;
+  readonly clock: () => number;
+  readonly location?: string;
+  readonly hostLedger?: HostLedgerPort;
+  readonly notifier?: { wake(recipients: readonly string[], activity: Activity): void };
+}
 export interface JoinInput { readonly name: string }
 export interface ExpressInput { readonly name: string; readonly body: string; readonly options?: ExpressOptions }
 export interface ListenInput { readonly name: string; readonly target: string }
@@ -24,6 +30,7 @@ export type CatchOutcome = CatchResult;
 export class ActivityApplication {
   constructor(private readonly context: OperationContext) {}
   join(input: JoinInput) { return join(this.context, input.name); }
+  implicitJoin(input: JoinInput) { return implicitJoin(this.context, input.name); }
   express(input: ExpressInput) { return express(this.context, input.name, input.body, input.options); }
   catch(input: CatchInput) { return catchUp(this.context, input.name, input.options); }
   listen(input: ListenInput) { return listen(this.context, input.name, input.target); }
@@ -32,6 +39,25 @@ export class ActivityApplication {
   hold(input: HoldInput) { return hold(this.context, input.name, input.body); }
   resume(input: ResumeInput) { return resume(this.context, input.name); }
   listening(name: string) { return listening(this.context, name); }
+}
+
+function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
+  const choices: readonly [string | undefined, PresenceChannel][] = [
+    [env.CLAUDE_CODE_SESSION_ID, 'claude-code'], [env.CODEX_THREAD_ID, 'codex'],
+    [env.OPENCODE_SESSION_ID, 'opencode'], [env.SQUARE_PI_SESSION_ID, 'pi'], [env.PASEO_AGENT_ID, 'paseo'],
+  ];
+  const found = choices.find(([session]) => session?.trim());
+  return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };
+}
+
+/** Host discovery is best effort and precedes every artifact mutation. */
+async function ensureLocalPresence(context: OperationContext, participant: string): Promise<void> {
+  if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return;
+  const identity = processIdentity(process.env);
+  const result = await context.hostLedger.ensurePresence({
+    location: context.location, participant, session: identity.session, channel: identity.channel, updatedAt: context.clock(),
+  }).catch((error) => ({ status: 'degraded' as const, record: { location: context.location!, participant, session: identity.session, channel: identity.channel }, error }));
+  if (result.status === 'degraded') process.stderr.write(`! host presence degraded: ${result.error instanceof Error ? result.error.message : String(result.error)}\n`);
 }
 
 function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
@@ -54,6 +80,7 @@ export async function catchUp(
   options: CatchOptions = {},
   project?: (state: SquareState) => CatchProjection,
 ): Promise<CatchResult> {
+  await ensureLocalPresence(square, name);
   const idle = options.idle ?? 0;
   if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Catch idle duration must be a non-negative number');
   const deadline = Date.now() + idle;
@@ -111,6 +138,7 @@ function parseRequiredActivityId(id: ActivityId): number {
 }
 
 export async function join(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activity: Activity | null }> {
+  await ensureLocalPresence(square, name);
   const now = square.clock();
   const committed = await square.artifact.transact<{ name: string; stored: StoredAct | null }>((state) => {
     const decision = decideJoin(state, name, now);
@@ -122,6 +150,7 @@ export async function join(square: OperationContext, name: string): Promise<{ re
 
 /** Automatic presence distinguishes first entry, current presence, and completed presence. */
 export async function implicitJoin(square: OperationContext, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
+  await ensureLocalPresence(square, name);
   const now = square.clock();
   const committed = await square.artifact.transact<{ name: string; state: 'joined' | 'active' | 'done'; stored: StoredAct | null }>((state) => {
     const decision = decideImplicitJoin(state, name, now);
@@ -132,6 +161,7 @@ export async function implicitJoin(square: OperationContext, name: string): Prom
 }
 
 export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {
+  await ensureLocalPresence(square, name);
   const now = square.clock();
   const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
   const committed = await square.artifact.transact((state) => {
@@ -151,6 +181,7 @@ export async function express(square: OperationContext, name: string, body: stri
     return { state, result: { stored } };
   });
   const activity = exposeActivity(committed.stored);
+  if (activity.mentions.length > 0) square.notifier?.wake(activity.mentions, activity);
   return { activity };
 }
 

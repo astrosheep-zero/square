@@ -16,7 +16,9 @@ import {
   type SquareState,
 } from './model.js';
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
-import type { SquareArtifactPort } from './ports.js';
+import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
+import type { WakeNotifier } from './square-facade.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 /** File-owned artifact creation for the CLI and path-backed public facade. */
 export async function createSquare(
@@ -37,6 +39,8 @@ export interface SquareBuildOptions {
   hardCap?: number | null;
   throttlePerMinute?: number;
   clock?: () => number;
+  hostLedger?: HostLedgerPort;
+  notifier?: WakeNotifier;
 }
 
 function validateBuildOptions(options: SquareBuildOptions): void {
@@ -52,13 +56,13 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 
 export async function openSquare(
   squarePath: string,
-  options: Pick<SquareBuildOptions, 'clock'> = {},
+  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'notifier'> = {},
 ): Promise<OpenSquare> {
   const cell = openSquareCell(squarePath);
   try {
     await cell.read();
     const artifact: SquareArtifactPort = { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
-    return { artifact, clock: options.clock ?? Date.now, location: squarePath };
+    return { artifact, clock: options.clock ?? Date.now, location: squarePath, hostLedger: options.hostLedger ?? createHostLedgerPort(), ...(options.notifier === undefined ? {} : { notifier: options.notifier }) };
   } catch (error) {
     await cell.close();
     if (error instanceof InternalSquareError && error.code === 'not_found') {
@@ -97,7 +101,7 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory' };
+  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, ...(options.notifier === undefined ? {} : { notifier: options.notifier }) };
 }
 
 function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {

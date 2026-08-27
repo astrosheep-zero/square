@@ -11,12 +11,12 @@ function filter(options: WatchOptions): { participants?: string[]; mention?: str
 }
 
 
-export async function acquireWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions, ownerId?: string): Promise<WatchLeaseStart> {
+export async function acquireWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions): Promise<WatchLeaseStart> {
   const at = square.clock();
   return square.artifact.transact<WatchLeaseStart>((state) => {
     const known = resolveKnownName(state, name); const existing = freshWatchLease(state, known, at);
     if (existing !== undefined && !options.replace) return { result: { type: 'active' as const, lease: existing } };
-    writeWatchLease(state, known, { leaseId, ...(ownerId === undefined ? {} : { ownerId }), heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
+    writeWatchLease(state, known, { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
     return { state, result: { type: 'started' as const, leaseId, replaced: existing !== undefined, heartbeatAt: at } };
   });
 }
@@ -30,7 +30,7 @@ export async function pulseWatchLease(square: OpenSquare, name: string, leaseId:
     const terminal = watchTerminalStatus(state, known);
     if (terminal !== undefined) return { result: { type: 'terminal' as const, status: terminal } };
     if (!heartbeatDue) return { result: { type: 'sleep' as const } };
-    writeWatchLease(state, known, { leaseId, ...(lease.ownerId === undefined ? {} : { ownerId: lease.ownerId }), heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
+    writeWatchLease(state, known, { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
     return { state, result: { type: 'sleep' as const, heartbeatAt: at } };
   });
 }

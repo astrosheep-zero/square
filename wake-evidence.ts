@@ -3,7 +3,7 @@ import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { nameKey, type SquareState } from './model.js';
 import { readPresentedAttentions } from './presented.js';
 import { canonicalSquarePath, readActiveBindings } from './registry.js';
-import { readWakeRoutes } from './routes.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import {
   isWakeRouteAttemptable,
   readWakeAttempts,
@@ -39,20 +39,13 @@ async function projectionFromState(
   delivery = deriveDeliveryModel(state),
 ): Promise<WakeEvidenceProjection> {
   const canonicalPath = await canonicalSquarePath(squarePath);
-  const owners = new Map<string, Set<string>>();
-  for (const binding of await readActiveBindings(now)) {
+  const bindings = await readActiveBindings(now, env);
+  const routes = (await createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] }).listPresence({ location: canonicalPath, scopes: ['user'], now })).filter((binding) => binding.route !== undefined);
+  const routesByBinding = new Map<string, WakeRoute[]>();
+  for (const binding of bindings) {
     if (binding.squarePath !== canonicalPath) continue;
-    const key = nameKey(binding.name);
-    const recipientOwners = owners.get(key) ?? new Set<string>();
-    recipientOwners.add(binding.ownerId);
-    owners.set(key, recipientOwners);
-  }
-
-  const routesByOwner = new Map<string, WakeRoute[]>();
-  for (const route of await readWakeRoutes({ freshOnly: true, now, env })) {
-    const routes = routesByOwner.get(route.ownerId) ?? [];
-    routes.push(route);
-    routesByOwner.set(route.ownerId, routes);
+    const route = routes.find((candidate) => candidate.session === binding.sessionId && candidate.channel === binding.channel && nameKey(candidate.participant) === nameKey(binding.name));
+    if (route?.route !== undefined) routesByBinding.set(JSON.stringify([binding.squarePath, nameKey(binding.name), binding.sessionId, binding.channel]), [{ location: binding.squarePath, participant: binding.name, sessionId: binding.sessionId, channel: binding.channel, kind: route.route.kind, address: { ...route.route.address }, updatedAt: route.updatedAt ?? 0 }]);
   }
 
   const attemptsByAttention = new Map<string, WakeAttempt[]>();
@@ -67,19 +60,18 @@ async function projectionFromState(
   for (const presented of await readPresentedAttentions(env, now)) {
     const key = await attentionKey(presented.squarePath, presented.name, presented.actIndex);
     const presentedOwners = presentedByAttention.get(key) ?? new Set<string>();
-    presentedOwners.add(presented.ownerId);
+    presentedOwners.add(presented.sessionId);
     presentedByAttention.set(key, presentedOwners);
   }
 
   return {
     evidence(recipient: string, actIndex: number): WakeEvidence {
-      const recipientOwners = owners.get(nameKey(recipient)) ?? new Set<string>();
+      const recipientBindings = bindings.filter((binding) => binding.squarePath === canonicalPath && nameKey(binding.name) === nameKey(recipient));
       const key = JSON.stringify([canonicalPath, nameKey(recipient), actIndex]);
       const attempts = attemptsByAttention.get(key) ?? [];
       const terminal = terminalWakeEvidence(attempts);
-      const routes = [...recipientOwners].flatMap((ownerId) => routesByOwner.get(ownerId) ?? []);
-      const presented = [...(presentedByAttention.get(key) ?? [])]
-        .some((ownerId) => recipientOwners.has(ownerId));
+      const routes = recipientBindings.flatMap((binding) => routesByBinding.get(JSON.stringify([binding.squarePath, nameKey(binding.name), binding.sessionId, binding.channel]) ) ?? []);
+      const presented = (presentedByAttention.get(key) ?? new Set()).size > 0;
       return {
         delivered: delivery.isSeen(recipient, actIndex),
         presented,

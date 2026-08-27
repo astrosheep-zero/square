@@ -32,7 +32,6 @@ export async function catchUp(
 export async function markBoundarySeen(
   squarePath: string,
   name: string,
-  ownerId: string | undefined,
   actIndexes: readonly number[],
   at = Date.now(),
 ): Promise<void> {
@@ -41,7 +40,7 @@ export async function markBoundarySeen(
   try {
     await square.artifact.transact((state) => {
       let changed = false;
-      for (const index of actIndexes) changed = recordObservation(state, name, index, 'seen', at, ownerId) || changed;
+      for (const index of actIndexes) changed = recordObservation(state, name, index, 'seen', at) || changed;
       return changed ? { state, result: undefined } : { result: undefined };
     });
   } finally {

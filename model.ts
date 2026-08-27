@@ -12,8 +12,10 @@ export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
 }
 
 export interface WakeRoute {
-  ownerId: string;
+  location: string;
+  participant: string;
   sessionId: string;
+  channel: string;
   kind: WakeRouteKind;
   address: Record<string, string>;
   updatedAt: number;
@@ -81,7 +83,6 @@ export type ObservationState = 'seen';
 export interface ActivityObservation {
   state: ObservationState;
   at: number;
-  ownerId?: string;
 }
 
 export interface WatchLeaseFilter {
@@ -91,8 +92,6 @@ export interface WatchLeaseFilter {
 
 export interface WatchLease {
   leaseId: string;
-  /** Machine-local owner that may claim automatic delivery for this lease. */
-  ownerId?: string;
   heartbeatAt: number;
   expiresAt: number;
   filter?: WatchLeaseFilter;
@@ -111,7 +110,6 @@ export interface InboxNotification {
 export interface InboxMembership {
   name: string;
   squarePath: string;
-  ownerId?: string;
   notifications: InboxNotification[];
   catchLease?: WatchLease;
 }

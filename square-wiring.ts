@@ -1,9 +1,8 @@
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
-import { ActivityApplication, implicitJoin } from './application.js';
-import { catchUp, markBoundarySeen as recordBoundarySeen } from './presence.js';
+import { ActivityApplication } from './application.js';
+import { markBoundarySeen as recordBoundarySeen } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
-import { localParticipantName } from './registry.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
@@ -28,7 +27,7 @@ class ParticipantHandle implements Participant {
   }
 
   catch(options?: CatchOptions): Promise<CatchResult> {
-    return catchUp(this.square, this.name, options);
+    return this.application.catch({ name: this.name, ...(options === undefined ? {} : { options }) });
   }
 
   history(query?: HistoryQuery): Promise<PerceivedActivity[]> {
@@ -51,7 +50,7 @@ class ParticipantHandle implements Participant {
 export class Square {
   private readonly application: ActivityApplication;
   private constructor(readonly location: string, private readonly square: OpenSquare) {
-    this.application = new ActivityApplication(square);
+    this.application = new ActivityApplication({ ...square, location });
   }
 
   static async at(input: SquareAtInput): Promise<Square> {
@@ -77,7 +76,7 @@ export class Square {
   }
 
   async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
-    const joined = await implicitJoin(this.square, name);
+    const joined = await this.application.implicitJoin({ name });
     return joined.state === 'done'
       ? { state: joined.state }
       : { state: joined.state, participant: new ParticipantHandle(joined.name, this.square, this.application) };
@@ -87,16 +86,21 @@ export class Square {
   snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
   history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
-    const registered = await localParticipantName(this.square.location, env);
-    if (registered === undefined) return null;
-    const canonicalName = await currentParticipant(this.square, registered);
+    if (this.square.hostLedger === undefined) return null;
+    const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.SQUARE_PI_SESSION_ID, env.PASEO_AGENT_ID]
+      .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+    if (sessions.length === 0) return null;
+    const bindings = await this.square.hostLedger.listPresence({ location: this.square.location, scopes: ['user', 'local'] });
+    const candidates = bindings.filter((binding) => sessions.includes(binding.session));
+    if (candidates.length !== 1) return null;
+    const canonicalName = await currentParticipant(this.square, candidates[0].participant);
     return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square, this.application);
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
 }
 
-export function markBoundarySeen(squarePath: string, name: string, ownerId: string | undefined, actIndexes: readonly number[], at?: number): Promise<void> {
-  return recordBoundarySeen(squarePath, name, ownerId, actIndexes, at);
+export function markBoundarySeen(squarePath: string, name: string, actIndexes: readonly number[], at?: number): Promise<void> {
+  return recordBoundarySeen(squarePath, name, actIndexes, at);
 }
 
 

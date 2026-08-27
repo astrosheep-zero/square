@@ -153,8 +153,7 @@ async function finishWatchResult(
 
 async function beginWatch(square: OpenSquare, squarePath: string, name: string, opts: WatchOptions): Promise<WatchLeaseStart> {
   const id = leaseId();
-  const ownerId = await localParticipantOwner(squarePath, name);
-  return acquireWatchLease(square, name, id, opts, ownerId);
+  return acquireWatchLease(square, name, id, opts);
 }
 
 async function endWatch(square: OpenSquare, name: string, id: string | undefined): Promise<void> {

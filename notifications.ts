@@ -75,7 +75,7 @@ function renderWakePayload(request: WakeRequest, body: string, kind: WakeRouteKi
 
 async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
   const binding = (await lookupParticipant(request.squarePath, request.recipient))
-    .find((item) => item.ownerId === route.ownerId);
+    .find((item) => item.sessionId === route.sessionId && item.channel === route.channel);
   const activeCatch = binding && (await sessionInbox(binding.sessionId))
     .find((item) => item.name === request.recipient)?.catchLease;
   if (!activeCatch || !leaseOwnsNotification(activeCatch, {
@@ -89,7 +89,7 @@ async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string
   while (Date.now() < deadline) {
     if (await hasDeliveredNotification(request.squarePath, request.recipient, request.actIndex)) return true;
     const currentBinding = (await lookupParticipant(request.squarePath, request.recipient))
-      .find((item) => item.ownerId === route.ownerId);
+      .find((item) => item.sessionId === route.sessionId && item.channel === route.channel);
     const lease = currentBinding && (await sessionInbox(currentBinding.sessionId))
       .find((item) => item.name === request.recipient)?.catchLease;
     if (!lease || lease.expiresAt <= Date.now()) return false;
@@ -235,7 +235,7 @@ async function processNotification(
           const current = await wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
           if (!wakeIsEligible(current)) return false;
           if (!current.attemptableRoutes.some((candidate) =>
-            candidate.ownerId === route.ownerId && candidate.kind === route.kind && candidate.sessionId === route.sessionId
+            candidate.kind === route.kind && candidate.sessionId === route.sessionId && candidate.channel === route.channel
           )) return false;
           const dispatching = await transitionNotifyLease(
             attention,

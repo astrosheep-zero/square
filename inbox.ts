@@ -35,12 +35,11 @@ export async function sessionInbox(sessionId: string): Promise<InboxMembership[]
     let square;
     try {
       square = await openSquare(binding.squarePath);
-      const projection = await inboxProjection(square, binding.name, binding.ownerId);
+      const projection = await inboxProjection(square, binding.name, binding.sessionId);
       if (!projection.joined) continue;
       inbox.push({
         name: projection.name,
         squarePath: binding.squarePath,
-        ownerId: binding.ownerId,
         notifications: [...projection.notifications],
         ...(projection.catchLease !== undefined ? { catchLease: projection.catchLease } : {}),
       });

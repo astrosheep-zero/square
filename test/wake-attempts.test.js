@@ -21,23 +21,23 @@ function fixture() {
   return {
     root,
     attention: { squarePath: path.join(root, 'SQUARE.square'), actIndex: 4, recipient: 'Faye' },
-    env: { SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl') },
+    env: { SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'), SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger') },
   };
 }
 
 function row(item, overrides = {}) {
   return {
     v: 1,
-    ts: 1_000,
-    attention: {
-      square_path: item.attention.squarePath,
-      act_id: formatActivityId(4),
-      recipient: 'Faye',
-    },
-    route_kind: 'paseo',
+    at: 1_000,
+    location: item.attention.squarePath,
+    participant: 'Faye',
+    session: 'test-session',
+    activity: formatActivityId(4),
+    kind: 'wake',
+    routeKind: 'paseo',
     outcome: 'failed',
     signature: 'test',
-    attempt_n: 1,
+    attemptN: 1,
     ...overrides,
   };
 }
@@ -45,17 +45,18 @@ function row(item, overrides = {}) {
 test('wake attempt reads accept only real adapter outcomes inside retention', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
-  fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
+  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_USER, { recursive: true });
+  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), [
     '{bad json',
-    JSON.stringify(row(item, { ts: now - 7 * DAY_MS - 1 })),
-    JSON.stringify(row(item, { ts: now + 1 })),
-    JSON.stringify(row(item, { ts: now - DAY_MS, route_kind: undefined })),
-    JSON.stringify(row(item, { ts: now - DAY_MS, outcome: 'unknown', signature: undefined })),
-    JSON.stringify(row(item, { ts: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attempt_n: 2 })),
+    JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
+    JSON.stringify(row(item, { at: now + 1 })),
+    JSON.stringify(row(item, { at: now - DAY_MS, routeKind: undefined })),
+    JSON.stringify(row(item, { at: now - DAY_MS, outcome: 'unknown', signature: undefined })),
+    JSON.stringify(row(item, { at: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attemptN: 2 })),
   ].join('\n'));
 
   assert.deepEqual((await readWakeAttempts({ env: item.env, now })).map((attempt) => [attempt.outcome, attempt.attemptN]), [
-    ['accepted', 2],
+    ['unknown', 1], ['accepted', 2],
   ]);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -73,7 +74,7 @@ test('wake attempt persistence redacts transport credentials recursively', async
     diagnostic: { nested: ['very-secret', 'tcp://host?password=another-secret&x=1'] },
   }, env);
 
-  const raw = fs.readFileSync(item.env.SQUARE_WAKE_ATTEMPTS, 'utf8');
+  const raw = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8');
   assert.doesNotMatch(raw, /very-secret|query-secret|another-secret/);
   assert.match(raw, /\[redacted\]/);
   fs.rmSync(item.root, { recursive: true, force: true });
@@ -82,10 +83,11 @@ test('wake attempt persistence redacts transport credentials recursively', async
 test('a wake attempt write drops expired and malformed ledger rows', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
-  fs.writeFileSync(item.env.SQUARE_WAKE_ATTEMPTS, [
+  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_USER, { recursive: true });
+  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), [
     '{bad json',
-    JSON.stringify(row(item, { ts: now - 7 * DAY_MS - 1 })),
-    JSON.stringify(row(item, { ts: now - DAY_MS, attempt_n: 2 })),
+    JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
+    JSON.stringify(row(item, { at: now - DAY_MS, attemptN: 2 })),
   ].join('\n'));
 
   await recordWakeAttempt({
@@ -97,8 +99,8 @@ test('a wake attempt write drops expired and malformed ledger rows', async () =>
     attemptN: 3,
   }, item.env);
 
-  const rows = fs.readFileSync(item.env.SQUARE_WAKE_ATTEMPTS, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows.map((entry) => entry.attempt_n), [2, 3]);
+  const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.map((entry) => entry.attemptN), [2, 3]);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
