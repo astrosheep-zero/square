@@ -23,15 +23,16 @@ export {
 };
 
 export async function readSquareFile(squarePath: string): Promise<SquareState> {
-  return loadSquare(squarePath);
+  return withSquareFileLock(squarePath, () => loadSquare(squarePath));
 }
 
 export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
-  return probeSquare(squarePath);
+  if (!squarePath.endsWith('.square')) return undefined;
+  return withSquareFileLock(squarePath, () => probeSquare(squarePath));
 }
 
 export async function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
-  return diagnoseArtifactFile(squarePath);
+  return withSquareFileLock(squarePath, () => diagnoseArtifactFile(squarePath));
 }
 
 export async function writeSquareSnapshot(squarePath: string, squareState: SquareState): Promise<void> {
@@ -158,11 +159,11 @@ export function createFileCell(squarePath: string): StateCell {
     return fingerprint;
   }
 
-  async function currentState(): Promise<SquareState> {
+  async function currentStateUnderLock(): Promise<SquareState> {
     const observed = await observe();
     if (cached?.fingerprint === observed) return cloneState(cached.state);
 
-    const decoded = await readSquareFile(squarePath);
+    const decoded = await loadSquare(squarePath);
     cached = { fingerprint: observed, state: cloneState(decoded) };
     return cloneState(cached.state);
   }
@@ -172,7 +173,7 @@ export function createFileCell(squarePath: string): StateCell {
       assertCellOpen(closed);
       return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
         assertCellOpen(closed);
-        const current = await currentState();
+        const current = await currentStateUnderLock();
         const working = cloneState(current);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
@@ -186,7 +187,10 @@ export function createFileCell(squarePath: string): StateCell {
     },
     async read() {
       assertCellOpen(closed);
-      return { state: await currentState(), version };
+      return withSquareFileLock(squarePath, async () => {
+        assertCellOpen(closed);
+        return { state: await currentStateUnderLock(), version };
+      });
     },
     async changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);

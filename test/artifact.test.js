@@ -19,7 +19,13 @@ import {
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { express } from '../dist/landing.js';
-import { createFileCell } from '../dist/square-storage.js';
+import {
+  createFileCell,
+  diagnoseSquareFile as diagnoseStoredSquareFile,
+  probeSquareFile,
+  readSquareFile,
+  withSquareFileLock,
+} from '../dist/square-storage.js';
 
 const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
 function withIndexes(acts) {
@@ -122,6 +128,60 @@ test('file cells reuse unchanged snapshots without sharing caller state', async 
   assert.deepEqual(second.state, squareState);
   await cell.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('all production snapshot readers wait behind the artifact publication lock', async () => {
+  const { dir, squarePath } = await writeFixture({ preamble: ['locked snapshot'] });
+  const cell = createFileCell(squarePath);
+  const originalOpen = fs.promises.open;
+  const originalReadFile = fs.promises.readFile;
+
+  async function assertReaderWaits(name, read) {
+    let releaseLock;
+    let lockHeld;
+    const entered = new Promise((resolve) => { lockHeld = resolve; });
+    const held = withSquareFileLock(squarePath, async () => {
+      lockHeld();
+      await new Promise((resolve) => { releaseLock = resolve; });
+    });
+    await entered;
+
+    let targetOpened = false;
+    fs.promises.open = async (...args) => {
+      if (String(args[0]) === squarePath) targetOpened = true;
+      return originalOpen(...args);
+    };
+    fs.promises.readFile = async (...args) => {
+      if (String(args[0]) === squarePath) targetOpened = true;
+      return originalReadFile(...args);
+    };
+
+    let pending;
+    try {
+      pending = read();
+      for (let index = 0; index < 3; index += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(targetOpened, false, `${name} opened the artifact while publication held its lock`);
+    } finally {
+      releaseLock();
+      await held;
+      await pending;
+    }
+    assert.equal(targetOpened, true, `${name} never opened the artifact after publication released its lock`);
+  }
+
+  try {
+    await assertReaderWaits('readSquareFile', () => readSquareFile(squarePath));
+    await assertReaderWaits('probeSquareFile', () => probeSquareFile(squarePath));
+    await assertReaderWaits('diagnoseSquareFile', () => diagnoseStoredSquareFile(squarePath));
+    await assertReaderWaits('file cell read', () => cell.read());
+  } finally {
+    fs.promises.open = originalOpen;
+    fs.promises.readFile = originalReadFile;
+    await cell.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('file cells invalidate a cached snapshot for external writes, replacements, deletion, and recreation', async () => {

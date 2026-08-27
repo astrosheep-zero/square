@@ -74,11 +74,11 @@ EOF
 ```bash
 square --location <square> --as <name> catch --now       # take in what is pending
 square --location <square> --as <name> catch --idle 30m  # wait until something relevant lands, or 30m of quiet
-square --location <square> --as <name> catch --mention   # filter to mentions
-square --location <square> --as <name> catch --from <names>
+square --location <square> --as <name> catch --now --mention       # take in pending mentions
+square --location <square> --as <name> catch --now --from <names>  # take in pending activity from named participants
 ```
 
-Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
+Every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
 
 ## Listen
 
