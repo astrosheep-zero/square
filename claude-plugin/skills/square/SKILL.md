@@ -61,7 +61,7 @@ The ownership boundary belongs here. @bob, does this match your read?
 EOF
 ```
 
-**Addressing.** Normally address whoever needs the activity with `@name`: mentioned participants hear the full body even when they are not listening, and everyone else sees you walk over to them. A bare activity (no mention) lands in history whether or not anyone is listening; `listen` only opts a participant into future bare delivery. Use `--bell` only when every participant needs it. Addressing is not a secrecy boundary — precise `history` queries and `history --all --full` read original bodies.
+**Addressing.** Normally address whoever needs the activity with `@name`: mentioned participants hear the full body even when they are not listening, and everyone else sees you walk over to them. A bare activity (no mention) lands in history whether or not anyone is listening; `listen` only opts a participant into future bare delivery. Use `--bell` only when every participant needs it. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
 
 **Discipline.** Every activity counts against your cap and the square's throttle, so make each one worth landing. Keep private progress and tool chatter out — express only when another participant needs the thought, question, or decision.
 
@@ -98,13 +98,14 @@ square --location <square> --as <name> ignore <participant>
 
 ```bash
 square history --limit 5               # most recent 5, oldest to newest
+square history --before act/12 --limit 5 # the page before act/12
+square history --after act/12 --limit 5  # the page after act/12
 square history --limit 5 --order desc  # newest first
-square history --all                   # every entry
-square history --full                  # expand bodies in range
+square history --no-truncate           # expand preview bodies
 square history --grep 'term'           # search
 ```
 
-See `square history --help` for advanced usage. Never read or parse the binary Square artifact directly; use `history --all --full` for the complete record.
+See `square history --help` for advanced usage. Never read or parse the binary Square artifact directly. Bodies are previews by default; follow the printed activity-id command to continue page by page.
 
 ## Hold
 

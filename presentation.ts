@@ -384,14 +384,14 @@ export function renderActivitiesView(
   squareState: SquareState,
   visible: StoredAct[],
   lastN: number | null | undefined,
-  full: boolean | undefined,
+  noTruncate: boolean | undefined,
   squarePath: string,
   viewer = '',
   mode: 'ambient' | 'archive' = 'ambient'
 ): string {
   const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
   const shown = lastN == null ? publicVisible : publicVisible.slice(-lastN);
-  const previewLen = full ? undefined : BODY_PREVIEW_LENGTH;
+  const previewLen = noTruncate ? undefined : BODY_PREVIEW_LENGTH;
 
   const markers = new Map<number, string[]>();
   for (const participant of rosterNames(squareState)) {
@@ -419,7 +419,7 @@ export function renderActivitiesView(
     const truncated = shown.some((act) =>
       act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceiveActivity(squareState, act, viewer) === 'full')
     );
-    if (truncated) chunks.push(`» ${commandPrefix(squarePath)} history --full`);
+    if (truncated) chunks.push(`» ${commandPrefix(squarePath)} history --no-truncate`);
   }
 
   return chunks.join('\n\n');
@@ -435,10 +435,11 @@ function highlightGrepMatch(text: string): string {
 export function renderGrepActivitiesView(
   visible: StoredAct[],
   totalMatches: number,
-  full: boolean | undefined,
+  noTruncate: boolean | undefined,
   squarePath: string,
   pattern: string,
-  fixed = false
+  fixed = false,
+  perception?: (act: StoredAct) => Perception,
 ): string {
   const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
   if (totalMatches === 0) return `○ no activity matched ${quoteShell(pattern)}`;
@@ -448,7 +449,11 @@ export function renderGrepActivitiesView(
 
   for (const act of publicVisible) {
     const rawBody = act.body ?? '';
-    if (full === true) {
+    if (perception?.(act) === 'presence') {
+      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}`);
+      continue;
+    }
+    if (noTruncate === true) {
       const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
       chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}\n${body}`);
       continue;
@@ -471,9 +476,9 @@ export function renderGrepActivitiesView(
   }
 
   if (publicVisible.length === 1) {
-    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2${truncated ? ' --full' : ''}`);
+    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
   } else if (truncated && publicVisible.length > 1) {
-    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2 --full`);
+    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2 --no-truncate`);
   }
   return chunks.join('\n\n');
 }

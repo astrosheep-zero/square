@@ -97,10 +97,10 @@ test('listener commands do not rejoin a participant who already left', async () 
     const bob = await square.join('Bob');
     await bob.done();
   });
-  const before = run(withPath(file, ['history', '--all', '--full']));
+  const before = run(withPath(file, ['history', '--no-truncate']));
   const refused = run(withName(file, 'Bob', ['listen', 'Alice']));
   assert.equal(refused.status, 2);
-  const after = run(withPath(file, ['history', '--all', '--full']));
+  const after = run(withPath(file, ['history', '--no-truncate']));
   assert.equal(after.stdout, before.stdout);
 });
 
@@ -397,14 +397,17 @@ test('history rejects removed filter aliases', async () => {
     ['history', '--by', 'Alice'],
     ['history', '--last', '1'],
     ['history', '--mentions', 'me'],
+    ['history', '--until', '1h'],
     ['history', '--before', '1h'],
   ];
   const results = await Promise.all(rejected.map((args) => runAsync(withPath(file, args))));
   for (const [index, result] of results.entries()) {
     const args = rejected[index];
     assert.notEqual(result.status, 0, args.join(' '));
-    assert.match(result.stderr, new RegExp(`history does not know ${args[1]}`));
-    assert.match(result.stderr, /» square history --help\n$/);
+    if (args[1] === '--until') assert.match(result.stderr, /history does not know --until/);
+    else if (args[1] === '--before') assert.match(result.stderr, /Invalid --before: expected an activity id/);
+    else assert.match(result.stderr, new RegExp(`history does not know ${args[1]}`));
+    if (args[1] !== '--before') assert.match(result.stderr, /» square history --help\n$/);
   }
 });
 

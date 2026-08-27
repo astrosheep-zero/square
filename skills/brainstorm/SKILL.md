@@ -53,7 +53,7 @@ square --location <square> --as <name> done - <<'EOF'
 ...
 EOF
 
-For complete history: square --location <square> history --all --full
+For complete history, follow the activity-id continuation commands printed by `history`.
 
 Every activity must address at least one participant with @name. Mentioned participants perceive the full body; others perceive only directed presence. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it. Precise history queries may still read original archive bodies.
 
@@ -117,7 +117,7 @@ While held, participant expression and catch pause. Join, done, status, and hist
 When participants are done, collect the public activities:
 
 ```bash
-square --location <square> history --all --full        # complete public history
+square --location <square> history --no-truncate      # expand preview bodies
 square --location <square> status
 ```
 

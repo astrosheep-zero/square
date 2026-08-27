@@ -67,7 +67,7 @@ test('participant history defaults to the recent ten activities in ascending ord
   assert.equal(recent.length, 10);
   assert.deepEqual(recent.map((activity) => activity.id), Array.from({ length: 10 }, (_, index) => `act/${index + 4}`));
   assert.deepEqual((await bob.history({ limit: 3, order: 'desc' })).map((activity) => activity.id), ['act/13', 'act/12', 'act/11']);
-  assert.equal((await bob.history({ all: true })).length, 14);
+  assert.equal((await bob.history({ limit: 14 })).length, 14);
   await square.close();
 });
 
@@ -80,12 +80,25 @@ test('participant history uses listener attention at each activity boundary', as
   await bob.listen('Alice');
   await alice.express('after listening', { force: true });
 
-  const history = await bob.history({ all: true });
+  const history = await bob.history({ limit: 20 });
   const before = history.find((activity) => activity.body === undefined && activity.kind === 'say');
   const after = history.find((activity) => activity.body === 'after listening');
   assert.equal(before?.perception, 'presence');
   assert.equal(after?.perception, 'full');
   assert.deepEqual((await bob.history({ mention: true })).map((activity) => activity.body), ['after listening']);
+  await square.close();
+});
+
+test('participant history pages around stable activity ids without overlap', async () => {
+  let at = 0;
+  const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
+  const alice = await square.join('Alice');
+  for (let index = 0; index < 6; index += 1) await alice.express(`message ${index}`, { force: true });
+  assert.deepEqual((await alice.history({ limit: 3 })).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
+  assert.deepEqual((await alice.history({ before: 'act/4', limit: 3 })).map((activity) => activity.id), ['act/1', 'act/2', 'act/3']);
+  assert.deepEqual((await alice.history({ before: 'act/4', limit: 3, order: 'desc' })).map((activity) => activity.id), ['act/3', 'act/2', 'act/1']);
+  assert.deepEqual((await alice.history({ after: 'act/3', limit: 3 })).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
+  await assert.rejects(() => alice.history({ before: 'act/4', after: 'act/3', limit: 3 }), /cannot combine before and after cursors/);
   await square.close();
 });
 

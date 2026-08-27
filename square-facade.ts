@@ -9,7 +9,7 @@ export interface ExpressResult { readonly activity: Activity; }
 export interface ListenerChangeResult { readonly activity: Activity | null; }
 export interface CatchOptions { readonly idle?: number; readonly from?: readonly string[]; readonly mention?: boolean; }
 export interface CatchResult { readonly activities: readonly PerceivedActivity[]; readonly consumedThrough: ActivityId | null; readonly idleExpired: boolean; }
-export interface HistoryQuery { readonly limit?: number; readonly order?: 'asc' | 'desc'; readonly all?: boolean; readonly full?: boolean; readonly grep?: string; readonly from?: readonly string[]; readonly mention?: boolean; }
+export interface HistoryQuery { readonly limit?: number; readonly order?: 'asc' | 'desc'; readonly before?: ActivityId; readonly after?: ActivityId; readonly grep?: string; readonly from?: readonly string[]; readonly mention?: boolean; }
 export interface ParticipantStatus { readonly name: string; readonly state: 'joined' | 'done'; readonly consumedThrough: ActivityId | null; readonly watching: boolean; readonly listening: readonly string[]; }
 export interface SquareSnapshot { readonly context: string; readonly actCount: number; readonly hardCap: number | null; readonly throttlePerMinute?: number; readonly held: { readonly by: string; readonly reason?: string } | null; readonly participants: readonly ParticipantStatus[]; delivered(name: string, id: ActivityId): boolean; }
 

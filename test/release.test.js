@@ -43,7 +43,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(claudeSkill, squareSkill);
   assert.match(squareSkill, /history.*only way to look back/i);
   assert.match(squareSkill, /Never read or parse the binary Square artifact directly/);
-  assert.match(squareSkill, /history --all --full/);
+  assert.match(squareSkill, /history --before act\/12/);
   assert.match(codexPlugin.interface.defaultPrompt, /join.*catch.*express.*done/i);
   assert.doesNotMatch(JSON.stringify(codexPlugin.interface), /\bstream\b/i);
   assert.deepEqual(

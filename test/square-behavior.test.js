@@ -102,7 +102,7 @@ test('hold and resume persist the requesting actor and never a system actor', as
   assert.equal(resumed.activity.kind, 'resume');
   assert.equal(resumed.activity.actor, 'Host');
   assert.equal((await square.snapshot()).held, null);
-  assert.ok((await square.history({ all: true })).every((activity) => activity.actor !== 'system'));
+  assert.ok((await square.history({ limit: 100 })).every((activity) => activity.actor !== 'system'));
   await closeSquare(square);
 });
 
@@ -224,7 +224,7 @@ test('history from a named participant keeps that participant\'s activities', as
   await (await square.join('Bob')).express('hello from bob @Alice', { force: true });
   await cara.express('hello from cara @Alice', { force: true });
   await cara.done('later');
-  const fromCara = await square.history({ from: ['Cara'], all: true });
+  const fromCara = await square.history({ from: ['Cara'], limit: 100 });
   assert.deepEqual(
     fromCara.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
     [
@@ -246,13 +246,13 @@ test('a mention target perceives the full body and everyone else perceives prese
   const bobCaught = await bob.catch();
   const bobMention = bobCaught.activities.find((activity) => activity.id === expressed.activity.id);
   assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full' });
-  const caraMention = (await cara.history({ all: true })).find((activity) => activity.id === expressed.activity.id);
+  const caraMention = (await cara.history({ limit: 100 })).find((activity) => activity.id === expressed.activity.id);
   assert.equal(caraMention.perception, 'presence');
   assert.equal('body' in caraMention, false);
-  assert.equal((await square.history({ all: true })).find((activity) => activity.id === expressed.activity.id).body, 'secret reach phrase @Bob');
+  assert.equal((await square.history({ limit: 100 })).find((activity) => activity.id === expressed.activity.id).body, 'secret reach phrase @Bob');
   const secondExpress = await alice.express('two targets @Cara then @bob', { force: true });
   const dan = await square.join('Dan');
-  const later = await dan.history({ all: true });
+  const later = await dan.history({ limit: 100 });
   const first = later.find((activity) => activity.id === expressed.activity.id);
   const second = later.find((activity) => activity.id === secondExpress.activity.id);
   assert.equal(first.perception, 'presence');
@@ -268,7 +268,7 @@ test('history remains read-only until catch writes a delivery receipt', async ()
   const bob = await square.join('Bob');
   const expressed = await alice.express('hello @Bob please check', { force: true });
   assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), false);
-  await bob.history({ all: true });
+  await bob.history({ limit: 100 });
   await square.history({ grep: 'please check' });
   assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), false);
   const caught = await bob.catch();
@@ -335,7 +335,7 @@ test('a bell remains directed while catch filters still apply', async () => {
   assert.equal(mentionWatch.activities.some((activity) => activity.body === 'bell one'), true);
   const fromWatch = await bob.catch({ from: ['Cara'] });
   assert.equal(fromWatch.activities.some((activity) => activity.id === bell.activity.id), false);
-  assert.equal((await square.history({ from: ['Cara'], all: true })).some((activity) => activity.body === 'bell one'), false);
+  assert.equal((await square.history({ from: ['Cara'], limit: 100 })).some((activity) => activity.body === 'bell one'), false);
   time.set(7000);
   await assert.rejects(
     () => alice.express('bell two', { reach: 'bell' }),
@@ -408,7 +408,7 @@ test('room changes stay in history while a final note remains directed conversat
     afterDone.activities.map((activity) => ({ kind: activity.kind, body: activity.body })),
     [],
   );
-  assert.equal((await square.history({ all: true })).filter((activity) => activity.body === 'final note').length, 1);
+  assert.equal((await square.history({ limit: 100 })).filter((activity) => activity.body === 'final note').length, 1);
   await closeSquare(square);
 });
 

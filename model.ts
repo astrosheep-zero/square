@@ -132,12 +132,12 @@ export interface SquareState {
 export interface ActivitiesOptions {
   lastN?: number | null;
   participants?: string[];
-  /** Exclusive upper bound on act.at (ms). */
-  before?: number;
   /** Exclusive lower bound on act.at (ms). Alias of --since. */
   after?: number;
   /** Exclusive lower bound on stable act index (--after act/<index>). */
   afterIndex?: number;
+  /** Exclusive upper bound on stable act index (--before act/<index>). */
+  beforeIndex?: number;
   /** Center act indexes for context windows (--at). */
   atIndexes?: number[];
   beforeContext?: number;
@@ -146,7 +146,6 @@ export interface ActivitiesOptions {
   /** Undelivered mention/bell items for viewer only (read-only; requires viewer). */
   pending?: boolean;
   viewer?: string;
-  full?: boolean;
   grep?: string;
   fixed?: string;
   order?: 'asc' | 'desc';

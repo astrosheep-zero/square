@@ -167,7 +167,7 @@ test('catch --now around the square excludes the current actor', async () => {
   assert.doesNotMatch(watched.stdout, /^\s*[◎●○×]\s+Alice\b/m);
 });
 
-test('history --all --full renders the complete archive', async () => {
+test('history with an explicit page and no truncation renders the archive', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
@@ -175,12 +175,30 @@ test('history --all --full renders the complete archive', async () => {
     await bob.done('bye');
   });
 
-  const activities = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
+  const activities = run(withPath(file, ['history', '--limit', '100', '--no-truncate']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
   assert.match(activities.stdout, /@Bob\s+#1/);
   assert.match(activities.stdout, /hello @Alice/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
+});
+
+test('history pages with stable activity-id cursors and prints the next page', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    for (let index = 0; index < 12; index += 1) await alice.express(`message ${index}`, { force: true });
+  }, { hardCap: 20 });
+  const latest = run(withPath(file, ['history', '--limit', '3']));
+  assert.equal(latest.status, 0, latest.stderr);
+  assert.match(latest.stdout, /message 9/);
+  assert.match(latest.stdout, /message 11/);
+  assert.match(latest.stdout, /history --before act\/\d+ --limit 3/);
+
+  const older = run(withPath(file, ['history', '--before', 'act/10', '--limit', '3']));
+  assert.equal(older.status, 0, older.stderr);
+  assert.match(older.stdout, /message 6/);
+  assert.match(older.stdout, /message 8/);
+  assert.doesNotMatch(older.stdout, /message 9/);
 });
 
 test('history --since excludes older public activity', async () => {
@@ -215,13 +233,13 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.match(caraWatch.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
   assert.doesNotMatch(caraWatch.stdout, /secret reach phrase/);
 
-  const ambient = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '7000' } });
+  const ambient = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
   assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
   assert.match(ambient.stdout, /→ @Alice, @Bob, @Cara were here/);
   assert.doesNotMatch(ambient.stdout, /→ @(?:Alice|Bob|Cara) was here/);
 
-  const archive = run(withPath(file, ['history', '--all', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
+  const archive = run(withPath(file, ['history', '--limit', '100', '--no-truncate']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(archive.status, 0, archive.stderr);
   assert.match(archive.stdout, /secret reach phrase @Bob/);
 
@@ -253,7 +271,7 @@ test('history groups every participant footprint at a shared projection anchor',
   const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(bobCatch.status, 0, bobCatch.stderr);
 
-  const history = run(withPath(file, ['history', '--all']), { env: { SQUARE_NOW_MS: '6000' } });
+  const history = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(history.status, 0, history.stderr);
   assert.match(history.stdout, /→ @Alice, @Bob, @Cara were here/);
   assert.doesNotMatch(history.stdout, /→ @(?:Alice|Bob|Cara) was here/);
@@ -329,7 +347,7 @@ test('express --reply renders the causal activity reference', async () => {
     await bob.express('answer @Alice', { force: true, reply: 'act/2' });
   });
 
-  const history = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--full']));
+  const history = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--no-truncate']));
   assert.equal(history.status, 0, history.stderr);
   assert.match(history.stdout, /act\/3.*replies to act\/2/);
 
@@ -461,9 +479,9 @@ test('history grep defaults to a compact character-bounded search view', async (
   assert.doesNotMatch(compact.stdout, /TAIL/);
   assert.doesNotMatch(compact.stdout, /�/);
   assert.doesNotMatch(compact.stdout, /footprints/);
-  assert.match(compact.stdout, /history --at act\/\d+ -C 2 --full/);
+  assert.match(compact.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
 
-  const full = run(withPath(file, ['history', '--grep', 'needle', '--full']), { env: { SQUARE_NOW_MS: '3000' } });
+  const full = run(withPath(file, ['history', '--grep', 'needle', '--no-truncate']), { env: { SQUARE_NOW_MS: '3000' } });
   assert.equal(full.status, 0, full.stderr);
   assert.match(full.stdout, /TAIL/);
   assert.doesNotMatch(full.stdout, /chars after/);
@@ -597,7 +615,7 @@ test('room changes and final notes remain visible without duplicate done events'
   assert.equal(afterDone.status, 0, afterDone.stderr);
   assert.match(afterDone.stdout, /final note/);
   assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 1);
-  assert.match(run(withPath(file, ['history', '--full'])).stdout, /final note/);
+  assert.match(run(withPath(file, ['history', '--no-truncate'])).stdout, /final note/);
   assert.match(run(withName(file, 'Alice', ['status'])).stdout, /final note/);
 });
 
@@ -748,6 +766,6 @@ test('list, participants, and clipped status use current state and executable hi
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);
-  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act\/\d+ -C 2 --full/);
+  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act\/\d+ -C 2 --no-truncate/);
   assert.match(status.stdout, /throttle 2\/min/);
 });

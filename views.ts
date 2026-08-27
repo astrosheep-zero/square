@@ -37,14 +37,17 @@ function parseRequiredActivityId(id: ActivityId): number {
 }
 
 function historyOptions(query: HistoryQuery, viewer?: string): ActivitiesOptions {
-  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.mention === true && viewer !== undefined ? { mention: viewer } : {}), order: 'asc' };
+  if (query.before !== undefined && query.after !== undefined) throw new SquareError('invalid_args', 'History cannot combine before and after cursors');
+  const afterIndex = query.after === undefined ? undefined : parseRequiredActivityId(query.after);
+  const beforeIndex = query.before === undefined ? undefined : parseRequiredActivityId(query.before);
+  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.mention === true && viewer !== undefined ? { mention: viewer } : {}), ...(afterIndex === undefined ? {} : { afterIndex }), ...(beforeIndex === undefined ? {} : { beforeIndex }), order: 'asc' };
 }
 
 function selectHistory(stored: StoredAct[], query: HistoryQuery): StoredAct[] {
   let selected = stored.filter((activity) => activity.kind !== 'read');
-  if (query.all !== true && query.limit !== undefined) {
+  if (query.limit !== undefined) {
     if (!Number.isSafeInteger(query.limit) || query.limit < 1) throw new SquareError('invalid_args', 'History limit must be a positive integer');
-    selected = selected.slice(-query.limit);
+    selected = query.after === undefined ? selected.slice(-query.limit) : selected.slice(0, query.limit);
   }
   return query.order === 'desc' ? selected.reverse() : selected;
 }
@@ -73,7 +76,7 @@ function sayNumbers(state: Parameters<typeof coreStatus>[0]): Record<number, num
 }
 
 export async function history(square: OpenSquare, query: HistoryQuery = {}): Promise<Activity[]> { const { state } = await square.artifact.read(); return selectHistory(coreActivities(state, historyOptions(query)), query).map(expose); }
-export async function participantHistory(square: OpenSquare, name: string, query: HistoryQuery = {}): Promise<PerceivedActivity[]> { const { state } = await square.artifact.read(); const viewer = resolveKnownName(state, name); const delivery = deriveDeliveryModel(state); const effective = query.all === true || query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective, viewer), delivery), effective).map((activity) => exposePerceived(activity, viewer, delivery)); }
+export async function participantHistory(square: OpenSquare, name: string, query: HistoryQuery = {}): Promise<PerceivedActivity[]> { const { state } = await square.artifact.read(); const viewer = resolveKnownName(state, name); const delivery = deriveDeliveryModel(state); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective, viewer), delivery), effective).map((activity) => exposePerceived(activity, viewer, delivery)); }
 export async function resolveParticipant(square: OpenSquare, name: string): Promise<{ readonly name: string; readonly roster: readonly string[] }> { const { state } = await square.artifact.read(); return { name: resolveKnownName(state, name), roster: rosterNames(state) }; }
 export async function currentParticipant(square: OpenSquare, name: string): Promise<string | undefined> { const { state } = await square.artifact.read(); const known = resolveRosterName(state, name); return known !== undefined && isCurrentlyJoined(state.acts, known) ? known : undefined; }
 export async function participants(square: OpenSquare): Promise<ParticipantStatus[]> { const { state } = await square.artifact.read(); return statuses(square, state); }

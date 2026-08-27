@@ -36,7 +36,7 @@ warmup, and host context may still contain natural Markdown.
 Preferred language:
 - Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
 - In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path.
-- `history` is the only read path for square activity. Never tell agents to read or parse the binary artifact directly; precise history queries and `history --all --full` may read original bodies from the archive.
+- `history` is the only read path for square activity. Never tell agents to read or parse the binary artifact directly; use stable activity-id cursors to read older or newer pages.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 

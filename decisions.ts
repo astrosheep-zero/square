@@ -381,13 +381,13 @@ export function coreActivities(squareState: SquareState, opts: ActivitiesOptions
     acts = acts.filter((act) => selected.has(act.index));
   }
   if (opts.afterIndex != null) acts = acts.filter((act) => act.index > opts.afterIndex!);
+  if (opts.beforeIndex != null) acts = acts.filter((act) => act.index < opts.beforeIndex!);
   if (canonicalParticipants.length > 0) {
     acts = acts.filter(
       (act) =>
         act.actor !== undefined && canonicalParticipants.some((participant) => sameName(participant, act.actor!))
     );
   }
-  if (opts.before != null) acts = acts.filter((act) => act.at < opts.before!);
   if (opts.after != null) acts = acts.filter((act) => act.at > opts.after!);
   if (opts.mention != null) {
     const mention = resolveKnownName(squareState, opts.mention);
