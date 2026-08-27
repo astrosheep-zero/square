@@ -1,11 +1,13 @@
 import { leaseOwnsNotification } from './delivery.js';
-import { markBoundarySeen } from './square-wiring.js';
+import { openSquare } from './square-file-adapter.js';
+import { closeOpenSquare } from './open-square.js';
+import { presentPending } from './application.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { ATTENTION_BODY_MAX, renderAttentionPreview } from './attention-presentation.js';
-import { presentOnce } from './presented.js';
 
 const CONTEXT_MAX = 1200;
+const presentationLocks = new Map<string, Promise<void>>();
 
 function pendingCount(inbox: InboxMembership[]): number {
   return inbox.reduce((total, membership) => total + membership.notifications.length, 0);
@@ -34,6 +36,7 @@ export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
 interface CompleteBoundaryMembership {
   membership: InboxMembership;
   actIndexes: number[];
+  markSeen: boolean;
 }
 
 interface BoundaryRender {
@@ -80,9 +83,11 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       continue;
     }
     blocks.push(block);
-    if (notification.body.replace(/\r\n/g, '\n').length <= ATTENTION_BODY_MAX) {
-      complete.push({ membership, actIndexes: [notification.actIndex] });
-    }
+    complete.push({
+      membership,
+      actIndexes: [notification.actIndex],
+      markSeen: notification.body.replace(/\r\n/g, '\n').length <= ATTENTION_BODY_MAX,
+    });
   }
 
   return {
@@ -101,30 +106,38 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
 export async function presentPendingAtBoundary<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,
-  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<T | undefined> {
-  const inbox = await lookup(sessionId);
-  let delivered: BoundaryRender | undefined;
-  const result = await presentOnce(
-    sessionId,
-    () => pendingAtBoundary(inbox),
-    (inbox) => {
-      delivered = renderBoundary(inbox);
-      return present(delivered.context);
-    },
-    env,
-    Date.now(),
-    signal
-  );
-  if (result !== undefined && delivered !== undefined) {
-    for (const entry of delivered.complete) {
-      await markBoundarySeen(
-        entry.membership.squarePath,
-        entry.membership.name,
-        entry.actIndexes,
-      );
+  const inbox = await lookup(sessionId, env);
+  if (signal?.aborted) return undefined;
+  const delivered = renderBoundary(pendingAtBoundary(inbox));
+  if (delivered.context === '') return undefined;
+  let result: T | undefined;
+  let rendered = false;
+  const renderOnce = async () => { if (!rendered) { rendered = true; result = await present(delivered.context); } };
+  for (const entry of delivered.complete) {
+    let square;
+    try {
+      try { square = await openSquare(entry.membership.squarePath, { env }); } catch { continue; }
+      for (const index of entry.actIndexes) {
+        const key = `${entry.membership.squarePath}\u0000${entry.membership.name.toLocaleLowerCase()}\u0000${index}`;
+        const prior = presentationLocks.get(key);
+        if (prior !== undefined) { await prior; continue; }
+        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, hostLedger: square.hostLedger, session: sessionId, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now() }).then(async (outcome) => {
+          // A stale projection can outlive its activity; still surface the bounded preview,
+          // but there is no artifact observation to commit.
+          if (!outcome.presented) {
+            const snapshot = await square!.artifact.read().catch(() => undefined);
+            if (snapshot?.state.acts.every((activity: { index: number }) => activity.index !== index)) await renderOnce();
+          }
+        });
+        presentationLocks.set(key, work);
+        try { await work; } finally { presentationLocks.delete(key); }
+      }
+    } finally {
+      if (square !== undefined) await closeOpenSquare(square);
     }
   }
   return result;

@@ -14,7 +14,6 @@ import {
   withPathOutput,
 } from './presentation.js';
 import { nowMs, SLEEP_MS } from './runtime.js';
-import { compatibilityWakeAfterCommit } from './notifications.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
@@ -108,7 +107,6 @@ export async function cmdActivity(
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
         try {
-          compatibilityWakeAfterCommit(squarePath, result.activity.id);
         } catch {
           // Compatibility wake is post-commit and cannot undo the activity.
         }

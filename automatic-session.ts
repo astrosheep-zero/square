@@ -5,8 +5,9 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
-import { canonicalSquarePath, lookupSessionBindings, recordSessionDone, recordSessionJoin } from './registry.js';
 import { automaticParticipant } from './participant-identity.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { projectSessionBindings } from './application.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
@@ -18,6 +19,18 @@ const providerEnv: Record<AutomaticProvider, string> = {
   opencode: 'OPENCODE_SESSION_ID',
   pi: 'SQUARE_PI_SESSION_ID',
 };
+
+function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, [providerEnv[provider]]: sessionId };
+}
+
+function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
+  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  return createHostLedgerPort({
+    userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
+    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
+  });
+}
 
 export function publicSquarePath(cwd: string): string {
   return path.join(cwd, '.square', 'PUBLIC.square');
@@ -43,17 +56,14 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     return undefined;
   }
   const name = automaticParticipant(provider, sessionId, env);
-  const canonicalPath = await canonicalSquarePath(squarePath);
-  const alreadyBound = (await lookupSessionBindings(sessionId, Date.now(), env)).some((binding) =>
-    binding.squarePath === canonicalPath && binding.name === name
-  );
   await closeOpenSquare(reader);
-  const square = await Square.at({ path: squarePath });
+  const scopedEnv = operationEnv(provider, sessionId, env);
+  const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
   try {
     const implicit = await square.implicitJoin(name);
-    if (implicit.state === 'done' || (implicit.state === 'active' && alreadyBound)) return undefined;
-    const channel = provider === 'claude' ? 'claude-code' : provider;
-    await recordSessionJoin(sessionId, name, squarePath, channel, { ...env, [providerEnv[provider]]: sessionId });
+    if (implicit.state === 'done') return undefined;
+    await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel: provider === 'claude' ? 'claude-code' : provider, updatedAt: Date.now() });
+    await square.reconcileBinding();
     return undefined;
   } finally {
     await square.close();
@@ -62,19 +72,26 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
 
 export async function automaticSessionEnd(provider: AutomaticProvider, sessionId: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const squarePath = publicSquarePath(cwd);
-  const channel = provider === 'claude' ? 'claude-code' : provider;
-  const canonicalPath = await canonicalSquarePath(squarePath);
-  const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonicalPath && item.channel === channel);
+  const scopedEnv = operationEnv(provider, sessionId, env);
+  const hostLedger = hostLedgerForEnv(scopedEnv);
+  const probe = await openSquare(squarePath, { hostLedger, env: scopedEnv });
+  const binding = (await projectSessionBindings({
+    hostLedger,
+    sessionId,
+    location: probe.location,
+    scopes: ['user', 'local'],
+  }))[0];
+  await closeOpenSquare(probe);
   if (binding === undefined || !await squareExists(squarePath)) return;
   const reader = await openSquare(squarePath);
-  const joined = await entryPresentation(reader, binding.name).finally(() => closeOpenSquare(reader));
+  const joined = await entryPresentation(reader, binding.participant).finally(() => closeOpenSquare(reader));
   if (!joined.joined) return;
-  const square = await Square.at({ path: squarePath });
+  const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
   try {
-    const participant = await square.join(binding.name);
+    const participant = await square.join(binding.participant);
     await participant.done();
+    await square.reconcileBinding();
   } finally {
     await square.close();
   }
-  await recordSessionDone(sessionId, binding.name, squarePath, channel, env);
 }

@@ -1,5 +1,4 @@
 import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
-import type { WakeNotifier } from './square-facade.js';
 
 /** Private binding assembled by storage and consumed by the four concerns. */
 export interface OpenSquare {
@@ -7,7 +6,7 @@ export interface OpenSquare {
   readonly clock: () => number;
   readonly location: string;
   readonly hostLedger?: HostLedgerPort;
-  readonly notifier?: WakeNotifier;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Package-private lifecycle boundary for bound squares. */

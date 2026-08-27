@@ -1,10 +1,15 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { waitForSessionPending } from '../dist/inbox.js';
-import { lookupSessionBindings } from '../dist/registry.js';
+import { projectSessionBindings } from '../dist/application.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
 const PI_SEND_TIMEOUT_MS = 5_000;
 const DEFAULT_PI_BOUNDARY_TIMEOUT_MS = 2_000;
+
+function sessionBindings(sessionId) {
+  return projectSessionBindings({ hostLedger: createHostLedgerPort(), sessionId });
+}
 
 function piBoundaryTimeoutMs() {
   const configured = Number.parseInt(process.env.SQUARE_PI_BOUNDARY_TIMEOUT_MS || '', 10);
@@ -84,7 +89,7 @@ export default function squarePiExtension(pi) {
 
   const wake = async (piContext, token, signal) => {
     while (sessionId !== undefined && token === generation && !signal.aborted) {
-      if ((await lookupSessionBindings(sessionId)).length === 0) {
+      if ((await sessionBindings(sessionId)).length === 0) {
         await pause(signal, 1_000);
         continue;
       }

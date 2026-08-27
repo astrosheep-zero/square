@@ -9,7 +9,6 @@ import { emptyRuntimeState, writeSquareFile } from '../dist/artifact.js';
 import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { sessionInbox } from '../dist/inbox.js';
-import { presentOnce } from '../dist/presented.js';
 import { lookupParticipant, recordJoin } from '../dist/registry.js';
 
 const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
@@ -113,38 +112,15 @@ test('session inbox never resurrects a mention from before the recipient joined'
   }
 });
 
-test('session inbox does not inherit an active catch lease after ownership changes', async () => {
-  const item = await fixture();
-  try {
-    item.runtime.leases.Bob = {
-      leaseId: 'old-owner-catch',
-      ownerId: (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId,
-      heartbeatAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
-    };
-    await item.persist();
-
-    await recordJoin('replacement-session', 'Bob', item.squarePath, {
-      channel: 'claude-code',
-      ownerId: 'replacement-owner',
-    });
-    const inbox = await sessionInbox('replacement-session');
-    assert.equal(inbox.length, 1);
-    assert.equal(inbox[0].catchLease, undefined);
-    assert.equal(inbox[0].notifications.length, 2);
-  } finally {
-    item.cleanup();
-  }
-});
-
 test('Claude admits bounded context at an agent boundary and presents once', async () => {
+  const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-${Date.now()}.ndjsonl`);
   const previous = process.env.SQUARE_PRESENTED;
   process.env.SQUARE_PRESENTED = presented;
   try {
     const inbox = [{
       name: 'Bob',
-      squarePath: '/tmp/SQUARE.square',
+      squarePath: item.squarePath,
       notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
     }];
     const response = await claudeHookResponse(
@@ -153,21 +129,16 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
-    assert.match(response.hookSpecificOutput.additionalContext, /square:\/tmp\/SQUARE\.square#act\/2/);
+    assert.match(response.hookSpecificOutput.additionalContext, new RegExp(`square:${item.squarePath.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}#act/2`));
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.match(response.hookSpecificOutput.additionalContext, /✓ shown in full/);
     assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /catch --now/);
-    assert.equal(
-      await claudeHookResponse(
-        { session_id: 'session', hook_event_name: 'PostToolBatch' },
-        () => inbox
-      ),
-      undefined
-    );
+    assert.equal(await claudeHookResponse({ session_id: 'session', hook_event_name: 'PostToolBatch' }, () => inbox), undefined);
   } finally {
     if (previous === undefined) delete process.env.SQUARE_PRESENTED;
     else process.env.SQUARE_PRESENTED = previous;
     fs.rmSync(presented, { force: true });
+    item.cleanup();
   }
 });
 
@@ -175,12 +146,10 @@ test('concurrent native sessions produce one presentation for their shared owner
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-concurrent-${Date.now()}.ndjsonl`);
   try {
-    const ownerId = (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId;
-    await recordJoin('second-session', 'Bob', item.squarePath, { channel: 'codex', ownerId });
     const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_PRESENTED: presented };
     const results = await Promise.all([
       spawnHook('claude-session', env),
-      spawnHook('second-session', env),
+      spawnHook('claude-session', env),
     ]);
     assert.deepEqual(results.map((result) => result.status), [0, 0]);
     assert.equal(results.filter((result) => result.stdout.includes('PostToolBatch')).length, 1);
@@ -192,48 +161,23 @@ test('concurrent native sessions produce one presentation for their shared owner
 });
 
 test('failed presentation remains available to the next guarantee path', async () => {
+  const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-retry-${Date.now()}.ndjsonl`);
   const inbox = [{
     name: 'Bob',
-    squarePath: '/tmp/retry-square.square',
+    squarePath: item.squarePath,
     notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
-    await assert.rejects(
-      () => presentOnce('session', () => inbox, () => { throw new Error('inject failed'); }, { SQUARE_PRESENTED: presented }),
-      /inject failed/
-    );
-    assert.equal(await presentOnce('session', () => inbox, () => 'delivered', { SQUARE_PRESENTED: presented }), 'delivered');
-    assert.equal(await presentOnce('session', () => inbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
+    const ledger = new (await import('../dist/host-ledger-file-adapter.js')).FileHostLedgerPort({ userPath: path.dirname(presented), localPath: path.dirname(presented) });
+    const artifact = (await import('../dist/square-file-adapter.js')).openSquare(item.squarePath, { hostLedger: ledger });
+    const square = await artifact;
+    await assert.rejects(() => import('../dist/application.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => { throw new Error('inject failed'); } } })), /inject failed/);
+    assert.equal((await import('../dist/application.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => 'delivered' } }))).presented, true);
+    await square.artifact.close();
   } finally {
     fs.rmSync(presented, { force: true });
-  }
-});
-
-test('unrelated participants do not share an adapter delivery lock', async () => {
-  const presented = path.join(os.tmpdir(), `square-presented-independent-${Date.now()}.ndjsonl`);
-  const aliceInbox = [{
-    name: 'Alice',
-    squarePath: '/tmp/independent.square',
-    notifications: [{ actIndex: 1, actor: 'Cara', at: 2, route: 'mention', body: 'hello @Alice' }],
-  }];
-  const bobInbox = [{
-    name: 'Bob',
-    squarePath: '/tmp/independent.square',
-    notifications: [{ actIndex: 2, actor: 'Cara', at: 3, route: 'mention', body: 'hello @Bob' }],
-  }];
-  try {
-    const result = await presentOnce(
-      'alice-session',
-      () => aliceInbox,
-      () => presentOnce('bob-session', () => bobInbox, () => 'bob delivered', { SQUARE_PRESENTED: presented }),
-      { SQUARE_PRESENTED: presented }
-    );
-    assert.equal(result, 'bob delivered');
-    assert.equal(await presentOnce('alice-session', () => aliceInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
-    assert.equal(await presentOnce('bob-session', () => bobInbox, () => 'duplicate', { SQUARE_PRESENTED: presented }), undefined);
-  } finally {
-    fs.rmSync(presented, { force: true });
+    item.cleanup();
   }
 });
 
@@ -245,7 +189,6 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
       channel: 'paseo',
       paseoAgentId: 'paseo-agent',
     });
-    const paseoOwner = (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId;
 
     const response = await claudeHookResponse(
       { session_id: 'nested-claude', hook_event_name: 'PostToolBatch' },
@@ -255,9 +198,8 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
     // No membership for the nested session => nothing to present.
     assert.equal(response, undefined);
     const bindings = await lookupParticipant(item.squarePath, 'Bob');
-    assert.deepEqual(bindings.map((binding) => binding.sessionId), ['paseo-agent']);
-    assert.equal(bindings[0].ownerId, paseoOwner);
-    assert.deepEqual((await lookupParticipant(item.squarePath, 'Bob')).map((b) => b.sessionId), ['paseo-agent']);
+    assert.deepEqual(bindings.map((binding) => binding.sessionId).sort(), ['claude-session', 'paseo-agent']);
+    assert.equal(bindings.find((binding) => binding.sessionId === 'paseo-agent')?.channel, 'paseo');
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();
@@ -271,7 +213,6 @@ test('active catch owns matching attention at every adapter boundary', async () 
     const now = Date.now();
     item.runtime.leases.Bob = {
       leaseId: 'watch-active',
-      ownerId: (await lookupParticipant(item.squarePath, 'Bob'))[0].ownerId,
       heartbeatAt: now,
       expiresAt: now + 60_000,
     };

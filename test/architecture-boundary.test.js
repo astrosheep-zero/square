@@ -149,8 +149,8 @@ test('watch terminal law and notifier type each have one directional owner', () 
   const concerns = ['landing.ts', 'presence.ts', 'views.ts', 'wakes.ts'];
   assert.equal((runtime.match(/function watchTerminalStatus\b/g) ?? []).length, 1);
   assert.equal(concerns.filter((file) => /function watchTerminalStatus\b/.test(productionSources.get(file) ?? '')).length, 0);
-  assert.equal((facade.match(/interface WakeNotifier\b/g) ?? []).length, 1);
-  assert.match(binding, /import type \{ WakeNotifier \} from ['"]\.\/square-facade\.js['"]/);
+  assert.equal((facade.match(/interface WakeNotifier\b/g) ?? []).length, 0);
+  assert.doesNotMatch(binding, /WakeNotifier/);
   assert.doesNotMatch(facade, /open-square\.js/);
   for (const concern of concerns) {
     assert.doesNotMatch(productionSources.get(concern) ?? '', /from ['"]\.\/(?:landing|presence|views|wakes)\.js['"]/);

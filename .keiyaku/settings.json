@@ -1,7 +1,7 @@
 {
   "worktree": {
     "create": [
-      { "argv": ["npm", "ci"], "timeoutMs": 900000 }
+      { "name": "npm-ci", "argv": ["npm", "ci"], "timeoutMs": 900000 }
     ]
   }
 }

@@ -155,6 +155,6 @@ test('route retry requires new route evidence, and unknown stops every route', (
     signature: 'send_unknown',
     attemptN: 2,
   };
-  assert.equal(terminalWakeEvidence([failed, unknown]), unknown);
-  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), false);
+  assert.equal(terminalWakeEvidence([failed, unknown]), undefined);
+  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), true);
 });

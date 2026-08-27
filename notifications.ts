@@ -1,41 +1,21 @@
-import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 import {
-  deriveDeliveryModel,
-  leaseOwnsNotification,
   planActNotifications,
-  type DeliveryModel,
   type WakeAdapter,
-  type WakeRequest,
 } from './delivery.js';
-import { sessionInbox } from './inbox.js';
-import { hasPresentedAttention } from './presented.js';
-import { SquareError, type SquareState, type WakeRoute, type WakeRouteKind } from './model.js';
+import { SquareError, type SquareState } from './model.js';
 import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { displayAttentionPath, renderAttentionPreview } from './attention-presentation.js';
-import { lookupParticipant } from './registry.js';
-import { retireWakeRoute } from './routes.js';
+import { displayAttentionPath } from './attention-presentation.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
-import { entryPresentation, notificationDelivered, notificationForAct, pendingDeliveriesFromState, resolveParticipant } from './views.js';
-import {
-  claimWakeDispatch,
-  nextWakeAttemptNumber,
-  recordRecoveredUnknown,
-  recordWakeAttempt,
-  releaseWakeDispatch,
-  transitionWakeDispatch,
-  type WakeAttention,
-} from './wake-attempts.js';
-import { wakeEvidence, wakeEvidenceProjectionFromState, wakeIsEligible } from './wake-evidence.js';
-import { WakePort } from './wake-port.js';
-
-const NOTIFY_LEASE_MS = 5 * 60 * 1000;
+import { notificationDelivered, resolveParticipant } from './views.js';
+import { deliverPending, projectPresentationEvidence, sweepPending, sweepPendingFromState } from './application.js';
+import type { WakeTransportPort, WakeOutcome, WakeRequest, PresenceChannel } from './ports.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 export type { PlannedNotification } from './delivery.js';
 export { planActNotifications, matchesMentionTarget };
@@ -50,52 +30,19 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
   return value;
 }
 
-function wakeLabel(kind: WakeRouteKind): string {
+function wakeLabel(kind: WakeRequest['route']['kind']): string {
   if (kind === 'paseo') return 'paseo';
   if (kind.startsWith('codex')) return 'codex-queue';
   return kind;
 }
 
-function renderWakePayload(request: WakeRequest, body: string, kind: WakeRouteKind): string {
+function renderWakePayload(request: WakeRequest): string {
   return [
-    `<system-reminder source="square" wake="${wakeLabel(kind)}">`,
-    `square: ${displayAttentionPath(request.squarePath)}`,
-    renderAttentionPreview({
-      squarePath: request.squarePath,
-      actIndex: request.actIndex,
-      recipient: request.recipient,
-      actor: request.actor,
-      route: request.route,
-      body,
-      compact: true,
-    }),
+    `<system-reminder source="square" wake="${wakeLabel(request.route.kind)}">`,
+    `square: ${displayAttentionPath(request.location)}`,
+    `attention: ${request.activity} for ${request.participant}`,
     '</system-reminder>',
   ].join('\n');
-}
-
-async function waitForCatch(route: WakeRoute, request: WakeRequest, body: string): Promise<boolean> {
-  const binding = (await lookupParticipant(request.squarePath, request.recipient))
-    .find((item) => item.sessionId === route.sessionId && item.channel === route.channel);
-  const activeCatch = binding && (await sessionInbox(binding.sessionId))
-    .find((item) => item.name === request.recipient)?.catchLease;
-  if (!activeCatch || !leaseOwnsNotification(activeCatch, {
-    actor: request.actor,
-    body,
-    route: request.route,
-    recipient: request.recipient,
-  })) return false;
-
-  const deadline = Date.now() + 180_000;
-  while (Date.now() < deadline) {
-    if (await hasDeliveredNotification(request.squarePath, request.recipient, request.actIndex)) return true;
-    const currentBinding = (await lookupParticipant(request.squarePath, request.recipient))
-      .find((item) => item.sessionId === route.sessionId && item.channel === route.channel);
-    const lease = currentBinding && (await sessionInbox(currentBinding.sessionId))
-      .find((item) => item.name === request.recipient)?.catchLease;
-    if (!lease || lease.expiresAt <= Date.now()) return false;
-    await sleep(Math.min(250, lease.expiresAt - Date.now()));
-  }
-  return false;
 }
 
 function notificationIndex(ref: number | ActivityId): number {
@@ -120,7 +67,10 @@ export async function hasAttentionNotification(squarePath: string, name: string,
   try {
     const recipient = (await resolveParticipant(square, name)).name;
     const index = notificationIndex(ref);
-    return await notificationDelivered(square, recipient, index) || await hasPresentedAttention(squarePath, recipient, index, env);
+    if (await notificationDelivered(square, recipient, index)) return true;
+    const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+    const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? root, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root, readableScopes: ['user'], writableScope: 'user' });
+    return (await projectPresentationEvidence({ hostLedger, location: squarePath, participant: recipient, activity: formatActivityId(index), now: Date.now() })).some((row) => row.outcome === 'presented');
   } finally {
     await closeOpenSquare(square);
   }
@@ -158,154 +108,57 @@ async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
   return adapters;
 }
 
-async function claimNotifyLease(attention: WakeAttention, env: NodeJS.ProcessEnv, at: number) {
-  const leaseId = randomUUID();
-  return claimWakeDispatch(attention, leaseId, NOTIFY_LEASE_MS, env, at);
+function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number): WakeTransportPort {
+  return {
+    attempt: async (request, _timeoutMs): Promise<WakeOutcome> => {
+      const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
+      if (adapter === undefined) return { outcome: 'failed', message: 'wake adapter unavailable' };
+      try {
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => true);
+        if (result.outcome === 'accepted') return { outcome: 'accepted' };
+        if (result.outcome === 'failed') return { outcome: 'failed', message: result.message };
+        if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true };
+        if (result.outcome === 'unknown') return { outcome: 'unknown', diagnostic: result.message };
+        return { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' };
+      } catch (error) {
+        return { outcome: 'unknown', diagnostic: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    invalidate: async (request) => {
+      await hostLedger.ensurePresence({
+        location: request.route.location,
+        participant: request.route.participant,
+        session: request.route.sessionId,
+        channel: request.route.channel as PresenceChannel,
+        updatedAt: clock(),
+      }, 'user');
+    },
+  };
 }
 
-async function transitionNotifyLease(
-  attention: WakeAttention,
-  leaseId: string,
-  phase: 'claimed' | 'dispatching',
-  routeKind?: WakeRouteKind,
-  attemptN?: number,
-  env?: NodeJS.ProcessEnv,
-  at?: number,
-): Promise<boolean> {
-  return transitionWakeDispatch(attention, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN, env, at);
-}
-
-async function releaseNotifyLease(attention: WakeAttention, leaseId: string, env: NodeJS.ProcessEnv, at: number): Promise<void> {
-  await releaseWakeDispatch(attention, leaseId, env, at);
-}
-
-async function processNotification(
-  squarePath: string,
-  notification: import('./delivery.js').PlannedNotification,
-  opts: ProcessNotificationOptions
-): Promise<void> {
+export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const attention: WakeAttention = {
-    squarePath,
-    actIndex: notification.item.index,
-    recipient: notification.recipient,
-  };
-  const initialAt = now();
-  if (!wakeIsEligible(await wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
-
-  const square = await openSquare(squarePath, { clock: now });
-  const claim = await claimNotifyLease(attention, env, initialAt);
-  if (claim.type === 'busy') {
-    await closeOpenSquare(square);
-    return;
-  }
-  if (claim.type === 'ambiguous') {
-    const recovered = await recordRecoveredUnknown(attention, claim.lease, env);
-    if (recovered !== undefined) {
-      await releaseNotifyLease(attention, claim.lease.leaseId, env, now());
-    }
-    await closeOpenSquare(square);
-    return;
-  }
-
-  const { leaseId } = claim;
-  let releaseLease = true;
+  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const hostLedger = createHostLedgerPort({
+    userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot,
+    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot,
+  });
+  const square = await openSquare(squarePath, { clock: now, hostLedger, env });
   try {
-    const dispatchAt = now();
-    const evidence = await wakeEvidence(squarePath, notification.recipient, notification.item.index, dispatchAt, env);
-    if (!wakeIsEligible(evidence)) return;
-    const port = new WakePort(opts.adapters ?? await defaultWakeAdapters());
-    const request: WakeRequest = {
-      squarePath,
-      actIndex: notification.item.index,
-      recipient: notification.recipient,
-      actor: notification.item.actor,
-      route: notification.route,
-    };
-    await port.dispatch(
-      evidence.attemptableRoutes,
-      (route) => renderWakePayload(request, notification.item.body, route.kind),
-      {
-        nextAttemptN: async () => nextWakeAttemptNumber(attention, { env, now: now() }),
-        beforeSend: async (route, attemptN) => {
-          if (await waitForCatch(route, request, notification.item.body)) return false;
-          const currentAt = now();
-          if (!(await entryPresentation(square, notification.recipient)).joined) return false;
-          const current = await wakeEvidence(squarePath, notification.recipient, notification.item.index, currentAt, env);
-          if (!wakeIsEligible(current)) return false;
-          if (!current.attemptableRoutes.some((candidate) =>
-            candidate.kind === route.kind && candidate.sessionId === route.sessionId && candidate.channel === route.channel
-          )) return false;
-          const dispatching = await transitionNotifyLease(
-            attention,
-            leaseId,
-            'dispatching',
-            route.kind,
-            attemptN,
-            env,
-            now(),
-          );
-          if (dispatching) releaseLease = false;
-          return dispatching;
-        },
-        record: async (route, attemptN, outcome) => {
-          if (outcome.outcome === 'failed') {
-            await transitionNotifyLease(attention, leaseId, 'claimed', undefined, undefined, env, now());
-            releaseLease = true;
-          }
-          await recordWakeAttempt({
-            attention,
-            routeKind: route.kind,
-            outcome: outcome.outcome,
-            attemptN,
-            at: now(),
-            ...('signature' in outcome ? { signature: outcome.signature } : {}),
-            ...('message' in outcome ? { message: outcome.message } : {}),
-            ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
-          }, env);
-          if (outcome.outcome !== 'failed') releaseLease = true;
-        },
-        invalidate: async (route) => {
-          await retireWakeRoute(route, { env, at: now() });
-        },
-      },
-    );
+    const adapters = opts.adapters ?? await defaultWakeAdapters();
+    const transport = createWakeTransport(adapters, hostLedger, now);
+    return await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
   } finally {
-    if (releaseLease) {
-      await releaseNotifyLease(attention, leaseId, env, now());
-    }
-      await closeOpenSquare(square);
+    await closeOpenSquare(square);
   }
 }
 
-export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
-  const square = await openSquare(squarePath);
-  const notifications = await notificationForAct(square, actIndex).finally(() => closeOpenSquare(square));
-  await Promise.all(notifications.map((notification) => processNotification(squarePath, notification, opts)));
-}
-
-interface WorkerLaunchOptions {
-  launchWorker?: (workerPath: string, args: string[]) => void;
+export interface SweepPendingNotificationsOptions {
   env?: NodeJS.ProcessEnv;
-}
-
-function launchWorker(workerPath: string, args: string[]): void {
-  const child = spawn(process.execPath, [workerPath, ...args], { detached: true, stdio: 'ignore', env: process.env });
-  child.unref();
-}
-
-/** Temporary caller-side bridge until host delivery owns this capability. */
-export function compatibilityWakeAfterCommit(squarePath: string, activityId: import('./square-core.js').ActivityId, env: NodeJS.ProcessEnv = process.env): void {
-  if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
-  const actIndex = parseActivityId(activityId);
-  if (actIndex === undefined) return;
-  launchWorker(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(actIndex)]);
-}
-
-export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {
   now?: number;
   limit?: number;
+  dispatchCandidate?: (actIndex: number) => void | Promise<void>;
 }
 
 /** Select sweep candidates from one frozen snapshot and one delivery replay. */
@@ -315,23 +168,13 @@ export async function pendingNotificationSweepFromState(
   now: number,
   env: NodeJS.ProcessEnv,
   limit: number,
-  deriveDelivery: (snapshot: SquareState) => DeliveryModel = deriveDeliveryModel,
+  deriveDelivery?: (snapshot: import('./model.js').SquareState) => ReturnType<typeof import('./delivery.js').deriveDeliveryModel>,
 ): Promise<number[]> {
-  const delivery = deriveDelivery(state);
-  const pending = pendingDeliveriesFromState(state, delivery);
-  const evidence = await wakeEvidenceProjectionFromState(squarePath, state, now, env, delivery);
-  const indexes = new Set<number>();
-  for (const recipient of pending) {
-    for (const note of recipient.notifications) {
-      if (now - note.item.at <= wakeGraceMs(env)) continue;
-      if (!wakeIsEligible(evidence.evidence(recipient.recipient, note.item.index))) continue;
-      indexes.add(note.item.index);
-    }
-  }
-  return [...indexes].sort((left, right) => left - right).slice(0, Math.max(0, limit));
+  const ledger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+  return sweepPendingFromState({ state, hostLedger: ledger, location: squarePath, now, graceMs: wakeGraceMs(env), limit, deriveDelivery });
 }
 
-/** Reconsider old pending attention at a bounded action boundary using the existing worker. */
+/** Select old pending attention at a bounded action boundary for an explicit executor. */
 export async function sweepPendingNotifications(
   squarePath: string,
   opts: SweepPendingNotificationsOptions = {},
@@ -340,17 +183,17 @@ export async function sweepPendingNotifications(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const square = await openSquare(squarePath, { clock: () => now });
-  let state: Awaited<ReturnType<typeof entryPresentation>>['state'];
+  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot });
+  const square = await openSquare(squarePath, { clock: () => now, hostLedger, env });
+  let selected: number[];
   try {
-    ({ state } = await entryPresentation(square, ''));
+    selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
   } finally {
     await closeOpenSquare(square);
   }
-  const selected = await pendingNotificationSweepFromState(squarePath, state, now, env, limit);
-  const workerPath = fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url));
-  for (const actIndex of selected) {
-    (opts.launchWorker ?? launchWorker)(workerPath, ['--location', squarePath, '--act-index', String(actIndex)]);
+  if (opts.dispatchCandidate !== undefined) {
+    for (const actIndex of selected) await opts.dispatchCandidate(actIndex);
   }
   return selected;
 }

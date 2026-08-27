@@ -33,7 +33,7 @@ test('large catch and pending sweep share one chronological delivery replay per 
   assert.equal(delivery.replayedActivityCount, state.acts.length);
 
   const cell = createMemoryCell(squareState(acts));
-  const square = { cell, clock: () => 2_000, location: 'memory' };
+  const square = { artifact: cell, clock: () => 2_000, location: 'memory' };
   try {
     const caught = await catchUp(square, 'P0');
     assert.equal(caught.activities.length, 900);

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   createSquareState,
@@ -17,7 +18,6 @@ import {
 } from './model.js';
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
-import type { WakeNotifier } from './square-facade.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 /** File-owned artifact creation for the CLI and path-backed public facade. */
@@ -40,7 +40,7 @@ export interface SquareBuildOptions {
   throttlePerMinute?: number;
   clock?: () => number;
   hostLedger?: HostLedgerPort;
-  notifier?: WakeNotifier;
+  env?: NodeJS.ProcessEnv;
 }
 
 function validateBuildOptions(options: SquareBuildOptions): void {
@@ -56,13 +56,24 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 
 export async function openSquare(
   squarePath: string,
-  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'notifier'> = {},
+  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'env'> = {},
 ): Promise<OpenSquare> {
+  const env = options.env ?? process.env;
+  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
   const cell = openSquareCell(squarePath);
   try {
     await cell.read();
     const artifact: SquareArtifactPort = { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
-    return { artifact, clock: options.clock ?? Date.now, location: squarePath, hostLedger: options.hostLedger ?? createHostLedgerPort(), ...(options.notifier === undefined ? {} : { notifier: options.notifier }) };
+    return {
+      artifact,
+      clock: options.clock ?? Date.now,
+      location: squarePath,
+      env,
+      hostLedger: options.hostLedger ?? createHostLedgerPort({
+        userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot,
+        localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot,
+      }),
+    };
   } catch (error) {
     await cell.close();
     if (error instanceof InternalSquareError && error.code === 'not_found') {
@@ -101,7 +112,7 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, ...(options.notifier === undefined ? {} : { notifier: options.notifier }) };
+  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger };
 }
 
 function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {

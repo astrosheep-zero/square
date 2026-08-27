@@ -17,10 +17,9 @@ import {
 } from '../presentation.js';
 import {
   hasAutomaticDeliveryIdentity,
-  localParticipantOwner,
-  recordLocalDone,
-  recordLocalJoin,
 } from '../registry.js';
+import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
+import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../application.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
@@ -152,11 +151,16 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     await closeOpenSquare(beforeSquare);
     const square = await Square.at({ path: squarePath, clock: nowMs });
     try {
+      const reconnect = before.joined
+        && await projectLocalParticipantBinding({
+          hostLedger: createHostLedgerPort(),
+          location: squarePath,
+          participant: intent.name,
+          sessionIds: sessionIdsFromEnvironment(),
+        }) !== undefined;
       const participant = await square.join(intent.name);
       const joinedName = participant.name;
       const isRejoin = before.joined;
-      const reconnect = isRejoin
-        && await localParticipantOwner(squarePath, joinedName) !== undefined;
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
           [
@@ -170,7 +174,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);
-      await recordLocalJoin(joinedName, squarePath);
+      await square.reconcileBinding();
       await sweepPendingNotifications(squarePath);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
         now: nowMs(),
@@ -349,9 +353,9 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const square = await Square.at({ path: squarePath, clock: nowMs });
     const participant = await square.join(intent.name);
     const result = await participant.done(body);
+    await square.reconcileBinding();
     await square.close();
     const name = result.activity.actor;
-    await recordLocalDone(name, squarePath);
     const presentation = await openSquare(squarePath, { clock: nowMs });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
     return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });

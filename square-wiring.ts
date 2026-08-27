@@ -6,6 +6,7 @@ import { history, participantHistory, participants, resolveParticipant, snapshot
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import { projectSessionBindings, reconcileBinding as reconcileBindingOperation } from './application.js';
 
 class ParticipantHandle implements Participant {
   constructor(readonly name: string, private readonly square: OpenSquare, private readonly application: ActivityApplication) {}
@@ -90,13 +91,18 @@ export class Square {
     const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.SQUARE_PI_SESSION_ID, env.PASEO_AGENT_ID]
       .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
     if (sessions.length === 0) return null;
-    const bindings = await this.square.hostLedger.listPresence({ location: this.square.location, scopes: ['user', 'local'] });
-    const candidates = bindings.filter((binding) => sessions.includes(binding.session));
+    const candidates = (await Promise.all(sessions.map((sessionId) => projectSessionBindings({
+      hostLedger: this.square.hostLedger!,
+      location: this.square.location,
+      sessionId,
+      scopes: ['user', 'local'],
+    })))).flat();
     if (candidates.length !== 1) return null;
     const canonicalName = await currentParticipant(this.square, candidates[0].participant);
     return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square, this.application);
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
+  reconcileBinding() { return reconcileBindingOperation({ artifact: this.square.artifact, hostLedger: this.square.hostLedger!, location: this.location }); }
 }
 
 export function markBoundarySeen(squarePath: string, name: string, actIndexes: readonly number[], at?: number): Promise<void> {

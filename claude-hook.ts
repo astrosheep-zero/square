@@ -32,7 +32,7 @@ export async function runClaudeHookAsync(inputText: string, env: NodeJS.ProcessE
 
 export async function claudeHookResponse(
   input: NativeHookInput,
-  lookup: (sessionId: string) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;

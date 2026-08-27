@@ -2,7 +2,8 @@ import os from 'node:os';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
-import { localParticipantName } from '../registry.js';
+import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
+import { projectSessionBindings, sessionIdsFromEnvironment } from '../application.js';
 
 export interface CommandContext {
   squarePath?: string;
@@ -162,7 +163,14 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   }
   const squarePath = requestedPath ?? configured;
   if (name === undefined && squarePath !== undefined && command !== undefined && locationIsRequired(command)) {
-    name = await localParticipantName(squarePath);
+    const bindings = (await Promise.all(sessionIdsFromEnvironment().map((sessionId) => projectSessionBindings({
+      hostLedger: createHostLedgerPort(),
+      location: squarePath,
+      sessionId,
+      scopes: ['user', 'local'],
+    })))).flat();
+    const names = new Set(bindings.map((binding) => binding.participant));
+    name = names.size === 1 ? [...names][0] : undefined;
   }
   return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
 }

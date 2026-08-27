@@ -12,7 +12,7 @@ import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-h
 import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
-import { presentOnce, recordPresentedForOwner } from '../dist/presented.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts, recordWakeAttempt } from '../dist/wake-attempts.js';
@@ -117,6 +117,11 @@ function inboxFor(item, act) {
   }];
 }
 
+async function markPresentedEvidence(item, session, act, participant = 'Bob') {
+  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+  await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome: 'presented', at: Date.now() });
+}
+
 function acceptedAdapter(onBeforeSend) {
   return {
     kind: 'paseo',
@@ -189,7 +194,7 @@ test('artifact roundtrip derives only directed pending attention', async () => {
   }
 });
 
-test('a native boundary presents bounded awareness once and records the current owner', async () => {
+test('a native boundary presents bounded awareness and leaves clipped attention retryable', async () => {
   const item = workshop();
   try {
     const body = `@Bob ${'x'.repeat(400)}`;
@@ -204,22 +209,24 @@ test('a native boundary presents bounded awareness once and records the current 
       () => inboxFor(item, act),
       item.env,
     ));
+    let secondCalls = 0;
     const second = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-native',
-      () => { throw new Error('duplicate presentation'); },
+      () => { secondCalls += 1; return 'presented'; },
       () => inboxFor(item, act),
       item.env,
     ));
 
     assert.equal(first, 'presented');
-    assert.equal(second, undefined);
+    assert.equal(second, 'presented');
+    assert.equal(secondCalls, 1);
     assert.match(payload, /@Bob x{115}\n… preview only/);
     assert.doesNotMatch(payload, /catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].session, 'bob-native');
+    assert.equal(rows.filter((row) => row.outcome === 'presented').length, 0);
+    assert.ok(rows.every((row) => row.session === 'bob-native'));
     assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
@@ -262,7 +269,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
     item.cli('Alice', ['express', '--force', 'please catch @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item);
-    await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, act), () => true, item.env));
+    await markPresentedEvidence(item, 'bob-session', act);
 
     item.cli('Bob', ['catch', '--now'], 40);
     const caught = await loadSquare(item.squarePath);
@@ -322,7 +329,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
       adapters: [adapter],
     }));
     assert.match(payload, /act\//);
-    assert.match(payload, /native wake preview @Bob/);
+    assert.match(payload, /attention: act\/2 for Bob/);
     assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
     assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
     const later = await withRegistry(item.env, () => presentPendingAtBoundary(
@@ -358,7 +365,7 @@ test('a current owner notified observation suppresses another wake', async () =>
   }
 });
 
-test('a crash after send recovers unknown and permanently prevents a second send', async () => {
+test('a crash after send records unknown and allows one retry', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', 'crash window @Bob'], 30);
@@ -379,15 +386,21 @@ test('a crash after send recovers unknown and permanently prevents a second send
     const later = await runWorker(item, act.index, 'accepted', callLog);
     assert.equal(recovery.code, 0, recovery.stderr);
     assert.equal(later.code, 0, later.stderr);
-    assert.equal(callCount(callLog), 1);
+    assert.equal(callCount(callLog), 2);
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
+      ['accepted', undefined],
     ]);
+    const claimsPath = path.join(item.env.SQUARE_HOST_LEDGER_USER, 'wake-claims.ndjsonl');
+    const claims = fs.existsSync(claimsPath)
+      ? fs.readFileSync(claimsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+      : [];
+    assert.equal(claims.some((claim) => claim.phase === 'dispatching'), false);
     const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     }));
-    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-unknown');
+    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();
   }
@@ -399,18 +412,13 @@ test('presentation does not suppress wake before worker start or at the final pr
     await registerRoute(item);
     item.cli('Alice', ['express', '--force', 'already visible @Bob'], 30);
     const visible = (await loadSquare(item.squarePath)).acts.at(-1);
-    await withRegistry(item.env, () => presentOnce('bob-session', () => inboxFor(item, visible), () => true, item.env));
+    await markPresentedEvidence(item, 'bob-session', visible);
     const first = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, visible.index, { env: item.env, adapters: [first] }));
 
     item.cli('Alice', ['express', '--force', 'race boundary @Bob'], 40);
     const racing = (await loadSquare(item.squarePath)).acts.at(-1);
-    const second = acceptedAdapter(() => withRegistry(item.env, () => presentOnce(
-      'bob-session',
-      () => inboxFor(item, racing),
-      () => true,
-      item.env,
-    )));
+    const second = acceptedAdapter(() => markPresentedEvidence(item, 'bob-session', racing));
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, racing.index, { env: item.env, adapters: [second] }));
 
     assert.equal(first.calls, 1);
@@ -427,7 +435,7 @@ test('presented evidence is scoped to the current participant owner', async () =
     item.cli('Alice', ['express', '--force', 'new owner must see this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item, 'old-owner', 'old-session');
-    await withRegistry(item.env, () => presentOnce('old-session', () => inboxFor(item, act), () => true, item.env));
+    await markPresentedEvidence(item, 'old-session', act);
     await withRegistry(item.env, async () => {
       await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
       await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 1 });
@@ -444,7 +452,8 @@ test('presented evidence is scoped to the current participant owner', async () =
     }));
 
     assert.equal(adapter.calls, 1);
-    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'presented-not-delivered');
+    // Presentation evidence is session-scoped; a new binding reports its own accepted wake.
+    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();
   }
@@ -484,10 +493,10 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
     const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now: firstAttemptAt + 1_500,
-      launchWorker: (_workerPath, args) => launched.push(args),
+      dispatchCandidate: (actIndex) => launched.push(actIndex),
     }));
     assert.deepEqual(selected, [act.index]);
-    assert.deepEqual(launched.map((args) => Number(args.at(-1))), [act.index]);
+    assert.deepEqual(launched, [act.index]);
 
     const worker = await runWorker(item, act.index);
     assert.equal(worker.code, 0, worker.stderr);
@@ -513,7 +522,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
     const selected = await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now,
-      launchWorker: () => {},
+      dispatchCandidate: () => {},
     }));
 
     assert.equal(wakeIsEligible(evidence), true);
@@ -536,7 +545,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       .find((item) => item.actIndex === act.index).kind, 'wake-accepted');
     assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
-      launchWorker: () => { throw new Error('terminal attention must not launch'); },
+      dispatchCandidate: () => { throw new Error('terminal attention must not dispatch'); },
     })), []);
   } finally {
     item.cleanup();
@@ -581,14 +590,15 @@ test('one sweep projects every candidate from one ledger read and keeps individu
       [formatActivityId(notified.index)]: { state: 'seen', at: now - 1 },
     };
     await writeSquareFile(item.squarePath, state);
-    await recordPresentedForOwner('carol-owner', item.squarePath, 'Carol', presented.index, item.env, now - 1);
+    const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+    await ledger.appendEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', outcome: 'presented', at: now - 1 });
     await recordWakeAttempt({
       attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: terminal.index },
-      routeKind: 'paseo', outcome: 'accepted', signature: 'accepted', attemptN: 1, at: now - 1,
+      routeKind: 'paseo', outcome: 'accepted', signature: 'accepted', session: 'bob-session', attemptN: 1, at: now - 1,
     }, item.env);
     await recordWakeAttempt({
       attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: failed.index },
-      routeKind: 'paseo', outcome: 'failed', signature: 'failed', attemptN: 1, at: now - 1,
+      routeKind: 'paseo', outcome: 'failed', signature: 'failed', session: 'bob-session', attemptN: 1, at: now - 1,
     }, item.env);
 
     const candidates = [
@@ -640,7 +650,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
         env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
         now,
         limit: 10,
-        launchWorker: (_workerPath, args) => launched.push(Number(args.at(-1))),
+        dispatchCandidate: (actIndex) => launched.push(actIndex),
       }));
       assert.deepEqual(selected, expectedSelected);
       assert.deepEqual(launched, expectedSelected);
@@ -653,7 +663,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
       env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
       now,
       limit: 1,
-      launchWorker: () => {},
+      dispatchCandidate: () => {},
     })), expectedSelected.slice(0, 1));
   } finally {
     item.cleanup();

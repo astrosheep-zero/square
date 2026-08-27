@@ -1,9 +1,18 @@
 import { type InboxMembership } from './model.js';
-import { lookupSessionBindings } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { inboxProjection } from './views.js';
 import { waitForSquareChanges } from './square-file-adapter.js';
+import path from 'node:path';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { projectPresentation, projectSessionBindings } from './application.js';
+
+function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
+  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  return createHostLedgerPort({
+    userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
+    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
+  });
+}
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;
@@ -29,17 +38,18 @@ function withoutExcluded(inbox: InboxMembership[], excludeKeys?: ReadonlySet<str
     .filter((membership) => membership.notifications.length > 0);
 }
 
-export async function sessionInbox(sessionId: string): Promise<InboxMembership[]> {
+export async function sessionInbox(sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
-  for (const binding of await lookupSessionBindings(sessionId)) {
+  const hostLedger = hostLedgerForEnv(env);
+  for (const binding of await projectSessionBindings({ hostLedger, sessionId })) {
     let square;
     try {
-      square = await openSquare(binding.squarePath);
-      const projection = await inboxProjection(square, binding.name, binding.sessionId);
+      square = await openSquare(binding.location, { env, hostLedger });
+      const projection = await projectPresentation({ artifact: square.artifact, binding, now: square.clock() });
       if (!projection.joined) continue;
       inbox.push({
-        name: projection.name,
-        squarePath: binding.squarePath,
+        name: projection.binding.participant,
+        squarePath: projection.binding.location,
         notifications: [...projection.notifications],
         ...(projection.catchLease !== undefined ? { catchLease: projection.catchLease } : {}),
       });
@@ -57,16 +67,17 @@ export async function waitForSessionPending(
   sessionId: string,
   timeoutMs: number,
   options: PendingWaitOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<InboxMembership[]> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   if (!options.skipImmediate) {
-    const immediate = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+    const immediate = withoutExcluded(await sessionInbox(sessionId, env), options.excludeKeys);
     if (immediate.some((membership) => membership.notifications.length > 0)) return immediate;
   }
   if (timeoutMs <= 0 || options.signal?.aborted) return [];
 
-  const bindings = await lookupSessionBindings(sessionId);
-  const paths = [...new Set(bindings.map((binding) => binding.squarePath))];
+  const bindings = await projectSessionBindings({ hostLedger: hostLedgerForEnv(env), sessionId });
+  const paths = [...new Set(bindings.map((binding) => binding.location))];
   let aborted = false;
   let projectAfterReady = !options.skipImmediate;
   const onAbort = () => { aborted = true; };
@@ -77,7 +88,7 @@ export async function waitForSessionPending(
       if (remaining <= 0) return [];
       const change = await waitForSquareChanges(paths, remaining, options.signal, async () => {
         if (!projectAfterReady) return undefined;
-        const current = withoutExcluded(await sessionInbox(sessionId), options.excludeKeys);
+        const current = withoutExcluded(await sessionInbox(sessionId, env), options.excludeKeys);
         return current.some((membership) => membership.notifications.length > 0) ? current : undefined;
       });
       if (aborted || change.status === 'expired') return [];

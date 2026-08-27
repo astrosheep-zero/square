@@ -10,18 +10,15 @@ import { recordJoin } from '../dist/registry.js';
 test('fixed facade builds, opens, and exposes participant-scoped activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));
   const squarePath = path.join(root, 'SQUARE.square');
-  const wakes = [];
   const square = await Square.build({
     path: squarePath,
     markdown: '# context',
     clock: () => 10,
-    notifier: { wake: (recipients, activity) => wakes.push({ recipients, activity }) },
   });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   const expressed = await alice.express('hello @Bob', { force: true });
   assert.equal(expressed.activity.id, 'act/2');
-  assert.deepEqual(wakes, [{ recipients: ['Bob'], activity: expressed.activity }]);
   assert.equal((await bob.history()).at(-1).perception, 'full');
   await square.close();
 

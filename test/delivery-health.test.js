@@ -15,10 +15,9 @@ test('delivery evidence writers and health labels stay inside their owning modul
     .map(([name]) => name)
     .sort();
 
-  assert.deepEqual(externalUsers('presentOnce', 'presented.ts'), ['boundary-presentation.ts']);
-  assert.deepEqual(externalUsers('markSeenNotifications', 'delivery.ts'), ['presence.ts']);
-  assert.deepEqual(externalUsers('recordWakeAttempt', 'wake-attempts.ts'), ['notifications.ts']);
-  assert.deepEqual(externalUsers('recordRecoveredUnknown', 'wake-attempts.ts'), ['notifications.ts']);
+  assert.deepEqual(externalUsers('markSeenNotifications', 'delivery.ts'), []);
+  assert.deepEqual(externalUsers('recordWakeAttempt', 'wake-attempts.ts'), []);
+  assert.deepEqual(externalUsers('recordRecoveredUnknown', 'wake-attempts.ts'), []);
 
   const labels = ['wake-accepted', 'wake-unknown', 'presented-not-delivered', 'unreachable'];
   for (const [name, source] of sources) {

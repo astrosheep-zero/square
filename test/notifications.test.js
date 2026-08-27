@@ -144,8 +144,8 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.match(sent.prompt, /square: \/[^\n]+/);
   assert.doesNotMatch(sent.prompt, /<square>[^<]+<\/square>/);
   assert.doesNotMatch(sent.prompt, /catch --now/);
-  assert.match(sent.prompt, /private payload @Bob/);
-  assert.match(sent.prompt, /✓ shown in full/);
+  assert.match(sent.prompt, /attention: act\/2 for Bob/);
+  assert.match(sent.prompt, /attention: act\/2 for Bob/);
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });

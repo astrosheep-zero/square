@@ -29,7 +29,7 @@ function artifactOf(square: OpenSquare | LegacySquare): SquareArtifactPort {
 }
 
 function contextOf(square: OpenSquare | LegacySquare) {
-  return { artifact: artifactOf(square), clock: square.clock, ...('location' in square ? { location: square.location, hostLedger: square.hostLedger, notifier: square.notifier } : {}) };
+  return { artifact: artifactOf(square), clock: square.clock, ...('location' in square ? { location: square.location, hostLedger: square.hostLedger, env: square.env } : {}) };
 }
 
 export function join(square: OpenSquare | LegacySquare, name: string): Promise<{ readonly name: string; readonly activity: Activity | null }> {

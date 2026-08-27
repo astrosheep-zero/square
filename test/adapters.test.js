@@ -538,14 +538,14 @@ test('Pi idle watcher wakes only after a new directed activity lands', async () 
       assert.equal(sent.length, 0);
       const actIndex = await expressToPi(item, 'native wake @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not wake for new directed activity');
-      await waitUntil(async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), 'Pi did not commit presentation');
+      await waitUntil(async () => await hasPresentedForOwner('pi-wake-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit presentation');
       await waitUntil(async () => (await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)]?.state === 'seen', 'Pi did not mark notification seen');
       assert.equal(sent.length, 1);
       assert.equal(sent[0].message.customType, 'square');
       assert.equal(sent[0].options.triggerTurn, true);
       assert.match(sent[0].message.content, /source="square"/);
       assert.match(sent[0].message.content, /native wake @Bob/);
-      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(await hasPresentedForOwner('pi-wake-session', item.squarePath, 'Bob', actIndex), true);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
       await handlers.get('session_shutdown')({}, context);
@@ -636,7 +636,7 @@ test('Pi retries failed native injection without committing presented or seen', 
     try {
       actIndex = await expressToPi(item, 'retry me @Bob');
       await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
-      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), false);
+      assert.equal(await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -650,7 +650,7 @@ test('Pi retries failed native injection without committing presented or seen', 
       await waitUntil(() => calls === 2, 'Pi did not retry after the next Square change');
       releaseSecond();
       await waitUntil(
-        async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex),
+        async () => await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex),
         'successful retry did not commit presentation',
       );
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
@@ -661,7 +661,7 @@ test('Pi retries failed native injection without committing presented or seen', 
   }, false);
 });
 
-test('Pi presents a clipped body once without marking it seen', async () => {
+test('Pi presents a clipped body without marking it seen', async () => {
   await withPiFixture('pi-preview-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -679,10 +679,9 @@ test('Pi presents a clipped body once without marking it seen', async () => {
     try {
       const actIndex = await expressToPi(item, `${'x'.repeat(140)} @Bob`);
       await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
-      await waitUntil(async () => await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), 'Pi did not commit clipped presentation');
       assert.match(sent[0].message.content, /… preview only/);
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
-      assert.equal(await hasPresentedForOwner('pi-owner', item.squarePath, 'Bob', actIndex), true);
+      assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       const square = await Square.at({ path: item.squarePath });
