@@ -16,7 +16,7 @@ import {
   type SquareState,
 } from './model.js';
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
-import type { WakeNotifier } from './square-facade.js';
+import type { SquareArtifactPort } from './ports.js';
 
 /** File-owned artifact creation for the CLI and path-backed public facade. */
 export async function createSquare(
@@ -37,7 +37,6 @@ export interface SquareBuildOptions {
   hardCap?: number | null;
   throttlePerMinute?: number;
   clock?: () => number;
-  notifier?: WakeNotifier;
 }
 
 function validateBuildOptions(options: SquareBuildOptions): void {
@@ -53,12 +52,13 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 
 export async function openSquare(
   squarePath: string,
-  options: Pick<SquareBuildOptions, 'clock' | 'notifier'> = {},
+  options: Pick<SquareBuildOptions, 'clock'> = {},
 ): Promise<OpenSquare> {
   const cell = openSquareCell(squarePath);
   try {
     await cell.read();
-    return { cell, clock: options.clock ?? Date.now, ...(options.notifier === undefined ? {} : { notifier: options.notifier }), location: squarePath };
+    const artifact: SquareArtifactPort = { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
+    return { artifact, clock: options.clock ?? Date.now, location: squarePath };
   } catch (error) {
     await cell.close();
     if (error instanceof InternalSquareError && error.code === 'not_found') {
@@ -70,7 +70,7 @@ export async function openSquare(
 
 export async function probeSquare(squarePath: string): Promise<OpenSquare | undefined> {
   const state = await probeSquareFile(squarePath);
-  return state === undefined ? undefined : { cell: createMemoryCell(state), clock: Date.now, location: squarePath };
+  return state === undefined ? undefined : { artifact: memoryArtifact(createMemoryCell(state)), clock: Date.now, location: squarePath };
 }
 
 export async function buildSquare(squarePath: string, options: SquareBuildOptions): Promise<OpenSquare> {
@@ -97,7 +97,11 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return { cell: createMemoryCell(squareState), clock: options.clock ?? Date.now, ...(options.notifier === undefined ? {} : { notifier: options.notifier }), location: 'memory' };
+  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory' };
+}
+
+function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
+  return { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
 }
 
 /** Wait for any bound artifact to change; delivery callers re-project after the edge. */
@@ -121,12 +125,12 @@ export async function waitForSquareChanges<T>(
     if (squares.length === 0) return { status: 'expired' };
     const baselines = await Promise.all(squares.map(async (square) => ({
       square,
-      version: (await square.cell.read()).version,
+      version: (await square.artifact.read()).version,
     })));
     const ready = await afterReady?.();
     if (ready !== undefined) return { status: 'ready', value: ready };
     const waits = baselines.map(async ({ square, version }) => {
-      const changed = await square.cell.changed(version, timeoutMs).catch(() => false);
+      const changed = await square.artifact.changed(version, timeoutMs).catch(() => false);
       if (changed) return true;
       throw new Error('square wait expired');
     });

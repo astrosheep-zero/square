@@ -20,16 +20,16 @@ import { displayAttentionPath, renderAttentionPreview } from './attention-presen
 import { lookupParticipant } from './registry.js';
 import { retireWakeRoute } from './routes.js';
 import { openSquare } from './square-file-adapter.js';
-import { markNotificationNotified } from './square-wiring.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
-import type { Activity, WakeNotifier } from './square-facade.js';
 import { entryPresentation, notificationDelivered, notificationForAct, pendingDeliveriesFromState, resolveParticipant } from './views.js';
-import { claimNotificationLease, releaseNotificationLease, transitionNotificationLease } from './wakes.js';
 import {
+  claimWakeDispatch,
   nextWakeAttemptNumber,
   recordRecoveredUnknown,
   recordWakeAttempt,
+  releaseWakeDispatch,
+  transitionWakeDispatch,
   type WakeAttention,
 } from './wake-attempts.js';
 import { wakeEvidence, wakeEvidenceProjectionFromState, wakeIsEligible } from './wake-evidence.js';
@@ -158,25 +158,25 @@ async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
   return adapters;
 }
 
-async function claimNotifyLease(square: OpenSquare, recipient: string, actIndex: number) {
+async function claimNotifyLease(attention: WakeAttention, env: NodeJS.ProcessEnv, at: number) {
   const leaseId = randomUUID();
-  return claimNotificationLease(square, recipient, actIndex, leaseId, NOTIFY_LEASE_MS);
+  return claimWakeDispatch(attention, leaseId, NOTIFY_LEASE_MS, env, at);
 }
 
 async function transitionNotifyLease(
-  square: OpenSquare,
-  recipient: string,
-  actIndex: number,
+  attention: WakeAttention,
   leaseId: string,
   phase: 'claimed' | 'dispatching',
   routeKind?: WakeRouteKind,
   attemptN?: number,
+  env?: NodeJS.ProcessEnv,
+  at?: number,
 ): Promise<boolean> {
-  return transitionNotificationLease(square, recipient, actIndex, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN);
+  return transitionWakeDispatch(attention, leaseId, phase, NOTIFY_LEASE_MS, routeKind, attemptN, env, at);
 }
 
-async function releaseNotifyLease(square: OpenSquare, recipient: string, actIndex: number, leaseId: string): Promise<void> {
-  await releaseNotificationLease(square, recipient, actIndex, leaseId);
+async function releaseNotifyLease(attention: WakeAttention, leaseId: string, env: NodeJS.ProcessEnv, at: number): Promise<void> {
+  await releaseWakeDispatch(attention, leaseId, env, at);
 }
 
 async function processNotification(
@@ -195,15 +195,15 @@ async function processNotification(
   if (!wakeIsEligible(await wakeEvidence(squarePath, notification.recipient, notification.item.index, initialAt, env))) return;
 
   const square = await openSquare(squarePath, { clock: now });
-  const claim = await claimNotifyLease(square, notification.recipient, notification.item.index);
-  if (claim.type === 'busy' || claim.type === 'delivered') {
+  const claim = await claimNotifyLease(attention, env, initialAt);
+  if (claim.type === 'busy') {
     await closeOpenSquare(square);
     return;
   }
   if (claim.type === 'ambiguous') {
     const recovered = await recordRecoveredUnknown(attention, claim.lease, env);
     if (recovered !== undefined) {
-      await releaseNotifyLease(square, notification.recipient, notification.item.index, claim.lease.leaseId);
+      await releaseNotifyLease(attention, claim.lease.leaseId, env, now());
     }
     await closeOpenSquare(square);
     return;
@@ -238,20 +238,20 @@ async function processNotification(
             candidate.ownerId === route.ownerId && candidate.kind === route.kind && candidate.sessionId === route.sessionId
           )) return false;
           const dispatching = await transitionNotifyLease(
-            square,
-            notification.recipient,
-            notification.item.index,
+            attention,
             leaseId,
             'dispatching',
             route.kind,
             attemptN,
+            env,
+            now(),
           );
           if (dispatching) releaseLease = false;
           return dispatching;
         },
         record: async (route, attemptN, outcome) => {
           if (outcome.outcome === 'failed') {
-            await transitionNotifyLease(square, notification.recipient, notification.item.index, leaseId, 'claimed');
+            await transitionNotifyLease(attention, leaseId, 'claimed', undefined, undefined, env, now());
             releaseLease = true;
           }
           await recordWakeAttempt({
@@ -264,9 +264,6 @@ async function processNotification(
             ...('message' in outcome ? { message: outcome.message } : {}),
             ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: outcome.diagnostic } : {}),
           }, env);
-          if (outcome.outcome === 'accepted') {
-            await markNotificationNotified(square, notification.recipient, notification.item.index, route.ownerId, now());
-          }
           if (outcome.outcome !== 'failed') releaseLease = true;
         },
         invalidate: async (route) => {
@@ -276,7 +273,7 @@ async function processNotification(
     );
   } finally {
     if (releaseLease) {
-      await releaseNotifyLease(square, notification.recipient, notification.item.index, leaseId);
+      await releaseNotifyLease(attention, leaseId, env, now());
     }
       await closeOpenSquare(square);
   }
@@ -298,15 +295,12 @@ function launchWorker(workerPath: string, args: string[]): void {
   child.unref();
 }
 
-export function wakeNotifierForSquare(squarePath: string, env: NodeJS.ProcessEnv = process.env): WakeNotifier {
-  return {
-    wake(recipients: readonly string[], activity: Activity): void {
-      if (env.SQUARE_DISABLE_PASEO_WAKE === '1' || recipients.length === 0) return;
-      const actIndex = parseActivityId(activity.id);
-      if (actIndex === undefined) return;
-      launchWorker(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(actIndex)]);
-    },
-  };
+/** Temporary caller-side bridge until host delivery owns this capability. */
+export function compatibilityWakeAfterCommit(squarePath: string, activityId: import('./square-core.js').ActivityId, env: NodeJS.ProcessEnv = process.env): void {
+  if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return;
+  const actIndex = parseActivityId(activityId);
+  if (actIndex === undefined) return;
+  launchWorker(fileURLToPath(new URL('./cmd/notify-once.js', import.meta.url)), ['--location', squarePath, '--act-index', String(actIndex)]);
 }
 
 export interface SweepPendingNotificationsOptions extends WorkerLaunchOptions {

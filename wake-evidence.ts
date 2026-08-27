@@ -17,7 +17,6 @@ import { entryPresentation } from './views.js';
 
 export interface WakeEvidence {
   delivered: boolean;
-  notified: boolean;
   presented: boolean;
   attempts: WakeAttempt[];
   terminal?: WakeAttempt;
@@ -83,12 +82,6 @@ async function projectionFromState(
         .some((ownerId) => recipientOwners.has(ownerId));
       return {
         delivered: delivery.isSeen(recipient, actIndex),
-        notified: (() => {
-          const observation = observationFor(state, recipient, actIndex);
-          return observation?.state === 'notified'
-            && observation.ownerId !== undefined
-            && recipientOwners.has(observation.ownerId);
-        })(),
         presented,
         attempts,
         ...(terminal === undefined ? {} : { terminal }),
@@ -138,7 +131,6 @@ export async function wakeEvidence(
 
 export function wakeIsEligible(evidence: WakeEvidence): boolean {
   return !evidence.delivered
-    && !evidence.notified
     && evidence.terminal === undefined
     && evidence.attemptableRoutes.length > 0;
 }

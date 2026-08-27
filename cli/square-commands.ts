@@ -21,7 +21,7 @@ import {
   recordLocalDone,
   recordLocalJoin,
 } from '../registry.js';
-import { sweepPendingNotifications, wakeNotifierForSquare } from '../notifications.js';
+import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
@@ -150,7 +150,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     const beforeSquare = await openSquare(squarePath, { clock: nowMs });
     const before = await entryPresentation(beforeSquare, intent.name, intent.lastN);
     await closeOpenSquare(beforeSquare);
-    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs });
     try {
       const participant = await square.join(intent.name);
       const joinedName = participant.name;
@@ -346,7 +346,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const body = (await resolveBody(intent.body ?? (process.stdin.isTTY ? '' : '-'))).replace(/\r\n/g, '\n').trim();
-    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs });
     const participant = await square.join(intent.name);
     const result = await participant.done(body);
     await square.close();
@@ -368,7 +368,7 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
   parse: parseHold,
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs });
     try {
       const participant = await square.join(intent.name);
       const result = await participant.hold((await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim());
@@ -391,7 +391,7 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
   },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+    const square = await Square.at({ path: squarePath, clock: nowMs });
     try {
       const participant = await square.join(intent.name);
       const result = await participant.resume();

@@ -21,5 +21,4 @@ export type {
   SquareBuildInput,
   SquareSnapshot,
   SquareSource,
-  WakeNotifier,
 } from './square-facade.js';

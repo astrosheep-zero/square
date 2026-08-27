@@ -76,7 +76,7 @@ export interface BuildOptions {
 export type StoredAct = Act & { index: number; at: number };
 export type StoredActHead = StoredAct extends infer T ? T extends StoredAct ? Omit<T, 'body' | 'through' | 'index'> : never : never;
 
-export type ObservationState = 'notified' | 'seen';
+export type ObservationState = 'seen';
 
 export interface ActivityObservation {
   state: ObservationState;
@@ -116,19 +116,10 @@ export interface InboxMembership {
   catchLease?: WatchLease;
 }
 
-export interface NotifyLease {
-  leaseId: string;
-  expiresAt: number;
-  phase: 'claimed' | 'dispatching';
-  attemptN?: number;
-  routeKind?: WakeRouteKind;
-}
-
 export interface SquareRuntimeState {
   nextActIndex: number;
   observations: Record<string, Record<string, ActivityObservation>>;
   leases: Record<string, WatchLease>;
-  notifyLeases: Record<string, NotifyLease>;
 }
 
 export interface SquareState {

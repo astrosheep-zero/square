@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { withFileLock } from './file-lock.js';
-import { isWakeRouteKind, nameKey, type NotifyLease, type WakeRoute, type WakeRouteKind } from './model.js';
+import { isWakeRouteKind, nameKey, type WakeRoute, type WakeRouteKind } from './model.js';
 import { canonicalSquarePath } from './registry.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 
@@ -26,6 +26,19 @@ export interface WakeAttempt {
   diagnostic?: unknown;
 }
 
+export interface WakeDispatchLease {
+  readonly leaseId: string;
+  readonly expiresAt: number;
+  readonly phase: 'claimed' | 'dispatching';
+  readonly routeKind?: WakeRouteKind;
+  readonly attemptN?: number;
+}
+
+export type WakeDispatchClaim =
+  | { readonly type: 'acquired'; readonly leaseId: string }
+  | { readonly type: 'busy' }
+  | { readonly type: 'ambiguous'; readonly lease: WakeDispatchLease };
+
 interface WakeAttemptRow {
   v: 1;
   ts: number;
@@ -38,6 +51,12 @@ interface WakeAttemptRow {
   diagnostic?: unknown;
 }
 
+interface WakeClaimRow extends WakeDispatchLease {
+  v: 1;
+  ts: number;
+  attention_key: string;
+}
+
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5 * 60 * 1000;
 const LOCK_RETRY_MS = 10;
@@ -45,6 +64,11 @@ const VALID_OUTCOMES = new Set<WakeOutcome>(['accepted', 'unknown', 'failed']);
 
 export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.SQUARE_WAKE_ATTEMPTS || path.join(os.homedir(), '.square', 'wake-attempts.ndjsonl');
+}
+
+/** Host-owned, cross-process wake claim ledger. It is never part of SquareState. */
+export function wakeClaimsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.SQUARE_WAKE_CLAIMS || `${wakeAttemptsPath(env)}.claims`;
 }
 
 export async function wakeAttentionKey(attention: WakeAttention): Promise<string> {
@@ -92,6 +116,91 @@ async function writeRows(filePath: string, rows: WakeAttemptRow[]): Promise<void
     mode: 0o600,
   });
   await fs.promises.rename(temporary, filePath);
+}
+
+function parseClaimRow(raw: string, now: number): WakeClaimRow | undefined {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return undefined; }
+  if (value === null || typeof value !== 'object') return undefined;
+  const row = value as Partial<WakeClaimRow>;
+  if (
+    row.v !== 1 || typeof row.ts !== 'number' || !Number.isFinite(row.ts) || now - row.ts > RETENTION_MS ||
+    typeof row.attention_key !== 'string' || row.attention_key === '' ||
+    typeof row.leaseId !== 'string' || row.leaseId === '' || typeof row.expiresAt !== 'number' || !Number.isFinite(row.expiresAt) ||
+    (row.phase !== 'claimed' && row.phase !== 'dispatching') ||
+    (row.routeKind !== undefined && !isWakeRouteKind(row.routeKind)) ||
+    (row.attemptN !== undefined && (!Number.isSafeInteger(row.attemptN) || row.attemptN < 1))
+  ) return undefined;
+  if (row.phase === 'dispatching' && (row.routeKind === undefined || row.attemptN === undefined)) return undefined;
+  return row as WakeClaimRow;
+}
+
+async function readClaimRows(filePath: string, now: number): Promise<WakeClaimRow[]> {
+  let raw: string;
+  try { raw = await fs.promises.readFile(filePath, 'utf8'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  return raw.split('\n').filter(Boolean).map((line) => parseClaimRow(line, now)).filter((row): row is WakeClaimRow => row !== undefined);
+}
+
+async function writeClaimRows(filePath: string, rows: WakeClaimRow[]): Promise<void> {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), { mode: 0o600 });
+  await fs.promises.rename(temporary, filePath);
+}
+
+export async function claimWakeDispatch(
+  attention: WakeAttention,
+  leaseId: string,
+  leaseMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+  at = Date.now(),
+): Promise<WakeDispatchClaim> {
+  const file = wakeClaimsPath(env);
+  const key = await wakeAttentionKey(attention);
+  return withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+    const rows = await readClaimRows(file, at);
+    const existing = rows.find((row) => row.attention_key === key);
+    if (existing?.phase === 'dispatching') return { type: 'ambiguous', lease: existing };
+    if (existing !== undefined && existing.expiresAt > at) return { type: 'busy' };
+    const next: WakeClaimRow = { v: 1, ts: at, attention_key: key, leaseId, expiresAt: at + leaseMs, phase: 'claimed' };
+    await writeClaimRows(file, [...rows.filter((row) => row.attention_key !== key), next]);
+    return { type: 'acquired', leaseId };
+  });
+}
+
+export async function transitionWakeDispatch(
+  attention: WakeAttention,
+  leaseId: string,
+  phase: WakeDispatchLease['phase'],
+  leaseMs: number,
+  routeKind: WakeRouteKind | undefined,
+  attemptN: number | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  at = Date.now(),
+): Promise<boolean> {
+  const file = wakeClaimsPath(env);
+  const key = await wakeAttentionKey(attention);
+  return withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+    const rows = await readClaimRows(file, at);
+    const current = rows.find((row) => row.attention_key === key);
+    if (current?.leaseId !== leaseId) return false;
+    const next: WakeClaimRow = { v: 1, ts: at, attention_key: key, leaseId, expiresAt: at + leaseMs, phase, ...(routeKind === undefined ? {} : { routeKind }), ...(attemptN === undefined ? {} : { attemptN }) };
+    await writeClaimRows(file, [...rows.filter((row) => row.attention_key !== key), next]);
+    return true;
+  });
+}
+
+export async function releaseWakeDispatch(attention: WakeAttention, leaseId: string, env: NodeJS.ProcessEnv = process.env, at = Date.now()): Promise<void> {
+  const file = wakeClaimsPath(env);
+  const key = await wakeAttentionKey(attention);
+  await withFileLock(`${file}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+    const rows = await readClaimRows(file, at);
+    await writeClaimRows(file, rows.filter((row) => row.attention_key !== key || row.leaseId !== leaseId));
+  });
 }
 
 async function fromRow(row: WakeAttemptRow): Promise<WakeAttempt> {
@@ -209,7 +318,7 @@ export async function recordWakeAttempt(
 
 export async function recordRecoveredUnknown(
   attention: WakeAttention,
-  lease: Pick<NotifyLease, 'attemptN' | 'routeKind'>,
+  lease: { attemptN?: number; routeKind?: WakeRouteKind },
   env: NodeJS.ProcessEnv = process.env,
   at = Date.now()
 ): Promise<WakeAttempt | undefined> {

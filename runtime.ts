@@ -196,7 +196,7 @@ export function recordObservation(
   const current = squareState.runtime.observations[key]?.[id];
   if (current?.state === 'seen' || (current?.state === state && current.at >= at && current.ownerId === ownerId)) return false;
   const next: ActivityObservation = {
-    state: state === 'seen' ? 'seen' : 'notified',
+    state: 'seen',
     at: Math.max(current?.at ?? -Infinity, at),
     ...(ownerId === undefined ? (current?.ownerId === undefined ? {} : { ownerId: current.ownerId }) : { ownerId }),
   };

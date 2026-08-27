@@ -14,7 +14,7 @@ import {
   withPathOutput,
 } from './presentation.js';
 import { nowMs, SLEEP_MS } from './runtime.js';
-import { wakeNotifierForSquare } from './notifications.js';
+import { compatibilityWakeAfterCommit } from './notifications.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
@@ -93,7 +93,7 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const square = await Square.at({ path: squarePath, clock: nowMs, notifier: wakeNotifierForSquare(squarePath) });
+  const square = await Square.at({ path: squarePath, clock: nowMs });
   try {
     const participant = await square.join(name);
     while (true) {
@@ -102,11 +102,16 @@ export async function cmdActivity(
       const pendingPublic = before.pendingPublic;
       const pendingRoomChanges = before.pendingRoomChanges;
       try {
-        await participant.express(body, {
+        const result = await participant.express(body, {
           force,
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
+        try {
+          compatibilityWakeAfterCommit(squarePath, result.activity.id);
+        } catch {
+          // Compatibility wake is post-commit and cannot undo the activity.
+        }
         const freshSquare = await openSquare(squarePath, { clock: nowMs });
         const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;

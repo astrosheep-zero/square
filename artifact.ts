@@ -12,7 +12,6 @@ import {
   type BuildOptions,
   type ActivityObservation,
   type HardCap,
-  type NotifyLease,
   type SquareState,
   type SquareRuntimeState,
   type StoredAct,
@@ -78,7 +77,7 @@ function isStringArray(value: unknown): value is string[] {
 function validateObservation(value: unknown): value is ActivityObservation {
   return isObject(value)
     && hasExactKeys(value, ['state', 'at'], ['ownerId'])
-    && (value.state === 'notified' || value.state === 'seen')
+    && value.state === 'seen'
     && isFiniteNumber(value.at)
     && (value.ownerId === undefined || isNonblankString(value.ownerId));
 }
@@ -98,47 +97,17 @@ function validateWatchLease(value: unknown): value is WatchLease {
     && (value.filter.mention === undefined || typeof value.filter.mention === 'string');
 }
 
-function validateNotifyLease(value: unknown): value is NotifyLease {
-  if (!isObject(value)
-    || !hasExactKeys(value, ['leaseId', 'expiresAt', 'phase'], ['attemptN', 'routeKind'])
-    || !isNonblankString(value.leaseId)
-    || !isFiniteNumber(value.expiresAt)
-    || (value.phase !== 'claimed' && value.phase !== 'dispatching')
-    || (value.attemptN !== undefined && (!Number.isSafeInteger(value.attemptN) || (value.attemptN as number) <= 0))
-    || (value.routeKind !== undefined && !isWakeRouteKind(value.routeKind))) return false;
-  return value.phase !== 'dispatching' || (value.attemptN !== undefined && value.routeKind !== undefined);
-}
-
 function validateRecord(value: unknown, item: (candidate: unknown) => boolean): value is Record<string, unknown> {
   return isObject(value)
     && Object.entries(value).every(([key, candidate]) => key.length > 0 && item(candidate));
 }
 
-function parseNotifyLeaseKey(key: string): { index: number; name: string } | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(key);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 2) return undefined;
-  const [id, name] = parsed;
-  if (typeof id !== 'string' || typeof name !== 'string' || name.length === 0 || nameKey(name) !== name) {
-    return undefined;
-  }
-  const index = parseActivityId(id);
-  if (index === undefined) return undefined;
-  if (JSON.stringify([id, name]) !== key) return undefined;
-  return { index, name };
-}
-
 function validateRuntime(value: unknown): value is SquareRuntimeState {
   if (!isObject(value)
-    || !hasExactKeys(value, ['nextActIndex', 'observations', 'leases', 'notifyLeases'])
+    || !hasExactKeys(value, ['nextActIndex', 'observations', 'leases'])
     || !isNonNegativeInteger(value.nextActIndex)
     || !validateRecord(value.observations, (candidate) => isObject(candidate) && Object.entries(candidate).every(([id, observation]) => parseActivityId(id) !== undefined && validateObservation(observation)))
     || !validateRecord(value.leases, validateWatchLease)
-    || !validateRecord(value.notifyLeases, validateNotifyLease)
     ) return false;
   return true;
 }
@@ -151,11 +120,6 @@ function validateAssignedRuntimeReferences(runtime: SquareRuntimeState): 'ok' | 
       if (index === undefined) return 'malformed';
       if (index >= bound) return 'future';
     }
-  }
-  for (const key of Object.keys(runtime.notifyLeases)) {
-    const parsed = parseNotifyLeaseKey(key);
-    if (parsed === undefined) return 'malformed';
-    if (parsed.index >= bound) return 'future';
   }
   return 'ok';
 }
@@ -283,7 +247,6 @@ export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
     nextActIndex,
     observations: {},
     leases: {},
-    notifyLeases: {},
   };
 }
 

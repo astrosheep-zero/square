@@ -1,0 +1,202 @@
+import { extractMentions, formatActivityId, parseActivityId, type Act, type ActivityId } from './square-core.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
+import { SquareError, type SquareState, type StoredAct } from './model.js';
+import { participantIdentity } from './participant-identity.js';
+import type { SquareArtifactPort } from './ports.js';
+import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
+import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
+import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
+
+export interface OperationContext { readonly artifact: SquareArtifactPort; readonly clock: () => number }
+export interface JoinInput { readonly name: string }
+export interface ExpressInput { readonly name: string; readonly body: string; readonly options?: ExpressOptions }
+export interface ListenInput { readonly name: string; readonly target: string }
+export interface IgnoreInput extends ListenInput {}
+export interface DoneInput { readonly name: string; readonly body?: string }
+export interface HoldInput extends DoneInput {}
+export interface ResumeInput { readonly name: string }
+export interface CatchInput { readonly name: string; readonly options?: CatchOptions }
+export type CommittedActivity = Activity;
+export interface NoopJoin { readonly name: string; readonly activity: null }
+export interface NoopListenerChange { readonly activity: null }
+export type CatchOutcome = CatchResult;
+
+export class ActivityApplication {
+  constructor(private readonly context: OperationContext) {}
+  join(input: JoinInput) { return join(this.context, input.name); }
+  express(input: ExpressInput) { return express(this.context, input.name, input.body, input.options); }
+  catch(input: CatchInput) { return catchUp(this.context, input.name, input.options); }
+  listen(input: ListenInput) { return listen(this.context, input.name, input.target); }
+  ignore(input: IgnoreInput) { return ignore(this.context, input.name, input.target); }
+  done(input: DoneInput) { return done(this.context, input.name, input.body); }
+  hold(input: HoldInput) { return hold(this.context, input.name, input.body); }
+  resume(input: ResumeInput) { return resume(this.context, input.name); }
+  listening(name: string) { return listening(this.context, name); }
+}
+
+function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
+  if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);
+  const result = {
+    id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor,
+    mentions: activity.kind === 'say' ? extractMentions(activity.body) : [],
+    ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}),
+    ...('target' in activity ? { target: activity.target } : {}),
+    ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}),
+  } as Activity;
+  if (perception === 'full' || !('body' in result)) return { ...result, perception };
+  const { body: _body, ...withoutBody } = result;
+  return { ...withoutBody, perception };
+}
+
+export async function catchUp(
+  square: OperationContext,
+  name: string,
+  options: CatchOptions = {},
+  project?: (state: SquareState) => CatchProjection,
+): Promise<CatchResult> {
+  const idle = options.idle ?? 0;
+  if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Catch idle duration must be a non-negative number');
+  const deadline = Date.now() + idle;
+  while (true) {
+    const attempt = await square.artifact.transact<{ version: number; decision: CatchDecision }>((state, version) => {
+      const decision = decideCatch(state, name, options, square.clock(), project);
+      return { ...(decision.changed ? { state } : {}), result: { version, decision } };
+    });
+    if (attempt.decision.delivered.length > 0 || idle === 0) {
+      return {
+        activities: attempt.decision.delivered.map((activity) => exposeCaught(activity, attempt.decision.perceptions.get(activity.index) ?? 'full')),
+        consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'],
+        idleExpired: false,
+      };
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0 || !await square.artifact.changed(attempt.version, remaining)) {
+      return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true };
+    }
+  }
+}
+
+function storeActs(state: SquareState, acts: readonly Act[]): StoredAct[] {
+  const stored: StoredAct[] = [];
+  for (const act of acts) {
+    const item = { ...act, index: state.runtime.nextActIndex } as StoredAct;
+    state.runtime.nextActIndex += 1;
+    state.acts.push(item);
+    stored.push(item);
+  }
+  return stored;
+}
+
+function committedActivity(stored: readonly StoredAct[], verb: string): StoredAct {
+  const activity = stored[0];
+  if (activity === undefined) throw new Error(`${verb} activity did not commit`);
+  return activity;
+}
+
+function exposeActivity(stored: StoredAct): Activity {
+  if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
+  return {
+    id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
+    ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
+    mentions: stored.kind === 'say' ? extractMentions(stored.body) : [],
+    ...('target' in stored ? { target: stored.target } : {}),
+    ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
+  };
+}
+
+function parseRequiredActivityId(id: ActivityId): number {
+  const index = parseActivityId(id);
+  if (index === undefined) throw new SquareError('invalid_args', `Invalid activity id: ${id}`);
+  return index;
+}
+
+export async function join(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activity: Activity | null }> {
+  const now = square.clock();
+  const committed = await square.artifact.transact<{ name: string; stored: StoredAct | null }>((state) => {
+    const decision = decideJoin(state, name, now);
+    if (decision.joinAct === undefined) return { result: { name: decision.joinedName, stored: null } };
+    return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
+  });
+  return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+}
+
+/** Automatic presence distinguishes first entry, current presence, and completed presence. */
+export async function implicitJoin(square: OperationContext, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
+  const now = square.clock();
+  const committed = await square.artifact.transact<{ name: string; state: 'joined' | 'active' | 'done'; stored: StoredAct | null }>((state) => {
+    const decision = decideImplicitJoin(state, name, now);
+    if (decision.joinAct === undefined) return { result: { name: decision.joinedName, state: decision.state, stored: null } };
+    return { state, result: { name: decision.joinedName, state: decision.state, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
+  });
+  return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+}
+
+export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {
+  const now = square.clock();
+  const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
+  const committed = await square.artifact.transact((state) => {
+    const decision = decideAct(state, { name, body, force: options.force ?? false, now, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
+    if (decision.type === 'blocked') {
+      const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
+      throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
+    }
+    if (decision.type === 'held') {
+      const holder = state.acts.filter((activity) => activity.kind === 'hold').at(-1)?.actor;
+      throw new SquareError('held', 'The square is held', holder === undefined ? undefined : { holder });
+    }
+    if (decision.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
+    if (decision.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: decision.delayMs });
+    if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
+    const stored = committedActivity(storeActs(state, [decision.act]), 'express');
+    return { state, result: { stored } };
+  });
+  const activity = exposeActivity(committed.stored);
+  return { activity };
+}
+
+export interface ListenerChangeResult {
+  readonly activity: Activity | null;
+}
+
+async function landListenerChange(
+  square: OperationContext,
+  verb: 'listen' | 'ignore',
+  actor: string,
+  target: string,
+): Promise<ListenerChangeResult> {
+  const now = square.clock();
+  const stored = await square.artifact.transact<StoredAct | null>((state) => {
+    const act = verb === 'listen'
+      ? coreListen(state, actor, target, now)
+      : coreIgnore(state, actor, target, now);
+    if (act === undefined) return { result: null };
+    return { state, result: committedActivity(storeActs(state, [act]), verb) };
+  });
+  return { activity: stored === null ? null : exposeActivity(stored) };
+}
+
+export function listen(square: OperationContext, actor: string, target: string): Promise<ListenerChangeResult> {
+  return landListenerChange(square, 'listen', actor, target);
+}
+
+export function ignore(square: OperationContext, actor: string, target: string): Promise<ListenerChangeResult> {
+  return landListenerChange(square, 'ignore', actor, target);
+}
+
+export async function listening(square: OperationContext, actor: string): Promise<readonly string[]> {
+  const { state } = await square.artifact.read();
+  return coreListening(state, actor);
+}
+
+async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = ''): Promise<ExpressResult> {
+  const now = square.clock();
+  const stored = await square.artifact.transact((state) => {
+    const act = verb === 'done' ? coreDone(state, actor, body, now) : verb === 'hold' ? coreHold(state, actor, body, now) : coreResume(state, actor, now);
+    return { state, result: committedActivity(storeActs(state, [act]), verb) };
+  });
+  return { activity: exposeActivity(stored) };
+}
+
+export function done(square: OperationContext, name: string, body = ''): Promise<ExpressResult> { return landCore(square, 'done', name, body); }
+export function hold(square: OperationContext, name: string, reason = ''): Promise<ExpressResult> { return landCore(square, 'hold', name, reason); }
+export function resume(square: OperationContext, name: string): Promise<ExpressResult> { return landCore(square, 'resume', name); }
