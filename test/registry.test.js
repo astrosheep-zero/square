@@ -143,7 +143,7 @@ test('presence follows active session lifecycle without delivery routes', async 
 
     const repeated = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.equal(repeated.status, 0, repeated.stderr);
-    assert.deepEqual(await lookupSession('resume-session'), []);
+    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
     assert.deepEqual((await lookupSession('observer-session')).map((entry) => entry.name), ['Alice']);
 
     const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], {

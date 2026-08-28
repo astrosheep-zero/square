@@ -131,7 +131,7 @@ test('wake port retires an unavailable route without recording an attempt', asyn
   const port = new WakePort([{
     kind: 'paseo',
     async dispatch() {
-      return { outcome: 'unavailable', signature: 'address_not_found', message: 'gone' };
+      return { outcome: 'unavailable', signature: 'address_not_found', message: 'gone', routeStale: true };
     },
   }]);
   const result = await port.dispatch([routeValue], 'wake', {

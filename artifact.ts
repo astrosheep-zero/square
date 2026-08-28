@@ -16,6 +16,7 @@ import {
   type SquareRuntimeState,
   type StoredAct,
   type WatchLease,
+  type ReceiverRoute,
 } from './model.js';
 import { parseActivityId } from './square-core.js';
 
@@ -179,13 +180,14 @@ function validateActs(value: unknown): value is StoredAct[] {
 
 function validateSquareState(value: unknown): SquareState {
   if (!isObject(value)
-    || !hasExactKeys(value, ['hardCap', 'preamble', 'warmup', 'acts', 'runtime'], ['throttlePerMinute'])
+    || !hasExactKeys(value, ['hardCap', 'preamble', 'warmup', 'acts', 'runtime'], ['throttlePerMinute', 'routes'])
     || !(value.hardCap === null || (Number.isSafeInteger(value.hardCap) && (value.hardCap as number) > 0))
     || (value.throttlePerMinute !== undefined
       && (!Number.isSafeInteger(value.throttlePerMinute) || (value.throttlePerMinute as number) <= 0))
     || !isStringArray(value.preamble)
     || !isStringArray(value.warmup)
     || !validateActs(value.acts)
+    || (value.routes !== undefined && (!Array.isArray(value.routes) || !value.routes.every((route) => isObject(route) && isWakeRouteKind(route.kind) && typeof route.location === 'string' && typeof route.participant === 'string' && typeof route.sessionId === 'string' && typeof route.channel === 'string' && isObject(route.address) && Object.values(route.address).every((item) => typeof item === 'string') && typeof route.updatedAt === 'number')))
     || !validateRuntime(value.runtime)) {
     throw invalidArtifact('snapshot schema is malformed.');
   }
@@ -279,6 +281,7 @@ export function createSquareState(
     preamble: normalizedLines(snippet),
     warmup: normalizedLines(guides.join('\n\n')),
     acts: [],
+    routes: [],
     runtime: emptyRuntimeState(),
   };
 }

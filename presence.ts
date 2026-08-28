@@ -12,7 +12,7 @@ import type { CatchProjection } from './catch-decisions.js';
 
 function operationContext(square: OpenSquare | { readonly cell: OpenSquare['artifact']; readonly clock: () => number }) {
   return 'artifact' in square
-    ? { artifact: square.artifact, clock: square.clock }
+    ? { artifact: square.artifact, clock: square.clock, location: square.location, hostLedger: square.hostLedger, wakeTransport: square.wakeTransport, env: square.env }
     : { artifact: square.cell, clock: square.clock };
 }
 

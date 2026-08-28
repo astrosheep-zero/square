@@ -2,6 +2,8 @@ import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
+import { sweepPrivilegedPending } from './notifications.js';
+import type { WakeAdapter } from './delivery.js';
 
 export interface NativeHookInput {
   session_id?: unknown;
@@ -33,16 +35,19 @@ export async function runClaudeHookAsync(inputText: string, env: NodeJS.ProcessE
 export async function claudeHookResponse(
   input: NativeHookInput,
   lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  deliveryAdapters?: WakeAdapter[],
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (input.hook_event_name !== 'PostToolBatch') return undefined;
-  return presentPendingAtBoundary(
+  const response = await presentPendingAtBoundary(
     input.session_id,
     (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext: context } }),
     lookup,
     env
   );
+  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters).catch(() => undefined);
+  return response;
 }
 
 export async function runClaudeHook(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {

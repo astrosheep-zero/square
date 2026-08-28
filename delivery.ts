@@ -38,7 +38,7 @@ export type WakeDispatchResult =
   | { outcome: 'accepted' }
   | { outcome: 'unknown'; signature: string; message: string; diagnostic?: unknown }
   | { outcome: 'failed'; signature: string; message: string; diagnostic?: unknown }
-  | { outcome: 'unavailable'; signature: string; message: string; diagnostic?: unknown; retainRoute?: boolean }
+  | { outcome: 'unavailable'; signature: string; message: string; diagnostic?: unknown; retainRoute?: boolean; routeStale?: boolean }
   | { outcome: 'cancelled' };
 
 export interface WakeAdapter {

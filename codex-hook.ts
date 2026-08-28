@@ -3,6 +3,8 @@ import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
 import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
+import { sweepPrivilegedPending } from './notifications.js';
+import type { WakeAdapter } from './delivery.js';
 
 export interface CodexHookInput {
   session_id?: unknown;
@@ -19,14 +21,15 @@ const CODEX_HOOK_EVENTS: Readonly<Record<string, 'PostToolUse' | 'Stop'>> = {
 export async function codexHookResponse(
   input: CodexHookInput,
   lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  deliveryAdapters?: WakeAdapter[],
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (typeof input.hook_event_name !== 'string') return undefined;
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
   if (hookEventName === undefined) return undefined;
   await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
-  return presentPendingAtBoundary(
+  const response = await presentPendingAtBoundary(
     input.session_id,
     (context) => hookEventName === 'Stop'
       ? { systemMessage: context }
@@ -34,6 +37,8 @@ export async function codexHookResponse(
     lookup,
     env
   );
+  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters).catch(() => undefined);
+  return response;
 }
 
 export async function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {

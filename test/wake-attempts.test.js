@@ -130,7 +130,7 @@ test('a wake attempt write immediately recovers a lock abandoned by a dead proce
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
-test('route retry requires new route evidence, and unknown stops every route', () => {
+test('failed routes remain retryable while unknown stops the same route', () => {
   const attention = { squarePath: '/SQUARE.square', actIndex: 4, recipient: 'Faye' };
   const failed = {
     at: 100,
@@ -143,9 +143,9 @@ test('route retry requires new route evidence, and unknown stops every route', (
   const sameFact = { kind: 'paseo', updatedAt: 100 };
   const newFact = { kind: 'paseo', updatedAt: 101 };
 
-  assert.equal(isWakeRouteAttemptable(sameFact, [failed]), false);
+  assert.equal(isWakeRouteAttemptable(sameFact, [failed]), true);
   assert.equal(isWakeRouteAttemptable(newFact, [failed]), true);
-  assert.equal(hasAttemptableWakeRoute([sameFact], [failed]), false);
+  assert.equal(hasAttemptableWakeRoute([sameFact], [failed]), true);
 
   const unknown = {
     at: 102,
@@ -156,5 +156,5 @@ test('route retry requires new route evidence, and unknown stops every route', (
     attemptN: 2,
   };
   assert.equal(terminalWakeEvidence([failed, unknown]), undefined);
-  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), true);
+  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), false);
 });

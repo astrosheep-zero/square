@@ -21,9 +21,7 @@ import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
 import { formatTimestamp } from './time.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
-import { createWakeTransport } from './notifications.js';
-import { CodexQueueAdapter } from './codex-queue.js';
-import { PaseoAdapter } from './paseo-delivery.js';
+import { createDefaultWakeTransport } from './notifications.js';
 
 export interface ActivityOptions {
   force?: boolean;
@@ -96,8 +94,9 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const hostLedger = createHostLedgerPort();
-  const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: createWakeTransport([new CodexQueueAdapter(), new PaseoAdapter()], hostLedger, nowMs) });
+  const ledgerRoot = process.env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(process.env.SQUARE_REGISTRY);
+  const hostLedger = createHostLedgerPort({ userPath: process.env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot, localPath: process.env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot });
+  const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
   try {
     const participant = await square.join(name);
     while (true) {
@@ -111,10 +110,7 @@ export async function cmdActivity(
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
-        try {
-        } catch {
-          // Compatibility wake is post-commit and cannot undo the activity.
-        }
+        if (result.delivery?.notCapable) process.stderr.write(`! wake not-capable: ${result.delivery.notCapable}\n`);
         const freshSquare = await openSquare(squarePath, { clock: nowMs });
         const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;

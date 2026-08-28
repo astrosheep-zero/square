@@ -36,7 +36,7 @@ export class WakePort {
       );
       if (result.outcome === 'cancelled') return result;
       if (result.outcome === 'unavailable') {
-        if (result.retainRoute !== true) await hooks.invalidate?.(route, result);
+        if (result.routeStale === true) await hooks.invalidate?.(route, result);
         continue;
       }
       await hooks.record(route, attemptN, result);

@@ -60,7 +60,7 @@ export class CodexQueueAdapter implements WakeAdapter {
   ): Promise<WakeDispatchResult> {
     const threadId = address.threadId?.trim();
     if (!threadId) {
-      return { outcome: 'unavailable', signature: 'invalid_address', message: 'Codex route has no thread id.' };
+      return { outcome: 'unavailable', signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
     }
     const env = this.opts.env ?? process.env;
     if (!await codexQueueEligible(threadId, env)) {

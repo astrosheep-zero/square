@@ -9,7 +9,9 @@ import { emptyRuntimeState, writeSquareFile } from '../dist/artifact.js';
 import { claudeHookResponse, runClaudeHook } from '../dist/claude-hook.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { sessionInbox } from '../dist/inbox.js';
-import { lookupParticipant, recordJoin } from '../dist/registry.js';
+import { lookupParticipant, recordJoin, recordSessionJoin } from '../dist/registry.js';
+import { upsertWakeRoute } from '../dist/routes.js';
+import { processActNotificationsOnce } from '../dist/notifications.js';
 
 const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
 
@@ -204,6 +206,25 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
     fs.rmSync(presented, { force: true });
     item.cleanup();
   }
+});
+
+test('privileged hook sweep wakes a different recipient after local failure', async () => {
+  const item = await fixture();
+  try {
+    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_HOST_LEDGER_USER: path.join(path.dirname(item.squarePath), 'ledger'), SQUARE_HOST_LEDGER_LOCAL: path.join(path.dirname(item.squarePath), 'local'), SQUARE_PRESENTED: path.join(path.dirname(item.squarePath), 'presented.ndjsonl') };
+    item.runtime.observations.Bob = { [formatActivityId(3)]: { state: 'seen', at: Date.now() } };
+    await item.persist();
+    await recordSessionJoin('bob-session', 'Bob', item.squarePath, 'claude-code', env);
+    await upsertWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'bob-session', channel: 'claude-code', kind: 'claude-native', address: { sessionId: 'bob-session' } });
+    const failed = { kind: 'claude-native', async dispatch() { return { outcome: 'failed', signature: 'temporary', message: 'offline' }; } };
+    await processActNotificationsOnce(item.squarePath, 2, { env, adapters: [failed] });
+    let calls = 0;
+    const accepted = { kind: 'claude-native', async dispatch(_route, _payload, beforeSend) { if (!(await beforeSend())) return { outcome: 'cancelled' }; calls += 1; return { outcome: 'accepted' }; } };
+    await claudeHookResponse({ session_id: 'alice-session', hook_event_name: 'PostToolBatch', cwd: path.dirname(path.dirname(item.squarePath)) }, () => [], env, [accepted]);
+    assert.equal(calls, 1);
+    await claudeHookResponse({ session_id: 'alice-session', hook_event_name: 'PostToolBatch', cwd: path.dirname(path.dirname(item.squarePath)) }, () => [], env, [accepted]);
+    assert.equal(calls, 1);
+  } finally { item.cleanup(); }
 });
 
 test('active catch owns matching attention at every adapter boundary', async () => {

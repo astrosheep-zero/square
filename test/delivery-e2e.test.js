@@ -14,7 +14,7 @@ import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
-import { upsertWakeRoute } from '../dist/routes.js';
+import { retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts, recordWakeAttempt } from '../dist/wake-attempts.js';
 import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
 import { readCursor } from '../dist/runtime.js';
@@ -365,7 +365,7 @@ test('a current owner notified observation suppresses another wake', async () =>
   }
 });
 
-test('a crash after send records unknown and allows one retry', async () => {
+test('a crash after send records unknown and blocks blind retry', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', 'crash window @Bob'], 30);
@@ -386,10 +386,9 @@ test('a crash after send records unknown and allows one retry', async () => {
     const later = await runWorker(item, act.index, 'accepted', callLog);
     assert.equal(recovery.code, 0, recovery.stderr);
     assert.equal(later.code, 0, later.stderr);
-    assert.equal(callCount(callLog), 2);
+    assert.equal(callCount(callLog), 1);
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
-      ['accepted', undefined],
     ]);
     const claimsPath = path.join(item.env.SQUARE_HOST_LEDGER_USER, 'wake-claims.ndjsonl');
     const claims = fs.existsSync(claimsPath)
@@ -400,7 +399,7 @@ test('a crash after send records unknown and allows one retry', async () => {
       graceMs: wakeGraceMs(item.env),
       env: item.env,
     }));
-    assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
+    assert.notEqual(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();
   }
@@ -440,6 +439,7 @@ test('presented evidence is scoped to the current participant owner', async () =
       await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
       await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 1 });
     });
+    await retireWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'old-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'old-session' }, updatedAt: Date.now() });
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env });
@@ -484,7 +484,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
       now: firstAttemptAt + 500,
       env: item.env,
     }));
-    assert.equal(unreachable.find((item) => item.actIndex === act.index).kind, 'unreachable');
+    assert.equal(unreachable.find((item) => item.actIndex === act.index).kind, 'awaiting');
 
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'bob-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'bob-session' },

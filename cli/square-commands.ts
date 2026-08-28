@@ -20,12 +20,12 @@ import {
 } from '../registry.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
 import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../square-projections.js';
-import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
 import { openParticipant, Square } from '../square-wiring.js';
 import { entryPresentation, eventPresentation } from '../views.js';
+import { createDefaultWakeTransport } from '../notifications.js';
 
 import {
   type CommandContext,
@@ -149,7 +149,8 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     const beforeSquare = await openSquare(squarePath, { clock: nowMs });
     const before = await entryPresentation(beforeSquare, intent.name, intent.lastN);
     await closeOpenSquare(beforeSquare);
-    const square = await Square.at({ path: squarePath, clock: nowMs });
+    const hostLedger = createHostLedgerPort();
+    const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
     try {
       const reconnect = before.joined
         && await projectLocalParticipantBinding({
@@ -174,8 +175,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);
-      await square.reconcileBinding();
-      await sweepPendingNotifications(squarePath);
+      await square.reconcileBinding().catch(() => undefined);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
         now: nowMs(),
         preview: intent.lastN === null ? undefined : 200,
@@ -241,7 +241,6 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    await sweepPendingNotifications(squarePath);
     const body = await resolveBody(intent.activity);
     const reachArg = intent.reach === 'bell' ? ' --bell' : '';
     await cmdActivity(squarePath, intent.name, body, (value) => value, {

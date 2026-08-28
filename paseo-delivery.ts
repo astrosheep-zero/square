@@ -53,6 +53,7 @@ export class PaseoAdapter implements WakeAdapter {
         outcome: 'unavailable',
         signature: 'invalid_address',
         message: 'Paseo route has no agent id.',
+        routeStale: true,
         diagnostic: diagnostic('selection', address, 'invalid_address'),
       };
     }
@@ -75,6 +76,7 @@ export class PaseoAdapter implements WakeAdapter {
         message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle.',
         diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_idle'),
         ...(agent === undefined ? {} : { retainRoute: true }),
+        ...(agent === undefined ? { routeStale: true } : {}),
       };
     }
 

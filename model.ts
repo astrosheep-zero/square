@@ -21,6 +21,8 @@ export interface WakeRoute {
   updatedAt: number;
 }
 
+export interface ReceiverRoute extends WakeRoute {}
+
 export type SquareErrorCode =
   | 'invalid_name'
   | 'invalid_args'
@@ -126,6 +128,7 @@ export interface SquareState {
   preamble: string[];
   warmup: string[];
   acts: StoredAct[];
+  routes?: ReceiverRoute[];
   runtime: SquareRuntimeState;
 }
 
