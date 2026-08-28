@@ -29,6 +29,8 @@ export interface SquareArtifactPort {
 
 /** Capability-neutral wake transport. Unused by this Contract's activity operations. */
 export interface WakeTransportPort {
+  /** Probe whether this executor can call the selected route without dispatching. */
+  probe?(route: WakeRoute): Promise<boolean>;
   attempt(request: WakeRequest, timeoutMs: number): Promise<WakeOutcome>;
   /** Optional route retirement supplied by the concrete executor adapter. */
   invalidate?(request: WakeRequest): Promise<void>;
@@ -76,7 +78,7 @@ export interface PresentationEvidenceProjection {
 
 export type WakeOutcome =
   | { readonly outcome: 'accepted'; readonly signature?: string; readonly attemptN?: number }
-  | { readonly outcome: 'failed'; readonly message?: string; readonly attemptN?: number; readonly unavailable?: boolean }
+  | { readonly outcome: 'failed'; readonly message?: string; readonly attemptN?: number; readonly unavailable?: boolean; readonly retainRoute?: boolean }
   | { readonly outcome: 'unknown'; readonly diagnostic?: string; readonly attemptN?: number };
 
 export interface SquareObservation {

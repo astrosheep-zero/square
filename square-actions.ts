@@ -3,6 +3,7 @@ import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, 
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
+import { deliverPending } from './delivery-operations.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
 import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
@@ -13,6 +14,7 @@ export interface OperationContext {
   readonly location?: string;
   readonly hostLedger?: HostLedgerPort;
   readonly env?: NodeJS.ProcessEnv;
+  readonly wakeTransport?: import('./ports.js').WakeTransportPort;
 }
 
 function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
@@ -148,6 +150,9 @@ export async function express(square: OperationContext, name: string, body: stri
     return { state, result: { stored } };
   });
   await ensureLocalPresence(square, name);
+  if (square.wakeTransport !== undefined && square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
+    await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, now }).catch(() => undefined);
+  }
   return { activity: exposeActivity(committed.stored) };
 }
 

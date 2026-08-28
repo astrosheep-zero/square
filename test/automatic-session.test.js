@@ -10,6 +10,7 @@ import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from
 import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { lookupSessionBindings } from '../dist/registry.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-auto-'));
@@ -60,6 +61,18 @@ test('automatic session end writes ordinary done for its bound owner', { concurr
   assert.deepEqual(squareState.acts.map((act) => act.kind), ['join', 'done']);
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'changed' }, (env) => automaticSessionEnd('pi', 'pi-session', item.cwd, env));
   assert.equal((await loadSquare(item.publicPath)).acts.length, 2);
+});
+
+test('Paseo is the preferred wake route when a native session runs under Paseo', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, PASEO_AGENT_ID: 'paseo-agent' }, async (env) => {
+    await automaticSessionStart('claude', 'claude-session', item.cwd, env);
+  });
+  const ledger = createHostLedgerPort({ userPath: path.dirname(item.env.SQUARE_REGISTRY), localPath: path.dirname(item.env.SQUARE_REGISTRY) });
+  const rows = await ledger.listPresence({ location: item.publicPath, participant: automaticParticipant('claude', 'claude-session', item.env), scopes: ['user'] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].channel, 'claude-code');
+  assert.deepEqual(rows[0].route, { kind: 'paseo', address: { agentId: 'paseo-agent' } });
 });
 
 test('automatic implicit join does not re-enter a participant that has done', { concurrency: false }, async () => {

@@ -1,5 +1,5 @@
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { HostLedgerPort } from './ports.js';
+import type { HostLedgerPort, WakeTransportPort } from './ports.js';
 
 export interface Activity { readonly id: ActivityId; readonly at: number; readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore'; readonly actor: string; readonly body?: string; readonly mentions: readonly string[]; readonly target?: string; readonly reply?: ActivityId; }
 export interface PerceivedActivity extends Activity { readonly perception: Perception; }
@@ -13,7 +13,7 @@ export interface ParticipantStatus { readonly name: string; readonly state: 'joi
 export interface SquareSnapshot { readonly context: string; readonly actCount: number; readonly hardCap: number | null; readonly throttlePerMinute?: number; readonly held: { readonly by: string; readonly reason?: string } | null; readonly participants: readonly ParticipantStatus[]; delivered(name: string, id: ActivityId): boolean; }
 
 export type SquareSource = { path: string };
-export interface OpenOptions { clock?: () => number; hostLedger?: HostLedgerPort; env?: NodeJS.ProcessEnv }
+export interface OpenOptions { clock?: () => number; hostLedger?: HostLedgerPort; wakeTransport?: WakeTransportPort; env?: NodeJS.ProcessEnv }
 export interface SquareAtInput extends SquareSource, OpenOptions {}
 export interface SquareBuildInput extends SquareSource {
   markdown: string;
@@ -21,6 +21,7 @@ export interface SquareBuildInput extends SquareSource {
   throttlePerMinute?: number;
   clock?: () => number;
   hostLedger?: HostLedgerPort;
+  wakeTransport?: WakeTransportPort;
   env?: NodeJS.ProcessEnv;
 }
 

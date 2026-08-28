@@ -1,4 +1,4 @@
-import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
+import type { HostLedgerPort, SquareArtifactPort, WakeTransportPort } from './ports.js';
 
 /** Private binding assembled by storage and consumed by the four concerns. */
 export interface OpenSquare {
@@ -6,6 +6,7 @@ export interface OpenSquare {
   readonly clock: () => number;
   readonly location: string;
   readonly hostLedger?: HostLedgerPort;
+  readonly wakeTransport?: WakeTransportPort;
   readonly env?: NodeJS.ProcessEnv;
 }
 

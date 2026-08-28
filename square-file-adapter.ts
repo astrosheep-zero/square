@@ -40,6 +40,7 @@ export interface SquareBuildOptions {
   throttlePerMinute?: number;
   clock?: () => number;
   hostLedger?: HostLedgerPort;
+  wakeTransport?: import('./ports.js').WakeTransportPort;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -56,7 +57,7 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 
 export async function openSquare(
   squarePath: string,
-  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'env'> = {},
+  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env'> = {},
 ): Promise<OpenSquare> {
   const env = options.env ?? process.env;
   const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
@@ -73,6 +74,7 @@ export async function openSquare(
         userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot,
         localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot,
       }),
+      wakeTransport: options.wakeTransport,
     };
   } catch (error) {
     await cell.close();
@@ -112,7 +114,7 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger };
+  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, wakeTransport: options.wakeTransport };
 }
 
 function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {

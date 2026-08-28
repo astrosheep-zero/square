@@ -95,8 +95,12 @@ export interface WakeAttempt {
 export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined { return attempts.findLast((attempt) => attempt.outcome === 'accepted'); }
 export function isWakeRouteAttemptable(route: Pick<WakeRoute, 'kind' | 'updatedAt'>, attempts: readonly WakeAttempt[]): boolean {
   if (terminalWakeEvidence(attempts) !== undefined) return false;
-  const failed = attempts.findLast((attempt) => attempt.routeKind === route.kind && attempt.outcome === 'failed');
-  return failed === undefined || route.updatedAt > failed.at;
+  // A transport may have happened even when its acknowledgement was lost. Only
+  // explicit recovery or a different route/session may clear that uncertainty.
+  if (attempts.some((attempt) => attempt.routeKind === route.kind && attempt.outcome === 'unknown')) return false;
+  // Definite pre-accept failure is handed to the next executor. Route freshness
+  // is not a retry policy and must not suppress that handoff.
+  return true;
 }
 export function hasAttemptableWakeRoute(routes: readonly Pick<WakeRoute, 'kind' | 'updatedAt'>[], attempts: readonly WakeAttempt[]): boolean { return routes.some((route) => isWakeRouteAttemptable(route, attempts)); }
 

@@ -109,16 +109,17 @@ async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
   return adapters;
 }
 
-function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number): WakeTransportPort {
+export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number): WakeTransportPort {
   return {
+    probe: async (route) => adapters.some((candidate) => candidate.kind === route.kind),
     attempt: async (request, _timeoutMs): Promise<WakeOutcome> => {
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
-      if (adapter === undefined) return { outcome: 'failed', message: 'wake adapter unavailable' };
+      if (adapter === undefined) return { outcome: 'failed', message: 'wake adapter unavailable', unavailable: true };
       try {
         const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => true);
         if (result.outcome === 'accepted') return { outcome: 'accepted' };
         if (result.outcome === 'failed') return { outcome: 'failed', message: result.message };
-        if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true };
+        if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true, retainRoute: result.retainRoute };
         if (result.outcome === 'unknown') return { outcome: 'unknown', diagnostic: result.message };
         return { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' };
       } catch (error) {

@@ -8,6 +8,7 @@ import { entryPresentation } from './views.js';
 import { automaticParticipant } from './participant-identity.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
+import type { PresenceRecord } from './host-ledger.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
@@ -30,6 +31,13 @@ function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
     userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
     localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
   });
+}
+
+function preferredWakeRoute(
+  env: NodeJS.ProcessEnv,
+): PresenceRecord['route'] {
+  const paseoAgentId = env.PASEO_AGENT_ID?.trim();
+  return paseoAgentId === undefined || paseoAgentId === '' ? undefined : { kind: 'paseo', address: { agentId: paseoAgentId } };
 }
 
 export function publicSquarePath(cwd: string): string {
@@ -62,7 +70,8 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   try {
     const implicit = await square.implicitJoin(name);
     if (implicit.state === 'done') return undefined;
-    await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel: provider === 'claude' ? 'claude-code' : provider, updatedAt: Date.now() });
+    const channel = provider === 'claude' ? 'claude-code' : provider;
+    await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel, route: preferredWakeRoute(env), updatedAt: Date.now() }, 'user');
     await square.reconcileBinding();
     return undefined;
   } finally {

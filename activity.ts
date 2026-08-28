@@ -20,6 +20,10 @@ import { Square } from './square-wiring.js';
 import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
 import { formatTimestamp } from './time.js';
+import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { createWakeTransport } from './notifications.js';
+import { CodexQueueAdapter } from './codex-queue.js';
+import { PaseoAdapter } from './paseo-delivery.js';
 
 export interface ActivityOptions {
   force?: boolean;
@@ -92,7 +96,8 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const square = await Square.at({ path: squarePath, clock: nowMs });
+  const hostLedger = createHostLedgerPort();
+  const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: createWakeTransport([new CodexQueueAdapter(), new PaseoAdapter()], hostLedger, nowMs) });
   try {
     const participant = await square.join(name);
     while (true) {
