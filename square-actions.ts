@@ -7,14 +7,15 @@ import { deliverPending } from './delivery-operations.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
 import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
+import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities, type WakeBoundaryProvider } from './routes.js';
 
 export interface OperationContext {
   readonly artifact: SquareArtifactPort;
   readonly clock: () => number;
   readonly location?: string;
   readonly hostLedger?: HostLedgerPort;
-  readonly env?: NodeJS.ProcessEnv;
   readonly wakeTransport?: import('./ports.js').WakeTransportPort;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
@@ -24,6 +25,23 @@ function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: Pr
   ];
   const found = choices.find(([session]) => session?.trim());
   return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };
+}
+
+async function publishIdentityRoute(context: OperationContext, participant: string): Promise<void> {
+  if (context.location === undefined || context.location === 'memory') return;
+  const identity = processIdentity(context.env ?? process.env);
+  if (context.hostLedger === undefined) return;
+  const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
+  const capabilities = await defaultWakeRouteCapabilities(context.hostLedger);
+  const route = await resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
+  if (route === undefined) return;
+  await publishWakeRoute(context.artifact, route, { at: context.clock() }).catch(() => undefined);
+}
+
+async function retireIdentityRoute(context: OperationContext, participant: string): Promise<void> {
+  if (context.location === undefined || context.location === 'memory') return;
+  const identity = processIdentity(context.env ?? process.env);
+  await retireWakeRouteFromArtifact(context.artifact, { location: context.location, participant, sessionId: identity.session }).catch(() => undefined);
 }
 
 /** Presence is best effort and runs only after the artifact mutation commits. */
@@ -60,6 +78,7 @@ export async function catchUp(square: OperationContext, name: string, options: C
       return { ...(decision.changed ? { state } : {}), result: { version, decision } };
     });
     await ensureLocalPresence(square, name);
+    await publishIdentityRoute(square, name);
     if (attempt.decision.delivered.length > 0 || idle === 0) {
       return {
         activities: attempt.decision.delivered.map((activity) => exposeCaught(activity, attempt.decision.perceptions.get(activity.index) ?? 'full')),
@@ -116,6 +135,7 @@ export async function join(square: OperationContext, name: string): Promise<{ re
     return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   });
   await ensureLocalPresence(square, committed.name);
+  await publishIdentityRoute(square, committed.name);
   return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
@@ -127,6 +147,8 @@ export async function implicitJoin(square: OperationContext, name: string): Prom
     return { state, result: { name: decision.joinedName, state: decision.state, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   });
   await ensureLocalPresence(square, committed.name);
+  if (committed.state === 'done') await retireIdentityRoute(square, committed.name);
+  else await publishIdentityRoute(square, committed.name);
   return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
@@ -150,10 +172,13 @@ export async function express(square: OperationContext, name: string, body: stri
     return { state, result: { stored } };
   });
   await ensureLocalPresence(square, name);
+  let delivery: import('./ports.js').DeliveryResult;
   if (square.wakeTransport !== undefined && square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
-    await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, now }).catch(() => undefined);
+    delivery = await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, activity: committed.stored.index, now }).catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }));
+  } else {
+    delivery = { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
   }
-  return { activity: exposeActivity(committed.stored) };
+  return { activity: exposeActivity(committed.stored), delivery };
 }
 
 export interface ListenerChangeResult { readonly activity: Activity | null }
@@ -178,6 +203,7 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
     const act = verb === 'done' ? coreDone(state, actor, body, now) : verb === 'hold' ? coreHold(state, actor, body, now) : coreResume(state, actor, now);
     return { state, result: committedActivity(storeActs(state, [act]), verb) };
   });
+  if (verb === 'done') await retireIdentityRoute(square, actor);
   return { activity: exposeActivity(stored) };
 }
 

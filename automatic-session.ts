@@ -9,6 +9,7 @@ import { automaticParticipant } from './participant-identity.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
+import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
@@ -31,13 +32,6 @@ function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
     userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
     localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
   });
-}
-
-function preferredWakeRoute(
-  env: NodeJS.ProcessEnv,
-): PresenceRecord['route'] {
-  const paseoAgentId = env.PASEO_AGENT_ID?.trim();
-  return paseoAgentId === undefined || paseoAgentId === '' ? undefined : { kind: 'paseo', address: { agentId: paseoAgentId } };
 }
 
 export function publicSquarePath(cwd: string): string {
@@ -70,8 +64,12 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   try {
     const implicit = await square.implicitJoin(name);
     if (implicit.state === 'done') return undefined;
-    const channel = provider === 'claude' ? 'claude-code' : provider;
-    await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel, route: preferredWakeRoute(env), updatedAt: Date.now() }, 'user');
+    const route = resolvePrimaryWakeRoute({ location: squarePath, participant: name, sessionId, provider }, env, await defaultWakeRouteCapabilities(hostLedgerForEnv(env)));
+    if (route !== undefined) {
+      const publisher = await openSquare(squarePath, { hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
+      try { await publishWakeRoute(publisher.artifact, route, { at: Date.now() }); } finally { await closeOpenSquare(publisher); }
+    }
+    await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel: provider === 'claude' ? 'claude-code' : provider, updatedAt: Date.now() }, 'user');
     await square.reconcileBinding();
     return undefined;
   } finally {
@@ -100,6 +98,8 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
     const participant = await square.join(binding.participant);
     await participant.done();
     await square.reconcileBinding();
+    const cleanup = await openSquare(squarePath);
+    try { await retireWakeRouteFromArtifact(cleanup.artifact, { location: squarePath, participant: binding.participant, sessionId }); } finally { await closeOpenSquare(cleanup); }
   } finally {
     await square.close();
   }

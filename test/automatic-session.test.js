@@ -77,12 +77,13 @@ test('Paseo is the preferred wake route when a native session runs under Paseo',
 
 test('automatic implicit join does not re-enter a participant that has done', { concurrency: false }, async () => {
   const item = await fixture();
-  await withEnv(item.env, async (env) => {
+  await withEnv({ ...item.env, PASEO_AGENT_ID: 'agent-1' }, async (env) => {
     await automaticSessionStart('pi', 'pi-session', item.cwd, env);
     await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
     assert.equal(await automaticSessionStart('pi', 'pi-session', item.cwd, env), undefined);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done']);
+  assert.equal((await loadSquare(item.publicPath)).routes?.some((route) => route.sessionId === 'pi-session'), false);
 });
 
 test('automatic implicit join rebinds an active participant without another join', { concurrency: false }, async () => {
