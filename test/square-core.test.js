@@ -72,8 +72,10 @@ test('audience parsing keeps first-appearance spelling and case-insensitive uniq
 });
 
 test('participant names allow non-empty slash segments and reject malformed paths', () => {
-  for (const name of ['aku/riko/7a', 'Alice', '甲/乙-2']) assert.doesNotThrow(() => validateName(name));
-  for (const name of ['/aku', 'aku/', 'aku//riko', 'aku/riko!', '']) {
+  const markedAkuId = 'aku/a\u0315/1234abcd'.normalize('NFC');
+  assert.match(markedAkuId, /\p{Mark}/u);
+  for (const name of ['aku/riko/7a', 'aku/🕷️/1234abcd', 'aku/👨‍👩‍👧‍👦/1234abcd', markedAkuId, 'Alice', '甲/乙-2']) assert.doesNotThrow(() => validateName(name));
+  for (const name of ['/aku', 'aku/', 'aku//riko', 'aku/riko!', 'aku/🕷/1234abcd', 'aku/️/1234abcd', 'aku/\u200d/1234abcd', '']) {
     assert.throws(() => validateName(name), (error) => error.code === 'invalid_name');
   }
 });

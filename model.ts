@@ -197,7 +197,7 @@ export function findParticipantName(participants: string[], name: string): strin
 }
 
 export function validateName(name: string): void {
-  if (!name || !/^[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*$/u.test(name)) {
-    throw new SquareError('invalid_name', 'Invalid name: names must contain non-empty slash-separated segments using only Unicode letters, digits, hyphens, and underscores.');
+  if (!name || !/^(?:[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]|\p{RGI_Emoji})+(?:\/(?:[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]|\p{RGI_Emoji})+)*$/v.test(name)) {
+    throw new SquareError('invalid_name', 'Invalid name: names must contain non-empty slash-separated segments using Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes.');
   }
 }

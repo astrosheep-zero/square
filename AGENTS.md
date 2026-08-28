@@ -15,7 +15,7 @@ Boundaries should be light and useful:
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
 - The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
-- Participant names contain one or more slash-separated segments. Each segment is non-empty and uses only Unicode letters, digits, hyphens, and underscores. Slash expresses a structured name without changing participant identity or lifecycle semantics.
+- Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
 - If someone is speaking to a specific participant, they must mention them as `@name`.
   The speaker and mentioned participants perceive the full body; everyone else perceives only the
   speaker walking over to those participants.

@@ -132,7 +132,9 @@ test('listener facade commits only edge changes and exposes canonical listener s
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
   const alice = await square.join('Alice');
+  const emojiAkuId = 'aku/🕷️/1234abcd';
   await square.join('Bob');
+  await square.join(emojiAkuId);
 
   const first = await alice.listen('bob');
   assert.deepEqual(first.activity && { kind: first.activity.kind, actor: first.activity.actor, target: first.activity.target }, { kind: 'listen', actor: 'Alice', target: 'bob' });
@@ -141,6 +143,11 @@ test('listener facade commits only edge changes and exposes canonical listener s
   assert.deepEqual((await square.snapshot()).participants.find((participant) => participant.name === 'Alice')?.listening, ['bob']);
   assert.equal((await alice.ignore('Bob')).activity?.kind, 'ignore');
   assert.equal((await alice.ignore('Bob')).activity, null);
+  assert.deepEqual(await alice.listening(), []);
+
+  assert.equal((await alice.listen(emojiAkuId)).activity?.kind, 'listen');
+  assert.deepEqual(await alice.listening(), [emojiAkuId]);
+  assert.equal((await alice.ignore(emojiAkuId)).activity?.kind, 'ignore');
   assert.deepEqual(await alice.listening(), []);
   await square.close();
 });
