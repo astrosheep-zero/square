@@ -1,34 +1,47 @@
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapter.js';
-import { ActivityApplication } from './application.js';
+import {
+  catchUp,
+  done,
+  express,
+  hold,
+  ignore,
+  implicitJoin,
+  join,
+  listen,
+  listening,
+  resume,
+  type OperationContext,
+} from './square-actions.js';
 import { markBoundarySeen as recordBoundarySeen } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
-import { projectSessionBindings, reconcileBinding as reconcileBindingOperation } from './application.js';
+import { projectSessionBindings } from './square-projections.js';
+import { reconcileBinding as reconcileBindingOperation } from './delivery-operations.js';
 
 class ParticipantHandle implements Participant {
-  constructor(readonly name: string, private readonly square: OpenSquare, private readonly application: ActivityApplication) {}
+  constructor(readonly name: string, private readonly square: OpenSquare, private readonly context: OperationContext) {}
 
   express(body: string, options?: ExpressOptions): Promise<ExpressResult> {
-    return this.application.express({ name: this.name, body, ...(options === undefined ? {} : { options }) });
+    return express(this.context, this.name, body, options);
   }
 
   listen(target: string): Promise<ListenerChangeResult> {
-    return this.application.listen({ name: this.name, target });
+    return listen(this.context, this.name, target);
   }
 
   ignore(target: string): Promise<ListenerChangeResult> {
-    return this.application.ignore({ name: this.name, target });
+    return ignore(this.context, this.name, target);
   }
 
   listening(): Promise<readonly string[]> {
-    return this.application.listening(this.name);
+    return listening(this.context, this.name);
   }
 
   catch(options?: CatchOptions): Promise<CatchResult> {
-    return this.application.catch({ name: this.name, ...(options === undefined ? {} : { options }) });
+    return catchUp(this.context, this.name, options);
   }
 
   history(query?: HistoryQuery): Promise<PerceivedActivity[]> {
@@ -36,22 +49,22 @@ class ParticipantHandle implements Participant {
   }
 
   hold(reason?: string): Promise<ExpressResult> {
-    return this.application.hold({ name: this.name, ...(reason === undefined ? {} : { body: reason }) });
+    return hold(this.context, this.name, reason);
   }
 
   resume(): Promise<ExpressResult> {
-    return this.application.resume({ name: this.name });
+    return resume(this.context, this.name);
   }
 
   done(body?: string): Promise<ExpressResult> {
-    return this.application.done({ name: this.name, ...(body === undefined ? {} : { body }) });
+    return done(this.context, this.name, body);
   }
 }
 
 export class Square {
-  private readonly application: ActivityApplication;
+  private readonly context: OperationContext;
   private constructor(readonly location: string, private readonly square: OpenSquare) {
-    this.application = new ActivityApplication({ ...square, location });
+    this.context = { ...square, location };
   }
 
   static async at(input: SquareAtInput): Promise<Square> {
@@ -67,20 +80,20 @@ export class Square {
   }
 
   async join(name: string): Promise<Participant> {
-    const joined = await this.application.join({ name });
-    return new ParticipantHandle(joined.name, this.square, this.application);
+    const joined = await join(this.context, name);
+    return new ParticipantHandle(joined.name, this.square, this.context);
   }
 
   async joinWithActivity(name: string): Promise<{ readonly participant: Participant; readonly activity: Activity | null }> {
-    const joined = await this.application.join({ name });
-    return { participant: new ParticipantHandle(joined.name, this.square, this.application), activity: joined.activity };
+    const joined = await join(this.context, name);
+    return { participant: new ParticipantHandle(joined.name, this.square, this.context), activity: joined.activity };
   }
 
   async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
-    const joined = await this.application.implicitJoin({ name });
+    const joined = await implicitJoin(this.context, name);
     return joined.state === 'done'
       ? { state: joined.state }
-      : { state: joined.state, participant: new ParticipantHandle(joined.name, this.square, this.application) };
+      : { state: joined.state, participant: new ParticipantHandle(joined.name, this.square, this.context) };
   }
 
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
@@ -99,7 +112,7 @@ export class Square {
     })))).flat();
     if (candidates.length !== 1) return null;
     const canonicalName = await currentParticipant(this.square, candidates[0].participant);
-    return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square, this.application);
+    return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square, this.context);
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
   reconcileBinding() { return reconcileBindingOperation({ artifact: this.square.artifact, hostLedger: this.square.hostLedger!, location: this.location }); }
@@ -118,7 +131,7 @@ export async function openParticipant(
   try {
     const known = await resolveParticipant(square, name);
     return {
-      participant: new ParticipantHandle(known.name, square, new ActivityApplication(square)),
+      participant: new ParticipantHandle(known.name, square, square),
       close: () => closeOpenSquare(square),
     };
   } catch (error) {

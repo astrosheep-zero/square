@@ -172,8 +172,8 @@ test('failed presentation remains available to the next guarantee path', async (
     const ledger = new (await import('../dist/host-ledger-file-adapter.js')).FileHostLedgerPort({ userPath: path.dirname(presented), localPath: path.dirname(presented) });
     const artifact = (await import('../dist/square-file-adapter.js')).openSquare(item.squarePath, { hostLedger: ledger });
     const square = await artifact;
-    await assert.rejects(() => import('../dist/application.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => { throw new Error('inject failed'); } } })), /inject failed/);
-    assert.equal((await import('../dist/application.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => 'delivered' } }))).presented, true);
+    await assert.rejects(() => import('../dist/presentation-operations.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => { throw new Error('inject failed'); } } })), /inject failed/);
+    assert.equal((await import('../dist/presentation-operations.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => 'delivered' } }))).presented, true);
     await square.artifact.close();
   } finally {
     fs.rmSync(presented, { force: true });

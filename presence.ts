@@ -7,10 +7,10 @@ import { closeOpenSquare } from './open-square.js';
 import { resolveKnownName } from './decisions.js';
 import { recordObservation } from './runtime.js';
 import type { CatchOptions, CatchResult } from './square-facade.js';
-import { catchUp as applicationCatchUp } from './application.js';
+import { catchUp as actionCatchUp } from './square-actions.js';
 import type { CatchProjection } from './catch-decisions.js';
 
-function applicationContext(square: OpenSquare | { readonly cell: OpenSquare['artifact']; readonly clock: () => number }) {
+function operationContext(square: OpenSquare | { readonly cell: OpenSquare['artifact']; readonly clock: () => number }) {
   return 'artifact' in square
     ? { artifact: square.artifact, clock: square.clock }
     : { artifact: square.cell, clock: square.clock };
@@ -25,7 +25,7 @@ export async function catchUp(
   const project = deriveDelivery === deriveDeliveryModel
     ? undefined
     : (state: import('./model.js').SquareState): CatchProjection => deriveDelivery(state);
-  return applicationCatchUp(applicationContext(square), name, options, project);
+  return actionCatchUp(operationContext(square), name, options, project);
 }
 
 /** Commit seen only for complete, actually rendered boundary bodies. */

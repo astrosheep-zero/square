@@ -13,7 +13,8 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import { notificationDelivered, resolveParticipant } from './views.js';
-import { deliverPending, projectPresentationEvidence, sweepPending, sweepPendingFromState } from './application.js';
+import { deliverPending, sweepPending, sweepPendingFromState } from './delivery-operations.js';
+import { projectPresentationEvidence } from './square-projections.js';
 import type { WakeTransportPort, WakeOutcome, WakeRequest, PresenceChannel } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 

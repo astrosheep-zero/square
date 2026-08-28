@@ -3,7 +3,7 @@ import os from 'node:os';
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
-import { projectSessionBindings, sessionIdsFromEnvironment } from '../application.js';
+import { projectSessionBindings, sessionIdsFromEnvironment } from '../square-projections.js';
 
 export interface CommandContext {
   squarePath?: string;

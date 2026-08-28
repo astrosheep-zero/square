@@ -7,9 +7,9 @@ import { closeOpenSquare } from './open-square.js';
 import {
   projectWakeEvidenceFromState,
   wakeIsEligible,
-  type ApplicationWakeEvidence as WakeEvidence,
-  type ApplicationWakeEvidenceProjection as WakeEvidenceProjection,
-} from './application.js';
+  type WakeEvidence,
+  type WakeEvidenceProjection,
+} from './square-projections.js';
 import type { DeliveryModel } from './delivery.js';
 
 export type { WakeEvidence, WakeEvidenceProjection };
@@ -25,7 +25,7 @@ function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
   });
 }
 
-/** Adapter entry: open the artifact, assemble host ports, and ask application for projection. */
+/** Adapter entry: open the artifact, assemble host ports, and project wake evidence. */
 export async function wakeEvidenceProjection(
   squarePath: string,
   now: number,

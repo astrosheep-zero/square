@@ -4,7 +4,7 @@ import { closeOpenSquare } from './open-square.js';
 import { waitForSquareChanges } from './square-file-adapter.js';
 import path from 'node:path';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
-import { projectPresentation, projectSessionBindings } from './application.js';
+import { projectPresentation, projectSessionBindings } from './square-projections.js';
 
 function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
   const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);

@@ -2,7 +2,7 @@ import { type DirectedNotificationRoute } from './delivery.js';
 import { formatActivityId } from './square-core.js';
 import { participantIdentity } from './presentation.js';
 import { formatDuration } from './time.js';
-import type { WakeAttempt } from './application.js';
+import type { WakeAttempt } from './square-projections.js';
 import { wakeEvidence } from './wake-evidence.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';

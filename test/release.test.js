@@ -36,7 +36,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(codexPlugin.version, packageJson.version);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
-  assert.deepEqual(Object.keys(claudeHooks.hooks), ['SessionStart', 'SessionResume', 'SessionEnd', 'PostToolBatch']);
+  assert.deepEqual(Object.keys(claudeHooks.hooks), ['SessionStart', 'SessionEnd', 'PostToolBatch']);
   for (const event of Object.keys(claudeHooks.hooks)) {
     assert.equal(claudeHooks.hooks[event][0].hooks[0].command, 'square claude-hook');
   }

@@ -6,9 +6,9 @@ import { canonicalSquarePath } from './registry.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import type { HostLedgerPort } from './host-ledger.js';
-import { terminalWakeEvidence } from './application.js';
-import type { WakeAttempt as ApplicationWakeAttempt } from './application.js';
-export { hasAttemptableWakeRoute, isWakeRouteAttemptable, terminalWakeEvidence } from './application.js';
+import { terminalWakeEvidence } from './square-projections.js';
+import type { WakeAttempt as ProjectedWakeAttempt } from './square-projections.js';
+export { hasAttemptableWakeRoute, isWakeRouteAttemptable, terminalWakeEvidence } from './square-projections.js';
 
 export type WakeOutcome = 'accepted' | 'unknown' | 'failed';
 
@@ -18,8 +18,7 @@ export interface WakeAttention {
   recipient: string;
 }
 
-/** Compatibility type alias for callers migrating to application projections. */
-export type WakeAttempt = ApplicationWakeAttempt;
+export type WakeAttempt = ProjectedWakeAttempt;
 
 export interface WakeDispatchLease {
   readonly leaseId: string;

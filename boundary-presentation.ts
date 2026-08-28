@@ -1,7 +1,7 @@
 import { leaseOwnsNotification } from './delivery.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { presentPending } from './application.js';
+import { presentPending } from './presentation-operations.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { ATTENTION_BODY_MAX, renderAttentionPreview } from './attention-presentation.js';

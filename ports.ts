@@ -46,7 +46,7 @@ export interface PresentationSinkPort {
   present(activity: StoredAct): void | Promise<void>;
 }
 
-/** Stable application projection of a host binding; storage rows never cross this boundary. */
+/** Stable projection of a host binding; storage rows never cross this boundary. */
 export interface SessionBindingProjection {
   readonly location: string;
   readonly participant: string;

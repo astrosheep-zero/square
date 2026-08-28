@@ -212,8 +212,8 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
   }
 });
 
-test('package facade participant verbs persist through the shared application engine', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-api-'));
+test('package facade participant verbs persist through shared actions', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-actions-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
   const squareState = {
     hardCap: null,

@@ -7,7 +7,7 @@ import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { automaticParticipant } from './participant-identity.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
-import { projectSessionBindings } from './application.js';
+import { projectSessionBindings } from './square-projections.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 

@@ -19,7 +19,7 @@ import {
   hasAutomaticDeliveryIdentity,
 } from '../registry.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
-import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../application.js';
+import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../square-projections.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';

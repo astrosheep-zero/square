@@ -61,7 +61,7 @@ interface MemoryWaiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
-/** In-process cell for fast application tests and embedded consumers. */
+/** In-process cell for fast behavior tests and embedded consumers. */
 export function createMemoryCell(initial: SquareState): StateCell {
   let state = cloneState(initial);
   let version = 0;
@@ -210,7 +210,7 @@ export function createFileCell(squarePath: string): StateCell {
   };
 }
 
-/** Application-facing file cell factory; keeps storage choice behind this module. */
+/** Consumer-facing file cell factory; keeps storage choice behind this module. */
 export function openSquareCell(squarePath: string): StateCell {
   return createFileCell(squarePath);
 }

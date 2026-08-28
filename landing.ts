@@ -11,7 +11,7 @@ import {
   listening as applyListening,
   resume as applyResume,
   type ListenerChangeResult,
-} from './application.js';
+} from './square-actions.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 
 /** Transitional adapter for existing internal callers until they migrate to SquareArtifactPort. */

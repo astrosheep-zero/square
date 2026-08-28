@@ -1,7 +1,7 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { waitForSessionPending } from '../dist/inbox.js';
-import { projectSessionBindings } from '../dist/application.js';
+import { projectSessionBindings } from '../dist/square-projections.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
 const PI_SEND_TIMEOUT_MS = 5_000;

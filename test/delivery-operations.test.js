@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createSquareState, writeSquareFile, loadSquare } from '../dist/artifact.js';
-import { join, presentPending } from '../dist/application.js';
+import { join } from '../dist/square-actions.js';
+import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 

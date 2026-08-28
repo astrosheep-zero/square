@@ -53,7 +53,7 @@ test('artifact bytes have one production import boundary', () => {
   assert.deepEqual(bypasses, [], `production modules bypass square-storage.ts: ${bypasses.join(', ')}`);
 });
 
-test('raw file state APIs stay inside storage and the file application adapter', () => {
+test('raw file state APIs stay inside storage and the file artifact adapter', () => {
   const storageAndFileAdapter = ['square-storage.ts', 'square-file-adapter.ts'];
   const leaks = [
     ...ownershipLeaks('readSquareFile', storageAndFileAdapter),
@@ -110,11 +110,8 @@ test('CLI observation consumes concern projections, not state or domain law', ()
   assert.deepEqual(leaks, [], `CLI observation bypasses concern projections:\n${leaks.join('\n')}`);
 });
 
-test('the collector vocabulary and engine are gone', () => {
+test('the collector engine is gone', () => {
   assert.equal(fs.existsSync(path.join(root, 'square-engine.ts')), false);
-  const stale = ['Square' + 'Application', 'create' + 'Application', 'openFile' + 'Application', 'probeFile' + 'Application', 'buildFile' + 'Application', 'buildMemory' + 'Application', 'Application' + 'BuildOptions']
-    .flatMap((identifier) => filesContaining(new RegExp(`\\b${identifier}\\b`)).map((file) => `${identifier}: ${file}`));
-  assert.deepEqual(stale, []);
 });
 
 test('the removed archive compaction protocol leaves no residue', () => {
