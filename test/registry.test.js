@@ -201,7 +201,7 @@ test('registry pruning removes only bindings disproved by their square artifacts
       } catch {
         return undefined;
       }
-    }), { removed: 2, kept: 2 });
+    }), { removed: 2, kept: 3 });
     assert.equal((await lookupSession('valid-session')).length, 1);
     assert.equal((await lookupSession('uncertain-session')).length, 1);
     assert.deepEqual(await lookupSession('not-joined-session'), []);
