@@ -226,7 +226,6 @@ test('privileged hook sweep wakes a different recipient after local failure', as
     assert.equal(calls, 1);
   } finally { item.cleanup(); }
 });
-
 test('privileged hook exits before its native timeout when a wake transport hangs', async () => {
   const item = await fixture();
   const fake = nodeCommandFixture('square-slow-paseo', `
@@ -258,7 +257,6 @@ test('privileged hook exits before its native timeout when a wake transport hang
     item.cleanup();
   }
 });
-
 test('active catch owns matching attention at every adapter boundary', async () => {
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-active-catch-${Date.now()}.ndjsonl`);

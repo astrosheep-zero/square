@@ -26,7 +26,6 @@ async function openExpressFixture() {
   const square = await openSquare(location, { clock: () => now, hostLedger: ledger, env });
   return { item, location, ledger, square, setNow: (value) => { now = value; } };
 }
-
 test('callable routes are read from receiver-owned square artifact', async () => {
   const item = fixture();
   try {
@@ -100,7 +99,6 @@ test('primary route selection is independent for same participant sessions', () 
   assert.equal(one?.sessionId, 's1');
   assert.equal(two?.sessionId, 's2');
 });
-
 test('express refreshes the current caller artifact route timestamp', async () => {
   const item = await openExpressFixture();
   try {

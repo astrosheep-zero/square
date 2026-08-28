@@ -5,7 +5,6 @@ import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, DeliverPending
 import { deriveDeliveryModel } from './delivery.js';
 import { isWakeRouteAttemptable, type WakeAttempt } from './square-projections.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
-
 async function attemptWakeWithin(
   transport: WakeTransportPort,
   request: WakeRequest,

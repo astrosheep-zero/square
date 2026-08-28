@@ -218,7 +218,6 @@ export async function sweepPrivilegedPending(
     } catch { /* stale index entries are ignored by the hook */ }
   }
 }
-
 export interface SweepPendingNotificationsOptions {
   env?: NodeJS.ProcessEnv;
   now?: number;
