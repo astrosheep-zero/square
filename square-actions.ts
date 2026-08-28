@@ -172,6 +172,7 @@ export async function express(square: OperationContext, name: string, body: stri
     return { state, result: { stored } };
   });
   await ensureLocalPresence(square, name);
+  await publishIdentityRoute(square, name);
   let delivery: import('./ports.js').DeliveryResult;
   if (square.wakeTransport !== undefined && square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
     delivery = await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, activity: committed.stored.index, now }).catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }));

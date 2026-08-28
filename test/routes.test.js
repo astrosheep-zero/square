@@ -5,9 +5,27 @@ import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { writeSquareFile } from '../dist/artifact.js';
+import { openSquare } from '../dist/square-file-adapter.js';
+import { closeOpenSquare } from '../dist/open-square.js';
+import { express, join } from '../dist/square-actions.js';
 import { readWakeRoutes, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_USER: path.join(root, 'user'), SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'local') } }; }
+
+function emptyState() {
+  return { hardCap: null, preamble: [], warmup: [], acts: [], routes: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } };
+}
+
+async function openExpressFixture() {
+  const item = fixture();
+  const location = path.join(item.root, 'square.square');
+  await writeSquareFile(location, emptyState());
+  const ledger = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL });
+  let now = 100;
+  const env = { ...process.env, ...item.env, CODEX_THREAD_ID: 'alice-session', PASEO_AGENT_ID: '' };
+  const square = await openSquare(location, { clock: () => now, hostLedger: ledger, env });
+  return { item, location, ledger, square, setNow: (value) => { now = value; } };
+}
 
 test('callable routes are read from receiver-owned square artifact', async () => {
   const item = fixture();
@@ -81,4 +99,47 @@ test('primary route selection is independent for same participant sessions', () 
   const two = selectPrimaryWakeRoute({ boundary: { location: '/square', participant: 'Bob', sessionId: 's2', provider: 'codex' }, env: {}, capabilities });
   assert.equal(one?.sessionId, 's1');
   assert.equal(two?.sessionId, 's2');
+});
+
+test('express refreshes the current caller artifact route timestamp', async () => {
+  const item = await openExpressFixture();
+  try {
+    await join(item.square, 'Alice');
+    const before = (await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' }))[0];
+    assert.equal(before?.kind, 'codex-queue');
+    item.setNow(500);
+    const result = await express(item.square, 'Alice', 'fresh route', { force: true });
+    assert.equal(result.activity.actor, 'Alice');
+    const routes = await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' });
+    assert.equal(routes.length, 1);
+    assert.ok(routes[0].updatedAt >= 500);
+    assert.equal(routes[0].address.threadId, 'alice-session');
+  } finally {
+    await closeOpenSquare(item.square);
+    fs.rmSync(item.item.root, { recursive: true, force: true });
+  }
+});
+
+test('express publication failure does not affect the committed activity or delivery result', async () => {
+  const item = await openExpressFixture();
+  try {
+    await join(item.square, 'Alice');
+    const transact = item.square.artifact.transact.bind(item.square.artifact);
+    let calls = 0;
+    let failPublication = false;
+    item.square.artifact.transact = async (fn) => {
+      calls += 1;
+      if (failPublication && calls === 4) throw new Error('publication unavailable');
+      return transact(fn);
+    };
+    failPublication = true;
+    const result = await express(item.square, 'Alice', 'committed despite route failure', { force: true });
+    assert.equal(result.activity.body, 'committed despite route failure');
+    assert.deepEqual(result.delivery, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
+    const state = (await item.square.artifact.read()).state;
+    assert.equal(state.acts.at(-1).body, 'committed despite route failure');
+  } finally {
+    await closeOpenSquare(item.square);
+    fs.rmSync(item.item.root, { recursive: true, force: true });
+  }
 });
