@@ -37,8 +37,12 @@ async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-hook-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registryPath = path.join(root, 'sessions.ndjsonl');
-  const previous = process.env.SQUARE_REGISTRY;
-  process.env.SQUARE_REGISTRY = registryPath;
+  const env = {
+    ...process.env,
+    SQUARE_REGISTRY: registryPath,
+    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger-user'),
+    SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'host-ledger-local'),
+  };
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -49,16 +53,15 @@ async function fixture() {
   const runtime = { ...emptyRuntimeState(5), nextActIndex: 5 };
   const squareState = { hardCap: null, preamble: [], warmup: ['test'], acts, runtime };
   await writeSquareFile(squarePath, squareState);
-  await recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code' });
+  await recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code', env });
   return {
     squarePath,
+    env,
     runtime,
     async persist() {
       await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
     },
     cleanup() {
-      if (previous === undefined) delete process.env.SQUARE_REGISTRY;
-      else process.env.SQUARE_REGISTRY = previous;
       fs.rmSync(root, { recursive: true, force: true });
     },
   };
@@ -67,7 +70,7 @@ async function fixture() {
 test('session inbox returns only canonical pending directed notifications', async () => {
   const item = await fixture();
   try {
-    let inbox = await sessionInbox('claude-session');
+    let inbox = await sessionInbox('claude-session', item.env);
     assert.equal(inbox.length, 1);
     assert.deepEqual(
       inbox[0].notifications.map((notification) => [notification.actIndex, notification.route]),
@@ -78,7 +81,7 @@ test('session inbox returns only canonical pending directed notifications', asyn
       [formatActivityId(2)]: { state: 'seen', at: 6 },
     };
     await item.persist();
-    inbox = await sessionInbox('claude-session');
+    inbox = await sessionInbox('claude-session', item.env);
     assert.deepEqual(
       inbox[0].notifications.map((notification) => notification.actIndex),
       [3]
@@ -92,8 +95,7 @@ test('session inbox never resurrects a mention from before the recipient joined'
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-prejoin-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registryPath = path.join(root, 'sessions.ndjsonl');
-  const previous = process.env.SQUARE_REGISTRY;
-  process.env.SQUARE_REGISTRY = registryPath;
+  const env = { ...process.env, SQUARE_REGISTRY: registryPath };
   try {
     const acts = [
       { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -103,13 +105,11 @@ test('session inbox never resurrects a mention from before the recipient joined'
     ];
     const runtime = { ...emptyRuntimeState(4), nextActIndex: 4 };
     await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
-    await recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code' });
+    await recordJoin('prejoin-session', 'Bob', squarePath, { channel: 'claude-code', env });
 
-    const inbox = await sessionInbox('prejoin-session');
+    const inbox = await sessionInbox('prejoin-session', env);
     assert.deepEqual(inbox[0].notifications.map((notification) => notification.actIndex), [3]);
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_REGISTRY;
-    else process.env.SQUARE_REGISTRY = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -117,8 +117,6 @@ test('session inbox never resurrects a mention from before the recipient joined'
 test('Claude admits bounded context at an agent boundary and presents once', async () => {
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-${Date.now()}.ndjsonl`);
-  const previous = process.env.SQUARE_PRESENTED;
-  process.env.SQUARE_PRESENTED = presented;
   try {
     const inbox = [{
       name: 'Bob',
@@ -127,7 +125,8 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     }];
     const response = await claudeHookResponse(
       { session_id: 'session', hook_event_name: 'PostToolBatch' },
-      () => inbox
+      () => inbox,
+      { ...item.env, SQUARE_PRESENTED: presented }
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
@@ -135,10 +134,8 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.match(response.hookSpecificOutput.additionalContext, /✓ shown in full/);
     assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /catch --now/);
-    assert.equal(await claudeHookResponse({ session_id: 'session', hook_event_name: 'PostToolBatch' }, () => inbox), undefined);
+    assert.equal(await claudeHookResponse({ session_id: 'session', hook_event_name: 'PostToolBatch' }, () => inbox, { ...item.env, SQUARE_PRESENTED: presented }), undefined);
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_PRESENTED;
-    else process.env.SQUARE_PRESENTED = previous;
     fs.rmSync(presented, { force: true });
     item.cleanup();
   }
@@ -148,7 +145,7 @@ test('concurrent native sessions produce one presentation for their shared owner
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-concurrent-${Date.now()}.ndjsonl`);
   try {
-    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_PRESENTED: presented };
+    const env = { ...item.env, SQUARE_PRESENTED: presented };
     const results = await Promise.all([
       spawnHook('claude-session', env),
       spawnHook('claude-session', env),
@@ -190,16 +187,17 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
     await recordJoin('paseo-agent', 'Bob', item.squarePath, {
       channel: 'paseo',
       paseoAgentId: 'paseo-agent',
+      env: item.env,
     });
 
     const response = await claudeHookResponse(
       { session_id: 'nested-claude', hook_event_name: 'PostToolBatch' },
       sessionInbox,
-      { SQUARE_PRESENTED: presented, PASEO_AGENT_ID: 'paseo-agent' }
+      { ...item.env, SQUARE_PRESENTED: presented, PASEO_AGENT_ID: 'paseo-agent' }
     );
     // No membership for the nested session => nothing to present.
     assert.equal(response, undefined);
-    const bindings = await lookupParticipant(item.squarePath, 'Bob');
+    const bindings = await lookupParticipant(item.squarePath, 'Bob', Date.now(), item.env);
     assert.deepEqual(bindings.map((binding) => binding.sessionId).sort(), ['claude-session', 'paseo-agent']);
     assert.equal(bindings.find((binding) => binding.sessionId === 'paseo-agent')?.channel, 'paseo');
   } finally {
@@ -243,7 +241,7 @@ test('active catch owns matching attention at every adapter boundary', async () 
       await claudeHookResponse(
         { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
         sessionInbox,
-        { SQUARE_PRESENTED: presented }
+        { ...item.env, SQUARE_PRESENTED: presented }
       ),
       undefined
     );
@@ -270,7 +268,7 @@ test('a boundary still admits notifications excluded by an active catch filter',
     const response = await claudeHookResponse(
       { session_id: 'claude-session', hook_event_name: 'PostToolBatch' },
       sessionInbox,
-      { SQUARE_PRESENTED: presented }
+      { ...item.env, SQUARE_PRESENTED: presented }
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
