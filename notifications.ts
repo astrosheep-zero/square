@@ -24,6 +24,8 @@ export { planActNotifications, matchesMentionTarget };
 
 export { notificationMessageId } from './delivery.js';
 
+export const PRIVILEGED_HOOK_BUDGET_MS = 3000;
+
 export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
   const value = Number.parseInt(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? '5000', 10);
   if (!Number.isFinite(value) || value <= 0) {
@@ -134,11 +136,11 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
         return { outcome: 'not-capable', diagnostic: error instanceof Error ? error.message : String(error) };
       }
     },
-    attempt: async (request, _timeoutMs): Promise<WakeOutcome> => {
+    attempt: async (request, timeoutMs): Promise<WakeOutcome> => {
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => true);
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => true, timeoutMs);
         if (result.outcome === 'accepted') return { outcome: 'accepted' };
         if (result.outcome === 'failed') return { outcome: 'failed', message: result.message };
         if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };
@@ -173,8 +175,15 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   }
 }
 
-/** Privileged hook fallback: sweep indexed squares plus the current cwd's local squares. */
-export async function sweepPrivilegedPending(cwd: string, env: NodeJS.ProcessEnv = process.env, suppliedAdapters?: WakeAdapter[]): Promise<void> {
+/** Privileged hook fallback: sweep indexed squares plus the current cwd's local squares within one boundary budget. */
+export async function sweepPrivilegedPending(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  suppliedAdapters?: WakeAdapter[],
+  deadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS,
+): Promise<void> {
+  const remainingMs = () => Math.max(0, deadline - Date.now());
+  if (remainingMs() === 0) return;
   const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
   const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? root, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root, readableScopes: ['user'], writableScope: 'user' });
   let indexed: readonly import('./host-ledger.js').PresenceRecord[] = [];
@@ -185,18 +194,26 @@ export async function sweepPrivilegedPending(cwd: string, env: NodeJS.ProcessEnv
       if (entry.endsWith('.square')) paths.add(path.join(cwd, '.square', entry));
     }
   } catch { /* no local square directory */ }
+  if (remainingMs() === 0) return;
   const adapters = suppliedAdapters ?? await defaultWakeAdapters();
   for (const squarePath of paths) {
+    if (remainingMs() === 0) break;
     try {
       const square = await openSquare(squarePath, { hostLedger, env });
       try {
-        const snapshot = await square.artifact.read();
         await hostLedger.reconcileBinding({ artifact: square.artifact, scopes: ['user'], now: Date.now() }).catch(() => undefined);
+        if (remainingMs() === 0) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
         const selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
         const transport = createWakeTransport(adapters, hostLedger, Date.now);
-        for (const actIndex of selected) await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: Date.now() }).catch(() => undefined);
+        for (const actIndex of selected) {
+          const remaining = remainingMs();
+          if (remaining === 0) break;
+          const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
+          const timeoutMs = Math.max(1, Math.min(Number.isFinite(configured) && configured > 0 ? configured : 5000, remaining));
+          await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
+        }
       } finally { await closeOpenSquare(square); }
     } catch { /* stale index entries are ignored by the hook */ }
   }

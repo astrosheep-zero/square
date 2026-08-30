@@ -15,7 +15,7 @@ import { processActNotificationsOnce } from '../dist/notifications.js';
 
 const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
 
-function spawnHook(sessionId, env) {
+function spawnHook(sessionId, env, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, 'claude-hook'], {
       env: { ...process.env, ...env },
@@ -29,7 +29,7 @@ function spawnHook(sessionId, env) {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
     child.on('close', (status) => resolve({ status, stdout, stderr }));
-    child.stdin.end(JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolBatch' }));
+    child.stdin.end(JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolBatch', ...(cwd === undefined ? {} : { cwd }) }));
   });
 }
 
@@ -223,6 +223,37 @@ test('privileged hook sweep wakes a different recipient after local failure', as
     await claudeHookResponse({ session_id: 'alice-session', hook_event_name: 'PostToolBatch', cwd: path.dirname(path.dirname(item.squarePath)) }, () => [], env, [accepted]);
     assert.equal(calls, 1);
   } finally { item.cleanup(); }
+});
+
+test('privileged hook exits before its native timeout when a wake transport hangs', async () => {
+  const item = await fixture();
+  const bin = path.join(import.meta.dirname, `.square-slow-paseo-${process.pid}-${Date.now()}`);
+  try {
+    const env = {
+      ...item.env,
+      SQUARE_PASEO_BIN: bin,
+    };
+    fs.writeFileSync(bin, '#!/bin/sh\nexec /bin/sleep 10\n');
+    fs.chmodSync(bin, 0o755);
+    await recordSessionJoin('slow-paseo', 'Bob', item.squarePath, 'paseo', env);
+    await upsertWakeRoute({
+      location: item.squarePath,
+      participant: 'Bob',
+      sessionId: 'slow-paseo',
+      channel: 'paseo',
+      kind: 'paseo',
+      address: { agentId: 'slow-paseo' },
+    }, { env });
+    const startedAt = Date.now();
+    const result = await spawnHook('unrelated-session', env, item.root);
+    const elapsed = Date.now() - startedAt;
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.ok(elapsed < 4500, `native hook took ${elapsed}ms`);
+  } finally {
+    fs.rmSync(bin, { force: true });
+    item.cleanup();
+  }
 });
 
 test('active catch owns matching attention at every adapter boundary', async () => {

@@ -5,9 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
-import { processActNotificationsOnce } from '../dist/notifications.js';
+import { processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
-import { recordJoin } from '../dist/registry.js';
+import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
@@ -87,25 +87,59 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
   const registered = { location: item.squarePath, participant: 'Bob', sessionId: 'exact-agent', channel: 'paseo', kind: 'paseo', address: { agentId: 'exact-agent' }, updatedAt: Date.now() };
   let boundary = false;
   let sent;
+  const timeouts = [];
   const adapter = new PaseoAdapter({
-    discover: () => ({ agents: [
+    discover: (timeoutMs) => { timeouts.push(['discover', timeoutMs]); return { agents: [
       { id: 'decoy', name: 'Bob', status: 'idle' },
       { id: 'exact-agent', name: 'Other', status: 'idle' },
-    ] }),
-    waitForBoundary: async () => { boundary = true; return true; },
-    sendWake: (request) => { sent = request; },
+    ] }; },
+    waitForBoundary: async (_agent, timeoutMs) => { timeouts.push(['boundary', timeoutMs]); boundary = true; return true; },
+    sendWake: (request, options) => { timeouts.push(['send', options.timeoutMs]); sent = request; },
   });
   const payload = '<system-reminder source="square">awareness</system-reminder>';
-  const outcome = await adapter.dispatch(registered.address, payload, async () => true);
+  const outcome = await adapter.dispatch(registered.address, payload, async () => true, 321);
 
   assert.deepEqual(outcome, { outcome: 'accepted' });
   assert.equal(boundary, true);
   assert.equal(sent.agentId, 'exact-agent');
   assert.equal(sent.prompt, payload);
+  assert.deepEqual(timeouts.map(([phase]) => phase), ['discover', 'boundary', 'send']);
+  assert.ok(timeouts.every(([, timeoutMs]) => timeoutMs > 0 && timeoutMs <= 321));
+  assert.ok(timeouts.every(([, timeoutMs], index) => index === 0 || timeoutMs <= timeouts[index - 1][1]));
   assert.doesNotMatch(sent.prompt, /private payload/);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
   assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
   fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('privileged sweep stops at its native hook deadline', async () => {
+  const item = await fixture();
+  try {
+    await recordSessionJoin('deadline-session', 'Bob', item.squarePath, 'claude-code', item.env);
+    await upsertWakeRoute({
+      location: item.squarePath,
+      participant: 'Bob',
+      sessionId: 'deadline-session',
+      channel: 'claude-code',
+      kind: 'claude-native',
+      address: { sessionId: 'deadline-session' },
+    }, { env: item.env });
+    let timeoutMs;
+    const hanging = {
+      kind: 'claude-native',
+      dispatch(_address, _payload, _beforeSend, timeout) {
+        timeoutMs = timeout;
+        return new Promise(() => {});
+      },
+    };
+    const startedAt = Date.now();
+    await sweepPrivilegedPending(item.root, item.env, [hanging], startedAt + 150);
+    const elapsed = Date.now() - startedAt;
+    assert.ok(timeoutMs > 0 && timeoutMs <= 150, `transport timeout ${timeoutMs}`);
+    assert.ok(elapsed < 750, `privileged sweep took ${elapsed}ms`);
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
 });
 
 test('PaseoAdapter does not wake a running agent', async () => {

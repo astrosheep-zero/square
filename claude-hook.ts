@@ -2,7 +2,7 @@ import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
-import { sweepPrivilegedPending } from './notifications.js';
+import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeAdapter } from './delivery.js';
 
 export interface NativeHookInput {
@@ -38,6 +38,7 @@ export async function claudeHookResponse(
   env: NodeJS.ProcessEnv = process.env,
   deliveryAdapters?: WakeAdapter[],
 ): Promise<object | undefined> {
+  const sweepDeadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS;
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (input.hook_event_name !== 'PostToolBatch') return undefined;
   const response = await presentPendingAtBoundary(
@@ -46,7 +47,7 @@ export async function claudeHookResponse(
     lookup,
     env
   );
-  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters).catch(() => undefined);
+  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters, sweepDeadline).catch(() => undefined);
   return response;
 }
 

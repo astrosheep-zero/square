@@ -57,7 +57,10 @@ export class CodexQueueAdapter implements WakeAdapter {
     address: Readonly<Record<string, string>>,
     payload: string,
     beforeSend: () => Promise<boolean>,
+    timeoutMs = 5000,
   ): Promise<WakeDispatchResult> {
+    const deadline = Date.now() + timeoutMs;
+    const remainingMs = () => Math.max(0, deadline - Date.now());
     const threadId = address.threadId?.trim();
     if (!threadId) {
       return { outcome: 'unavailable', signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
@@ -80,8 +83,12 @@ export class CodexQueueAdapter implements WakeAdapter {
         retainRoute: true,
       };
     }
+    const remaining = remainingMs();
+    if (remaining === 0) {
+      return { outcome: 'unavailable', signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
+    }
     try {
-      (this.opts.sendQueue ?? sendCodexQueue)({ threadId, message: payload }, { env });
+      (this.opts.sendQueue ?? sendCodexQueue)({ threadId, message: payload }, { env, timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

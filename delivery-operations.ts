@@ -1,10 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { nameKey, type SquareState } from './model.js';
-import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput, ReconcileBindingInput, SquareObservation } from './ports.js';
+import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput, ReconcileBindingInput, SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { isWakeRouteAttemptable, type WakeAttempt } from './square-projections.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
+
+async function attemptWakeWithin(
+  transport: WakeTransportPort,
+  request: WakeRequest,
+  timeoutMs: number,
+): Promise<import('./ports.js').WakeOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<import('./ports.js').WakeOutcome>((resolve) => {
+    timer = setTimeout(() => resolve({ outcome: 'unknown', diagnostic: 'transport timeout' }), timeoutMs);
+  });
+  try {
+    return await Promise.race([transport.attempt(request, timeoutMs), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export async function observeSquare(input: ObserveSquareInput): Promise<SquareObservation> {
   const snapshot = await input.artifact.read();
@@ -89,7 +105,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         attempted += 1;
         const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session, at: input.now });
         if (!dispatching) { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now }); continue; }
-        try { outcome = await Promise.race([input.transport.attempt(request, leaseMs), new Promise<import('./ports.js').WakeOutcome>((resolve) => setTimeout(() => resolve({ outcome: 'unknown', diagnostic: 'transport timeout' }), leaseMs))]); }
+        try { outcome = await attemptWakeWithin(input.transport, request, leaseMs); }
         catch (error) { outcome = { outcome: 'unknown' as const, diagnostic: error instanceof Error ? error.message : String(error) }; }
         if (outcome.outcome === 'not-capable') {
           await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', now: input.now }).catch(() => undefined);

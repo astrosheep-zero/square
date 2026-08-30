@@ -3,7 +3,7 @@ import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
 import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
-import { sweepPrivilegedPending } from './notifications.js';
+import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeAdapter } from './delivery.js';
 
 export interface CodexHookInput {
@@ -24,6 +24,7 @@ export async function codexHookResponse(
   env: NodeJS.ProcessEnv = process.env,
   deliveryAdapters?: WakeAdapter[],
 ): Promise<object | undefined> {
+  const sweepDeadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS;
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (typeof input.hook_event_name !== 'string') return undefined;
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
@@ -37,7 +38,7 @@ export async function codexHookResponse(
     lookup,
     env
   );
-  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters).catch(() => undefined);
+  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters, sweepDeadline).catch(() => undefined);
   return response;
 }
 

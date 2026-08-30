@@ -45,8 +45,17 @@ export class PaseoAdapter implements WakeAdapter {
   async dispatch(
     address: Readonly<Record<string, string>>,
     payload: string,
-    beforeSend: () => Promise<boolean>
+    beforeSend: () => Promise<boolean>,
+    timeoutMs = 5000,
   ): Promise<WakeDispatchResult> {
+    const deadline = Date.now() + timeoutMs;
+    const remainingMs = () => Math.max(0, deadline - Date.now());
+    const budgetUnavailable = (): WakeDispatchResult => ({
+      outcome: 'unavailable',
+      signature: 'dispatch_budget_exhausted',
+      message: 'The wake dispatch budget elapsed before Paseo accepted the wake.',
+      retainRoute: true,
+    });
     const agentId = address.agentId?.trim();
     if (!agentId) {
       return {
@@ -58,7 +67,9 @@ export class PaseoAdapter implements WakeAdapter {
       };
     }
 
-    const discovery = (this.opts.discover ?? discoverPaseoAgents)();
+    let remaining = remainingMs();
+    if (remaining === 0) return budgetUnavailable();
+    const discovery = (this.opts.discover ?? discoverPaseoAgents)(remaining);
     if (discovery.error && discovery.agents.length === 0) {
       return {
         outcome: 'unavailable',
@@ -80,7 +91,9 @@ export class PaseoAdapter implements WakeAdapter {
       };
     }
 
-    if (!(await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent))) {
+    remaining = remainingMs();
+    if (remaining === 0) return budgetUnavailable();
+    if (!(await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent, remaining))) {
       return {
         outcome: 'unavailable',
         signature: 'boundary_unavailable',
@@ -90,9 +103,11 @@ export class PaseoAdapter implements WakeAdapter {
       };
     }
     if (!(await beforeSend())) return { outcome: 'cancelled' };
+    remaining = remainingMs();
+    if (remaining === 0) return budgetUnavailable();
 
     try {
-      (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: payload });
+      (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: payload }, { timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

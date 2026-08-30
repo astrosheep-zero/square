@@ -28,8 +28,8 @@ export function discoverPaseoAgents(timeoutMs = 5000): { agents: PaseoAgent[]; e
   }
 }
 
-export async function waitForPaseoWakeBoundary(agent: Pick<PaseoAgent, 'id' | 'status'>): Promise<boolean> {
+export async function waitForPaseoWakeBoundary(agent: Pick<PaseoAgent, 'id' | 'status'>, timeoutMs = 30_000): Promise<boolean> {
   if (agent.status === 'idle') return true;
   if (agent.status !== 'running') return false;
-  return waitForPaseoToolBoundary(agent.id);
+  return waitForPaseoToolBoundary(agent.id, { timeoutMs });
 }

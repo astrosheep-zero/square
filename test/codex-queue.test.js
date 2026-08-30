@@ -69,23 +69,25 @@ test('Codex queue adapter retains an ineligible route without sending', async ()
 test('Codex queue adapter sends only after the final boundary check', async () => {
   const item = fixture();
   const requests = [];
+  const timeouts = [];
   try {
     await recordCodexBoundary('thread-a', 'Stop', item.env);
     const result = await new CodexQueueAdapter({
       env: item.env,
-      sendQueue: (request) => { requests.push(request); },
-    }).dispatch({ threadId: 'thread-a' }, 'awareness', async () => true);
+      sendQueue: (request, options) => { requests.push(request); timeouts.push(options.timeoutMs); },
+    }).dispatch({ threadId: 'thread-a' }, 'awareness', async () => true, 321);
     assert.deepEqual(result, { outcome: 'accepted' });
     assert.deepEqual(requests, [{ threadId: 'thread-a', message: 'awareness' }]);
+    assert.ok(timeouts[0] > 0 && timeouts[0] <= 321);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
 test('Codex queue transport uses the exact CLI shape and classifies failures', () => {
-  const bin = path.join(os.tmpdir(), `square-codex-bin-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(bin, '#!/bin/sh\nprintf "%s\\n" "$@" > "$SQUARE_CODEX_ARGS"\n');
+  const bin = path.join(import.meta.dirname, `.square-codex-bin-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(bin, '#!/bin/sh\nexec /usr/bin/printf "%s\\n" "$@" > "$SQUARE_CODEX_ARGS"\n');
   fs.chmodSync(bin, 0o755);
   try {
-    const env = { SQUARE_CODEX_ARGS: `${bin}.args` };
+    const env = { ...process.env, SQUARE_CODEX_ARGS: `${bin}.args` };
     sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { bin, env });
     assert.deepEqual(fs.readFileSync(env.SQUARE_CODEX_ARGS, 'utf8').trim().split('\n'), [
       'queue', '--thread', 'thread-a', '--message', 'hello',

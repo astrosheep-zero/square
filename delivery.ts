@@ -47,6 +47,7 @@ export interface WakeAdapter {
     address: Readonly<Record<string, string>>,
     payload: string,
     beforeSend: () => Promise<boolean>,
+    timeoutMs?: number,
   ): Promise<WakeDispatchResult>;
 }
 
