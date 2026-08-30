@@ -6,9 +6,41 @@ import test from 'node:test';
 
 import { createSquareState, writeSquareFile, loadSquare } from '../dist/artifact.js';
 import { join } from '../dist/square-actions.js';
+import { deliverPending } from '../dist/delivery-operations.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/square-file-adapter.js';
+
+test('activity-scoped wake results ignore older pending attention without routes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-activity-scope-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'join', actor: 'Carol', at: 3, index: 2 },
+    { kind: 'say', actor: 'Alice', at: 4, body: 'older @Bob', index: 3 },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'current @Carol', index: 4 },
+  );
+  state.runtime.nextActIndex = 5;
+  await writeSquareFile(location, state);
+  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const square = await openSquare(location, { hostLedger: ledger });
+  try {
+    const result = await deliverPending({
+      artifact: square.artifact,
+      hostLedger: ledger,
+      transport: { attempt: async () => ({ outcome: 'accepted' }) },
+      location,
+      activity: 4,
+      now: 6,
+    });
+    assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('presentation claim is exclusive across concurrent executors', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-claim-'));

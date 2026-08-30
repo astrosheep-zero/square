@@ -57,12 +57,12 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
   let attempted = 0; let accepted = 0; let failed = 0; let unknown = 0; let notCapable = 0;
   for (const membership of observation.pending) {
     for (const notification of membership.notifications) {
-      const candidates = routes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
-      if (candidates.length === 0) { notCapable += 1; continue; }
       if (input.activity !== undefined) {
         const requested = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
         if (requested === undefined || requested !== notification.item.index) continue;
       }
+      const candidates = routes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
+      if (candidates.length === 0) { notCapable += 1; continue; }
       let acceptedForAttention = false;
       try {
         const prior = await input.hostLedger.listWakeAttempts({ attention: { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient }, now: input.now });

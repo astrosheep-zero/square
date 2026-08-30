@@ -124,7 +124,7 @@ export async function presentPendingAtBoundary<T>(
       for (const index of entry.actIndexes) {
         const key = `${entry.membership.squarePath}\u0000${entry.membership.name.toLocaleLowerCase()}\u0000${index}`;
         const prior = presentationLocks.get(key);
-        if (prior !== undefined) { await prior; continue; }
+        if (prior !== undefined) { await prior; if (!rendered) return undefined; continue; }
         const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, hostLedger: square.hostLedger, session: sessionId, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now() }).then(async (outcome) => {
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
@@ -135,6 +135,7 @@ export async function presentPendingAtBoundary<T>(
         });
         presentationLocks.set(key, work);
         try { await work; } finally { presentationLocks.delete(key); }
+        if (!rendered) return undefined;
       }
     } finally {
       if (square !== undefined) await closeOpenSquare(square);

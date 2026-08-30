@@ -100,13 +100,13 @@ test('express does not surface delivery-health diagnostics during normal use', a
     env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(acted.status, 0, acted.stderr);
-  assert.doesNotMatch(acted.stdout + acted.stderr, /delivery|receipt|harness doctor|pending/i);
+  assert.doesNotMatch(acted.stdout + acted.stderr, /delivery|receipt|harness doctor|pending|wake|not-capable/i);
 
   const diagnosed = run(withPath(file, ['harness', 'doctor', 'delivery']), {
     env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(diagnosed.status, 0, diagnosed.stderr);
-  assert.match(diagnosed.stdout, /unreachable: 1/);
+  assert.match(diagnosed.stdout, /awaiting: 1/);
 });
 
 test('catch --mention renders matching says and suppresses room changes', async () => {

@@ -141,7 +141,7 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
   }
 });
 
-test('concurrent native sessions produce one presentation for their shared owner', async () => {
+test('concurrent native sessions present each activity once for their shared owner', async () => {
   const item = await fixture();
   const presented = path.join(os.tmpdir(), `square-presented-concurrent-${Date.now()}.ndjsonl`);
   try {
@@ -151,8 +151,9 @@ test('concurrent native sessions produce one presentation for their shared owner
       spawnHook('claude-session', env),
     ]);
     assert.deepEqual(results.map((result) => result.status), [0, 0]);
-    assert.equal(results.filter((result) => result.stdout.includes('PostToolBatch')).length, 1);
-    assert.equal(results.filter((result) => result.stdout === '').length, 1);
+    const contexts = results.flatMap((result) => result.stdout === '' ? [] : [JSON.parse(result.stdout).hookSpecificOutput.additionalContext]);
+    assert.equal(contexts.reduce((count, context) => count + (context.match(/#act\/2/g)?.length ?? 0), 0), 1);
+    assert.equal(contexts.reduce((count, context) => count + (context.match(/#act\/3/g)?.length ?? 0), 0), 1);
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();

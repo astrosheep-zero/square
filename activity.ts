@@ -105,12 +105,11 @@ export async function cmdActivity(
       const pendingPublic = before.pendingPublic;
       const pendingRoomChanges = before.pendingRoomChanges;
       try {
-        const result = await participant.express(body, {
+        await participant.express(body, {
           force,
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
-        if (result.delivery?.notCapable) process.stderr.write(`! wake not-capable: ${result.delivery.notCapable}\n`);
         const freshSquare = await openSquare(squarePath, { clock: nowMs });
         const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;
