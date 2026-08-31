@@ -46,7 +46,7 @@ async function fixture() {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
     { kind: 'say', actor: 'Alice', at: 4, body: 'attention', reach: 'bell', index: 3 },
     { kind: 'say', actor: 'Alice', at: 5, body: 'ambient', index: 4 },
   ];
@@ -99,9 +99,9 @@ test('session inbox never resurrects a mention from before the recipient joined'
   try {
     const acts = [
       { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'join us @Bob', index: 1 },
+      { kind: 'say', actor: 'Alice', at: 2, body: 'join us @Bob', mentions: ['Bob'], index: 1 },
       { kind: 'join', actor: 'Bob', at: 3, index: 2 },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'welcome @Bob', index: 3 },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'welcome @Bob', mentions: ['Bob'], index: 3 },
     ];
     const runtime = { ...emptyRuntimeState(4), nextActIndex: 4 };
     await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });

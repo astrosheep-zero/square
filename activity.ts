@@ -27,6 +27,7 @@ export interface ActivityOptions {
   force?: boolean;
   forceCommand: string;
   noWait?: boolean;
+  mentions?: readonly string[];
   reach?: import('./model.js').Reach;
   reply?: number;
 }
@@ -107,6 +108,7 @@ export async function cmdActivity(
       try {
         await participant.express(body, {
           force,
+          ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
         });
@@ -165,7 +167,7 @@ export async function cmdActivity(
           const delayMs = error.facts?.retryAfterMs ?? SLEEP_MS;
         if (noWait) {
           const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs, draftPath, participantCount: headerCount, held }));
+          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
           process.exit(1);
         }
         if (announcedWait !== 'throttled') {
@@ -179,7 +181,7 @@ export async function cmdActivity(
           const holdReason = fresh.holdReason;
         if (noWait) {
           const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held }));
+          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
           process.exit(1);
         }
         if (announcedWait !== 'held') {

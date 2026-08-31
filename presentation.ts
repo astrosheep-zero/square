@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, type Perception } from './square-core.js';
+import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
 import { perceiveActivity } from './delivery.js';
 import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
@@ -44,6 +44,7 @@ interface ExpressWaitingOptions {
 
 interface ExpressNoWaitOptions extends ParticipantOutputOptions {
   reason: 'throttled' | 'held';
+  forceCommand: string;
   delayMs?: number;
   holdReason?: string;
   draftPath?: string;
@@ -246,21 +247,30 @@ function renderPresenceOnlySay(
   if (targets.length === 0) {
     return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}`;
   }
-  const dest = ` ${targets.map((name) => participantIdentity(name)).join(' and ')}`;
+  const visibleTargets = targets.slice(0, MAX_IDENTITY_SET_SIZE).map((name) => participantIdentity(name));
+  const remainingTargets = targets.length - visibleTargets.length;
+  const dest = ` ${[
+    ...visibleTargets,
+    ...(remainingTargets === 0 ? [] : [`${remainingTargets} ${remainingTargets === 1 ? 'other' : 'others'}`]),
+  ].join(' and ')}`;
   return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
 }
 
 export function renderAmbientEvent(
   event: StoredAct,
   viewer: string,
-  opts: { now?: number; preview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
+  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
 ): string {
   if (event.kind !== 'say') return renderEventCli(event, opts);
   if (opts.perception === undefined && opts.squareState === undefined) {
     throw new Error('Ambient say rendering requires a settled perception or SquareState');
   }
   const seen = opts.perception ?? perceiveActivity(opts.squareState!, event, viewer);
-  if (seen === 'presence') return renderPresenceOnlySay(event, opts);
+  if (seen === 'presence') {
+    const presence = renderPresenceOnlySay(event, opts);
+    const body = opts.presencePreview === undefined ? '' : renderedBody(event.body, opts.presencePreview);
+    return `${presence}${bodySuffix(body)}`;
+  }
   return renderEventCli(event, opts);
 }
 
@@ -273,8 +283,10 @@ function withDraftInput(command: string, draftPath: string | undefined): string 
 }
 
 function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[]; roomChanges: RoomChangeAct[]; viewer: string }): string[] {
+  const visibleSummaries = opts.activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
+  const remainingSummaries = opts.activitySummaries.length - visibleSummaries.length;
   return [
-    ...opts.activitySummaries.flatMap((item) => [
+    ...visibleSummaries.flatMap((item) => [
       ...item.previews.slice(-1).map((preview) => {
         const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number, perception: preview.perception });
         if (rendered === '') return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
@@ -284,6 +296,7 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
         return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
       }),
     ]),
+    ...(remainingSummaries === 0 ? [] : [`  · ${remainingSummaries} more participants have unread activity`]),
     ...opts.roomChanges.map((act) => `  · ${renderRoomChangeText(act)}`),
   ];
 }
@@ -336,7 +349,7 @@ export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
 }
 
 export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
-  const retryCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} express -`;
+  const retryCommand = opts.forceCommand;
   const lines =
     opts.reason === 'throttled'
       ? [
@@ -376,8 +389,11 @@ function lastPresenceAnchor(squareState: SquareState, name: string): number {
 }
 
 export function renderPresenceAnchor(names: readonly string[]): string {
-  const participants = names.map((name) => participantIdentity(name)).join(', ');
-  return names.length === 1 ? `→ ${participants} was here` : `→ ${participants} were here`;
+  const visibleNames = names.slice(0, MAX_IDENTITY_SET_SIZE);
+  const participants = visibleNames.map((name) => participantIdentity(name)).join(', ');
+  const remaining = names.length - visibleNames.length;
+  const suffix = remaining === 0 ? '' : ` and ${remaining} more`;
+  return names.length === 1 ? `→ ${participants} was here` : `→ ${participants}${suffix} were here`;
 }
 
 export function renderActivitiesView(
@@ -498,11 +514,20 @@ export function renderActivityLimit(opts: ActivityLimitOptions): string {
 }
 
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
-  return ['✕ you are already catching', `» ${participantCommandPrefix(opts.squarePath, opts.name)} catch --idle 30m --replace`].join('\n');
+  return [
+    '✕ you are already catching',
+    `  · an active catch is already running for ${participantIdentity(opts.name)}`,
+    '  · wait for it to finish before starting another catch',
+    `» ${commandPrefix(opts.squarePath)} participants`,
+  ].join('\n');
 }
 
 export function renderWatchForceTakeover(_opts: ParticipantOutputOptions): string {
   return '✓ your new catch takes over';
+}
+
+export function renderWatchReplaceMissing(_opts: ParticipantOutputOptions): string {
+  return '⚠ nothing to replace — no active catch was running; your catch started normally';
 }
 
 export function renderWatchReplaced(_opts: ParticipantOutputOptions): string {

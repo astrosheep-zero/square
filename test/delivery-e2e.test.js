@@ -185,7 +185,7 @@ function callCount(file) {
 test('artifact roundtrip derives only directed pending attention', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'please review @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'please review @Bob'], 30);
 
     const pending = deriveDeliveryModel(await loadSquare(item.squarePath)).pendingFor('Bob');
     assert.equal(pending.length, 1);
@@ -198,7 +198,7 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
   const item = workshop();
   try {
     const body = `@Bob ${'x'.repeat(400)}`;
-    item.cli('Alice', ['express', '--force', body], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', body], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item, 'bob-owner', 'bob-native');
     let payload;
@@ -240,7 +240,7 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
 test('a native boundary marks a fully presented body seen', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'short attention @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'short attention @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item, 'bob-owner', 'bob-native');
 
@@ -266,7 +266,7 @@ test('a native boundary marks a fully presented body seen', async () => {
 test('catch is the durable acknowledgement that closes pending attention for later workers', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'please catch @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'please catch @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item);
     await markPresentedEvidence(item, 'bob-session', act);
@@ -289,7 +289,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
 test('wake acceptance is durable and at most once across worker processes', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'wake once @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'wake once @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
@@ -312,7 +312,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
 test('an accepted native wake does not write presented evidence or suppress the boundary', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'native wake preview @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'native wake preview @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item);
     let payload;
@@ -348,7 +348,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
 test('a current owner notified observation suppresses another wake', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'notify current owner @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'notify current owner @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item, 'current-owner', 'current-session');
     const adapter = acceptedAdapter();
@@ -368,7 +368,7 @@ test('a current owner notified observation suppresses another wake', async () =>
 test('a crash after send records unknown and blocks blind retry', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'crash window @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'crash window @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
@@ -409,13 +409,13 @@ test('presentation does not suppress wake before worker start or at the final pr
   const item = workshop();
   try {
     await registerRoute(item);
-    item.cli('Alice', ['express', '--force', 'already visible @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'already visible @Bob'], 30);
     const visible = (await loadSquare(item.squarePath)).acts.at(-1);
     await markPresentedEvidence(item, 'bob-session', visible);
     const first = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, visible.index, { env: item.env, adapters: [first] }));
 
-    item.cli('Alice', ['express', '--force', 'race boundary @Bob'], 40);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'race boundary @Bob'], 40);
     const racing = (await loadSquare(item.squarePath)).acts.at(-1);
     const second = acceptedAdapter(() => markPresentedEvidence(item, 'bob-session', racing));
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, racing.index, { env: item.env, adapters: [second] }));
@@ -431,7 +431,7 @@ test('presentation does not suppress wake before worker start or at the final pr
 test('presented evidence is scoped to the current participant owner', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'new owner must see this @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'new owner must see this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     await registerRoute(item, 'old-owner', 'old-session');
     await markPresentedEvidence(item, 'old-session', act);
@@ -462,7 +462,7 @@ test('presented evidence is scoped to the current participant owner', async () =
 test('new route evidence lets the bounded sweep recover old failed attention', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'recover this @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'recover this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     const firstAttemptAt = Date.now() - 2_000;
     await registerRoute(item, 'bob-owner', 'bob-session', firstAttemptAt - 1_000);
@@ -509,7 +509,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
 test('worker, sweep, and doctor derive the same wake eligibility without diagnostic writes', async () => {
   const item = workshop();
   try {
-    item.cli('Alice', ['express', '--force', 'shared evidence @Bob'], 30);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'shared evidence @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
     const now = Date.now();
     await registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
@@ -567,14 +567,14 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     await registerRoute(item, 'bob-owner', 'bob-session', now - 100);
 
     item.cli('Carol', ['join'], now - 90);
-    item.cli('Alice', ['express', '--force', 'terminal attempt @Bob'], now - 80_000);
-    item.cli('Alice', ['express', '--force', 'eligible first @Bob'], now - 70_000);
-    item.cli('Alice', ['express', '--force', 'already notified @Bob'], now - 60_000);
-    item.cli('Alice', ['express', '--force', 'already presented @Carol'], now - 50_000);
-    item.cli('Alice', ['express', '--force', 'failed route @Bob'], now - 40_000);
-    item.cli('Alice', ['express', '--force', 'eligible later @Bob'], now - 30_000);
-    item.cli('Alice', ['express', '--force', 'one activity two recipients @Bob @Carol'], now - 20_000);
-    item.cli('Alice', ['express', '--force', 'inside grace @Bob'], now - wakeGraceMs(item.env));
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'terminal attempt @Bob'], now - 80_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'eligible first @Bob'], now - 70_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'already notified @Bob'], now - 60_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Carol', 'already presented @Carol'], now - 50_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'failed route @Bob'], now - 40_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'eligible later @Bob'], now - 30_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', '--mention', 'Carol', 'one activity two recipients @Bob @Carol'], now - 20_000);
+    item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'inside grace @Bob'], now - wakeGraceMs(item.env));
 
     const acts = (await loadSquare(item.squarePath)).acts.filter((act) => act.kind === 'say');
     const byBody = new Map(acts.map((act) => [act.body, act]));

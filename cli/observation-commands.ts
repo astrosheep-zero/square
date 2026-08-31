@@ -6,7 +6,6 @@ import { cmdListSquares } from '../list.js';
 import { parseActivityId, type ActivitiesOptions, type StoredAct, type WatchOptions, sameName } from '../model.js';
 import {
   commandPrefix,
-  participantCommandPrefix,
   participantIdentity,
   renderGrepActivitiesView,
   renderEventCli,
@@ -27,6 +26,7 @@ import {
   type CommandContext,
   type CommandSpec,
   fail,
+  parseBoundedLimit,
   parseDurationMs,
   parseNameList,
   parseNonNegativeInteger,
@@ -38,6 +38,10 @@ import {
 } from './context.js';
 
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
+const HISTORY_DEFAULT_LIMIT = 10;
+const HISTORY_MAX_LIMIT = 100;
+const PARTICIPANTS_DEFAULT_LIMIT = 20;
+const PARTICIPANTS_MAX_LIMIT = 100;
 
 interface HistoryCommandOptions extends ActivitiesOptions {
   noTruncate: boolean;
@@ -149,8 +153,7 @@ function historyContinuationArgs(argv: string[]): string[] {
 
 function parseHistory(argv: string[], context: CommandContext): HistoryCommandOptions {
   const squarePath = requireSquarePath(context);
-  const viewer = context.name;
-  let lastN: number | null = 10;
+  let lastN: number | null = HISTORY_DEFAULT_LIMIT;
   let lastNExplicit = false;
   let after: number | undefined;
   let afterIndex: number | undefined;
@@ -159,7 +162,6 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   let beforeContext: number | undefined;
   let afterContext: number | undefined;
   let mention: string | undefined;
-  let pending = false;
   let noTruncate = false;
   let grep: string | undefined;
   let fixed: string | undefined;
@@ -170,13 +172,12 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
     if (flag === '--limit') {
-      const value = argv[index + 1];
-      const retry = `${commandPrefix(squarePath)} history --limit 30`;
-      if (value === undefined || value.startsWith('--')) fail(`✕ --limit needs a positive number\n» ${retry}`);
-      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
-        fail(`✕ --limit needs a positive number\n» ${retry}`);
-      }
-      lastN = Number(value);
+      lastN = parseBoundedLimit(
+        argv[index + 1],
+        '--limit',
+        HISTORY_MAX_LIMIT,
+        `${commandPrefix(squarePath)} history --limit ${HISTORY_MAX_LIMIT}`,
+      );
       lastNExplicit = true;
       index += 1;
     } else if (flag === '--from') {
@@ -211,7 +212,7 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
     else if (flag === '--mention') {
       mention = requireValue(argv, index, flag);
       index += 1;
-    } else if (flag === '--pending') pending = true;
+    }
     else if (flag === '--grep') {
       grep = requireValue(argv, index, flag);
       index += 1;
@@ -229,11 +230,10 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
     } else if (flag === '--json') json = true;
     else fail(`✕ history does not know ${flag}\n» square history --help`);
   }
-  if (pending && !viewer) fail('--pending requires --as <name>.');
   if (grep !== undefined && fixed !== undefined) fail('--grep and --fixed cannot be combined.');
   if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
   if (beforeIndex !== undefined && afterIndex !== undefined) fail('--before and --after cannot be combined.');
-  if (!lastNExplicit && (atIndexes.length > 0 || pending)) lastN = null;
+  if (!lastNExplicit && atIndexes.length > 0) lastN = null;
   return {
     lastN,
     participants,
@@ -244,8 +244,6 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
     beforeContext,
     afterContext,
     mention,
-    pending,
-    viewer,
     noTruncate,
     grep,
     fixed,
@@ -257,12 +255,16 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
 }
 
 function historyContinuationCommand(options: HistoryCommandOptions, squarePath: string, direction: '--before' | '--after', index: number): string {
-  const prefix = options.viewer === undefined ? commandPrefix(squarePath) : participantCommandPrefix(squarePath, options.viewer);
-  const args = [...(options.continuationArgs ?? []), direction, actId(index), '--limit', String(options.lastN ?? 10)];
-  return `${prefix} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
+  const args = [...(options.continuationArgs ?? []), direction, actId(index), '--limit', String(options.lastN ?? HISTORY_DEFAULT_LIMIT)];
+  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
 }
 
-function renderFields(sayNumbers: Readonly<Record<number, number>>, item: StoredAct, fields: string[], perception?: 'full' | 'presence'): string {
+function boundedHistoryCommand(options: HistoryCommandOptions, squarePath: string): string {
+  const args = [...(options.continuationArgs ?? []), '--limit', String(HISTORY_MAX_LIMIT)];
+  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
+}
+
+function renderFields(sayNumbers: Readonly<Record<number, number>>, item: StoredAct, fields: string[]): string {
   return fields.map((field) => {
     switch (field) {
       case 'id': return actId(item.index);
@@ -271,7 +273,7 @@ function renderFields(sayNumbers: Readonly<Record<number, number>>, item: Stored
       case 'ts':
       case 'at': return formatTimestamp(item.at);
       case 'kind': return item.kind;
-      case 'body': return perception === 'presence' ? '' : 'body' in item && typeof item.body === 'string' ? item.body.replace(/\s+/g, ' ').trim() : '';
+      case 'body': return 'body' in item && typeof item.body === 'string' ? item.body.replace(/\s+/g, ' ').trim() : '';
       case 'number': return item.kind === 'say' ? String(sayNumbers[item.index]) : '';
       case 'reply': return item.kind === 'say' && item.reply !== undefined ? actId(item.reply) : '';
       default: return '';
@@ -279,7 +281,7 @@ function renderFields(sayNumbers: Readonly<Record<number, number>>, item: Stored
   }).join('\t');
 }
 
-function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: StoredAct, perception?: 'full' | 'presence'): string {
+function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: StoredAct): string {
   const act = item;
   return JSON.stringify({
     id: actId(item.index),
@@ -288,8 +290,9 @@ function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: StoredAct,
     author: act.actor ?? null,
     at: act.at,
     ts: formatTimestamp(act.at),
-    body: perception === 'presence' ? '' : 'body' in act && typeof act.body === 'string' ? act.body : '',
+    body: 'body' in act && typeof act.body === 'string' ? act.body : '',
     number: act.kind === 'say' ? sayNumbers[act.index] : null,
+    mentions: act.kind === 'say' ? [...(act.mentions ?? [])] : [],
     reach: act.kind === 'say' ? act.reach ?? null : null,
     reply: act.kind === 'say' && act.reply !== undefined ? actId(act.reply) : null,
   });
@@ -300,29 +303,22 @@ function renderHistoryProjection(
   visible: HistoryPresentation['activities'],
   noTruncate: boolean,
   squarePath: string,
-  viewer: string,
-  mode: 'ambient' | 'archive',
 ): string {
   const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done');
-  const preview = noTruncate ? undefined : 200;
+  const preview = noTruncate || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
   for (const activity of shown) {
     const options = {
       preview,
       actNumber: activity.kind === 'say' ? projection.sayNumbers[activity.index] : undefined,
-      perception: activity.perception,
     };
-    const rendered = mode === 'archive'
-      ? renderEventCli(activity, options)
-      : renderAmbientEvent(activity, viewer, options);
+    const rendered = renderEventCli(activity, options);
     if (rendered !== '') chunks.push(rendered);
     const participants = projection.presenceAnchors[activity.index];
     if (participants !== undefined) chunks.push(renderPresenceAnchor(participants));
   }
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
-  if (preview !== undefined && shown.some((activity) =>
-    activity.kind === 'say' && activity.body.length > preview && (mode === 'archive' || activity.perception === 'full')
-  )) {
+  if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
     chunks.push(`» ${commandPrefix(squarePath)} history --no-truncate`);
   }
   return chunks.join('\n\n');
@@ -338,6 +334,9 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       // then --order only changes how the selected page is displayed.
       const projection = await historyPresentation(square, { ...options, order: 'asc' });
       let events = [...projection.activities];
+      if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
+        fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n» ${boundedHistoryCommand(options, squarePath)}`);
+      }
       const searching = options.grep !== undefined || options.fixed !== undefined;
       const totalMatches = searching ? events.length : 0;
       if (options.lastN != null) {
@@ -346,16 +345,14 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
           : events.slice(-options.lastN);
       }
       if (options.order === 'desc') events.reverse();
-      if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item, item.perception)).join('\n') + (events.length > 0 ? '\n' : '');
+      if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item)).join('\n') + (events.length > 0 ? '\n' : '');
       if (options.format !== undefined && options.format.length > 0) {
-        return events.map((item) => renderFields(projection.sayNumbers, item, options.format!, item.perception)).join('\n') + (events.length > 0 ? '\n' : '');
+        return events.map((item) => renderFields(projection.sayNumbers, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
       }
       const pattern = options.grep ?? options.fixed;
-      const anonymous = options.viewer === undefined;
-      const archive = anonymous;
       const output = pattern === undefined || pattern === ''
-        ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath, options.viewer ?? '', archive ? 'archive' : 'ambient')
-        : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, (item) => projection.activities.find((candidate) => candidate.index === item.index)?.perception ?? 'full');
+        ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath)
+        : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
       const publicEvents = events.filter((item) => item.kind === 'say' || item.kind === 'done');
       const allPublic = projection.activities.filter((item) => item.kind === 'say' || item.kind === 'done');
       const pageMin = publicEvents.length === 0 ? undefined : Math.min(...publicEvents.map((item) => item.index));
@@ -376,24 +373,53 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-export const participantsCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  async execute(_intent, context) {
+interface ParticipantsCommandOptions { limit: number; }
+
+function participantsLimitCommand(squarePath: string, limit: number): string {
+  return `${commandPrefix(squarePath)} participants --limit ${limit}`;
+}
+
+function parseParticipants(argv: string[], context: CommandContext): ParticipantsCommandOptions {
+  let limit = PARTICIPANTS_DEFAULT_LIMIT;
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== '--limit') usage(context.command);
+    limit = parseBoundedLimit(
+      argv[index + 1],
+      '--limit',
+      PARTICIPANTS_MAX_LIMIT,
+      participantsLimitCommand(requireSquarePath(context), PARTICIPANTS_MAX_LIMIT),
+    );
+    index += 1;
+  }
+  return { limit };
+}
+
+export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string> = {
+  parse(argv, context) { return parseParticipants(argv, context); },
+  async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const square = await openSquare(squarePath, { clock: nowMs });
     try {
       const now = nowMs();
       const participants = await participantsPresentation(square);
-      const lines = participants.map((participant) => {
+      const lines = participants.slice(0, intent.limit).map((participant) => {
         const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
         const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
         const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-        return `  ${glyph} ${participantIdentity(participant.name)} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
+        return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
       });
       const participantCount = participants.filter(
         (participant) => participant.state === 'active'
       ).length;
-      return withPathOutput(squarePath, ['participants', ...lines].join('\n'), {
+      const tail = participants.length <= intent.limit
+        ? []
+        : [
+            `  ○ ${lines.length} of ${participants.length} participants shown`,
+            ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
+              `» ${participantsLimitCommand(squarePath, participants.length)}`,
+            ] : []),
+          ];
+      return withPathOutput(squarePath, ['participants', ...lines, ...tail].join('\n'), {
         participantCount,
       });
     } finally {
@@ -438,7 +464,9 @@ export const statusCommand: CommandSpec<undefined, string> = {
     });
     if (active.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
       people.push(`  ○ … ${active.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more participants`);
-      people.push(`» ${commandPrefix(squarePath)} participants`);
+      people.push(`» ${result.participants.length <= PARTICIPANTS_MAX_LIMIT
+        ? participantsLimitCommand(squarePath, result.participants.length)
+        : `${commandPrefix(squarePath)} participants`}`);
     }
     const cap = result.hardCap === null ? 'unlimited' : String(result.hardCap);
     const hold = result.holdActive
@@ -460,8 +488,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
         : '  · latest activity is private to another participant']
       : [`  ${visible.replace(/\n/g, '\n  ')}`];
     if (visible.includes('more chars') && result.latestAct !== undefined) {
-      const prefix = context.name === undefined ? commandPrefix(squarePath) : participantCommandPrefix(squarePath, context.name);
-      latest.push(`» ${prefix} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
+      latest.push(`» ${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }
     const output = [
       `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,

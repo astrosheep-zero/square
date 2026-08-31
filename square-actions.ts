@@ -1,4 +1,4 @@
-import { extractMentions, formatActivityId, parseActivityId, type Act } from './square-core.js';
+import { formatActivityId, parseActivityId, type Act } from './square-core.js';
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
 import { SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
@@ -58,7 +58,7 @@ function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): Per
   if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);
   const result = {
     id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor,
-    mentions: activity.kind === 'say' ? extractMentions(activity.body) : [],
+    mentions: activity.kind === 'say' ? activity.mentions ?? [] : [],
     ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}),
     ...('target' in activity ? { target: activity.target } : {}),
     ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}),
@@ -115,7 +115,7 @@ function exposeActivity(stored: StoredAct): Activity {
   return {
     id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
-    mentions: stored.kind === 'say' ? extractMentions(stored.body) : [],
+    mentions: stored.kind === 'say' ? stored.mentions ?? [] : [],
     ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
   };
@@ -156,7 +156,7 @@ export async function express(square: OperationContext, name: string, body: stri
   const now = square.clock();
   const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
   const committed = await square.artifact.transact((state) => {
-    const decision = decideAct(state, { name, body, force: options.force ?? false, now, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
+    const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
     if (decision.type === 'blocked') {
       const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
       throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });

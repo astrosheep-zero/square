@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deliveryDelta } from '../dist/activity-feed.js';
+import { decideCatch } from '../dist/catch-decisions.js';
 import { coreActivities, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
 import { done, express, ignore, join, listen, listening } from '../dist/landing.js';
 import { createMemoryCell } from '../dist/square-storage.js';
@@ -29,21 +30,23 @@ test('joining contributes one canonical lifecycle activity for an unknown partic
   assert.equal(result.joinAct.actor, 'Alice');
 });
 
-test('pending activities begin after the recipient joined and include directed mentions', () => {
-  const squareState = makeState({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1, body: '' },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'too early @Bob' },
-      { kind: 'join', actor: 'Bob', at: 3, body: '' },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'live @Bob' },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'also @Bob' },
-    ],
-  });
+test('unknown participant errors identify only the requested name', () => {
+  const squareState = makeState({ acts: [{ kind: 'join', actor: 'Alice', at: 1, body: '' }] });
+  const unknown = 'Eve';
+  const cases = [
+    () => coreActivities(squareState, { participants: [unknown] }),
+    () => decideAct(squareState, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] }),
+    () => decideCatch(squareState, unknown, {}, 2),
+  ];
 
-  assert.deepEqual(
-    coreActivities(squareState, { pending: true, viewer: 'Bob' }).map((item) => item.index),
-    [3, 4]
-  );
+  for (const attempt of cases) {
+    assert.throws(attempt, (error) => {
+      assert.match(error.message, /Unknown (?:participant|mention target)/);
+      assert.match(error.message, /@Eve/);
+      assert.doesNotMatch(error.message, /Expected one of|@Alice/);
+      return true;
+    });
+  }
 });
 
 test('mention history selects historical direct attention for the addressed participant', () => {
@@ -52,7 +55,7 @@ test('mention history selects historical direct attention for the addressed part
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
       { kind: 'join', actor: 'Cara', at: 3, body: '' },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'private @Bob' },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'private @Bob', mentions: ['Bob'] },
       { kind: 'listen', actor: 'Cara', target: 'Alice', at: 5 },
       { kind: 'say', actor: 'Alice', at: 6, body: 'listener attention' },
       { kind: 'ignore', actor: 'Cara', target: 'Alice', at: 7 },
@@ -69,7 +72,7 @@ test('directed pending attention survives observations of later activity', () =>
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'pending @Bob' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'pending @Bob', mentions: ['Bob'] },
       { kind: 'say', actor: 'Bob', at: 4, body: 'self activity' },
     ],
   });
@@ -98,7 +101,7 @@ test('landings advance the actor cursor and never reuse an index', async () => {
   const cell = createMemoryCell(makeState());
   const square = { cell, clock: () => (now += 1), location: 'memory' };
   await join(square, 'Alice');
-  await express(square, 'Alice', 'hello @Alice', { force: true });
+  await express(square, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
   await done(square, 'Alice', 'bye');
 
   const stored = (await cell.read()).state;
@@ -171,6 +174,35 @@ test('listener decisions are idempotent and preserve active target spelling orde
   });
 });
 
+test('mention and listening caps reject without enumerating the roster', () => {
+  const targets = Array.from({ length: 11 }, (_value, index) => `Target${index}`);
+  const mentionsState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1 },
+      ...targets.map((actor, index) => ({ kind: 'join', actor, at: index + 2 })),
+    ],
+  });
+  assert.throws(
+    () => decideAct(mentionsState, { name: 'Alice', body: 'too many mentions', force: true, now: 20, mentions: targets }),
+    (error) => error.code === 'invalid_args'
+      && error.message === 'An activity can mention at most 10 participants'
+      && !error.message.includes(targets[0])
+  );
+
+  const listeningState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Caller', at: 1 },
+      ...targets.slice(0, 10).map((target, index) => ({ kind: 'listen', actor: 'Caller', target, at: index + 2 })),
+    ],
+  });
+  assert.throws(
+    () => coreListen(listeningState, 'Caller', targets[10], 20),
+    (error) => error.code === 'invalid_args'
+      && error.message === 'A participant can listen to at most 10 others'
+      && !error.message.includes(targets[0])
+  );
+});
+
 test('listener landings append only real edge changes', async () => {
   let now = 10;
   const cell = createMemoryCell(makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
@@ -204,7 +236,7 @@ test('activity history after a timestamp excludes older public activity', () => 
     acts: [
       { kind: 'join', actor: 'Alice', at: 1000, body: '' },
       { kind: 'join', actor: 'Bob', at: 2000, body: '' },
-      { kind: 'say', actor: 'Bob', at: 3000, body: 'hello @Alice' },
+      { kind: 'say', actor: 'Bob', at: 3000, body: 'hello @Alice', mentions: ['Alice'] },
       { kind: 'done', actor: 'Bob', at: 4000, body: 'bye' },
     ],
   });
@@ -220,8 +252,8 @@ test('activity history at indexes unions their context windows', () => {
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'first @Bob' },
-      { kind: 'say', actor: 'Bob', at: 4, body: 'second @Alice' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'first @Bob', mentions: ['Bob'] },
+      { kind: 'say', actor: 'Bob', at: 4, body: 'second @Alice', mentions: ['Alice'] },
     ],
   });
 
@@ -236,8 +268,8 @@ test('activity history grep searches ids, participant names, and bodies', () => 
     acts: [
       { kind: 'join', actor: 'Alice', at: 1, body: '' },
       { kind: 'join', actor: 'Bob', at: 2, body: '' },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'first inventory @Bob' },
-      { kind: 'say', actor: 'Bob', at: 4, body: 'facts only @Alice' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'first inventory @Bob', mentions: ['Bob'] },
+      { kind: 'say', actor: 'Bob', at: 4, body: 'facts only @Alice', mentions: ['Alice'] },
     ],
   });
 

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Square, SquareError } from '../dist/index.js';
 import { recordJoin } from '../dist/registry.js';
 
-test('fixed facade builds, opens, and exposes participant-scoped activity', async () => {
+test('fixed facade builds, opens, and exposes participant activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const square = await Square.build({
@@ -17,9 +17,9 @@ test('fixed facade builds, opens, and exposes participant-scoped activity', asyn
   });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  const expressed = await alice.express('hello @Bob', { force: true });
+  const expressed = await alice.express('hello @Bob', { force: true, mentions: ['Bob'] });
   assert.equal(expressed.activity.id, 'act/2');
-  assert.equal((await bob.history()).at(-1).perception, 'full');
+  assert.equal((await bob.history()).at(-1).body, 'hello @Bob');
   await square.close();
 
   const reopened = await Square.at({ path: squarePath });
@@ -58,7 +58,7 @@ test('participant history defaults to the recent ten activities in ascending ord
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   for (let index = 0; index < 12; index += 1) {
-    await alice.express(`message ${index} @Bob`, { force: true });
+    await alice.express(`message ${index} @Bob`, { force: true, mentions: ['Bob'] });
   }
   const recent = await bob.history();
   assert.equal(recent.length, 10);
@@ -68,7 +68,7 @@ test('participant history defaults to the recent ten activities in ascending ord
   await square.close();
 });
 
-test('participant history uses listener attention at each activity boundary', async () => {
+test('participant history reads the full archive', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
   const alice = await square.join('Alice');
@@ -78,11 +78,10 @@ test('participant history uses listener attention at each activity boundary', as
   await alice.express('after listening', { force: true });
 
   const history = await bob.history({ limit: 20 });
-  const before = history.find((activity) => activity.body === undefined && activity.kind === 'say');
+  const before = history.find((activity) => activity.body === 'before listening');
   const after = history.find((activity) => activity.body === 'after listening');
-  assert.equal(before?.perception, 'presence');
-  assert.equal(after?.perception, 'full');
-  assert.deepEqual((await bob.history({ mention: true })).map((activity) => activity.body), ['after listening']);
+  assert.equal(before?.body, 'before listening');
+  assert.equal(after?.body, 'after listening');
   await square.close();
 });
 
@@ -108,7 +107,7 @@ test('idle catch wakes for a committed activity and expires while quiet', async 
 
   const waiting = bob.catch({ idle: 500, mention: true });
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const expressed = await alice.express('wake @Bob', { force: true });
+  const expressed = await alice.express('wake @Bob', { force: true, mentions: ['Bob'] });
   const caught = await waiting;
   assert.deepEqual(caught.activities, [{ ...expressed.activity, perception: 'full' }]);
   assert.equal(caught.consumedThrough, expressed.activity.id);

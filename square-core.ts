@@ -5,6 +5,8 @@ export type Audience =
   | { readonly kind: 'mentions'; readonly names: readonly string[] };
 export type ActivityId = `act/${number}`;
 
+export const MAX_IDENTITY_SET_SIZE = 10;
+
 export function formatActivityId(index: number): ActivityId {
   if (!Number.isSafeInteger(index) || index < 0) {
     throw new Error(`Invalid activity index: ${index}`);
@@ -29,7 +31,7 @@ export interface Hold {
 export type Act =
   | { kind: 'join'; actor: Participant; at?: number }
   | { kind: 'done'; actor: Participant; at?: number; body?: string }
-  | { kind: 'say'; actor: Participant; at?: number; body: string; reach?: Reach; reply?: number }
+  | { kind: 'say'; actor: Participant; at?: number; body: string; mentions: readonly Participant[]; reach?: Reach; reply?: number }
   | { kind: 'hold'; actor?: Participant; at?: number; body?: string }
   | { kind: 'resume'; actor?: Participant; at?: number }
   | { kind: 'read'; actor: Participant; at?: number; through: number }
@@ -84,7 +86,9 @@ export type ValidationResult =
   | { ok: false; reason: 'held'; hold: Hold }
   | { ok: false; reason: 'hard_cap'; count: number; hardCap: number }
   | { ok: false; reason: 'throttled'; delayMs: number }
-  | { ok: false; reason: 'bell_quota'; nextAt: number };
+  | { ok: false; reason: 'bell_quota'; nextAt: number }
+  | { ok: false; reason: 'mention_limit'; limit: number }
+  | { ok: false; reason: 'listening_limit'; limit: number };
 
 interface MutableParticipantSnapshot extends ParticipantSnapshot {}
 
@@ -96,14 +100,6 @@ function sameName(a: string, b: string): boolean {
   return nameKey(a) === nameKey(b);
 }
 
-export function extractMentions(body: string): string[] {
-  const matches = [];
-  const re = /@([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gu;
-  let match;
-  while ((match = re.exec(body)) !== null) matches.push(match[1]);
-  return matches;
-}
-
 function uniqueMentionNames(names: readonly string[]): string[] {
   const unique: string[] = [];
   for (const name of names) {
@@ -113,9 +109,9 @@ function uniqueMentionNames(names: readonly string[]): string[] {
   return unique;
 }
 
-export function audienceOf(say: { body: string; reach?: Reach }): Audience {
+export function audienceOf(say: { body: string; mentions?: readonly Participant[]; reach?: Reach }): Audience {
   if (say.reach === 'bell') return { kind: 'bell' };
-  return { kind: 'mentions', names: uniqueMentionNames(extractMentions(say.body)) };
+  return { kind: 'mentions', names: uniqueMentionNames(say.mentions ?? []) };
 }
 
 export function audienceIncludes(audience: Audience, name: string): boolean {
@@ -385,10 +381,20 @@ export function validate(state: FoldedSquareState, act: Act, options: SquareVali
     case 'ignore':
       if (current?.done) return { ok: false, reason: 'done' };
       if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
+      if (act.kind === 'listen'
+        && !isListening(state, act.actor, act.target)
+        && listeningTo(state, act.actor).length >= MAX_IDENTITY_SET_SIZE) {
+        return { ok: false, reason: 'listening_limit', limit: MAX_IDENTITY_SET_SIZE };
+      }
       return { ok: true };
     case 'say': {
       if (current?.done) return { ok: false, reason: 'done' };
       if (current?.joined !== true) return { ok: false, reason: 'not_joined' };
+      const audience = audienceOf(act);
+      const mentionCount = audience.kind === 'mentions' ? audience.names.length : 0;
+      if (mentionCount > MAX_IDENTITY_SET_SIZE) {
+        return { ok: false, reason: 'mention_limit', limit: MAX_IDENTITY_SET_SIZE };
+      }
       if (state.hold.active) return { ok: false, reason: 'held', hold: state.hold };
       const activityCount = current?.activityCount ?? 0;
       if (options.hardCap !== undefined && options.hardCap !== null && activityCount >= options.hardCap) {

@@ -228,7 +228,7 @@ test('package facade participant verbs persist through shared actions', async ()
   try {
     const square = await Square.at({ path: squarePath });
     const alice = await square.join('Alice');
-    await alice.express('one @Alice', { force: true });
+    await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
     await alice.done('complete');
@@ -447,7 +447,7 @@ async function piFixture(sessionId, pending = true) {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 }] : []),
+    ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 }] : []),
   ];
   await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
   return { root, squarePath, registry, presented, sessionId };
@@ -481,7 +481,7 @@ async function expressToPi(item, body) {
   const square = await Square.at({ path: item.squarePath });
   try {
     const alice = await square.join('Alice');
-    const result = await alice.express(body);
+    const result = await alice.express(body, { mentions: ['Bob'] });
     return Number(result.activity.id.slice('act/'.length));
   } finally {
     await square.close();

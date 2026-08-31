@@ -36,10 +36,10 @@ test('status stays compact and focuses on the current square', async () => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
     for (let index = 0; index < 12; index += 1) {
-      await alice.express(`activity ${index} @Bob`, { force: true });
+      await alice.express(`activity ${index} @Bob`, { force: true, mentions: ['Bob'] });
     }
     await bob.done('leaving');
-    await alice.express('last activity @Alice', { force: true });
+    await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 100, markdown: '## Topic\n\nTesting status' });
 
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
@@ -67,14 +67,76 @@ test('status previews ten active participants and links to the complete roster',
   assert.equal(participantRows.length, 10);
   assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), ['Viewer', ...peers.slice(3).reverse()]);
   assert.match(status.stdout, /^  ○ … 3 more participants$/m);
-  assert.ok(status.stdout.includes(`» square --location '${file}' participants\n`));
+  assert.ok(status.stdout.includes(`» square --location '${file}' participants --limit 13\n`));
   assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
 
   const participants = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(participants.status, 0, participants.stderr);
-  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] @/.test(line)).length, 13);
-  assert.match(participants.stdout, /@Peer01/);
-  assert.match(participants.stdout, /@Peer12/);
+  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] /.test(line)).length, 13);
+  assert.match(participants.stdout, /Peer01/);
+  assert.match(participants.stdout, /Peer12/);
+  assert.doesNotMatch(participants.stdout, /@Peer/);
+});
+
+test('participants bound the roster without pagination', async () => {
+  const names = Array.from({ length: 21 }, (_value, index) => `Peer${String(index + 1).padStart(2, '0')}`);
+  const file = await persistSquare(async ({ square }) => {
+    for (const name of names) await square.join(name);
+  }, { hardCap: 100 });
+
+  const defaultPage = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(defaultPage.status, 0, defaultPage.stderr);
+  const rows = defaultPage.stdout.split('\n').filter((line) => /^  [◎●○] \S+ ·/.test(line));
+  assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(0, 20));
+  assert.doesNotMatch(defaultPage.stdout, /@Peer/);
+  assert.match(defaultPage.stdout, /^  ○ 20 of 21 participants shown$/m);
+  assert.match(defaultPage.stdout, new RegExp(`» square --location '${file}' participants --limit 21`));
+
+  const complete = run(withPath(file, ['participants', '--limit', '21']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(complete.status, 0, complete.stderr);
+  assert.doesNotMatch(complete.stdout, /participants shown|participants --limit/);
+
+  const zero = run(withPath(file, ['participants', '--limit', '0']));
+  assert.equal(zero.status, 2);
+  assert.match(zero.stderr, /--limit needs a positive integer/);
+
+  const overLimit = run(withPath(file, ['participants', '--limit', '101']));
+  assert.equal(overLimit.status, 2);
+  assert.match(overLimit.stderr, /--limit is capped at 100/);
+  assert.match(overLimit.stderr, new RegExp(`» square --location '${file}' participants --limit 100`));
+
+  const unsupported = run(withPath(file, ['participants', '--all']));
+  assert.equal(unsupported.status, 2);
+  assert.match(unsupported.stderr, /participants --help/);
+});
+
+test('participants do not offer a rejected complete-roster limit', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    for (let index = 1; index <= 101; index += 1) await square.join(`Peer${String(index).padStart(3, '0')}`);
+  }, { hardCap: 100 });
+
+  const page = run(withPath(file, ['participants', '--limit', '100']), { env: { SQUARE_NOW_MS: '100000' } });
+  assert.equal(page.status, 0, page.stderr);
+  assert.match(page.stdout, /^  ○ 100 of 101 participants shown$/m);
+  assert.doesNotMatch(page.stdout, /participants --limit 101/);
+});
+
+test('history refuses an unbounded merged context and offers a bounded executable command', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    for (let index = 1; index <= 101; index += 1) {
+      await alice.express(`activity ${index}`, { force: true });
+    }
+  }, { hardCap: 200 });
+
+  const oversized = run(withPath(file, ['history', '--at', 'act/100', '-C', '100', '--json']));
+  assert.equal(oversized.status, 2);
+  assert.match(oversized.stderr, /history is capped at 100 activities/);
+  assert.match(oversized.stderr, new RegExp(`» square --location '${file}' history --at act/100 -C 100 --json --limit 100`));
+
+  const bounded = run(withPath(file, ['history', '--at', 'act/100', '-C', '100', '--json', '--limit', '100']));
+  assert.equal(bounded.status, 0, bounded.stderr);
+  assert.equal(bounded.stdout.trim().split('\n').length, 100);
 });
 
 test('status has no participant preview affordance at ten active participants', async () => {
@@ -92,11 +154,11 @@ test('express does not surface delivery-health diagnostics during normal use', a
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
-    await (await square.join('Alice')).express('hey @Bob', { force: true });
-    await bob.express('still working @Bob', { force: true });
+    await (await square.join('Alice')).express('hey @Bob', { force: true, mentions: ['Bob'] });
+    await bob.express('still working @Bob', { force: true, mentions: ['Bob'] });
   });
 
-  const acted = run(withName(file, 'Bob', ['express', '--force', 'still working later @Bob']), {
+  const acted = run(withName(file, 'Bob', ['express', '--force', '--mention', 'Bob', 'still working later @Bob']), {
     env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(acted.status, 0, acted.stderr);
@@ -113,7 +175,7 @@ test('catch --mention renders matching says and suppresses room changes', async 
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.express('hello @Alice', { force: true });
+    await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await square.join('Cara');
     void alice;
   });
@@ -131,8 +193,8 @@ test('catch --from renders named peers and rejects the removed --by flag', async
     await square.join('Alice');
     const bob = await square.join('Bob');
     const cara = await square.join('Cara');
-    await bob.express('hello from bob @Alice', { force: true });
-    await cara.express('hello from cara @Alice', { force: true });
+    await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
+    await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
     await bob.done('bye');
   });
 
@@ -171,7 +233,7 @@ test('history with an explicit page and no truncation renders the archive', asyn
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.express('hello @Alice', { force: true });
+    await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await bob.done('bye');
   });
 
@@ -181,6 +243,35 @@ test('history with an explicit page and no truncation renders the archive', asyn
   assert.match(activities.stdout, /hello @Alice/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
+});
+
+test('history rejects an explicit participant identity with a retry that removes it', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+  });
+
+  const history = run(withName(file, 'Alice', ['history', '--limit', '3']));
+  assert.equal(history.status, 2);
+  assert.match(history.stderr, /history is an archive and does not use --as/);
+  assert.match(history.stderr, new RegExp(`» square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --limit 3`));
+  assert.doesNotMatch(history.stderr, /Expected one of|@Alice/);
+
+  const help = run(withName(file, 'Alice', ['history', '--help']));
+  assert.equal(help.status, 2);
+  assert.match(help.stderr, /history is an archive and does not use --as/);
+  assert.match(help.stderr, new RegExp(`» square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --help`));
+});
+
+test('unknown participant errors stay bounded and point to the roster', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+  });
+
+  const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
+  assert.equal(expressed.status, 2);
+  assert.match(expressed.stderr, /Unknown mention target @Eve/);
+  assert.doesNotMatch(expressed.stderr, /Expected one of|@Alice/);
+  assert.match(expressed.stderr, new RegExp(`» square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
 });
 
 test('history pages with stable activity-id cursors and prints the next page', async () => {
@@ -205,11 +296,11 @@ test('history --since excludes older public activity', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.express('hello @Alice', { force: true });
+    await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await bob.done('bye');
   });
 
-  const activities = run(withName(file, 'Alice', ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
+  const activities = run(withPath(file, ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
   assert.doesNotMatch(activities.stdout, /Bob\s+#1/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
@@ -220,7 +311,7 @@ test('ambient catch and history render full body to a mention target and presenc
     const alice = await square.join('Alice');
     await square.join('Bob');
     await square.join('Cara');
-    await alice.express('secret reach phrase @Bob', { force: true });
+    await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
   });
 
   const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -251,8 +342,8 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.equal(json.status, 0, json.stderr);
   assert.match(JSON.parse(json.stdout).body, /secret reach phrase/);
 
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
-  const laterJoin = run(withName(file, 'Dan', ['join', '--all']), { env: { SQUARE_NOW_MS: '11000' } });
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Cara', '--mention', 'bob', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
+  const laterJoin = run(withName(file, 'Dan', ['join', '--last', '100']), { env: { SQUARE_NOW_MS: '11000' } });
   assert.equal(laterJoin.status, 0, laterJoin.stderr);
   assert.match(laterJoin.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
   assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
@@ -265,7 +356,7 @@ test('history groups every participant footprint at a shared projection anchor',
     const alice = await square.join('Alice');
     await square.join('Bob');
     await square.join('Cara');
-    await alice.express('shared coordinate @Bob', { force: true });
+    await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });
 
   const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -294,12 +385,12 @@ test('presence rendering omits a body when a bare say has no visible mention tar
   assert.doesNotMatch(caraWatch.stdout, /listener-only answer/);
 });
 
-test('history without --as expands the newest ten activities in chronological order', async () => {
+test('history expands the newest ten activities in chronological order', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     for (let index = 1; index <= 11; index += 1) {
       const body = `history body ${index} ${'x'.repeat(index === 11 ? 230 : 4)} @Alice`;
-      await alice.express(body, { force: true });
+      await alice.express(body, { force: true, mentions: ['Alice'] });
     }
   }, { hardCap: null });
 
@@ -310,6 +401,31 @@ test('history without --as expands the newest ten activities in chronological or
   assert.match(history.stdout, /history body 11 /);
   assert.match(history.stdout, /history body 11 [^\n]*x{20}/);
   assert.ok(history.stdout.indexOf('history body 2 ') < history.stdout.indexOf('history body 11 '));
+});
+
+test('history expands one result, previews multiple results, and --no-truncate expands all', async () => {
+  const firstTail = 'FIRST-TAIL';
+  const secondTail = 'SECOND-TAIL';
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express(`${'a'.repeat(220)}${firstTail}`, { force: true });
+    await alice.express(`${'b'.repeat(220)}${secondTail}`, { force: true });
+  });
+
+  const single = run(withPath(file, ['history', '--limit', '1']));
+  assert.equal(single.status, 0, single.stderr);
+  assert.match(single.stdout, new RegExp(secondTail));
+
+  const multiple = run(withPath(file, ['history', '--limit', '2']));
+  assert.equal(multiple.status, 0, multiple.stderr);
+  assert.doesNotMatch(multiple.stdout, new RegExp(firstTail));
+  assert.doesNotMatch(multiple.stdout, new RegExp(secondTail));
+  assert.match(multiple.stdout, /history --no-truncate/);
+
+  const expanded = run(withPath(file, ['history', '--limit', '2', '--no-truncate']));
+  assert.equal(expanded.status, 0, expanded.stderr);
+  assert.match(expanded.stdout, new RegExp(firstTail));
+  assert.match(expanded.stdout, new RegExp(secondTail));
 });
 
 test('bell quota refusal prints the next timestamp and express help keeps --bell', async () => {
@@ -343,8 +459,8 @@ test('express --reply renders the causal activity reference', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
-    await alice.express('question @Bob', { force: true });
-    await bob.express('answer @Alice', { force: true, reply: 'act/2' });
+    await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
+    await bob.express('answer @Alice', { force: true, mentions: ['Alice'], reply: 'act/2' });
   });
 
   const history = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--no-truncate']));
@@ -360,8 +476,8 @@ test('history --at accepts multiple coordinates and unions their context windows
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
-    await alice.express('first @Bob', { force: true });
-    await bob.express('second @Alice', { force: true });
+    await alice.express('first @Bob', { force: true, mentions: ['Bob'] });
+    await bob.express('second @Alice', { force: true, mentions: ['Alice'] });
   });
 
   const comma = run(withPath(file, ['history', '--at', 'act/2,act/3', '-C', '0', '--json']));
@@ -377,7 +493,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     await square.join('Bob');
-    await alice.express('hey @Bob', { force: true });
+    await alice.express('hey @Bob', { force: true, mentions: ['Bob'] });
   });
   const root = path.dirname(file);
   const registry = path.join(root, 'sessions.ndjsonl');
@@ -416,7 +532,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   assert.equal(duplicate.status, 0, duplicate.stderr);
   assert.equal(duplicate.stdout, '');
 
-  const fresh = run(withName(file, 'Alice', ['express', '--force', 'stop answer @Bob']), { env });
+  const fresh = run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'stop answer @Bob']), { env });
   assert.equal(fresh.status, 0, fresh.stderr);
 
   const registerStop = spawnSync(process.execPath, ['--input-type=module', '-e', `
@@ -439,8 +555,8 @@ test('history power filters and jsonl stay read-only', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.express('deploy failed on schema v3 @Alice', { force: true });
-    await alice.express('hello @Bob please check', { force: true });
+    await bob.express('deploy failed on schema v3 @Alice', { force: true, mentions: ['Alice'] });
+    await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
   });
 
   const grepped = run(withPath(file, ['history', '--grep', 'schema v3', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -449,25 +565,12 @@ test('history power filters and jsonl stay read-only', async () => {
   assert.match(row.id, /^act\//);
   assert.match(row.body, /schema v3/);
 
-  const pending = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '6000' } });
-  assert.equal(pending.status, 0, pending.stderr);
-  assert.equal(pending.stdout.trim().split('\n').filter(Boolean).length, 1);
-
-  const still = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '7000' } });
-  assert.equal(still.stdout.trim().split('\n').filter(Boolean).length, 1);
-
-  const caught = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '8000' } });
-  assert.equal(caught.status, 0, caught.stderr);
-  assert.match(caught.stdout, /hello @Bob/);
-
-  const after = run(withName(file, 'Bob', ['history', '--pending', '--json']), { env: { SQUARE_NOW_MS: '9000' } });
-  assert.equal(after.stdout, '');
 });
 
 test('history grep defaults to a compact character-bounded search view', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
-    await alice.express(`needle ${'🙂'.repeat(250)}TAIL @Alice`, { force: true });
+    await alice.express(`needle ${'🙂'.repeat(250)}TAIL @Alice`, { force: true, mentions: ['Alice'] });
   });
 
   const compact = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
@@ -490,8 +593,8 @@ test('history grep defaults to a compact character-bounded search view', async (
 test('history grep centers snippets on late, multiline, and fixed matches', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
-    await alice.express(`START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END @Alice`, { force: true });
-    await alice.express('literal [ bracket @Alice', { force: true });
+    await alice.express(`START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END @Alice`, { force: true, mentions: ['Alice'] });
+    await alice.express('literal [ bracket @Alice', { force: true, mentions: ['Alice'] });
   });
 
   const centered = run(withPath(file, ['history', '--grep', 'schema\\s+v3']), { env: { SQUARE_NOW_MS: '4000' } });
@@ -514,7 +617,7 @@ test('history search reports shown and total matches consistently', async () => 
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     for (let index = 0; index < 12; index += 1) {
-      await alice.express(`needle ${index} @Alice`, { force: true });
+      await alice.express(`needle ${index} @Alice`, { force: true, mentions: ['Alice'] });
     }
   }, { hardCap: null });
 
@@ -565,7 +668,7 @@ test('status shows attention state and stable activity ids', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     await square.join('Bob');
-    await alice.express('please check @Bob', { force: true });
+    await alice.express('please check @Bob', { force: true, mentions: ['Bob'] });
   });
 
   const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
@@ -627,11 +730,11 @@ test('status attention and express blocker agree on unread square changes', asyn
   });
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(status.stdout, /@Alice.*changes waiting/);
-  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
+  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(noWaitAct.stdout, /a hand is raised/);
   assert.match(noWaitAct.stdout, /draft kept/);
   assert.equal(run(withName(file, 'Bob', ['resume']), { env: { SQUARE_NOW_MS: '210000' } }).status, 0);
-  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
+  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
   assert.match(unheld.stdout, /square moved behind your back/);
   assert.match(unheld.stdout, /catch --now/);
 });
@@ -642,7 +745,7 @@ test('an unread join alone does not block express', async () => {
     await square.join('Bob');
   });
 
-  const expressed = run(withName(file, 'Alice', ['express', 'welcome @Bob']), {
+  const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Bob', 'welcome @Bob']), {
     env: { SQUARE_NOW_MS: '200000' },
   });
   assert.equal(expressed.status, 0, expressed.stderr);
@@ -657,32 +760,32 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const host = await square.join('Host');
     await host.hold('pause');
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', 'express -');
+  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', 'express --mention Host -');
 
   const throttleFile = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
-    await alice.express('first @Alice', { force: true });
+    await alice.express('first @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10, throttlePerMinute: 1 });
-  const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '-']), {
+  const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '--mention', 'Alice', '-']), {
     input: 'throttled body @Alice\n',
     env: { SQUARE_NOW_MS: '3000' },
   });
-  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', 'express -');
+  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', 'express --mention Alice -');
   assert.match(throttled.stdout, /next opening in (?:\d+s|1m)/);
   assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
 
   const capFile = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
-    await alice.express('first @Alice', { force: true });
+    await alice.express('first @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 1 });
-  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '-']), { input: 'final body @Alice\n' }), capFile, 'Alice', 'final body @Alice\n', 'done -');
+  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'final body @Alice\n' }), capFile, 'Alice', 'final body @Alice\n', 'done -');
 
   const blockedFile = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.express('peer @Alice', { force: true });
+    await bob.express('peer @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express -');
+  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express --mention Bob -');
 });
 
 test('list bounds recursive discovery by default and accepts an explicit depth', async () => {
@@ -726,7 +829,7 @@ test('list previews bounded context and the three most recently active participa
   await square.join('bob');
   await square.join('carol');
   await square.join('dave');
-  await (await square.join('alice')).express('@bob latest', { force: true });
+  await (await square.join('alice')).express('@bob latest', { force: true, mentions: ['bob'] });
   await square.close();
 
   const listed = run(['list'], { cwd });
@@ -749,7 +852,7 @@ test('list, participants, and clipped status use current state and executable hi
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   await bob.done('finished');
-  await alice.express(`${'x'.repeat(260)} @Alice`, { force: true });
+  await alice.express(`${'x'.repeat(260)} @Alice`, { force: true, mentions: ['Alice'] });
   await square.close();
 
   const listed = run(['list'], { cwd });
@@ -760,12 +863,13 @@ test('list, participants, and clipped status use current state and executable hi
   assert.doesNotMatch(listed.stdout, /participants[^\n]*Bob/);
 
   const participants = run(withPath(file, ['participants']), { cwd });
-  assert.match(participants.stdout, /@Alice · active/);
-  assert.match(participants.stdout, /@Bob · done/);
+  assert.match(participants.stdout, /Alice · active/);
+  assert.match(participants.stdout, /Bob · done/);
+  assert.doesNotMatch(participants.stdout, /@Alice|@Bob/);
   assert.doesNotMatch(participants.stdout, /^presence$/m);
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);
-  assert.match(status.stdout, /» square --location '.*' --as 'Alice' history --at act\/\d+ -C 2 --no-truncate/);
+  assert.match(status.stdout, /» square --location '.*' history --at act\/\d+ -C 2 --no-truncate/);
   assert.match(status.stdout, /throttle 2\/min/);
 });

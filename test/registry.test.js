@@ -134,7 +134,7 @@ test('presence follows active session lifecycle without delivery routes', async 
     assert.equal(catchNow.status, 0, catchNow.stderr);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
-    const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', 'still not an owner @alice'], {
+    const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', '--no-mention', 'still not an owner @alice'], {
       env: observerEnv,
     });
     assert.equal(expressed.status, 0, expressed.stderr);
@@ -314,7 +314,7 @@ test('stream recipient filtering matches the addressed participant', async () =>
     warmup: [],
     acts: [
       ...acts,
-      { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', index: 3 },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', mentions: ['Bob'], index: 3 },
       { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 },
       { kind: 'say', actor: 'Alice', at: 6, body: 'attention', reach: 'bell', index: 5 },
     ],

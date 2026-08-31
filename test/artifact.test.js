@@ -67,7 +67,7 @@ test('encode/decode roundtrip preserves Square state', () => {
     acts: [
       { kind: 'join', actor: 'Alice', at: 1700000000000 },
       { kind: 'listen', actor: 'Alice', target: 'aku/riko/7a', at: 1700000000500 },
-      { kind: 'say', actor: 'Alice', at: 1700000001000, body: 'hello @Bob' },
+      { kind: 'say', actor: 'Alice', at: 1700000001000, body: 'hello @Bob', mentions: ['Bob'] },
       { kind: 'ignore', actor: 'Alice', target: 'aku/riko/7a', at: 1700000001500 },
       { kind: 'hold', actor: 'Host', at: 1700000002000, body: 'pause' },
       { kind: 'resume', actor: 'Host', at: 1700000003000 },
@@ -103,7 +103,7 @@ test('file landing never reuses an index and publishes the complete next snapsho
     acts: [{ kind: 'join', actor: 'Alice', at: 1 }],
   });
   const cell = createFileCell(squarePath);
-  const appended = await express({ cell, clock: () => 2, location: squarePath }, 'Alice', 'hello @Alice', { force: true });
+  const appended = await express({ cell, clock: () => 2, location: squarePath }, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
   assert.equal(appended.activity.id, 'act/1');
   const persisted = await loadSquare(squarePath);
   assert.deepEqual(persisted.acts.map((act) => act.index), [0, 1]);
@@ -290,7 +290,7 @@ test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind h
   const squareState = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'hello @Bob' },
+      { kind: 'say', actor: 'Alice', at: 2, body: 'hello @Bob', mentions: ['Bob'] },
     ],
   });
 
@@ -344,7 +344,7 @@ test('codec rejects future observation references', () => {
 
 test('archived activity references remain valid below nextActIndex', () => {
   const squareState = makeState({
-    acts: [{ kind: 'say', actor: 'Alice', at: 5, body: 'later @Bob' }],
+    acts: [{ kind: 'say', actor: 'Alice', at: 5, body: 'later @Bob', mentions: ['Bob'] }],
   });
   squareState.acts[0].index = 4;
   squareState.runtime.nextActIndex = 5;
@@ -366,7 +366,7 @@ test('a future observation cannot persist and suppress the next real mention', a
   await assert.rejects(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
 
   const cell = createFileCell(squarePath);
-  await express({ cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true });
+  await express({ cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true, mentions: ['Bob'] });
   const persisted = await loadSquare(squarePath);
   assert.equal(persisted.acts.at(-1).index, 2);
   assert.deepEqual(deriveDeliveryModel(persisted).pendingFor('Bob').map((item) => item.item.index), [2]);
@@ -379,7 +379,7 @@ test('say metadata roundtrips through the binary snapshot', () => {
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'center @Bob' },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'center @Bob', mentions: ['Bob'] },
       { kind: 'say', actor: 'Alice', at: 4, body: 'bell', reach: 'bell', reply: 2 },
     ],
   });

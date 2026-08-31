@@ -60,15 +60,41 @@ test('validation makes held, capped, and throttled activity uncommittable', () =
   }
 });
 
-test('audience parsing keeps first-appearance spelling and case-insensitive uniqueness', () => {
-  assert.deepEqual(audienceOf({ body: 'hey @Bob and @aku/riko/7a then @BOB @Missing' }), {
+test('validation bounds unique mention targets and active listening relations', () => {
+  const targets = Array.from({ length: 11 }, (_value, index) => `Target${index}`);
+  const speaker = fold([{ kind: 'join', actor: 'Alice', at: T0 }]);
+  assertRejected(
+    validate(speaker, { kind: 'say', actor: 'Alice', at: T0 + 1, body: 'too many', mentions: targets }),
+    'mention_limit'
+  );
+  assert.equal(
+    validate(speaker, { kind: 'say', actor: 'Alice', at: T0 + 1, body: 'deduplicated', mentions: [...targets.slice(0, 10), 'TARGET0'] }).ok,
+    true
+  );
+
+  const listener = fold([
+    { kind: 'join', actor: 'Caller', at: T0 },
+    ...targets.slice(0, 10).map((target, index) => ({ kind: 'listen', actor: 'Caller', target, at: T0 + index + 1 })),
+  ]);
+  assertRejected(validate(listener, { kind: 'listen', actor: 'Caller', target: targets[10], at: T0 + 20 }), 'listening_limit');
+  assert.equal(validate(listener, { kind: 'listen', actor: 'Caller', target: 'TARGET0', at: T0 + 20 }).ok, true);
+});
+
+test('audience metadata keeps first-appearance spelling and case-insensitive uniqueness', () => {
+  assert.deepEqual(audienceOf({ body: 'hey @Bob and @aku/riko/7a then @BOB @Missing', mentions: ['Bob', 'aku/riko/7a', 'BOB', 'Missing'] }), {
     kind: 'mentions',
     names: ['Bob', 'aku/riko/7a', 'Missing'],
   });
   assert.deepEqual(audienceOf({ body: 'ignore @Bob', reach: 'bell' }), { kind: 'bell' });
-  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob' }), 'bob'), true);
-  assert.deepEqual(resolveAudience(audienceOf({ body: '@cara then @BOB' }), ['Alice', 'Bob', 'Cara']), ['Cara', 'Bob']);
+  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob', mentions: ['Bob'] }), 'bob'), true);
+  assert.deepEqual(resolveAudience(audienceOf({ body: '@cara then @BOB', mentions: ['cara', 'BOB'] }), ['Alice', 'Bob', 'Cara']), ['Cara', 'Bob']);
   assert.deepEqual(resolveAudience({ kind: 'bell' }, ['Alice', 'Bob']), ['Alice', 'Bob']);
+});
+
+test('explicit audience metadata drives routing while body at-signs stay literal', () => {
+  assert.deepEqual(audienceOf({ body: 'hey @Bob' }), { kind: 'mentions', names: [] });
+  assert.deepEqual(audienceOf({ body: 'hey @Bob', mentions: ['Bob'] }), { kind: 'mentions', names: ['Bob'] });
+  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob' }), 'Bob'), false);
 });
 
 test('participant names allow non-empty slash segments and reject malformed paths', () => {
@@ -97,8 +123,8 @@ test('done clears outgoing listening and rejoin starts with no old edges', () =>
 });
 
 test('perception is full for author, mentioned viewers, and every bell viewer', () => {
-  const directed = { kind: 'say', actor: 'Alice', at: T0 + 2, body: 'psst @Bob' };
-  const selfMention = { kind: 'say', actor: 'Alice', at: T0 + 3, body: 'note @Alice' };
+  const directed = { kind: 'say', actor: 'Alice', at: T0 + 2, body: 'psst @Bob', mentions: ['Bob'] };
+  const selfMention = { kind: 'say', actor: 'Alice', at: T0 + 3, body: 'note @Alice', mentions: ['Alice'] };
   const bell = { kind: 'say', actor: 'Alice', at: T0 + 4, body: 'listen @Bob', reach: 'bell' };
 
   assert.equal(perceive(directed, 'Alice'), 'full');

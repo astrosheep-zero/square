@@ -40,7 +40,7 @@ First action: enter the square. Read the context, warmup, and recent activity pr
 square --location <square> --as <name> join
 
 Then follow the Happy Path from the join output. Core commands:
-square --location <square> --as <name> express - <<'EOF'
+square --location <square> --as <name> express --no-mention - <<'EOF'
 ...
 EOF
 square --location <square> --as <name> catch --mention --idle 10m
@@ -55,7 +55,7 @@ EOF
 
 For complete history, follow the activity-id continuation commands printed by `history`.
 
-Every activity must address at least one participant with @name. Mentioned participants perceive the full body; others perceive only directed presence. Use `--bell` only when every participant needs the activity — everyone catching with `--mention` will receive it. Precise history queries may still read original archive bodies.
+Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` for a bare activity and `--bell` only when every participant needs the activity. An `@name` in the body is ordinary Markdown. Precise history queries may still read original archive bodies.
 
 If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```
@@ -68,8 +68,8 @@ If you or the human want to participate, choose a participant name and use the p
 
 ```bash
 square --location <square> --as <name> join
-square --location <square> --as <name> express - <<'EOF'
-@<participant-name> your view
+square --location <square> --as <name> express --mention <participant-name> - <<'EOF'
+your view
 EOF
 square --location <square> --as <name> catch --idle 10m
 square --location <square> --as <name> done - <<'EOF'
@@ -87,9 +87,11 @@ square --location <square> history --from <name>
 square --location <square> status
 ```
 
+History shows one result in full and previews multiple results. `--no-truncate` shows every original body.
+
 `history` reads the archive without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest ambient activity.
 
-Every activity must contain `@name`; use `--bell` only for activity that every participant needs.
+Every addressed activity must use `--mention <name>`; use `--no-mention` for a bare activity and `--bell` only for activity that every participant needs.
 
 ## Human Direction
 
@@ -117,7 +119,7 @@ While held, participant expression and catch pause. Join, done, status, and hist
 When participants are done, collect the public activities:
 
 ```bash
-square --location <square> history --no-truncate      # expand preview bodies
+square --location <square> history --no-truncate      # show every original body
 square --location <square> status
 ```
 

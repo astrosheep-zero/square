@@ -16,7 +16,7 @@ import {
 import { markBoundarySeen as recordBoundarySeen } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import { currentParticipant } from './views.js';
-import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
+import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { projectSessionBindings } from './square-projections.js';
 import { reconcileBinding as reconcileBindingOperation } from './delivery-operations.js';
@@ -44,7 +44,7 @@ class ParticipantHandle implements Participant {
     return catchUp(this.context, this.name, options);
   }
 
-  history(query?: HistoryQuery): Promise<PerceivedActivity[]> {
+  history(query?: HistoryQuery): Promise<Activity[]> {
     return participantHistory(this.square, this.name, query);
   }
 

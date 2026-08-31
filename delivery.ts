@@ -54,6 +54,7 @@ export interface WakeAdapter {
 export interface RoutedNotification {
   actor: string;
   body: string;
+  mentions?: readonly string[];
   route: DirectedNotificationRoute;
   recipient?: string;
 }
@@ -61,6 +62,7 @@ export interface RoutedNotification {
 export interface CatchFilterShape {
   actor: string;
   body: string;
+  mentions?: readonly string[];
   reach?: Reach;
   recipients?: readonly string[];
 }
@@ -207,6 +209,7 @@ export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNot
     {
       actor: notification.actor,
       body: notification.body,
+      ...(notification.mentions === undefined ? {} : { mentions: notification.mentions }),
       ...(notification.recipient === undefined ? {} : { recipients: [notification.recipient] }),
       ...(notification.route === 'bell' ? { reach: 'bell' as const } : {}),
     },

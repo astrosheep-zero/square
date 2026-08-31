@@ -23,7 +23,7 @@ test('large catch and pending sweep share one chronological delivery replay per 
   const acts = [{ kind: 'join', actor: 'Alice', at: 0 }];
   for (let index = 0; index < 96; index++) acts.push({ kind: 'join', actor: `P${index}`, at: index + 1 });
   for (let index = 0; index < 900; index++) {
-    acts.push({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0` });
+    acts.push({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0`, mentions: ['P0'] });
   }
 
   const state = squareState(acts);
@@ -49,7 +49,7 @@ test('large frozen wake sweep uses one delivery replay across every pending cand
   const acts = [{ kind: 'join', actor: 'Alice', at: 0 }];
   for (let index = 0; index < 96; index++) acts.push({ kind: 'join', actor: `P${index}`, at: index + 1 });
   for (let index = 0; index < 900; index++) {
-    acts.push({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0` });
+    acts.push({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0`, mentions: ['P0'] });
   }
 
   const state = squareState(acts);
@@ -71,7 +71,7 @@ test('large delivered catch carries its settled perception into rendering withou
   const acts = [{ kind: 'join', actor: 'Alice', at: 0 }];
   acts.push({ kind: 'join', actor: 'P0', at: 1 });
   for (let index = 0; index < 900; index++) {
-    acts.push({ kind: 'say', actor: 'Alice', at: index + 2, body: `dispatch ${index} @P0` });
+    acts.push({ kind: 'say', actor: 'Alice', at: index + 2, body: `dispatch ${index} @P0`, mentions: ['P0'] });
   }
 
   const state = squareState(acts);

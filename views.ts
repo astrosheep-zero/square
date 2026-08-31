@@ -1,15 +1,15 @@
-import { extractMentions, formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { deliveryDelta, directedPeerSays } from './activity-feed.js';
 import { coreActivities, coreParticipants, coreStatus, resolveKnownName } from './decisions.js';
 import { deriveDeliveryModel, isActivitySeen, type DeliveryModel, type PlannedNotification } from './delivery.js';
 import { SquareError, nameKey, type ActivitiesOptions, type ActivityObservation, type InboxNotification, type PublicAct, type RoomChangeAct, type SquareState, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { countSays, currentHold, foldedState, freshWatchLease, inSquareCount, isCurrentlyJoined, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
-import type { Activity, HistoryQuery, ParticipantStatus, PerceivedActivity, SquareSnapshot } from './square-facade.js';
+import type { Activity, HistoryQuery, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 
 export interface ActivityPresentation { readonly name: string; readonly roster: readonly string[]; readonly pendingPublic: readonly PublicAct[]; readonly pendingRoomChanges: readonly RoomChangeAct[]; readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly held: boolean; readonly holdReason?: string; readonly ownActivityCount: number; readonly hardCap: number | null; }
 export interface EntryPresentation { readonly joined: boolean; readonly scene: string; readonly context: string; readonly joinContext: string; readonly recentActivities: readonly StoredAct[]; readonly state: SquareState; readonly sayNumbers: Readonly<Record<number, number>>; readonly participantCount: number; }
-export interface HistoryPresentation { readonly activities: readonly (StoredAct & { readonly perception: 'full' | 'presence' })[]; readonly sayNumbers: Readonly<Record<number, number>>; readonly presenceAnchors: Readonly<Record<number, readonly string[]>>; readonly participantCount: number; }
+export interface HistoryPresentation { readonly activities: readonly StoredAct[]; readonly sayNumbers: Readonly<Record<number, number>>; readonly presenceAnchors: Readonly<Record<number, readonly string[]>>; readonly participantCount: number; }
 export interface ListPresentation { readonly context: readonly string[]; readonly participants: readonly string[]; readonly activities: number; }
 export interface StatusPresentation { readonly state: SquareState; readonly status: ReturnType<typeof coreStatus>; readonly latestActNumber?: number; }
 export interface WatchPresentation { readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly presence: { readonly participants: ReturnType<typeof coreParticipants>; readonly now: number }; readonly terminalStatus?: 'capped' | 'quorum'; }
@@ -19,15 +19,7 @@ export interface PendingDeliveryProjection { readonly recipient: string; readonl
 
 function expose(stored: StoredAct): Activity {
   if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
-  return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor, ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}), mentions: stored.kind === 'say' ? extractMentions(stored.body) : [], ...('target' in stored ? { target: stored.target } : {}), ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
-}
-
-function exposePerceived(stored: StoredAct, viewer: string, delivery: DeliveryModel): PerceivedActivity {
-  const perception = delivery.perceive(stored, viewer);
-  const activity = expose(stored);
-  if (perception === 'full' || activity.body === undefined) return { ...activity, perception };
-  const { body: _body, ...withoutBody } = activity;
-  return { ...withoutBody, perception };
+  return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor, ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}), mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}), ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }
 
 function parseRequiredActivityId(id: ActivityId): number {
@@ -36,11 +28,11 @@ function parseRequiredActivityId(id: ActivityId): number {
   return index;
 }
 
-function historyOptions(query: HistoryQuery, viewer?: string): ActivitiesOptions {
+function historyOptions(query: HistoryQuery): ActivitiesOptions {
   if (query.before !== undefined && query.after !== undefined) throw new SquareError('invalid_args', 'History cannot combine before and after cursors');
   const afterIndex = query.after === undefined ? undefined : parseRequiredActivityId(query.after);
   const beforeIndex = query.before === undefined ? undefined : parseRequiredActivityId(query.before);
-  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.mention === true && viewer !== undefined ? { mention: viewer } : {}), ...(afterIndex === undefined ? {} : { afterIndex }), ...(beforeIndex === undefined ? {} : { beforeIndex }), order: 'asc' };
+  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.mention === undefined ? {} : { mention: query.mention }), ...(afterIndex === undefined ? {} : { afterIndex }), ...(beforeIndex === undefined ? {} : { beforeIndex }), order: 'asc' };
 }
 
 function selectHistory(stored: StoredAct[], query: HistoryQuery): StoredAct[] {
@@ -76,14 +68,14 @@ function sayNumbers(state: Parameters<typeof coreStatus>[0]): Record<number, num
 }
 
 export async function history(square: OpenSquare, query: HistoryQuery = {}): Promise<Activity[]> { const { state } = await square.artifact.read(); return selectHistory(coreActivities(state, historyOptions(query)), query).map(expose); }
-export async function participantHistory(square: OpenSquare, name: string, query: HistoryQuery = {}): Promise<PerceivedActivity[]> { const { state } = await square.artifact.read(); const viewer = resolveKnownName(state, name); const delivery = deriveDeliveryModel(state); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective, viewer), delivery), effective).map((activity) => exposePerceived(activity, viewer, delivery)); }
+export async function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}): Promise<Activity[]> { const { state } = await square.artifact.read(); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective)), effective).map(expose); }
 export async function resolveParticipant(square: OpenSquare, name: string): Promise<{ readonly name: string; readonly roster: readonly string[] }> { const { state } = await square.artifact.read(); return { name: resolveKnownName(state, name), roster: rosterNames(state) }; }
 export async function currentParticipant(square: OpenSquare, name: string): Promise<string | undefined> { const { state } = await square.artifact.read(); const known = resolveRosterName(state, name); return known !== undefined && isCurrentlyJoined(state.acts, known) ? known : undefined; }
 export async function participants(square: OpenSquare): Promise<ParticipantStatus[]> { const { state } = await square.artifact.read(); return statuses(square, state); }
 export async function snapshot(square: OpenSquare): Promise<SquareSnapshot> { const { state } = await square.artifact.read(); const folded = foldedState(state); return { context: [...state.preamble, ...state.warmup].join('\n'), actCount: state.acts.filter((activity) => activity.kind !== 'read').length, hardCap: state.hardCap, ...(state.throttlePerMinute === undefined ? {} : { throttlePerMinute: state.throttlePerMinute }), held: folded.hold.active && folded.hold.actor !== undefined ? { by: folded.hold.actor, ...(folded.hold.reason === undefined ? {} : { reason: folded.hold.reason }) } : null, participants: statuses(square, state), delivered(name, id) { return isActivitySeen(state, name, parseRequiredActivityId(id)); } }; }
 export async function activityPresentation(square: OpenSquare, name: string): Promise<ActivityPresentation> { const { state } = await square.artifact.read(); const known = resolveKnownName(state, name); const delivery = deriveDeliveryModel(state); const delta = deliveryDelta(state, known, delivery); const hold = currentHold(state.acts); return { name: known, roster: rosterNames(state), pendingPublic: directedPeerSays(state, delta, known, delivery), pendingRoomChanges: [], activities: state.acts, state, participantCount: inSquareCount(state), held: hold.active, ...(hold.reason === undefined ? {} : { holdReason: hold.reason }), ownActivityCount: countSays(state.acts, known), hardCap: state.hardCap }; }
 export async function entryPresentation(square: OpenSquare, name: string, lastN: number | null = 10): Promise<EntryPresentation> { const { state } = await square.artifact.read(); const known = resolveRosterName(state, name) ?? name; const publicActivities = state.acts.filter((activity) => activity.kind === 'say' || activity.kind === 'done'); return { joined: isCurrentlyJoined(state.acts, known), scene: state.warmup.join('\n').trim(), context: state.preamble.join('\n').trim(), joinContext: (state.preamble.at(-1) === '---' ? state.preamble.slice(0, -1) : state.preamble).join('\n').trim(), recentActivities: lastN === null ? publicActivities : publicActivities.slice(-lastN), state, sayNumbers: sayNumbers(state), participantCount: inSquareCount(state) }; }
-export async function historyPresentation(square: OpenSquare, options: ActivitiesOptions): Promise<HistoryPresentation> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); return { activities: coreActivities(state, options, delivery).map((activity) => ({ ...activity, perception: options.viewer === undefined ? 'full' as const : delivery.perceive(activity, options.viewer) })), sayNumbers: sayNumbers(state), presenceAnchors: anchors(state, delivery), participantCount: inSquareCount(state) }; }
+export async function historyPresentation(square: OpenSquare, options: ActivitiesOptions): Promise<HistoryPresentation> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); return { activities: coreActivities(state, options, delivery), sayNumbers: sayNumbers(state), presenceAnchors: anchors(state, delivery), participantCount: inSquareCount(state) }; }
 export async function participantsPresentation(square: OpenSquare): Promise<ReturnType<typeof coreParticipants>> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); return coreParticipants(state, square.clock(), delivery); }
 export async function listPresentation(square: OpenSquare): Promise<ListPresentation> { const { state } = await square.artifact.read(); return { context: state.preamble, participants: foldedState(state).participants.filter((participant) => participant.joined).sort((left, right) => (right.lastActiveAt ?? -Infinity) - (left.lastActiveAt ?? -Infinity) || left.name.localeCompare(right.name)).map((participant) => participant.name), activities: state.acts.filter((activity) => activity.kind === 'say').length }; }
 export async function statusPresentation(square: OpenSquare): Promise<StatusPresentation> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); const status = coreStatus(state, square.clock(), delivery); return { state, status, ...(status.latestAct?.kind === 'say' ? { latestActNumber: countSays(state.acts, status.latestAct.actor) } : {}) }; }

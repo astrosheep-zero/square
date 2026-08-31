@@ -19,6 +19,7 @@ import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease, 
 import {
   renderWatchForceTakeover,
   renderWatchAlreadyActive,
+  renderWatchReplaceMissing,
   renderWatchOutput,
   renderWatchReplaced,
   renderWatchStatus,
@@ -233,10 +234,16 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   let staleSince = nowMs();
   let currentLeaseId: string | undefined = start.leaseId;
   let nextHeartbeatAt = start.heartbeatAt + WATCH_HEARTBEAT_MS;
-  if (start.replaced) {
+  if (opts.replace) {
     const presentation = await watchPresentation(square, name);
     process.stdout.write(
-      withPathOutput(squarePath, renderWatchForceTakeover({ squarePath, name }), { participantCount: presentation.participantCount })
+      withPathOutput(
+        squarePath,
+        start.replaced
+          ? renderWatchForceTakeover({ squarePath, name })
+          : renderWatchReplaceMissing({ squarePath, name }),
+        { participantCount: presentation.participantCount }
+      )
     );
   }
   const idleMs = opts.idleMs ?? STALE_MS;

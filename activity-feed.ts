@@ -34,7 +34,7 @@ function matchesParticipants(act: StoredAct, participants: string[] | undefined)
 export function matchesFeedFilter(act: StoredAct, filter: ActivityFeedFilter, recipients?: readonly string[]): boolean {
   if (act.kind === 'say') {
     return matchesCatchFilter(
-      { actor: act.actor, body: act.body, reach: act.reach, ...(recipients === undefined ? {} : { recipients }) },
+      { actor: act.actor, body: act.body, mentions: act.mentions, reach: act.reach, ...(recipients === undefined ? {} : { recipients }) },
       filter
     );
   }

@@ -16,7 +16,7 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- If someone is speaking to a specific participant, they must mention them as `@name`.
+- If someone is speaking to a specific participant, they must use explicit `--mention name` metadata; an `@name` in the body is ordinary Markdown.
   The speaker and mentioned participants perceive the full body; everyone else perceives only the
   speaker walking over to those participants.
   A listener may also turn an ear toward a named sender; that standing relation makes the sender's
@@ -24,9 +24,9 @@ Boundaries should be light and useful:
   directed attention. A listener turns away explicitly or loses every outgoing listening relation
   when leaving the square. Audience is fixed when each activity lands; later listening changes never
   rewrite history.
-  An activity without any `@name` or bell remains valid and lands even when nobody is listening. The
-  human CLI asks for `--force` only when such an activity has no current listener; the core library
-  never treats an empty audience as invalid. A bell reaches all joined participants (everyone watching
+  An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The
+  human CLI requires explicit `--no-mention` for that bare reach; the core library never treats an empty
+  audience as invalid. A bell reaches all joined participants (everyone watching
   with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through

@@ -38,7 +38,7 @@ test('CLI test runner isolates host delivery identities', () => {
   }
 });
 
-test('participant identities include leading @ in human-readable output', () => {
+test('participants renders roster names without mention syntax', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   const joined = run(withName(file, 'Alice', ['join']), {
@@ -47,7 +47,8 @@ test('participant identities include leading @ in human-readable output', () => 
   assert.equal(joined.status, 0, joined.stderr);
   const roster = run(withPath(file, ['participants']));
   assert.equal(roster.status, 0, roster.stderr);
-  assert.match(roster.stdout, /@Alice/);
+  assert.match(roster.stdout, /  ○ Alice · active/);
+  assert.doesNotMatch(roster.stdout, /@Alice/);
 });
 
 test('listen and ignore commands control future bare delivery without gating express', async () => {
@@ -55,7 +56,11 @@ test('listen and ignore commands control future bare delivery without gating exp
     await square.join('Alice');
     await square.join('Bob');
   });
-  const bareWithoutListener = run(withName(file, 'Alice', ['express', 'bare thought']));
+  const missingReach = run(withName(file, 'Alice', ['express', 'bare thought']));
+  assert.equal(missingReach.status, 2);
+  assert.match(missingReach.stderr, /express needs --mention <name>, --no-mention, or --bell/);
+
+  const bareWithoutListener = run(withName(file, 'Alice', ['express', '--no-mention', 'bare thought']));
   assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);
 
   const ignoredBeforeListening = run(withName(file, 'Bob', ['ignore', 'Alice']));
@@ -69,7 +74,7 @@ test('listen and ignore commands control future bare delivery without gating exp
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.match(repeated.stdout, /already turns an ear toward @Alice/);
   assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', 'bare thought'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--no-mention', 'bare thought'])).status, 0);
   const listening = run(withName(file, 'Bob', ['listening']));
   assert.equal(listening.status, 0, listening.stderr);
   assert.match(listening.stdout, /@Alice/);
@@ -316,7 +321,7 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.equal(bobJoin.status, 0, bobJoin.stderr);
   assert.doesNotMatch(bobJoin.stdout, /catch --/);
 
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', 'hello Alice @Alice']), { env: codexDelivery }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', '--mention', 'Alice', 'hello Alice @Alice']), { env: codexDelivery }).status, 0);
   const aliceCatch = run(withName(file, 'Alice', ['catch', '--now']), { env: noDelivery });
   assert.equal(aliceCatch.status, 0, aliceCatch.stderr);
   assert.match(aliceCatch.stdout, /hello Alice/);
@@ -326,7 +331,7 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.match(aliceQuiet.stdout, /only footsteps/);
   assert.match(aliceQuiet.stdout, /catch --idle 30m/);
 
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', 'hello Bob @Bob']), { env: noDelivery }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'hello Bob @Bob']), { env: noDelivery }).status, 0);
   const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: codexDelivery });
   assert.equal(bobCatch.status, 0, bobCatch.stderr);
   assert.match(bobCatch.stdout, /hello Bob/);
@@ -411,7 +416,7 @@ test('history rejects removed filter aliases', async () => {
   }
 });
 
-test('history reports unknown options and invalid limits with a next command', async () => {
+test('history reports unknown options and bounded limits with a next command', async () => {
   const file = await persistSquare(async () => {});
 
   const unknown = run(withPath(file, ['history', '--wat']));
@@ -423,9 +428,31 @@ test('history reports unknown options and invalid limits with a next command', a
   const invalids = await Promise.all(limits.map((value) => runAsync(withPath(file, ['history', '--limit', value]))));
   for (const [index, invalid] of invalids.entries()) {
     assert.notEqual(invalid.status, 0, limits[index]);
-    assert.match(invalid.stderr, /✕ --limit needs a positive number/);
-    assert.match(invalid.stderr, /history --limit 30\n$/);
+    assert.match(invalid.stderr, /✕ --limit needs a positive integer/);
+    assert.match(invalid.stderr, /history --limit 100\n$/);
   }
+
+  const overLimit = run(withPath(file, ['history', '--limit', '101']));
+  assert.equal(overLimit.status, 2);
+  assert.match(overLimit.stderr, /--limit is capped at 100/);
+  assert.match(overLimit.stderr, /history --limit 100\n$/);
+});
+
+test('join rejects removed exhaustive history and bounds --last', async () => {
+  const file = await persistSquare(async () => {});
+
+  const exhaustive = run(withName(file, 'Alice', ['join', '--all']));
+  assert.equal(exhaustive.status, 2);
+  assert.match(exhaustive.stderr, /invalid arguments for join/);
+
+  const overLimit = run(withName(file, 'Alice', ['join', '--last', '101']));
+  assert.equal(overLimit.status, 2);
+  assert.match(overLimit.stderr, /--last is capped at 100/);
+  assert.match(overLimit.stderr, /--as 'Alice' join --last 100\n$/);
+
+  const zero = run(withName(file, 'Alice', ['join', '--last', '0']));
+  assert.equal(zero.status, 2);
+  assert.match(zero.stderr, /--last needs a positive integer/);
 });
 
 test('CLI activity selectors accept only canonical textual ids', async () => {
@@ -436,12 +463,12 @@ test('CLI activity selectors accept only canonical textual ids', async () => {
 
   const underscore = ['act', '1'].join('_');
   const cases = [
-    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', underscore, 'later @Alice'])],
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--no-mention', '--reply', underscore, 'later @Alice'])],
     ['--at', withPath(file, ['history', '--at', underscore])],
     ['--after', withPath(file, ['history', '--after', underscore])],
-    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', '1', 'later @Alice'])],
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--no-mention', '--reply', '1', 'later @Alice'])],
     ['--at', withPath(file, ['history', '--at', '1'])],
-    ['--reply', withName(file, 'Alice', ['express', '--force', '--reply', ` ${formatActivityId(1)} `, 'later @Alice'])],
+    ['--reply', withName(file, 'Alice', ['express', '--force', '--no-mention', '--reply', ` ${formatActivityId(1)} `, 'later @Alice'])],
     ['--at', withPath(file, ['history', '--at', ` ${formatActivityId(1)} `])],
   ];
   const results = await Promise.all(cases.map(([, args]) => runAsync(args)));

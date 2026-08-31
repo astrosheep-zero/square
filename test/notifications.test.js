@@ -25,7 +25,7 @@ async function fixture() {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'private payload @Bob', index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'private payload @Bob', mentions: ['Bob'], index: 2 },
   ];
   const squareState = {
     hardCap: null,

@@ -23,7 +23,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js';
-import { formatActivityId, isIgnored, isListening, listeningTo, validate, type FoldedSquareState, type Perception } from './square-core.js';
+import { formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 
@@ -44,8 +44,7 @@ export function resolveKnownName(squareState: SquareState, name: string): string
   validateName(name);
   const known = resolveRosterName(squareState, name);
   if (known === undefined) {
-    const roster = rosterNames(squareState);
-    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(name)}". Expected one of: ${roster.map(participantIdentity).join(', ')}.`);
+    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(name)}".`);
   }
   return known;
 }
@@ -110,6 +109,7 @@ function requireStanding(squareState: SquareState, act: Act): void {
   if (result.ok) return;
   if (result.reason === 'done') throw new SquareError('already_done', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} is already done`);
   if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} has not joined this square`);
+  if (result.reason === 'listening_limit') throw new SquareError('invalid_args', `A participant can listen to at most ${result.limit} others`);
   throw new Error(`Unexpected standing validation result: ${result.reason}`);
 }
 
@@ -132,13 +132,33 @@ const UNREAD_PREVIEW_LIMIT = 3;
 
 export function decideAct(
   squareState: SquareState,
-  input: { name: string; body: string; force: boolean; now: number; reach?: Reach; reply?: number }
+  input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number }
 ): ActDecision {
   const { now, force } = input;
   const name = resolveStandingName(squareState, input.name);
   const body = input.body;
   if (body.trim() === '') throw new SquareError('invalid_args', 'express body cannot be empty');
   const reach = input.reach;
+  const state = foldedState(squareState);
+  const requestedMentions = input.mentions ?? [];
+  const mentionNames: string[] = [];
+  const joinedNames = state.participants.filter((participant) => participant.joined).map((participant) => participant.name);
+  for (const requested of requestedMentions) {
+    validateName(requested);
+    const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
+    if (resolved === undefined) {
+      throw new SquareError('invalid_args', `Unknown mention target ${participantIdentity(requested)}.`);
+    }
+    if (!mentionNames.some((existing) => sameName(existing, resolved))) {
+      if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {
+        throw new SquareError('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
+      }
+      mentionNames.push(resolved);
+    }
+  }
+  if (reach === 'bell' && mentionNames.length > 0) {
+    throw new SquareError('invalid_args', 'A bell cannot be combined with --mention.');
+  }
   const reply = input.reply;
   if (reply !== undefined) {
     if (!Number.isSafeInteger(reply) || reply < 0 || reply >= squareState.runtime.nextActIndex) {
@@ -147,12 +167,11 @@ export function decideAct(
     }
   }
 
-  const state = foldedState(squareState);
   const current = participantState(state, name);
   const result = validate(
     state,
     {
-      kind: 'say', actor: name, at: now, body,
+      kind: 'say', actor: name, at: now, body, mentions: mentionNames,
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
@@ -160,6 +179,7 @@ export function decideAct(
   );
   if (!result.ok) {
     if (result.reason === 'done') throw new SquareError('already_done', `${name} is already done`);
+    if (result.reason === 'mention_limit') throw new SquareError('invalid_args', `An activity can mention at most ${result.limit} participants`);
     if (result.reason === 'held') return { type: 'held', reason: result.hold.reason };
     if (result.reason === 'hard_cap') return { type: 'capped', count: result.count, hardCap: result.hardCap };
     if (result.reason === 'throttled') return { type: 'throttled', delayMs: result.delayMs };
@@ -213,7 +233,7 @@ export function decideAct(
   return {
     type: 'sent',
     act: {
-      kind: 'say', actor: name, at: now, body,
+      kind: 'say', actor: name, at: now, body, mentions: mentionNames,
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
@@ -363,7 +383,6 @@ export function coreParticipants(squareState: SquareState, now: number, delivery
 export function coreActivities(squareState: SquareState, opts: ActivitiesOptions, suppliedDelivery?: DeliveryModel): StoredAct[] {
   const participants = opts.participants ?? [];
   const canonicalParticipants = participants.map((participant) => resolveKnownName(squareState, participant));
-  const viewer = opts.viewer !== undefined ? resolveKnownName(squareState, opts.viewer) : undefined;
   let acts = [...squareState.acts];
   let delivery = suppliedDelivery;
   const projected = (): DeliveryModel => delivery ??= deriveDeliveryModel(squareState);
@@ -392,11 +411,6 @@ export function coreActivities(squareState: SquareState, opts: ActivitiesOptions
   if (opts.mention != null) {
     const mention = resolveKnownName(squareState, opts.mention);
     acts = acts.filter((act) => act.kind === 'say' && projected().plan(act).some((item) => sameName(item.recipient, mention)));
-  }
-  if (opts.pending) {
-    if (viewer === undefined) return [];
-    const pendingIndexes = new Set(projected().pendingFor(viewer).map((notification) => notification.item.index));
-    acts = acts.filter((act) => pendingIndexes.has(act.index));
   }
   const search = opts.grep !== undefined ? { pattern: opts.grep, fixed: false } : opts.fixed !== undefined ? { pattern: opts.fixed, fixed: true } : undefined;
   if (search !== undefined && search.pattern !== '') {

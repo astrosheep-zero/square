@@ -31,6 +31,7 @@ import {
   type CommandContext,
   type CommandSpec,
   fail,
+  parseBoundedLimit,
   parseHardCap,
   parsePositiveInteger,
   readStdin,
@@ -48,7 +49,7 @@ interface BuildIntent {
 
 interface JoinIntent {
   name: string;
-  lastN: number | null;
+  lastN: number;
   kick: boolean;
 }
 
@@ -57,6 +58,8 @@ interface ActivityIntent {
   activity: string;
   force: boolean;
   noWait: boolean;
+  noMention: boolean;
+  mentions: string[];
   reach?: Reach;
   reply?: number;
 }
@@ -70,6 +73,9 @@ interface ListenerIntent {
   name: string;
   target?: string;
 }
+
+const JOIN_DEFAULT_LAST = 10;
+const JOIN_MAX_LAST = 100;
 
 function parseBuild(argv: string[]): BuildIntent {
   const options: BuildOptions & { hardCap: HardCap } = { force: false, hardCap: null };
@@ -125,21 +131,26 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
 };
 
 function parseJoin(argv: string[], context: CommandContext): JoinIntent {
-  let lastN: number | null = 10;
+  const name = requireParticipant(context.name);
+  const squarePath = requireSquarePath(context);
+  let lastN = JOIN_DEFAULT_LAST;
   let kick = false;
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--last') {
-      lastN = parsePositiveInteger(requireValue(argv, index, argv[index]), argv[index]);
+      lastN = parseBoundedLimit(
+        argv[index + 1],
+        '--last',
+        JOIN_MAX_LAST,
+        `${participantCommandPrefix(squarePath, name)} join --last ${JOIN_MAX_LAST}`,
+      );
       index += 1;
-    } else if (argv[index] === '--all') {
-      lastN = null;
     } else if (argv[index] === '--kick') {
       kick = true;
     } else {
       usage(context.command);
     }
   }
-  return { name: requireParticipant(context.name), lastN, kick };
+  return { name, lastN, kick };
 }
 
 export const joinCommand: CommandSpec<JoinIntent, string> = {
@@ -211,6 +222,8 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   let force = false;
   let noWait = false;
   let bell = false;
+  let noMention = false;
+  const mentions: string[] = [];
   let reply: number | undefined;
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
@@ -219,6 +232,11 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else if (argument === '--no-wait') noWait = true;
     else if (argument === '--beside') fail('✕ express does not know --beside\n» square express --help');
     else if (argument === '--bell') bell = true;
+    else if (argument === '--no-mention') noMention = true;
+    else if (argument === '--mention') {
+      mentions.push(requireParticipant(requireValue(argv, index, argument)));
+      index += 1;
+    }
     else if (argument === '--reply') {
       const replyIndex = parseActivityId(requireValue(argv, index, argument));
       if (replyIndex === undefined) fail('Invalid --reply: expected an activity id like act/12');
@@ -228,13 +246,16 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else bodyArgs.push(argument);
   }
   const reach = bell ? 'bell' : undefined;
+  if (bell && (noMention || mentions.length > 0)) fail('✕ --bell cannot be combined with --mention or --no-mention\n» square express --help');
+  if (noMention && mentions.length > 0) fail('✕ --no-mention cannot be combined with --mention\n» square express --help');
+  if (!bell && !noMention && mentions.length === 0) fail('✕ express needs --mention <name>, --no-mention, or --bell\n» square express --help');
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
-      if (!process.stdin.isTTY) return { name: requireParticipant(context.name), activity: '-', force, noWait, reach, reply };
+      if (!process.stdin.isTTY) return { name: requireParticipant(context.name), activity: '-', force, noWait, noMention, mentions, reach, reply };
     }
     fail("express requires a body argument (a quoted string or '-' with piped stdin)");
   }
-  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, reach, reply };
+  return { name: requireParticipant(context.name), activity: bodyArgs[0], force, noWait, noMention, mentions, reach, reply };
 }
 
 export const expressCommand: CommandSpec<ActivityIntent> = {
@@ -242,10 +263,11 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const body = await resolveBody(intent.activity);
-    const reachArg = intent.reach === 'bell' ? ' --bell' : '';
+    const reachArg = intent.reach === 'bell' ? ' --bell' : intent.noMention ? ' --no-mention' : intent.mentions.map((name) => ` --mention ${quoteShell(name)}`).join('');
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
       noWait: intent.noWait,
+      mentions: intent.mentions,
       reach: intent.reach,
       reply: intent.reply,
       forceCommand: `${participantCommandPrefix(squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply ${formatActivityId(intent.reply)}`} -`,

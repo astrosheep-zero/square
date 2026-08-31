@@ -110,7 +110,7 @@ test('any self activity advances the actor cursor', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/0');
-  await alice.express('hello @Alice', { force: true });
+  await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/1');
   await alice.done('bye');
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/2');
@@ -121,7 +121,7 @@ test('catch mention returns only matching says and omits peer room changes', asy
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await bob.express('hello @Alice', { force: true });
+  await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
   await square.join('Cara');
   const caught = await alice.catch({ mention: true });
   assert.deepEqual(caught.activities.map((activity) => ({ id: activity.id, kind: activity.kind, body: activity.body })), [
@@ -136,8 +136,8 @@ test('catch from a named peer keeps that peer\'s directed says only', async () =
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   const cara = await square.join('Cara');
-  await bob.express('hello from bob @Alice', { force: true });
-  await cara.express('hello from cara @Alice', { force: true });
+  await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
+  await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
   await bob.done('bye');
   const caught = await alice.catch({ from: ['Bob'] });
   assert.deepEqual(
@@ -180,8 +180,8 @@ test('catch still delivers an unreceipted mention behind a self-advanced cursor'
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await alice.express('question @Bob', { force: true });
-  await bob.express('answer @Alice', { force: true });
+  await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
+  await bob.express('answer @Alice', { force: true, mentions: ['Alice'] });
   const caught = await bob.catch();
   assert.equal(caught.activities.some((activity) => activity.body === 'question @Bob'), true);
   const again = await bob.catch();
@@ -194,7 +194,7 @@ test('catch and express gating share directed-say attention', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: time.now });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await bob.express('direct @Alice', { force: true });
+  await bob.express('direct @Alice', { force: true, mentions: ['Alice'] });
   time.set(100000);
   await assert.rejects(
     () => alice.express('reply @Bob'),
@@ -221,8 +221,8 @@ test('history from a named participant keeps that participant\'s activities', as
   await square.join('Alice');
   await square.join('Bob');
   const cara = await square.join('Cara');
-  await (await square.join('Bob')).express('hello from bob @Alice', { force: true });
-  await cara.express('hello from cara @Alice', { force: true });
+  await (await square.join('Bob')).express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
+  await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
   await cara.done('later');
   const fromCara = await square.history({ from: ['Cara'], limit: 100 });
   assert.deepEqual(
@@ -237,28 +237,25 @@ test('history from a named participant keeps that participant\'s activities', as
   await closeSquare(square);
 });
 
-test('a mention target perceives the full body and everyone else perceives presence', async () => {
+test('catch is directed while history is the full archive', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   const cara = await square.join('Cara');
-  const expressed = await alice.express('secret reach phrase @Bob', { force: true });
+  const expressed = await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
   const bobCaught = await bob.catch();
   const bobMention = bobCaught.activities.find((activity) => activity.id === expressed.activity.id);
   assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full' });
   const caraMention = (await cara.history({ limit: 100 })).find((activity) => activity.id === expressed.activity.id);
-  assert.equal(caraMention.perception, 'presence');
-  assert.equal('body' in caraMention, false);
+  assert.equal(caraMention?.body, 'secret reach phrase @Bob');
   assert.equal((await square.history({ limit: 100 })).find((activity) => activity.id === expressed.activity.id).body, 'secret reach phrase @Bob');
-  const secondExpress = await alice.express('two targets @Cara then @bob', { force: true });
+  const secondExpress = await alice.express('two targets @Cara then @bob', { force: true, mentions: ['Cara', 'bob'] });
   const dan = await square.join('Dan');
   const later = await dan.history({ limit: 100 });
   const first = later.find((activity) => activity.id === expressed.activity.id);
   const second = later.find((activity) => activity.id === secondExpress.activity.id);
-  assert.equal(first.perception, 'presence');
-  assert.equal('body' in first, false);
-  assert.equal(second.perception, 'presence');
-  assert.equal('body' in second, false);
+  assert.equal(first?.body, 'secret reach phrase @Bob');
+  assert.equal(second?.body, 'two targets @Cara then @bob');
   await closeSquare(square);
 });
 
@@ -266,7 +263,7 @@ test('history remains read-only until catch writes a delivery receipt', async ()
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  const expressed = await alice.express('hello @Bob please check', { force: true });
+  const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
   assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), false);
   await bob.history({ limit: 100 });
   await square.history({ grep: 'please check' });
@@ -282,8 +279,8 @@ test('history grep searches ids, participant names, and bodies and honors limit 
   const square = Square.inMemory({ markdown: 'context', hardCap: null, clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await alice.express('first inventory @Bob', { force: true });
-  await bob.express('facts only @Alice', { force: true });
+  await alice.express('first inventory @Bob', { force: true, mentions: ['Bob'] });
+  await bob.express('facts only @Alice', { force: true, mentions: ['Alice'] });
   assert.equal((await square.history({ grep: '^act/2$' }))[0].body, 'first inventory @Bob');
   assert.equal((await square.history({ grep: '^Bob$' }))[0].body, 'facts only @Alice');
   assert.deepEqual(
@@ -291,7 +288,7 @@ test('history grep searches ids, participant names, and bodies and honors limit 
     ['act/2', 'act/3'],
   );
   for (let index = 0; index < 12; index += 1) {
-    await alice.express(`needle ${index} @Alice`, { force: true });
+    await alice.express(`needle ${index} @Alice`, { force: true, mentions: ['Alice'] });
   }
   assert.deepEqual(
     (await square.history({ grep: 'needle', limit: 3 })).map((activity) => activity.body),
@@ -314,7 +311,7 @@ test('an unread directed body is not leaked when express is blocked', async () =
   time.set(3000);
   const cara = await square.join('Cara');
   time.set(4000);
-  await alice.express('secret pending phrase @Bob', { force: true });
+  await alice.express('secret pending phrase @Bob', { force: true, mentions: ['Bob'] });
   time.set(100000);
   await assert.doesNotReject(() => cara.express('cara tries after unrelated directed say @Alice'));
   await closeSquare(square);
@@ -350,7 +347,7 @@ test('stored say omits mention reach while bell persists explicitly', async () =
   const square = await Square.build({ path: squarePath, markdown: 'context', clock: time.tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await alice.express('mention @Bob', { force: true });
+  await alice.express('mention @Bob', { force: true, mentions: ['Bob'] });
   await bob.express('bell line', { force: true, reach: 'bell' });
   await closeSquare(square);
   const persisted = await loadSquare(squarePath);
@@ -363,11 +360,11 @@ test('express reply preserves one causal activity reference', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  const question = await alice.express('question @Bob', { force: true });
-  const replied = await bob.express('answer @Alice', { force: true, reply: question.activity.id });
+  const question = await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
+  const replied = await bob.express('answer @Alice', { force: true, mentions: ['Alice'], reply: question.activity.id });
   assert.equal(replied.activity.reply, question.activity.id);
   await assert.rejects(
-    () => bob.express('orphan @Alice', { force: true, reply: 'act/99' }),
+    () => bob.express('orphan @Alice', { force: true, mentions: ['Alice'], reply: 'act/99' }),
     (error) => error instanceof SquareError && error.code === 'invalid_args' && /Unknown reply activity: act\/99/.test(error.message),
   );
   await closeSquare(square);
@@ -378,10 +375,10 @@ test('snapshot counts only people still in the square and tracks done participan
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   for (let index = 0; index < 12; index += 1) {
-    await alice.express(`activity ${index} @Bob`, { force: true });
+    await alice.express(`activity ${index} @Bob`, { force: true, mentions: ['Bob'] });
   }
   await bob.done('leaving');
-  await alice.express('last activity @Alice', { force: true });
+  await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
   const snapshot = await square.snapshot();
   assert.equal(snapshot.hardCap, 100);
   assert.equal(snapshot.participants.filter((participant) => participant.state === 'joined').length, 1);
@@ -423,13 +420,13 @@ test('hold, unread room changes, and an unread join gate express independently',
   await bob.hold('pause');
   time.set(200000);
   await assert.rejects(
-    () => alice.express('late body @Bob'),
+    () => alice.express('late body @Bob', { mentions: ['Bob'] }),
     (error) => error instanceof SquareError && error.code === 'held' && error.facts?.holder === 'Bob',
   );
   time.set(210000);
   await bob.resume();
   time.set(220000);
-  await assert.doesNotReject(() => alice.express('after resume @Bob'));
+  await assert.doesNotReject(() => alice.express('after resume @Bob', { mentions: ['Bob'] }));
 
   const open = Square.inMemory({ markdown: 'context', clock: time.now });
   time.set(1000);
@@ -437,7 +434,7 @@ test('hold, unread room changes, and an unread join gate express independently',
   time.set(2000);
   await open.join('Bob');
   time.set(200000);
-  const welcomed = await welcomeAlice.express('welcome @Bob');
+  const welcomed = await welcomeAlice.express('welcome @Bob', { mentions: ['Bob'] });
   assert.equal(welcomed.activity.body, 'welcome @Bob');
   await closeSquare(square);
   await closeSquare(open);
@@ -449,7 +446,7 @@ test('held, throttled, and capped expressions keep their coded errors', async ()
   const host = await heldSquare.join('Host');
   await host.hold('pause');
   await assert.rejects(
-    () => heldAlice.express('held body @Host'),
+    () => heldAlice.express('held body @Host', { mentions: ['Host'] }),
     (error) => error instanceof SquareError && error.code === 'held',
   );
   await closeSquare(heldSquare);
@@ -461,18 +458,18 @@ test('held, throttled, and capped expressions keep their coded errors', async ()
     clock: tickingClock().tick,
   });
   const throttleAlice = await throttleSquare.join('Alice');
-  await throttleAlice.express('first @Alice', { force: true });
+  await throttleAlice.express('first @Alice', { force: true, mentions: ['Alice'] });
   await assert.rejects(
-    () => throttleAlice.express('throttled body @Alice'),
+    () => throttleAlice.express('throttled body @Alice', { mentions: ['Alice'] }),
     (error) => error instanceof SquareError && error.code === 'throttled' && error.facts?.retryAfterMs > 0,
   );
   await closeSquare(throttleSquare);
 
   const capSquare = Square.inMemory({ markdown: 'context', hardCap: 1, clock: tickingClock().tick });
   const capAlice = await capSquare.join('Alice');
-  await capAlice.express('first @Alice', { force: true });
+  await capAlice.express('first @Alice', { force: true, mentions: ['Alice'] });
   await assert.rejects(
-    () => capAlice.express('final body @Alice'),
+    () => capAlice.express('final body @Alice', { mentions: ['Alice'] }),
     (error) => error instanceof SquareError && error.code === 'capped',
   );
   await closeSquare(capSquare);

@@ -2,7 +2,7 @@ import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } 
 import { matchesMentionTarget, readCursor, recordObservation } from './runtime.js';
 import { participantIdentity } from './participant-identity.js';
 import { SquareError, sameName, type SquareState, type StoredAct, validateName } from './model.js';
-import { resolveRosterName, rosterNames } from './runtime.js';
+import { resolveRosterName } from './runtime.js';
 import type { CatchOptions } from './square-facade.js';
 
 export interface CatchDecision {
@@ -32,7 +32,7 @@ function resolveCatchName(state: SquareState, requestedName: string): string {
   validateName(requestedName);
   const known = resolveRosterName(state, requestedName);
   if (known === undefined) {
-    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(requestedName)}". Expected one of: ${rosterNames(state).map(participantIdentity).join(', ')}.`);
+    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(requestedName)}".`);
   }
   return known;
 }

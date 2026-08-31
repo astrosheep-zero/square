@@ -142,9 +142,10 @@ function validateStoredAct(value: unknown): value is StoredAct {
         && validateActor(value.actor, true)
         && (value.body === undefined || typeof value.body === 'string');
     case 'say':
-      return hasExactKeys(value, ['kind', 'actor', 'at', 'body', 'index'], ['reach', 'reply'])
+      return hasExactKeys(value, ['kind', 'actor', 'at', 'body', 'index'], ['mentions', 'reach', 'reply'])
         && validateActor(value.actor, true)
         && typeof value.body === 'string'
+        && (value.mentions === undefined || isStringArray(value.mentions))
         && (value.reach === undefined || value.reach === 'bell')
         && (value.reply === undefined || isNonNegativeInteger(value.reply));
     case 'hold':

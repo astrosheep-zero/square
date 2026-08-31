@@ -72,6 +72,15 @@ export function parsePositiveInteger(value: string, flag: string): number {
   return parsed;
 }
 
+export function parseBoundedLimit(value: string | undefined, flag: string, max: number, retry: string): number {
+  if (value === undefined || value.startsWith('--') || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    fail(`✕ ${flag} needs a positive integer\n» ${retry}`);
+  }
+  const parsed = Number(value);
+  if (parsed > max) fail(`✕ ${flag} is capped at ${max}\n» ${retry}`);
+  return parsed;
+}
+
 export function parseNonNegativeInteger(value: string, flag: string): number {
   if (!/^\d+$/.test(value)) fail(`Invalid ${flag}: expected a non-negative integer.`);
   const parsed = Number(value);
@@ -138,10 +147,23 @@ export interface ParsedGlobalArgs {
   args: string[];
 }
 
+function withoutAsCommand(rawArgs: readonly string[]): string {
+  const args: string[] = [];
+  for (let index = 0; index < rawArgs.length; index++) {
+    if (rawArgs[index] === '--as') {
+      index += 1;
+      continue;
+    }
+    args.push(rawArgs[index]);
+  }
+  return `square ${args.map((arg) => /^[A-Za-z0-9_./:=@+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`).join(' ')}`;
+}
+
 export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalArgs> {
   const args = [...rawArgs];
   let requestedPath: string | undefined;
   let name: string | undefined;
+  let hasExplicitName = false;
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--location') {
       requestedPath = requireValue(args, index, args[index]);
@@ -149,14 +171,18 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
       index -= 1;
     } else if (args[index] === '--as') {
       name = requireValue(args, index, args[index]);
+      hasExplicitName = true;
       args.splice(index, 2);
       index -= 1;
     }
   }
+  const command = args[0];
+  if (command === 'history' && hasExplicitName) {
+    fail(`✕ history is an archive and does not use --as\n» ${withoutAsCommand(rawArgs)}`);
+  }
   if (name === undefined) name = configuredName();
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
-  const command = args[0];
   const configured = configuredLocation();
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
     fail(`✕ ${command} needs a square location\n» square ls`);

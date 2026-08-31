@@ -21,14 +21,14 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --depth <N>  Descend through at most N directory levels (default 4; 0 scans only the current directory).'],
   },
   {
-    names: ['join'], usage: '--as <name> join [--last N | --all] [--kick]', usesSquare: true, group: 'participant',
+    names: ['join'], usage: '--as <name> join [--last N] [--kick]', usesSquare: true, group: 'participant',
     summary: 'Step into the square and read its current context.',
-    details: ['Options:', '  --last <N>  Show the last N public activities (default 10).', '  --all       Show the complete history.'],
+    details: ['Options:', '  --last <N>  Show the last N public activities (default 10, maximum 100).'],
   },
   {
-    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--bell] [--reply <activity-id>] <activity | ->', usesSquare: true, group: 'participant',
+    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] (--mention <name>... | --no-mention | --bell) [--reply <activity-id>] <activity | ->', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
-    details: ['Reach:', '  @name             Address someone in the square. They hear the body even without listen; everyone else sees you walk over.', '  bare              Lands in history even with no listener; listen opts someone into future bare delivery.', "  --bell            Call every participant's attention to this activity without a mention.", '', 'Options:', '  -f, --force       Express without first catching unread activity or attention etiquette.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <activity-id>   Mark this activity as a reply to an earlier activity (for example act/12).'],
+    details: ['Reach:', '  --mention <name>  Address one participant; repeat for multiple participants. The body stays unchanged.', '  --no-mention      Land a bare activity explicitly; listen opts someone into future bare delivery.', "  --bell            Call every participant's attention to this activity.", '', 'Options:', '  -f, --force       Express without first catching unread activity or attention etiquette.', '  --no-wait         If held or throttled, save a draft and return.', '  --reply <activity-id>   Mark this activity as a reply to an earlier activity (for example act/12).'],
   },
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future bare says.' },
   { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Ignore one participant\'s future mentions and bare says.' },
@@ -51,12 +51,16 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   {
-    names: ['history'], usage: '[--as <name>] history [filters] [output]', usesSquare: true, group: 'participant',
+    names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search the archive without changing what you have caught.',
-    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>                  Match activities after a time.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match direct attention for a participant.', '  --pending                       Match attention waiting for --as <name>.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --before <id>                   Read the page immediately before an activity.', '  --after <id>                    Read the page immediately after an activity.', '', 'Results:', '  --limit <N>                     Page size (default 10).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --no-truncate  --json  --format <fields>', '  Bodies are previews by default; --no-truncate expands them. --as keeps participant perception.'],
+    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>                  Match activities after a time.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match direct attention for a participant.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --before <id>                   Read the page immediately before an activity.', '  --after <id>                    Read the page immediately after an activity.', '', 'Results:', '  --limit <N>                     Page size (default 10, maximum 100).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --no-truncate  --json  --format <fields>', '  One result shows its full body; multiple results use previews.', '  --no-truncate shows every original body.'],
   },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
-  { names: ['participants'], usage: 'participants', usesSquare: true, group: 'host', summary: 'Show the full participant roster and current states.' },
+  {
+    names: ['participants'], usage: 'participants [--limit <count>]', usesSquare: true, group: 'host',
+    summary: 'Show the participant roster and current states.',
+    details: ['Options:', '  --limit <count>  Show the first count names in roster order (default 20, maximum 100).'],
+  },
   { names: ['hold'], usage: '--as <name> hold [reason | -]', usesSquare: true, group: 'participant', summary: 'Raise a hand and pause participant activity.' },
   { names: ['resume'], usage: '--as <name> resume', usesSquare: true, group: 'participant', summary: 'Lower the raised hand and resume activity.' },
   {
@@ -135,16 +139,20 @@ export function renderSubcommandHelp(command: string): string | undefined {
 
 export function helpRequest(rawArgs: string[]): { command?: string } | undefined {
   const args: string[] = [];
+  let hasExplicitName = false;
   for (let index = 0; index < rawArgs.length; index++) {
     const arg = rawArgs[index];
     if (arg === '--location' || arg === '--as') {
       const value = rawArgs[index + 1];
       if (value === undefined || value.startsWith('--')) return undefined;
+      if (arg === '--as') hasExplicitName = true;
       index++;
       continue;
     }
     args.push(arg);
   }
+
+  if (hasExplicitName && args[0] === 'history') return undefined;
 
   if (isHelpFlag(args[0])) return {};
   if (args[0] === 'help') {

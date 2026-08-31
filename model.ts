@@ -146,9 +146,6 @@ export interface ActivitiesOptions {
   beforeContext?: number;
   afterContext?: number;
   mention?: string;
-  /** Undelivered mention/bell items for viewer only (read-only; requires viewer). */
-  pending?: boolean;
-  viewer?: string;
   grep?: string;
   fixed?: string;
   order?: 'asc' | 'desc';

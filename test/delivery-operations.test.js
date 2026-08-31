@@ -19,8 +19,8 @@ test('activity-scoped wake results ignore older pending attention without routes
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
     { kind: 'join', actor: 'Carol', at: 3, index: 2 },
-    { kind: 'say', actor: 'Alice', at: 4, body: 'older @Bob', index: 3 },
-    { kind: 'say', actor: 'Alice', at: 5, body: 'current @Carol', index: 4 },
+    { kind: 'say', actor: 'Alice', at: 4, body: 'older @Bob', mentions: ['Bob'], index: 3 },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'current @Carol', mentions: ['Carol'], index: 4 },
   );
   state.runtime.nextActIndex = 5;
   await writeSquareFile(location, state);
@@ -50,7 +50,7 @@ test('presentation claim is exclusive across concurrent executors', async () => 
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
@@ -81,7 +81,7 @@ test('presentation evidence from an older session does not block a new binding',
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
@@ -167,7 +167,7 @@ test('clipped presentation stays retryable and never records presented evidence'
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);

@@ -75,7 +75,7 @@ export function nowMs(): number {
 }
 
 /** Pure directed-activity filter. Bell matches every viewer; mentions match by audience. */
-export function matchesMentionTarget(act: { body: string; reach?: Reach }, mention: string | true): boolean {
+export function matchesMentionTarget(act: { body: string; mentions?: readonly string[]; reach?: Reach }, mention: string | true): boolean {
   const audience = audienceOf(act);
   if (mention === true) return audience.kind === 'bell' || audience.names.length > 0;
   return audienceIncludes(audience, mention);
