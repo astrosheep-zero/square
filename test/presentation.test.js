@@ -5,11 +5,20 @@ import {
   renderActivitiesView,
   renderActivityBlocked,
   renderAmbientEvent,
+  renderDoctorUnfixable,
   renderPresenceAnchor,
   renderWatchAlreadyActive,
   renderWatchForceTakeover,
   renderWatchReplaceMissing,
 } from '../dist/presentation.js';
+
+test('unfixable doctor detail is bounded to 160 Unicode code points', () => {
+  const detail = '界'.repeat(200);
+  assert.equal(
+    renderDoctorUnfixable(detail),
+    `✕ unreadable artifact\n  · ${[...detail].slice(0, 159).join('')}…`
+  );
+});
 
 test('legacy presence rendering bounds identity lists and names the remainder', () => {
   const names = Array.from({ length: 12 }, (_value, index) => `Person${index}`);

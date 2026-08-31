@@ -2,6 +2,7 @@ import fs from 'node:fs';
 
 import { doctorDeliveryHealth } from './delivery-health.js';
 import { wakeGraceMs } from './notifications.js';
+import { truncateExternalDiagnostic } from './presentation.js';
 
 import {
   doctorClaudePlugin,
@@ -58,7 +59,8 @@ async function doctorHost(label: string, inspect: () => Promise<string[]>): Prom
   try {
     return result(await inspect());
   } catch (error) {
-    return result([`○ ${label} doctor unavailable (${error instanceof Error ? error.message : String(error)})`]);
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    return result([`○ ${label} doctor unavailable (${truncateExternalDiagnostic(diagnostic)})`]);
   }
 }
 

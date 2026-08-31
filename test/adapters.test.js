@@ -36,6 +36,7 @@ import { recordJoin } from '../dist/registry.js';
 import { hasPresentedForOwner } from '../dist/presented.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/index.js';
+import { executeHarnessTarget } from '../dist/harness.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installOpenCodePlugin,
@@ -55,6 +56,7 @@ function sampleInbox() {
 
 function enabledPlugins(pluginId) { return JSON.stringify({ installed: [{ pluginId, installed: true, enabled: true }] }); }
 function enabledClaudePlugins(pluginId) { return JSON.stringify([{ id: pluginId, version: SQUARE_IDENTITY.packageVersion, enabled: true, installPath: '/tmp/plugin' }]); }
+function clippedDiagnostic(value) { return `${[...value].slice(0, 159).join('')}…`; }
 
 test('multi-target installation continues after an independent target fails', async () => {
   const attempted = [];
@@ -154,6 +156,40 @@ test('OpenCode doctor runs debug config through its runtime boundary', () => {
   assert.match(
     verifyOpenCodeRuntime(home, () => ({ status: 1, stdout: '', stderr: 'extension failed' })),
     /OpenCode debug config failed: extension failed/
+  );
+});
+
+test('harness doctor bounds external diagnostics without changing its category', async () => {
+  const previous = process.env.SQUARE_CLAUDE_BIN;
+  const missingCommand = `square-missing-${'x'.repeat(240)}`;
+  process.env.SQUARE_CLAUDE_BIN = missingCommand;
+  try {
+    const result = await executeHarnessTarget('claude', 'doctor', { homeDir: os.tmpdir(), force: false });
+    const prefix = '○ Claude doctor unavailable (';
+    const diagnostic = result.lines[0].slice(prefix.length, -1);
+    assert.match(result.lines[0], /^○ Claude doctor unavailable \(/);
+    assert.equal([...diagnostic].length, 160);
+    assert.match(diagnostic, /…$/);
+  } finally {
+    if (previous === undefined) delete process.env.SQUARE_CLAUDE_BIN;
+    else process.env.SQUARE_CLAUDE_BIN = previous;
+  }
+});
+
+test('OpenCode runtime doctor bounds stderr, stdout, and thrown diagnostics', () => {
+  const diagnostic = '界'.repeat(200);
+  const clipped = clippedDiagnostic(diagnostic);
+  assert.equal(
+    verifyOpenCodeRuntime('/tmp/square-opencode', () => ({ status: 1, stdout: '', stderr: diagnostic })),
+    `✕ OpenCode debug config failed: ${clipped}`
+  );
+  assert.equal(
+    verifyOpenCodeRuntime('/tmp/square-opencode', () => ({ status: 1, stdout: diagnostic, stderr: '' })),
+    `✕ OpenCode debug config failed: ${clipped}`
+  );
+  assert.equal(
+    verifyOpenCodeRuntime('/tmp/square-opencode', () => { throw new Error(diagnostic); }),
+    `○ OpenCode runtime unavailable (${clipped})`
   );
 });
 

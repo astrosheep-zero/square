@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
+import { truncateExternalDiagnostic } from './presentation.js';
 
 export interface HarnessLink {
   source: string;
@@ -131,7 +132,8 @@ export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunne
   try {
     const result = run(homeDir, ['debug', 'config']);
     if (result.status !== 0) {
-      return `✕ OpenCode debug config failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`;
+      const diagnostic = result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`;
+      return `✕ OpenCode debug config failed: ${truncateExternalDiagnostic(diagnostic)}`;
     }
     let config: { config?: { plugin?: unknown } };
     try {
@@ -144,7 +146,8 @@ export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunne
     if (Array.isArray(plugin) && plugin.includes(expected)) return '✓ OpenCode npm plugin loaded';
     return `○ OpenCode npm plugin not loaded: ${expected}`;
   } catch (error) {
-    return `○ OpenCode runtime unavailable (${error instanceof Error ? error.message : String(error)})`;
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    return `○ OpenCode runtime unavailable (${truncateExternalDiagnostic(diagnostic)})`;
   }
 }
 

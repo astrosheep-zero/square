@@ -160,6 +160,13 @@ export function truncateChars(body: string, maxChars: number): { text: string; r
   return { text: chars.slice(0, maxChars).join('').trimEnd(), remaining: chars.length - maxChars };
 }
 
+const EXTERNAL_DIAGNOSTIC_MAX_CHARS = 160;
+
+export function truncateExternalDiagnostic(diagnostic: string): string {
+  if (truncateChars(diagnostic, EXTERNAL_DIAGNOSTIC_MAX_CHARS).remaining === 0) return diagnostic;
+  return `${truncateChars(diagnostic, EXTERNAL_DIAGNOSTIC_MAX_CHARS - 1).text}…`;
+}
+
 function previewBody(body: string, maxLen = BODY_PREVIEW_LENGTH): string {
   const preview = truncateChars(body, maxLen);
   return preview.remaining === 0 ? preview.text : `${preview.text}\n… ${preview.remaining} more chars`;
@@ -575,7 +582,7 @@ export function renderDoctorClean(): string {
 }
 
 export function renderDoctorUnfixable(reason: string): string {
-  return ['✕ unreadable artifact', `  · ${reason}`].join('\n');
+  return ['✕ unreadable artifact', `  · ${truncateExternalDiagnostic(reason)}`].join('\n');
 }
 
 export function renderWatchOutput(
