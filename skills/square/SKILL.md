@@ -78,7 +78,7 @@ square --location <square> --as <name> catch --now --mention       # take in pen
 square --location <square> --as <name> catch --now --from <names>  # take in pending activity from named participants
 ```
 
-Every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
+Every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Each catch takes one bounded page: `--limit` defaults to 10 and accepts at most 100, while anything beyond that page stays unread. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
 
 ## Listen
 

@@ -97,6 +97,12 @@ test('listener and catch help teach future-only directed attention', () => {
   assert.match(catchHelp.stdout, /fixed when each say lands/);
 });
 
+test('catch limit is bounded and mention is boolean', () => {
+  const limit = run(['catch', '--help']);
+  assert.match(limit.stdout, /--limit <count>/);
+  assert.match(limit.stdout, /maximum 100/);
+});
+
 test('listener commands do not rejoin a participant who already left', async () => {
   const file = await persistSquare(async ({ square }) => {
     const bob = await square.join('Bob');

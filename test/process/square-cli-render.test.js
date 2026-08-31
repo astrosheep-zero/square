@@ -188,6 +188,24 @@ test('catch --mention renders matching says and suppresses room changes', async 
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
 });
 
+test('catch continuation preserves filters and page size', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    const cara = await square.join('Cara');
+    for (let index = 0; index < 3; index += 1) await bob.express(`message ${index} @Alice`, { force: true, mentions: ['Alice'] });
+    for (let index = 0; index < 3; index += 1) await cara.express(`reply ${index} @Alice`, { force: true, mentions: ['Alice'] });
+    void alice;
+  });
+  const first = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob,Cara', '--mention', '--limit', '5']));
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /1 matching activity remains/);
+  assert.match(first.stdout, /catch --now --from Bob,Cara --mention --limit 5/);
+  assert.doesNotMatch(first.stdout, /catch --idle 30m/);
+  const invalidMention = run(withName(file, 'Alice', ['catch', '--now', '--mention', 'Bob']));
+  assert.notEqual(invalidMention.status, 0);
+});
+
 test('catch --from renders named peers and rejects the removed --by flag', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');

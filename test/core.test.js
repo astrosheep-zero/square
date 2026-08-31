@@ -280,3 +280,33 @@ test('activity history grep searches ids, participant names, and bodies', () => 
     [2, 3],
   );
 });
+
+test('catch pages unseen directed activity and keeps the continuous cursor behind a gap', () => {
+  const acts = [
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    ...Array.from({ length: 25 }, (_, index) => ({ kind: 'say', actor: index % 2 === 0 ? 'Bob' : 'Cara', at: index + 4, body: `message ${index} @Alice`, mentions: ['Alice'] })),
+  ];
+  const squareState = makeState({ acts });
+  const first = decideCatch(squareState, 'Alice', { limit: 10 }, 100);
+  assert.deepEqual(first.delivered.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 3));
+  assert.equal(first.remaining, 15);
+  const second = decideCatch(squareState, 'Alice', { limit: 10 }, 101);
+  assert.deepEqual(second.delivered.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 13));
+  const final = decideCatch(squareState, 'Alice', { limit: 10 }, 102);
+  assert.deepEqual(final.delivered.map((item) => item.index), [23, 24, 25, 26, 27]);
+
+  const gapState = makeState({
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1 },
+      { kind: 'join', actor: 'Bob', at: 2 },
+      { kind: 'join', actor: 'Cara', at: 3 },
+      { kind: 'say', actor: 'Cara', at: 4, body: 'gap @Alice', mentions: ['Alice'] },
+      { kind: 'say', actor: 'Bob', at: 5, body: 'seen @Alice', mentions: ['Alice'] },
+    ],
+  });
+  const bobOnly = decideCatch(gapState, 'Alice', { from: ['Bob'] }, 200);
+  assert.deepEqual(bobOnly.delivered.map((item) => item.index), [4]);
+  assert.deepEqual(decideCatch(gapState, 'Alice', { from: ['Bob'] }, 201).delivered, []);
+});

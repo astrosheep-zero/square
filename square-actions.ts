@@ -84,11 +84,12 @@ export async function catchUp(square: OperationContext, name: string, options: C
         activities: attempt.decision.delivered.map((activity) => exposeCaught(activity, attempt.decision.perceptions.get(activity.index) ?? 'full')),
         consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'],
         idleExpired: false,
+        remaining: attempt.decision.remaining,
       };
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0 || !await square.artifact.changed(attempt.version, remaining)) {
-      return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true };
+      return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true, remaining: 0 };
     }
   }
 }

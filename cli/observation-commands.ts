@@ -36,6 +36,7 @@ import {
   requireValue,
   usage,
 } from './context.js';
+import { CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT } from '../catch-decisions.js';
 
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
 const HISTORY_DEFAULT_LIMIT = 10;
@@ -85,6 +86,7 @@ export const catchCommand: CommandSpec<WatchOptions> = {
     const name = requireParticipant(context.name);
     let idleMs: number | undefined;
     let mention: string | undefined;
+    let limit = CATCH_DEFAULT_LIMIT;
     let replace = false;
     let now = false;
     const participants: string[] = [];
@@ -96,13 +98,10 @@ export const catchCommand: CommandSpec<WatchOptions> = {
         idleMs = parseDurationMs(requireValue(argv, index, argv[index]), argv[index]);
         index += 1;
       } else if (argv[index] === '--mention') {
-        const value = argv[index + 1];
-        if (value !== undefined && !value.startsWith('--')) {
-          mention = value;
-          index += 1;
-        } else {
-          mention = name;
-        }
+        mention = name;
+      } else if (argv[index] === '--limit') {
+        limit = parseBoundedLimit(argv[index + 1], '--limit', CATCH_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} catch --now --limit ${CATCH_MAX_LIMIT}`);
+        index += 1;
       } else if (argv[index] === '--replace') replace = true;
       else if (argv[index] === '--now') now = true;
       else fail(`✕ catch does not know ${argv[index]}\n» square catch --help`);
@@ -112,6 +111,7 @@ export const catchCommand: CommandSpec<WatchOptions> = {
     return {
       ...(participants.length > 0 ? { participants } : {}),
       ...(mention === undefined ? {} : { mention }),
+      limit,
       ...(idleMs === undefined ? {} : { idleMs }),
       ...(replace ? { replace } : {}),
       ...(now ? { now } : {}),

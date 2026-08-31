@@ -6,8 +6,8 @@ export interface PerceivedActivity extends Activity { readonly perception: Perce
 export interface ExpressOptions { readonly force?: boolean; readonly mentions?: readonly string[]; readonly reach?: Reach; readonly reply?: ActivityId; }
 export interface ExpressResult { readonly activity: Activity; readonly delivery?: DeliveryResult; }
 export interface ListenerChangeResult { readonly activity: Activity | null; }
-export interface CatchOptions { readonly idle?: number; readonly from?: readonly string[]; readonly mention?: boolean; }
-export interface CatchResult { readonly activities: readonly PerceivedActivity[]; readonly consumedThrough: ActivityId | null; readonly idleExpired: boolean; }
+export interface CatchOptions { readonly idle?: number; readonly from?: readonly string[]; readonly mention?: boolean; readonly limit?: number; }
+export interface CatchResult { readonly activities: readonly PerceivedActivity[]; readonly consumedThrough: ActivityId | null; readonly idleExpired: boolean; readonly remaining: number; }
 export interface HistoryQuery { readonly limit?: number; readonly order?: 'asc' | 'desc'; readonly before?: ActivityId; readonly after?: ActivityId; readonly grep?: string; readonly from?: readonly string[]; readonly mention?: string; }
 export interface ParticipantStatus { readonly name: string; readonly state: 'joined' | 'done'; readonly consumedThrough: ActivityId | null; readonly watching: boolean; readonly listening: readonly string[]; }
 export interface SquareSnapshot { readonly context: string; readonly actCount: number; readonly hardCap: number | null; readonly throttlePerMinute?: number; readonly held: { readonly by: string; readonly reason?: string } | null; readonly participants: readonly ParticipantStatus[]; delivered(name: string, id: ActivityId): boolean; }

@@ -36,10 +36,11 @@ test('large catch and pending sweep share one chronological delivery replay per 
   const square = { artifact: cell, clock: () => 2_000, location: 'memory' };
   try {
     const caught = await catchUp(square, 'P0');
-    assert.equal(caught.activities.length, 900);
+    assert.equal(caught.activities.length, 10);
+    assert.equal(caught.remaining, 890);
     const pending = await pendingDeliveries(square);
     assert.equal(pending.length, 97);
-    assert.deepEqual(pending.find((item) => item.recipient === 'P0')?.notifications, []);
+    assert.equal(pending.find((item) => item.recipient === 'P0')?.notifications.length, 890);
   } finally {
     await cell.close();
   }
@@ -93,7 +94,9 @@ test('large delivered catch carries its settled perception into rendering withou
     });
 
     assert.match(output, /dispatch 0 @P0/);
-    assert.match(output, /dispatch 899 @P0/);
+    assert.doesNotMatch(output, /dispatch 899 @P0/);
+    assert.equal(caught.activities.length, 10);
+    assert.equal(caught.remaining, 890);
     assert.equal(derivations, 1);
   } finally {
     await cell.close();

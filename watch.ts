@@ -33,7 +33,7 @@ import type { CatchResult } from './square-facade.js';
 import type { WatchPresentation } from './views.js';
 
 type WatchResult =
-  | { type: 'output'; stdout: string; status?: WatchStatus }
+  | { type: 'output'; stdout: string; remaining: number; status?: WatchStatus }
   | { type: 'terminal'; status: WatchStatus }
   | { type: 'replaced' }
   | { type: 'held' }
@@ -52,7 +52,7 @@ function watchOutputResult(
   presentation: WatchPresentation,
   name: string,
   caught: CatchResult,
-  opts: { stalePartial?: boolean; participants?: string[]; mention?: string; status?: WatchStatus; idleMs?: number } = {}
+  opts: { stalePartial?: boolean; participants?: string[]; mention?: string; limit?: number; status?: WatchStatus; idleMs?: number } = {}
 ): WatchResult {
   const delivered = caught.activities.flatMap((activity) => {
     const index = parseActivityId(activity.id);
@@ -74,12 +74,23 @@ function watchOutputResult(
       viewer: name,
       showCatchHint: !hasAutomaticDeliveryIdentity(),
       perceptions,
-    }),
+    }) + (caught.remaining > 0
+      ? `\n○ ${caught.remaining} matching ${caught.remaining === 1 ? 'activity remains' : 'activities remain'}\n» ${catchContinuationCommand(squarePath, name, opts)}`
+      : ''),
+    remaining: caught.remaining,
     ...(opts.status ? { status: opts.status } : {}),
   };
 }
 
-function writeWatchOutput(squarePath: string, name: string, presentation: WatchPresentation, stdout: string, status?: WatchStatus, idleMs?: number): void {
+function catchContinuationCommand(squarePath: string, name: string, opts: { participants?: string[]; mention?: string; limit?: number }): string {
+  const args = ['--now'];
+  if (opts.participants !== undefined && opts.participants.length > 0) args.push('--from', opts.participants.join(','));
+  if (opts.mention !== undefined) args.push('--mention');
+  if (opts.limit !== undefined) args.push('--limit', String(opts.limit));
+  return `${participantCommandPrefix(squarePath, name)} catch ${args.join(' ')}`;
+}
+
+function writeWatchOutput(squarePath: string, name: string, presentation: WatchPresentation, stdout: string, remaining: number, status?: WatchStatus, idleMs?: number): void {
   const headerOpts = { participantCount: presentation.participantCount };
   const showCatchHint = !hasAutomaticDeliveryIdentity();
   if (status) {
@@ -93,7 +104,7 @@ function writeWatchOutput(squarePath: string, name: string, presentation: WatchP
     return;
   }
 
-  const fallback = showCatchHint
+  const fallback = showCatchHint && remaining === 0
     ? `» ${participantCommandPrefix(squarePath, name)} catch --idle 30m\n  stay available for new activity`
     : '';
   process.stdout.write(
@@ -134,7 +145,7 @@ async function finishWatchResult(
 ): Promise<boolean> {
   if (result.type === 'output') {
     await endWatch(square, name, leaseId);
-    writeWatchOutput(squarePath, name, await watchPresentation(square, name), result.stdout, result.status);
+    writeWatchOutput(squarePath, name, await watchPresentation(square, name), result.stdout, result.remaining, result.status);
     process.exitCode = watchStatusExitCode(result.status);
     return true;
   }
@@ -185,11 +196,12 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions)
     const caught: CatchResult = await facade.participant.catch({
       ...(opts.participants === undefined ? {} : { from: opts.participants }),
       ...(opts.mention === undefined ? {} : { mention: true }),
+      ...(opts.limit === undefined ? {} : { limit: opts.limit }),
     });
     const presentation = await watchPresentation(square, name);
     const status = presentation.terminalStatus;
     const result = caught.activities.length > 0
-      ? watchOutputResult(squarePath, presentation, name, caught, { mention: opts.mention, ...(status ? { status } : {}) })
+      ? watchOutputResult(squarePath, presentation, name, caught, { mention: opts.mention, participants: opts.participants, limit: opts.limit, ...(status ? { status } : {}) })
       : { type: 'terminal' as const, status: status ?? 'empty-now' as WatchStatus };
     await finishWatchResult(square, squarePath, name, result, undefined);
     return caught.activities.length > 0;
@@ -262,9 +274,10 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
         const caught = await facade.participant.catch({
           ...(opts.participants === undefined ? {} : { from: opts.participants }),
           ...(opts.mention === undefined ? {} : { mention: true }),
+          ...(opts.limit === undefined ? {} : { limit: opts.limit }),
         });
         if (caught.activities.length > 0) {
-          result = watchOutputResult(squarePath, await watchPresentation(square, name), name, caught, { mention: opts.mention });
+          result = watchOutputResult(squarePath, await watchPresentation(square, name), name, caught, { mention: opts.mention, participants: opts.participants, limit: opts.limit });
         }
       }
 

@@ -1,5 +1,5 @@
 import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } from './square-core.js';
-import { matchesMentionTarget, readCursor, recordObservation } from './runtime.js';
+import { matchesMentionTarget, observationFor, readCursor, recordObservation } from './runtime.js';
 import { participantIdentity } from './participant-identity.js';
 import { SquareError, sameName, type SquareState, type StoredAct, validateName } from './model.js';
 import { resolveRosterName } from './runtime.js';
@@ -11,12 +11,25 @@ export interface CatchDecision {
   readonly perceptions: ReadonlyMap<number, Perception>;
   readonly consumedThrough: string | null;
   readonly changed: boolean;
+  readonly remaining: number;
+}
+
+export const CATCH_DEFAULT_LIMIT = 10;
+export const CATCH_MAX_LIMIT = 100;
+
+function catchLimit(value: number | undefined): number {
+  const limit = value ?? CATCH_DEFAULT_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CATCH_MAX_LIMIT) {
+    throw new SquareError('invalid_args', `Catch limit must be a positive integer no greater than ${CATCH_MAX_LIMIT}.`);
+  }
+  return limit;
 }
 
 export interface CatchProjection {
   cursorFor(name: string): number;
   directedTo(activity: StoredAct, name: string): boolean;
   perceive(activity: StoredAct, name: string): Perception;
+  isSeen(name: string, index: number): boolean;
 }
 
 function defaultProjection(state: SquareState): CatchProjection {
@@ -25,6 +38,7 @@ function defaultProjection(state: SquareState): CatchProjection {
     cursorFor: (name) => readCursor(state, name, landed),
     directedTo: (activity, name) => activity.kind === 'say' && landed.includes(activity, name),
     perceive: (activity, name) => activity.kind !== 'say' || sameName(activity.actor, name) || landed.includes(activity, name) ? 'full' : 'presence',
+    isSeen: (name, index) => observationFor(state, name, index)?.state === 'seen',
   };
 }
 
@@ -46,20 +60,24 @@ export function decideCatch(
   project: (state: SquareState) => CatchProjection = defaultProjection,
 ): CatchDecision {
   const viewer = resolveCatchName(state, requestedName);
+  const limit = catchLimit(options.limit);
   const delivery = project(state);
-  const cursor = delivery.cursorFor(viewer);
   const from = options.from;
   const mentionOnly = options.mention === true;
   const delivered: StoredAct[] = [];
   const perceptions = new Map<number, Perception>();
 
+  const matching: StoredAct[] = [];
   for (const activity of state.acts) {
-    if (activity.index <= cursor || activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) continue;
+    if (activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) continue;
     if (from !== undefined && !from.some((participant) => sameName(participant, activity.actor))) continue;
     if (mentionOnly && audienceOf(activity).kind !== 'bell' && !matchesMentionTarget(activity, viewer)) continue;
-    delivered.push(activity);
-    perceptions.set(activity.index, delivery.perceive(activity, viewer));
+    if (delivery.isSeen(viewer, activity.index)) continue;
+    matching.push(activity);
   }
+
+  delivered.push(...matching.slice(0, limit));
+  for (const activity of delivered) perceptions.set(activity.index, delivery.perceive(activity, viewer));
 
   let changed = false;
   for (const activity of delivered) {
@@ -72,5 +90,6 @@ export function decideCatch(
     perceptions,
     consumedThrough: consumed < 0 ? null : formatActivityId(consumed),
     changed,
+    remaining: Math.max(0, matching.length - delivered.length),
   };
 }

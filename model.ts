@@ -156,6 +156,7 @@ export interface ActivitiesOptions {
 export interface WatchOptions {
   participants?: string[];
   mention?: string;
+  limit?: number;
   idleMs?: number;
   replace?: boolean;
   now?: boolean;
