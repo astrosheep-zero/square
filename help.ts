@@ -17,8 +17,8 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --cap <N|unlimited>  Set a per-participant activity cap (default unlimited).', '  --template <name>    Append a packaged activity guide.', '  --throttle <N>       Allow at most N public activities per minute.', '  -f, --force          Replace an existing artifact.'],
   },
   {
-    names: ['list', 'ls'], usage: '{command} [--depth N]', summary: 'List nearby squares below the current directory.', group: 'host',
-    details: ['Options:', '  --depth <N>  Descend through at most N directory levels (default 4; 0 scans only the current directory).'],
+    names: ['list', 'ls'], usage: '{command} [--depth N] [--limit N] [--after path]', summary: 'List nearby squares below the current directory.', group: 'host',
+    details: ['Options:', '  --depth <N>    Descend through at most N directory levels (default 4; maximum 16; 0 scans only the current directory).', '  --limit <N>    Show one page (default 20, maximum 100).', '  --after <path> Resume after a relative path from a previous page.'],
   },
   {
     names: ['join'], usage: '--as <name> join [--last N] [--kick]', usesSquare: true, group: 'participant',

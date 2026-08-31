@@ -8,6 +8,10 @@ import test from 'node:test';
 
 import { formatActivityId } from '../../dist/square-core.js';
 import { Square } from '../../dist/index.js';
+import { cmdListSquares } from '../../dist/list.js';
+import { closeOpenSquare } from '../../dist/open-square.js';
+import { probeSquare } from '../../dist/square-file-adapter.js';
+import { listPresentation } from '../../dist/views.js';
 import {
   ROOT,
   CLI,
@@ -830,6 +834,92 @@ test('list bounds recursive discovery by default and accepts an explicit depth',
   const invalid = run(['list', '--depth', '-1'], { cwd });
   assert.equal(invalid.status, 2);
   assert.match(invalid.stderr, /square list --help/);
+
+  const depth16 = run(['list', '--depth', '16'], { cwd });
+  assert.equal(depth16.status, 0, depth16.stderr);
+  const depth17 = run(['list', '--depth', '17'], { cwd });
+  assert.equal(depth17.status, 2);
+  assert.match(depth17.stderr, /square list --help/);
+
+  const limit100 = run(['list', '--limit', '100'], { cwd });
+  assert.equal(limit100.status, 0, limit100.stderr);
+  const limit101 = run(['list', '--limit', '101'], { cwd });
+  assert.equal(limit101.status, 2);
+  assert.match(limit101.stderr, /square list --help/);
+});
+
+test('list pages a deterministic relative-path order without overlap', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-pages-'));
+  const cursor = `pages/m${'x'.repeat(170)}.square`;
+  const paths = [
+    ...Array.from({ length: 19 }, (_value, index) => `pages/${String(index).padStart(2, '0')}.square`),
+    cursor,
+    'pages/z.square',
+  ];
+  for (const relativePath of paths) {
+    const file = path.join(cwd, relativePath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const square = await Square.build({ path: file, markdown: `${relativePath}\n`, hardCap: 3 });
+    await square.close();
+  }
+
+  const first = run(['list'], { cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const firstPaths = first.stdout.split('\n').flatMap((line) => line.match(/^[●○] (.*?) · /)?.[1] ?? []);
+  assert.equal(firstPaths.length, 20);
+  assert.match(first.stdout, /… 1 more square/);
+  assert.ok(first.stdout.includes(`» square list --depth 4 --limit 20 --after '${cursor}'`));
+
+  const second = run(['list', '--depth', '4', '--limit', '20', '--after', cursor], { cwd });
+  assert.equal(second.status, 0, second.stderr);
+  const secondPaths = second.stdout.split('\n').flatMap((line) => line.match(/^[●○] (.*?) · /)?.[1] ?? []);
+  assert.deepEqual(secondPaths, ['pages/z.square']);
+  assert.equal(secondPaths.some((item) => firstPaths.includes(item)), false);
+});
+
+test('list keeps page-more boolean when deterministic discovery stops', async () => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-budget-')));
+  const originalCwd = process.cwd();
+  const paths = Array.from({ length: 21 }, (_value, index) => `a${String(index).padStart(2, '0')}.square`);
+  for (const relativePath of paths) {
+    const square = await Square.build({ path: path.join(root, relativePath), markdown: `${relativePath}\n`, hardCap: 3 });
+    await square.close();
+  }
+  const entries = [
+    ...paths.map((name) => ({ name, isDirectory: () => false, isFile: () => true })),
+    ...Array.from({ length: 9_979 }, (_value, index) => ({
+      name: `b${String(index).padStart(5, '0')}`,
+      isDirectory: () => false,
+      isFile: () => false,
+    })),
+  ].reverse();
+  const originalReaddir = fs.promises.readdir;
+  const originalWrite = process.stdout.write;
+  const output = [];
+
+  try {
+    process.chdir(root);
+    fs.promises.readdir = async (directory) => {
+      assert.equal(directory, root);
+      return entries;
+    };
+    process.stdout.write = (chunk) => {
+      output.push(String(chunk));
+      return true;
+    };
+    await cmdListSquares([], () => assert.fail('list should not reject valid defaults'));
+  } finally {
+    fs.promises.readdir = originalReaddir;
+    process.stdout.write = originalWrite;
+    process.chdir(originalCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  const listed = output.join('');
+  assert.match(listed, /^  … more squares$/m);
+  assert.match(listed, /» square list --depth 4 --limit 20 --after 'a19\.square'/);
+  assert.match(listed, /discovery stopped after examining 10000 filesystem entries; results may be incomplete/);
+  assert.doesNotMatch(listed, /… \d+ more squares?/);
 });
 
 test('list previews bounded context and the three most recently active participants', async () => {
@@ -855,6 +945,32 @@ test('list previews bounded context and the three most recently active participa
   assert.match(listed.stdout, /context · ## Topic\n\s+· First context line\n\s+· … 1 more line/);
   assert.match(listed.stdout, /participants · @alice · @dave · @carol · … 1 more/);
   assert.doesNotMatch(listed.stdout, /participants[^\n]*bob/);
+});
+
+test('list clips displayed path, context, and names without truncating its projection', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-character-preview-'));
+  const longPath = path.join('p'.repeat(100), 'q'.repeat(100), 'preview.square');
+  const file = path.join(cwd, longPath);
+  const longContext = `context-${'🐈'.repeat(180)}-tail`;
+  const longName = `name-${'名'.repeat(180)}-tail`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const square = await Square.build({ path: file, markdown: `${longContext}\n`, hardCap: 3 });
+  await square.join(longName);
+  await square.close();
+
+  const projectionSquare = await probeSquare(file);
+  assert.ok(projectionSquare);
+  const projection = await listPresentation(projectionSquare);
+  assert.ok(projection.context.includes(longContext));
+  assert.ok(projection.participants.includes(longName));
+  await closeOpenSquare(projectionSquare);
+
+  const listed = run(['list'], { cwd });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.doesNotMatch(listed.stdout, new RegExp(longPath));
+  assert.doesNotMatch(listed.stdout, new RegExp(longContext));
+  assert.doesNotMatch(listed.stdout, new RegExp(longName));
+  assert.match(listed.stdout, /…/);
 });
 
 test('list, participants, and clipped status use current state and executable hints', async () => {

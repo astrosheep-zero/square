@@ -231,7 +231,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
   assert.equal(named.status, 0, named.stderr);
   assert.equal(named.stdout, direct.stdout);
   assert.equal(alias.status, 0, alias.stderr);
-  assert.match(alias.stdout, /^Usage: square list \[--depth N\]$/m);
+  assert.match(alias.stdout, /^Usage: square list \[--depth N\] \[--limit N\] \[--after path\]$/m);
   assert.match(alias.stdout, /^Aliases: ls$/m);
   assert.equal(unknown.status, 2);
   assert.match(unknown.stderr, /unknown command: missing-command/);
