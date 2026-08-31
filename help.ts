@@ -40,9 +40,9 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['done'], usage: '--as <name> done [final | -]', usesSquare: true, group: 'participant', summary: 'Step out, optionally leaving a final note.' },
   {
-    names: ['stream'], usage: 'stream [--ndjson [--for <name>]]', usesSquare: true, hiddenFromIndex: true,
+    names: ['stream'], usage: 'stream [--ndjson [--for <name>] [--last <N> | --after <id>]]', usesSquare: true, hiddenFromIndex: true,
     summary: 'Follow activity without consuming participant presence.',
-    details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.'],
+    details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
     names: ['inbox'], usage: 'inbox --for-session <session-id> [--json]', hiddenFromIndex: true,

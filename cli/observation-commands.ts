@@ -15,7 +15,7 @@ import {
   quoteShell,
 } from '../presentation.js';
 import { actId, nowMs } from '../runtime.js';
-import { cmdStream, cmdStreamNdjson } from '../stream.js';
+import { cmdStream, cmdStreamNdjson, type StreamStart } from '../stream.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { cmdWatch } from '../watch.js';
 import { openSquare } from '../square-file-adapter.js';
@@ -57,25 +57,38 @@ export const listCommand: CommandSpec<string[]> = {
   present: () => {},
 };
 
-interface StreamIntent { ndjson: boolean; forName?: string; }
+interface StreamIntent { ndjson: boolean; forName?: string; start: StreamStart; }
 
 export const streamCommand: CommandSpec<StreamIntent> = {
   parse(argv, context) {
     let ndjson = false;
     let forName: string | undefined;
+    let last = 10;
+    let after: number | undefined;
+    let hasLast = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--ndjson') ndjson = true;
       else if (argv[index] === '--for') {
         forName = requireValue(argv, index, argv[index]);
         index += 1;
+      } else if (argv[index] === '--last') {
+        if (after !== undefined) fail('Invalid stream options: --last and --after cannot be combined.');
+        last = parseNonNegativeInteger(requireValue(argv, index, argv[index]), '--last');
+        if (last > 100) fail('Invalid --last: maximum is 100.');
+        hasLast = true;
+        index += 1;
+      } else if (argv[index] === '--after') {
+        if (hasLast) fail('Invalid stream options: --last and --after cannot be combined.');
+        after = parseActRef(requireValue(argv, index, argv[index]), '--after');
+        index += 1;
       } else usage(context.command);
     }
-    if (forName !== undefined && !ndjson) usage(context.command);
-    return { ndjson, forName };
+    if (!ndjson && argv.length > 0) usage(context.command);
+    return { ndjson, forName, start: after === undefined ? { kind: 'tail', last } : { kind: 'after', after } };
   },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    if (intent.ndjson) await cmdStreamNdjson(squarePath, intent.forName);
+    if (intent.ndjson) await cmdStreamNdjson(squarePath, intent.forName, intent.start);
     else await cmdStream(squarePath);
   },
   present: () => {},

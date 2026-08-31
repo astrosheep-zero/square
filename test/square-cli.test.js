@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { formatActivityId } from '../dist/square-core.js';
+import { streamCommand } from '../dist/cli/observation-commands.js';
 import { Square } from '../dist/index.js';
 import {
   ROOT,
@@ -520,4 +521,20 @@ test('ordinary argument errors stay scoped and stream pipes stay ANSI-free', asy
   assert.equal(streamed.status, 2);
   assert.doesNotMatch(streamed.stderr, /\\x1b|\u001b/);
   assert.match(streamed.stderr, /stream --ndjson/);
+});
+
+test('stream CLI defaults its tail, accepts zero through one hundred, and rejects incompatible cursors', () => {
+  const context = { command: 'stream', squarePath: tempSquare(), homeDir: os.homedir() };
+  assert.deepEqual(streamCommand.parse(['--ndjson'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 10 } });
+  assert.deepEqual(streamCommand.parse(['--ndjson', '--last', '0'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 0 } });
+  assert.deepEqual(streamCommand.parse(['--ndjson', '--last', '100'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 100 } });
+  assert.deepEqual(streamCommand.parse(['--ndjson', '--after', 'act/12'], context), { ndjson: true, forName: undefined, start: { kind: 'after', after: 12 } });
+
+  const overLimit = run(withPath(context.squarePath, ['stream', '--ndjson', '--last', '101']));
+  assert.equal(overLimit.status, 2);
+  assert.match(overLimit.stderr, /Invalid --last: maximum is 100/);
+
+  const incompatible = run(withPath(context.squarePath, ['stream', '--ndjson', '--last', '0', '--after', 'act/12']));
+  assert.equal(incompatible.status, 2);
+  assert.match(incompatible.stderr, /--last and --after cannot be combined/);
 });

@@ -14,7 +14,7 @@ export interface ListPresentation { readonly context: readonly string[]; readonl
 export interface StatusPresentation { readonly state: SquareState; readonly status: ReturnType<typeof coreStatus>; readonly latestActNumber?: number; }
 export interface WatchPresentation { readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly presence: { readonly participants: ReturnType<typeof coreParticipants>; readonly now: number }; readonly terminalStatus?: 'capped' | 'quorum'; }
 export interface InboxProjection { readonly name: string; readonly joined: boolean; readonly notifications: readonly InboxNotification[]; readonly catchLease?: import('./model.js').WatchLease; }
-export interface StreamProjection { readonly activities: readonly { readonly activity: StoredAct; readonly route?: string }[]; readonly cursor: number; }
+export interface StreamProjection { readonly activities: readonly { readonly activity: StoredAct; readonly route?: string }[]; readonly cursor: number; readonly hasMore: boolean; }
 export interface PendingDeliveryProjection { readonly recipient: string; readonly notifications: readonly PlannedNotification[]; }
 
 function expose(stored: StoredAct): Activity {
@@ -82,7 +82,47 @@ export async function statusPresentation(square: OpenSquare): Promise<StatusPres
 export async function eventPresentation(square: OpenSquare, id: ActivityId): Promise<{ readonly activity: StoredAct; readonly participantCount: number; readonly held: boolean }> { const { state } = await square.artifact.read(); const activity = state.acts.find((candidate) => candidate.index === parseRequiredActivityId(id)); if (activity === undefined) throw new SquareError('invalid_args', `Unknown activity id: ${id}`); return { activity, participantCount: inSquareCount(state), held: currentHold(state.acts).active }; }
 export async function watchPresentation(square: OpenSquare, name: string): Promise<WatchPresentation> { const { state } = await square.artifact.read(); const known = resolveKnownName(state, name); const now = square.clock(); const terminal = watchTerminalStatus(state, known); const delivery = deriveDeliveryModel(state); return { activities: state.acts, state, participantCount: inSquareCount(state), presence: { participants: coreParticipants(state, now, delivery), now }, ...(terminal === undefined ? {} : { terminalStatus: terminal }) }; }
 export async function inboxProjection(square: OpenSquare, name: string, _sessionId?: string): Promise<InboxProjection> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); const known = delivery.knownParticipant(name); if (known === undefined || !delivery.joinedRecipients().some((recipient) => nameKey(recipient) === nameKey(known))) return { name, joined: false, notifications: [] }; const lease = freshWatchLease(state, known, square.clock()); return { name: known, joined: true, notifications: delivery.pendingFor(known).map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, route, body: item.body })), ...(lease === undefined ? {} : { catchLease: lease }) }; }
-export async function streamProjection(square: OpenSquare | { readonly cell: { read(): Promise<{ state: SquareState }> } }, cursor: number, recipient?: string): Promise<StreamProjection> { const artifact = 'artifact' in square ? square.artifact : square.cell; const { state } = await artifact.read(); const delivery = recipient === undefined ? undefined : deriveDeliveryModel(state); return { activities: state.acts.filter((activity) => activity.index > cursor).flatMap((activity) => { if (delivery === undefined || recipient === undefined) return [{ activity }]; const notification = delivery.plan(activity).find((candidate) => nameKey(candidate.recipient) === nameKey(recipient)); return notification === undefined ? [] : [{ activity, route: notification.route }]; }), cursor: Math.max(cursor, ...state.acts.map((activity) => activity.index)) }; }
+const STREAM_BATCH_MAX = 100;
+
+type StreamItem = { readonly activity: StoredAct; readonly route?: string };
+
+function projectStreamActivities(state: SquareState, activities: readonly StoredAct[], recipient?: string): StreamItem[] {
+  const delivery = recipient === undefined ? undefined : deriveDeliveryModel(state);
+  return activities.flatMap((activity) => {
+    if (delivery === undefined || recipient === undefined) return [{ activity }];
+    const notification = delivery.plan(activity).find((candidate) => nameKey(candidate.recipient) === nameKey(recipient));
+    return notification === undefined ? [] : [{ activity, route: notification.route }];
+  });
+}
+
+function selectStreamTail(activities: readonly StreamItem[], last: number): StreamItem[] {
+  if (!Number.isSafeInteger(last) || last < 0 || last > STREAM_BATCH_MAX) {
+    throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${STREAM_BATCH_MAX}.`);
+  }
+  return last === 0 ? [] : activities.slice(-last);
+}
+
+export async function streamProjection(square: OpenSquare | { readonly cell: { read(): Promise<{ state: SquareState }> } }, cursor: number, recipient?: string): Promise<StreamProjection> {
+  const artifact = 'artifact' in square ? square.artifact : square.cell;
+  const { state } = await artifact.read();
+  const pending = state.acts.filter((activity) => activity.index > cursor);
+  const batch = pending.slice(0, STREAM_BATCH_MAX);
+  return {
+    activities: projectStreamActivities(state, batch, recipient),
+    cursor: batch.at(-1)?.index ?? cursor,
+    hasMore: pending.length > batch.length,
+  };
+}
+
+export async function streamTailProjection(square: OpenSquare | { readonly cell: { read(): Promise<{ state: SquareState }> } }, last = 10, recipient?: string): Promise<StreamProjection> {
+  const artifact = 'artifact' in square ? square.artifact : square.cell;
+  const { state } = await artifact.read();
+  return {
+    activities: selectStreamTail(projectStreamActivities(state, state.acts, recipient), last),
+    cursor: state.acts.at(-1)?.index ?? -1,
+    hasMore: false,
+  };
+}
 export async function notificationForAct(square: OpenSquare, actIndex: number): Promise<readonly PlannedNotification[]> { const { state } = await square.artifact.read(); const activity = state.acts.find((candidate) => candidate.index === actIndex); return activity === undefined ? [] : deriveDeliveryModel(state).plan(activity); }
 export function pendingDeliveriesFromState(state: SquareState, delivery = deriveDeliveryModel(state)): readonly PendingDeliveryProjection[] { return delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })); }
 export async function pendingDeliveries(square: OpenSquare): Promise<readonly PendingDeliveryProjection[]> { const { state } = await square.artifact.read(); return pendingDeliveriesFromState(state); }

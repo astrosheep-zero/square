@@ -22,7 +22,7 @@ import {
   recordLocalJoin,
   recordSessionDone,
 } from '../dist/registry.js';
-import { streamProjection } from '../dist/views.js';
+import { streamProjection, streamTailProjection } from '../dist/views.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -296,40 +296,94 @@ test('automatic delivery capability follows native and Paseo session identities'
   assert.equal(hasAutomaticDeliveryIdentity({ PASEO_AGENT_ID: 'paseo-agent' }), true);
 });
 
-test('stream recipient filtering matches the addressed participant', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 1, body: '', index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, body: '', index: 1 },
-    { kind: 'join', actor: 'Cara', at: 3, body: '', index: 2 },
-  ];
-  const runtime = {
-    nextActIndex: 6,
-    observations: {},
-    leases: {},
-    notifyLeases: {},
-  };
-  const state = {
+function streamState(acts) {
+  return {
     hardCap: null,
     preamble: [],
     warmup: [],
-    acts: [
-      ...acts,
-      { kind: 'say', actor: 'Alice', at: 4, body: 'hi @Bob', mentions: ['Bob'], index: 3 },
-      { kind: 'say', actor: 'Alice', at: 5, body: 'hello all', index: 4 },
-      { kind: 'say', actor: 'Alice', at: 6, body: 'attention', reach: 'bell', index: 5 },
-    ],
-    runtime,
+    acts,
+    runtime: {
+      nextActIndex: (acts.at(-1)?.index ?? -1) + 1,
+      observations: {},
+      leases: {},
+      notifyLeases: {},
+    },
   };
+}
+
+async function withStreamSquare(state, action) {
   const cell = createMemoryCell(state);
-  const square = { cell, clock: Date.now, location: 'memory' };
   try {
-    const bob = await streamProjection(square, -1, 'Bob');
-    const cara = await streamProjection(square, -1, 'Cara');
-    const alice = await streamProjection(square, -1, 'Alice');
-    assert.deepEqual(bob.activities.map(({ activity, route }) => [activity.index, route]), [[3, 'mention'], [5, 'bell']]);
-    assert.deepEqual(cara.activities.map(({ activity, route }) => [activity.index, route]), [[5, 'bell']]);
-    assert.deepEqual(alice.activities, []);
+    return await action({ cell, clock: Date.now, location: 'memory' });
   } finally {
     await cell.close();
   }
+}
+
+test('stream tail defaults to ten eligible activities and keeps its 100-activity bound', async () => {
+  const acts = Array.from({ length: 120 }, (_value, index) => ({ kind: 'say', actor: 'Alice', at: index, body: String(index), index }));
+  await withStreamSquare(streamState(acts), async (square) => {
+    const defaultTail = await streamTailProjection(square);
+    const zeroTail = await streamTailProjection(square, 0);
+    const hundredTail = await streamTailProjection(square, 100);
+
+    assert.deepEqual(defaultTail.activities.map(({ activity }) => activity.index), Array.from({ length: 10 }, (_value, index) => index + 110));
+    assert.deepEqual(zeroTail.activities, []);
+    assert.equal(hundredTail.activities.length, 100);
+    await assert.rejects(() => streamTailProjection(square, 101), (error) => error?.code === 'invalid_args');
+    assert.equal(defaultTail.cursor, 119);
+  });
+});
+
+test('stream resumes after its exclusive cursor and drains forward batches without loss or duplication', async () => {
+  const acts = Array.from({ length: 205 }, (_value, index) => ({ kind: 'say', actor: 'Alice', at: index, body: String(index), index }));
+  await withStreamSquare(streamState(acts), async (square) => {
+    const after = await streamProjection(square, 99);
+    assert.deepEqual(after.activities.map(({ activity }) => activity.index), Array.from({ length: 100 }, (_value, index) => index + 100));
+    assert.equal(after.cursor, 199);
+    assert.equal(after.hasMore, true);
+
+    let cursor = -1;
+    const received = [];
+    do {
+      const batch = await streamProjection(square, cursor);
+      received.push(...batch.activities.map(({ activity }) => activity.index));
+      cursor = batch.cursor;
+      if (!batch.hasMore) break;
+    } while (true);
+
+    assert.deepEqual(received, acts.map((activity) => activity.index));
+    assert.equal(cursor, 204);
+  });
+});
+
+test('stream advances through recipient-filter gaps while preserving addressed activity order', async () => {
+  const acts = [
+    { kind: 'join', actor: 'Alice', at: 0, body: '', index: 0 },
+    { kind: 'join', actor: 'Bob', at: 1, body: '', index: 1 },
+    ...Array.from({ length: 203 }, (_value, offset) => {
+      const index = offset + 2;
+      return {
+        kind: 'say',
+        actor: 'Alice',
+        at: index,
+        body: String(index),
+        ...(index === 102 || index === 203 ? { mentions: ['Bob'] } : {}),
+        index,
+      };
+    }),
+  ];
+  await withStreamSquare(streamState(acts), async (square) => {
+    let cursor = -1;
+    const received = [];
+    do {
+      const batch = await streamProjection(square, cursor, 'Bob');
+      received.push(...batch.activities.map(({ activity }) => activity.index));
+      cursor = batch.cursor;
+      if (!batch.hasMore) break;
+    } while (true);
+
+    assert.deepEqual(received, [102, 203]);
+    assert.equal(cursor, 204);
+  });
 });
