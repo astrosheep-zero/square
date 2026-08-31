@@ -3,7 +3,7 @@ import { runCodexHookAsync } from '../codex-hook.js';
 import { sessionInbox } from '../inbox.js';
 import { sweepPendingNotifications } from '../notifications.js';
 import { cmdListSquares } from '../list.js';
-import { parseActivityId, type ActivitiesOptions, type StoredAct, type WatchOptions, sameName } from '../model.js';
+import { nameKey, parseActivityId, type ActivitiesOptions, type StoredAct, type WatchOptions, sameName } from '../model.js';
 import {
   commandPrefix,
   participantIdentity,
@@ -11,6 +11,7 @@ import {
   renderEventCli,
   renderAmbientEvent,
   renderPresenceAnchor,
+  truncateChars,
   withPathOutput,
   quoteShell,
 } from '../presentation.js';
@@ -43,6 +44,18 @@ const HISTORY_DEFAULT_LIMIT = 10;
 const HISTORY_MAX_LIMIT = 100;
 const PARTICIPANTS_DEFAULT_LIMIT = 20;
 const PARTICIPANTS_MAX_LIMIT = 100;
+const INBOX_DEFAULT_LIMIT = 20;
+const INBOX_MAX_LIMIT = 100;
+const INBOX_DISPLAY_CHARS = 160;
+
+function inboxDisplay(value: string): string {
+  const truncated = truncateChars(value, INBOX_DISPLAY_CHARS - 1);
+  return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
+}
+
+function inboxLimitCommand(sessionId: string, json: boolean): string {
+  return `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${json ? ' --json' : ''}`;
+}
 
 interface HistoryCommandOptions extends ActivitiesOptions {
   noTruncate: boolean;
@@ -515,22 +528,56 @@ export const statusCommand: CommandSpec<undefined, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-interface InboxIntent { sessionId: string; json: boolean; }
+interface InboxIntent { sessionId: string; json: boolean; limit: number; }
 export const inboxCommand: CommandSpec<InboxIntent, string> = {
   parse(argv, context) {
     let sessionId: string | undefined;
     let json = false;
+    let limitValue: string | undefined;
+    let hasLimit = false;
+    let duplicateLimit = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--for-session') { sessionId = requireValue(argv, index, argv[index]); index += 1; }
       else if (argv[index] === '--json') json = true;
+      else if (argv[index] === '--limit') {
+        if (hasLimit) duplicateLimit = true;
+        hasLimit = true;
+        const value = argv[index + 1];
+        if (value !== undefined && !value.startsWith('--')) { limitValue = value; index += 1; }
+      }
       else usage(context.command);
     }
     if (!sessionId) fail('inbox requires --for-session <session-id>.');
-    return { sessionId, json };
+    const retry = inboxLimitCommand(sessionId, json);
+    if (duplicateLimit) fail(`✕ inbox accepts one --limit\n» ${retry}`);
+    const limit = hasLimit
+      ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)
+      : INBOX_DEFAULT_LIMIT;
+    return { sessionId, json, limit };
   },
   async execute(intent) {
     const inbox = await sessionInbox(intent.sessionId);
-    return intent.json ? `${JSON.stringify(inbox)}\n` : inbox.map((membership) => `${membership.name}\t${membership.squarePath}\t${membership.notifications.length}\n`).join('');
+    const ordered = [...inbox].sort((left, right) => {
+      if (left.squarePath < right.squarePath) return -1;
+      if (left.squarePath > right.squarePath) return 1;
+      const leftName = nameKey(left.name);
+      const rightName = nameKey(right.name);
+      if (leftName < rightName) return -1;
+      if (leftName > rightName) return 1;
+      if (left.name < right.name) return -1;
+      if (left.name > right.name) return 1;
+      return 0;
+    });
+    const rows = ordered.slice(0, intent.limit).map((membership) => ({
+      namePreview: inboxDisplay(membership.name),
+      squarePathPreview: inboxDisplay(membership.squarePath),
+      pending: membership.notifications.length,
+    }));
+    if (intent.json) return `${JSON.stringify({ rows, total: ordered.length })}\n`;
+    return [
+      ...rows.map((row) => `${row.namePreview}\t${row.squarePathPreview}\t${row.pending}\n`),
+      ...(rows.length < ordered.length ? [`${rows.length} of ${ordered.length} memberships shown\n`] : []),
+    ].join('');
   },
   present: (result) => process.stdout.write(result),
 };

@@ -45,9 +45,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
-    names: ['inbox'], usage: 'inbox --for-session <session-id> [--json]', hiddenFromIndex: true,
-    summary: 'Inspect bounded machine-local notifications for a native session.',
-    details: ['Options:', '  --for-session <id>  Required harness session id.', '  --json              Emit structured JSON.'],
+    names: ['inbox'], usage: 'inbox --for-session <session-id> [--limit <N>] [--json]', hiddenFromIndex: true,
+    summary: 'Inspect a bounded machine-local notification snapshot for a native session.',
+    details: ['Options:', '  --for-session <id>  Required harness session id.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).', '  --json              Emit the bounded snapshot as structured JSON.'],
   },
   { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   {

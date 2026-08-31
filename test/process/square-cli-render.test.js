@@ -531,8 +531,15 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   const inspected1 = run(['inbox', '--for-session', 'sid-cli', '--json'], { env });
   assert.equal(inspected1.status, 0, inspected1.stderr);
   const pendingInbox = JSON.parse(inspected1.stdout);
-  assert.equal(pendingInbox.length, 1);
-  assert.equal(pendingInbox[0].notifications.length, 1);
+  assert.deepEqual(pendingInbox, {
+    rows: [{ namePreview: 'Bob', squarePathPreview: fs.realpathSync(file), pending: 1 }],
+    total: 1,
+  });
+  assert.doesNotMatch(inspected1.stdout, /hey @Bob|notifications|catchLease/);
+
+  const textSnapshot = run(['inbox', '--for-session', 'sid-cli'], { env });
+  assert.equal(textSnapshot.status, 0, textSnapshot.stderr);
+  assert.equal(textSnapshot.stdout, `Bob\t${fs.realpathSync(file)}\t1\n`);
 
   const inspected2 = run(['inbox', '--for-session', 'sid-cli', '--json'], { env });
   assert.equal(inspected2.status, 0, inspected2.stderr);
@@ -545,6 +552,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   });
   assert.equal(inject.status, 0, inject.stderr);
   assert.match(inject.stdout, /"hookEventName":"PostToolUse"/);
+  assert.match(inject.stdout, /hey @Bob/);
 
   const duplicate = spawnSync(process.execPath, [CLI, 'codex-hook'], {
     encoding: 'utf8',
