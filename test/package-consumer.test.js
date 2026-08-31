@@ -11,11 +11,14 @@ function run(command, args, options = {}) {
   return spawnSync(command, args, { cwd: root, encoding: 'utf8', ...options });
 }
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function runNpm(args, options = {}) {
+  const npmCli = process.env.npm_execpath;
+  return npmCli === undefined ? run('npm', args, options) : run(process.execPath, [npmCli, ...args], options);
+}
 
 test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'square-package-consumer-'));
-  const packed = run(npmCommand, ['pack', '--json', '--ignore-scripts', '--pack-destination', fixture], {
+  const packed = runNpm(['pack', '--json', '--ignore-scripts', '--pack-destination', fixture], {
     env: { ...process.env, npm_config_cache: path.join(fixture, 'npm-cache') },
   });
   assert.equal(packed.status, 0, packed.stderr);
