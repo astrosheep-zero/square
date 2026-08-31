@@ -3,7 +3,6 @@ import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-se
 import { waitForSessionPending } from '../dist/inbox.js';
 import { projectSessionBindings } from '../dist/square-projections.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { captureSquareChangeCursor } from '../dist/square-file-adapter.js';
 
 const PI_SEND_TIMEOUT_MS = 5_000;
 const DEFAULT_PI_BOUNDARY_TIMEOUT_MS = 2_000;
@@ -44,7 +43,7 @@ export default function squarePiExtension(pi) {
   let settledWaiters = [];
   const handledPending = new Set();
   let retryAfterChange = false;
-  let retryCursor;
+  let retryWait;
   const present = (deliver, signal) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver, undefined, undefined, signal);
 
   const presentAtBoundary = (deliver) => {
@@ -90,28 +89,43 @@ export default function squarePiExtension(pi) {
   });
 
   const wake = async (piContext, token, signal) => {
+    const armDeferredRetry = () => {
+      const controller = new AbortController();
+      let resolveArmed;
+      const armed = new Promise((resolve) => { resolveArmed = resolve; });
+      const abort = () => controller.abort();
+      signal.addEventListener('abort', abort, { once: true });
+      const pending = waitForSessionPending(sessionId, 30_000, {
+        signal: controller.signal,
+        excludeKeys: handledPending,
+        skipImmediate: true,
+        onChangeArmed: resolveArmed,
+      }).catch(() => {
+        resolveArmed(false);
+        return [];
+      }).finally(() => signal.removeEventListener('abort', abort));
+      return { armed, pending, cancel: () => controller.abort() };
+    };
+
     while (sessionId !== undefined && token === generation && !signal.aborted) {
       if ((await sessionBindings(sessionId)).length === 0) {
         await pause(signal, 1_000);
         continue;
       }
       const deferredRetry = retryAfterChange;
-      const pending = await waitForSessionPending(sessionId, 30_000, {
-        signal,
-        excludeKeys: handledPending,
-        skipImmediate: deferredRetry,
-        ...(deferredRetry && retryCursor !== undefined ? { changeCursor: retryCursor } : {}),
-      });
+      const pending = deferredRetry && retryWait !== undefined
+        ? await retryWait
+        : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending });
       if (sessionId === undefined || token !== generation || signal.aborted) return;
       if (pending.length === 0) {
         if (deferredRetry) {
           retryAfterChange = false;
-          retryCursor = undefined;
+          retryWait = undefined;
         }
         continue;
       }
       retryAfterChange = false;
-      retryCursor = undefined;
+      retryWait = undefined;
       if (!piContext.isIdle()) {
         const serial = settledSerial;
         await waitForSettled(serial, signal);
@@ -120,7 +134,14 @@ export default function squarePiExtension(pi) {
       if (presenting) continue;
       const keys = inboxKeys(pending);
       presenting = true;
-      const retryBaseline = await captureSquareChangeCursor(pending.map((item) => item.squarePath));
+      const deferred = armDeferredRetry();
+      const retryArmed = await deferred.armed;
+      if (!retryArmed) {
+        deferred.cancel();
+        presenting = false;
+        continue;
+      }
+      let keepDeferred = false;
       try {
         const delivered = await presentPendingAtBoundary(
           sessionId,
@@ -157,10 +178,12 @@ export default function squarePiExtension(pi) {
           for (const key of keys) handledPending.add(key);
         }
       } catch {
-        // Leave pending evidence untouched so the next state change can retry.
+        // The next state edge is already being observed before native injection starts.
         retryAfterChange = true;
-        retryCursor = retryBaseline;
+        retryWait = deferred.pending;
+        keepDeferred = true;
       } finally {
+        if (!keepDeferred) deferred.cancel();
         presenting = false;
       }
     }
@@ -171,7 +194,7 @@ export default function squarePiExtension(pi) {
     stopWatcher();
     handledPending.clear();
     retryAfterChange = false;
-    retryCursor = undefined;
+    retryWait = undefined;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     previousSessionId = process.env.SQUARE_PI_SESSION_ID;
@@ -218,6 +241,6 @@ export default function squarePiExtension(pi) {
     sessionCwd = undefined;
     joiningContext = undefined;
     presenting = false;
-    retryCursor = undefined;
+    retryWait = undefined;
   });
 }

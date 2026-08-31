@@ -1,7 +1,7 @@
 import { type InboxMembership } from './model.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { type SquareChangeCursor, waitForSquareChanges } from './square-file-adapter.js';
+import { waitForSquareChanges } from './square-file-adapter.js';
 import path from 'node:path';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectPresentation, projectSessionBindings } from './square-projections.js';
@@ -20,8 +20,8 @@ export interface PendingWaitOptions {
   excludeKeys?: ReadonlySet<string>;
   /** After a delivery failure, wait for a new state edge before retrying the same pending work. */
   skipImmediate?: boolean;
-  /** A durable pre-delivery observation: changes since it satisfy a deferred retry edge. */
-  changeCursor?: SquareChangeCursor;
+  /** Reports whether a change wait has been established for a deferred retry. */
+  onChangeArmed?: (armed: boolean) => void;
 }
 
 function notificationKey(membership: InboxMembership, actIndex: number): string {
@@ -76,7 +76,10 @@ export async function waitForSessionPending(
     const immediate = withoutExcluded(await sessionInbox(sessionId, env), options.excludeKeys);
     if (immediate.some((membership) => membership.notifications.length > 0)) return immediate;
   }
-  if (timeoutMs <= 0 || options.signal?.aborted) return [];
+  if (timeoutMs <= 0 || options.signal?.aborted) {
+    options.onChangeArmed?.(false);
+    return [];
+  }
 
   const bindings = await projectSessionBindings({ hostLedger: hostLedgerForEnv(env), sessionId });
   const paths = [...new Set(bindings.map((binding) => binding.location))];
@@ -92,7 +95,7 @@ export async function waitForSessionPending(
         if (!projectAfterReady) return undefined;
         const current = withoutExcluded(await sessionInbox(sessionId, env), options.excludeKeys);
         return current.some((membership) => membership.notifications.length > 0) ? current : undefined;
-      }, options.changeCursor);
+      }, options.onChangeArmed);
       if (aborted || change.status === 'expired') return [];
       if (change.status === 'ready') return change.value;
       projectAfterReady = true;

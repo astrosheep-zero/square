@@ -131,7 +131,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
   return cell;
 }
 
-export async function squareFileFingerprint(squarePath: string): Promise<string> {
+async function fileFingerprint(squarePath: string): Promise<string> {
   try {
     const stat = await fs.promises.stat(squarePath);
     return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
@@ -148,7 +148,7 @@ export function createFileCell(squarePath: string): StateCell {
   let cached: { fingerprint: string; state: SquareState } | undefined;
 
   async function observe(): Promise<string> {
-    const next = await squareFileFingerprint(squarePath);
+    const next = await fileFingerprint(squarePath);
     if (fingerprint === undefined) {
       fingerprint = next;
     } else if (next !== fingerprint) {
@@ -178,7 +178,7 @@ export function createFileCell(squarePath: string): StateCell {
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
           await writeSquareSnapshot(squarePath, outcome.state);
-          fingerprint = await squareFileFingerprint(squarePath);
+          fingerprint = await fileFingerprint(squarePath);
           cached = { fingerprint, state: cloneState(outcome.state) };
           version += 1;
         }
