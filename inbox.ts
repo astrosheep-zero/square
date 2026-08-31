@@ -1,7 +1,7 @@
 import { type InboxMembership } from './model.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { waitForSquareChanges } from './square-file-adapter.js';
+import { type SquareChangeCursor, waitForSquareChanges } from './square-file-adapter.js';
 import path from 'node:path';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectPresentation, projectSessionBindings } from './square-projections.js';
@@ -20,6 +20,8 @@ export interface PendingWaitOptions {
   excludeKeys?: ReadonlySet<string>;
   /** After a delivery failure, wait for a new state edge before retrying the same pending work. */
   skipImmediate?: boolean;
+  /** A durable pre-delivery observation: changes since it satisfy a deferred retry edge. */
+  changeCursor?: SquareChangeCursor;
 }
 
 function notificationKey(membership: InboxMembership, actIndex: number): string {
@@ -90,7 +92,7 @@ export async function waitForSessionPending(
         if (!projectAfterReady) return undefined;
         const current = withoutExcluded(await sessionInbox(sessionId, env), options.excludeKeys);
         return current.some((membership) => membership.notifications.length > 0) ? current : undefined;
-      });
+      }, options.changeCursor);
       if (aborted || change.status === 'expired') return [];
       if (change.status === 'ready') return change.value;
       projectAfterReady = true;

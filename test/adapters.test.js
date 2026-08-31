@@ -513,7 +513,7 @@ async function withPiFixture(sessionId, fn, pending = true) {
     else process.env.SQUARE_PRESENTED = previous.presented;
     if (previous.piSession === undefined) delete process.env.SQUARE_PI_SESSION_ID;
     else process.env.SQUARE_PI_SESSION_ID = previous.piSession;
-    fs.rmSync(item.root, { recursive: true, force: true });
+    fs.rmSync(item.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
   }
 }
 
@@ -679,7 +679,6 @@ test('Pi retries failed native injection without committing presented or seen', 
       assert.equal(await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
       const square = await Square.at({ path: item.squarePath });
       try {
         const alice = await square.join('Alice');

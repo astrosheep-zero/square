@@ -64,7 +64,7 @@ function headerLine(squarePath: string, opts: HeaderOptions = {}): string {
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
-  if (!path.isAbsolute(squarePath)) return squarePath;
+  if (!path.isAbsolute(squarePath)) return squarePath.split(path.sep).join('/');
   const comparableCwd = fs.realpathSync.native(cwd);
   let comparableSquarePath = squarePath;
   try {
@@ -73,7 +73,8 @@ export function displayPath(squarePath: string, cwd = process.cwd()): string {
     // Some error outputs name a path before it exists; lexical comparison remains useful there.
   }
   const relative = path.relative(comparableCwd, comparableSquarePath);
-  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) ? relative : squarePath;
+  const displayed = relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) ? relative : squarePath;
+  return displayed.split(path.sep).join('/');
 }
 
 export function withPathOutput(squarePath: string, body = '', opts: HeaderOptions = {}): string {

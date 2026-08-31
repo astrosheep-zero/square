@@ -8,6 +8,7 @@ import {
   withSquareFileLock,
   openSquareCell,
   createMemoryCell,
+  squareFileFingerprint,
 } from './square-storage.js';
 import {
   InternalSquareError,
@@ -127,11 +128,25 @@ export type SquareChangeWaitResult<T> =
   | { status: 'changed' }
   | { status: 'expired' };
 
+/** Durable file observations that let a retrier retain a change boundary across waits. */
+export interface SquareChangeCursor {
+  readonly fingerprints: ReadonlyMap<string, string>;
+}
+
+export async function captureSquareChangeCursor(squarePaths: readonly string[]): Promise<SquareChangeCursor> {
+  const paths = [...new Set(squarePaths)];
+  return {
+    fingerprints: new Map(await Promise.all(paths.map(async (squarePath) =>
+      [squarePath, await squareFileFingerprint(squarePath)] as const))),
+  };
+}
+
 export async function waitForSquareChanges<T>(
   squarePaths: readonly string[],
   timeoutMs: number,
   signal?: AbortSignal,
   afterReady?: () => Promise<T | undefined>,
+  cursor?: SquareChangeCursor,
 ): Promise<SquareChangeWaitResult<T>> {
   if (timeoutMs <= 0 || signal?.aborted || squarePaths.length === 0) return { status: 'expired' };
   const squares: OpenSquare[] = [];
@@ -144,6 +159,15 @@ export async function waitForSquareChanges<T>(
       square,
       version: (await square.artifact.read()).version,
     })));
+    if (cursor !== undefined) {
+      const changedSinceCursor = await Promise.all(squares.map(async (square) => (
+        cursor.fingerprints.get(square.location) !== await squareFileFingerprint(square.location)
+      )));
+      if (changedSinceCursor.some(Boolean)) {
+        const ready = await afterReady?.();
+        return ready === undefined ? { status: 'changed' } : { status: 'ready', value: ready };
+      }
+    }
     const ready = await afterReady?.();
     if (ready !== undefined) return { status: 'ready', value: ready };
     const waits = baselines.map(async ({ square, version }) => {

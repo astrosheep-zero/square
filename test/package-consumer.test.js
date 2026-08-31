@@ -11,9 +11,11 @@ function run(command, args, options = {}) {
   return spawnSync(command, args, { cwd: root, encoding: 'utf8', ...options });
 }
 
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
 test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'square-package-consumer-'));
-  const packed = run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', fixture], {
+  const packed = run(npmCommand, ['pack', '--json', '--ignore-scripts', '--pack-destination', fixture], {
     env: { ...process.env, npm_config_cache: path.join(fixture, 'npm-cache') },
   });
   assert.equal(packed.status, 0, packed.stderr);
@@ -34,7 +36,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'held', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
     void participant; void id; void codes;
   `);
-  const typecheck = run(path.join(root, 'node_modules', '.bin', 'tsc'), [
+  const typecheck = run(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
     '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     '--types', 'node', '--typeRoots', path.join(root, 'node_modules', '@types'),
     path.join(fixture, 'consumer.ts'),

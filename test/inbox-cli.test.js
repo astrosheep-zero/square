@@ -17,7 +17,7 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
     await sender.express(secretBody, { force: true, mentions: ['Alpha', longName] });
   }, { hardCap: null });
   const root = path.dirname(source);
-  const canonicalSource = fs.realpathSync(source);
+  const canonicalSource = await fs.promises.realpath(source);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const copyDirectory = path.join(root, 'z'.repeat(180));

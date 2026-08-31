@@ -175,7 +175,7 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.equal(sent.agentId, 'integrated-agent');
   assert.match(sent.prompt, /<system-reminder source="square" wake="paseo">/);
   assert.doesNotMatch(sent.prompt, /native adapter presented/);
-  assert.match(sent.prompt, /square: \/[^\n]+/);
+  assert.match(sent.prompt, new RegExp(`square: ${item.squarePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.doesNotMatch(sent.prompt, /<square>[^<]+<\/square>/);
   assert.doesNotMatch(sent.prompt, /catch --now/);
   assert.match(sent.prompt, /attention: act\/2 for Bob/);
