@@ -1,6 +1,6 @@
 import { type DirectedNotificationRoute } from './delivery.js';
 import { formatActivityId } from './square-core.js';
-import { participantIdentity } from './presentation.js';
+import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
 import type { WakeAttempt } from './square-projections.js';
 import { wakeEvidence } from './wake-evidence.js';
@@ -36,6 +36,8 @@ const DISPLAY_ORDER: readonly DeliveryHealthKind[] = [
 ];
 
 const ACTIONABLE = new Set<DeliveryHealthKind>(['wake-unknown', 'unreachable']);
+const DETAIL_LIMIT = 20;
+const DISPLAY_FIELD_LIMIT = 160;
 
 /** Purely classify current pending attention from the artifact and durable ledgers. */
 export async function classifyDeliveryHealth(
@@ -77,9 +79,31 @@ export async function classifyDeliveryHealth(
   return items;
 }
 
+function displayField(value: string): string {
+  const truncated = truncateChars(value, DISPLAY_FIELD_LIMIT - 1);
+  return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
+}
+
 function formatItem(item: DeliveryHealthItem): string {
-  const evidence = item.attempt?.signature === undefined ? '' : ` · ${item.attempt.signature}`;
-  return `  · ${formatActivityId(item.actIndex)} → ${participantIdentity(item.recipient)} from ${participantIdentity(item.actor)} · ${formatDuration(item.ageMs)}${evidence}`;
+  const evidence = item.attempt?.signature === undefined ? '' : ` · ${displayField(item.attempt.signature)}`;
+  return `  · ${formatActivityId(item.actIndex)} → ${displayField(participantIdentity(item.recipient))} from ${displayField(participantIdentity(item.actor))} · ${formatDuration(item.ageMs)}${evidence}`;
+}
+
+export function renderDeliveryHealth(items: readonly DeliveryHealthItem[]): string[] {
+  if (items.length === 0) return ['✓ no pending delivery attention'];
+
+  const out = [`· delivery attention · ${items.length} pending`];
+  let displayed = 0;
+  for (const kind of DISPLAY_ORDER) {
+    const group = items.filter((item) => item.kind === kind);
+    if (group.length === 0) continue;
+    out.push(`${ACTIONABLE.has(kind) ? '✕' : '○'} ${kind}: ${group.length}`);
+    const details = group.slice(0, DETAIL_LIMIT - displayed);
+    out.push(...details.map(formatItem));
+    displayed += details.length;
+  }
+  if (items.length > DETAIL_LIMIT) out.push(`${DETAIL_LIMIT} of ${items.length} pending details shown`);
+  return out;
 }
 
 export async function doctorDeliveryHealth(
@@ -88,15 +112,5 @@ export async function doctorDeliveryHealth(
   now = Date.now(),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
-  const items = await classifyDeliveryHealth(squarePath, { graceMs, now, env });
-  if (items.length === 0) return ['✓ no pending delivery attention'];
-
-  const out = [`· delivery attention · ${items.length} pending`];
-  for (const kind of DISPLAY_ORDER) {
-    const group = items.filter((item) => item.kind === kind);
-    if (group.length === 0) continue;
-    out.push(`${ACTIONABLE.has(kind) ? '✕' : '○'} ${kind}: ${group.length}`);
-    out.push(...group.map(formatItem));
-  }
-  return out;
+  return renderDeliveryHealth(await classifyDeliveryHealth(squarePath, { graceMs, now, env }));
 }
