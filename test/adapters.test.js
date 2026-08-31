@@ -209,10 +209,14 @@ test('OpenCode uninstall removes only the Square npm plugin entry', () => {
   fs.mkdirSync(config, { recursive: true });
   const configPath = path.join(config, 'opencode.jsonc');
   fs.writeFileSync(configPath, JSON.stringify({ plugin: ['@astrosheep/square@0.3.27', 'other-plugin'] }, null, 2));
+  const previousConfigHome = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
   try {
     assert.deepEqual(uninstallOpenCodePlugin(home), ['@astrosheep/square']);
     assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), { plugin: ['other-plugin'] });
   } finally {
+    if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousConfigHome;
     fs.rmSync(home, { recursive: true, force: true });
   }
 });

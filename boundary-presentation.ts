@@ -1,4 +1,8 @@
+import os from 'node:os';
+import path from 'node:path';
+
 import { leaseOwnsNotification } from './delivery.js';
+import { withFileLock } from './file-lock.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
@@ -103,7 +107,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   };
 }
 
-export async function presentPendingAtBoundary<T>(
+async function presentPendingAtBoundaryUnlocked<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,
   lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
@@ -142,4 +146,17 @@ export async function presentPendingAtBoundary<T>(
     }
   }
   return result;
+}
+
+/** Serialize a boundary across hook processes so one stale inbox cannot render twice. */
+export async function presentPendingAtBoundary<T>(
+  sessionId: string,
+  present: (context: string) => T | Promise<T>,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  env: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
+): Promise<T | undefined> {
+  const ledgerRoot = env.SQUARE_HOST_LEDGER_USER ?? path.join(os.homedir(), '.square', 'host-ledger');
+  return withFileLock(path.join(ledgerRoot, 'presentation-boundary.lock'), { retryMs: 10, staleMs: 300_000, signal }, () =>
+    presentPendingAtBoundaryUnlocked(sessionId, present, lookup, env, signal));
 }
