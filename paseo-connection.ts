@@ -58,6 +58,10 @@ function isIpc(host: string | undefined): host is string {
   return host !== undefined && (host.startsWith('unix://') || host.startsWith('pipe://'));
 }
 
+function supportsIpcHost(host: string): boolean {
+  return process.platform !== 'win32' || !host.startsWith('unix://');
+}
+
 /** Match the host precedence used by the Paseo CLI for local daemon connections. */
 export function paseoDaemonHosts(env: NodeJS.ProcessEnv = process.env): string[] {
   const explicit = normalizeHost(env.PASEO_HOST);
@@ -67,9 +71,9 @@ export function paseoDaemonHosts(env: NodeJS.ProcessEnv = process.env): string[]
   const listen = normalizeHost(env.PASEO_LISTEN);
   const pid = pidHost(env);
   const configured = configuredHost(env);
-  if (isIpc(listen)) candidates.push(listen);
-  if (isIpc(pid)) candidates.push(pid);
-  if (isIpc(configured)) candidates.push(configured);
+  if (isIpc(listen) && supportsIpcHost(listen)) candidates.push(listen);
+  if (isIpc(pid) && supportsIpcHost(pid)) candidates.push(pid);
+  if (isIpc(configured) && supportsIpcHost(configured)) candidates.push(configured);
   if (configured !== undefined && !isIpc(configured) && configured !== '127.0.0.1:6767') candidates.push(configured);
   candidates.push(DEFAULT_HOST);
   return [...new Set(candidates)];
@@ -83,6 +87,9 @@ function uriPassword(uri: URL): string | undefined {
 export function resolvePaseoDaemonTarget(host: string, env: NodeJS.ProcessEnv = process.env): PaseoDaemonTarget {
   const passwordFromEnv = env.PASEO_PASSWORD?.trim() || undefined;
   if (host.startsWith('unix://') || host.startsWith('pipe://')) {
+    if (process.platform === 'win32' && host.startsWith('unix://')) {
+      throw new Error('Paseo Unix socket targets are unsupported on Windows; use pipe:// or tcp://.');
+    }
     const prefix = host.startsWith('unix://') ? 'unix://' : 'pipe://';
     const socketPath = expandHome(host.slice(prefix.length).trim());
     if (socketPath === '') throw new Error('Invalid Paseo IPC target: missing socket path.');

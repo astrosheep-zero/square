@@ -85,7 +85,15 @@ export function doctorHarnessLinks(links: HarnessLink[]): string[] {
 export type OpenCodeCommandRunner = (homeDir: string, args: string[]) => { status: number; stdout: string; stderr: string };
 
 function runOpenCode(homeDir: string, args: string[]): { status: number; stdout: string; stderr: string } {
-  const result = crossSpawn.sync(process.env.SQUARE_OPENCODE_BIN || 'opencode', args, {
+  const prefix = (() => {
+    try {
+      const parsed = JSON.parse(process.env.SQUARE_OPENCODE_BIN_ARGS ?? '[]') as unknown;
+      return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
+  const result = crossSpawn.sync(process.env.SQUARE_OPENCODE_BIN || 'opencode', [...prefix, ...args], {
     encoding: 'utf8',
     env: { ...process.env, HOME: homeDir, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config') },
     timeout: 30_000,

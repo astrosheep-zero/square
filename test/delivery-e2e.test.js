@@ -375,7 +375,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
     const held = spawnHeldWorker(item, act.index, callLog);
 
     await held.sent;
-    held.child.kill('SIGKILL');
+    held.child.kill();
     await new Promise((resolve) => held.child.once('close', resolve));
     const interrupted = (await loadSquare(item.squarePath)).runtime;
     const lease = interrupted.leases.Bob;

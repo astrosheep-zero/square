@@ -26,11 +26,11 @@ function classifyFailure(message: string): CodexQueueFailureKind {
 
 export function sendCodexQueue(
   { threadId, message }: CodexQueueRequest,
-  opts: { bin?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  opts: { args?: string[]; bin?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): void {
   const result = spawnSync(
     opts.bin ?? process.env.SQUARE_CODEX_BIN ?? 'codex',
-    ['queue', '--thread', threadId, '--message', message],
+    [...(opts.args ?? []), 'queue', '--thread', threadId, '--message', message],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env: opts.env ?? process.env },
   );
   if (result.error) {

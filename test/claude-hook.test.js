@@ -12,6 +12,7 @@ import { sessionInbox } from '../dist/inbox.js';
 import { lookupParticipant, recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
+import { nodeCommandFixture } from './node-command-fixture.js';
 
 const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
 
@@ -228,14 +229,15 @@ test('privileged hook sweep wakes a different recipient after local failure', as
 
 test('privileged hook exits before its native timeout when a wake transport hangs', async () => {
   const item = await fixture();
-  const bin = path.join(import.meta.dirname, `.square-slow-paseo-${process.pid}-${Date.now()}`);
+  const fake = nodeCommandFixture('square-slow-paseo', `
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
+  `);
   try {
     const env = {
       ...item.env,
-      SQUARE_PASEO_BIN: bin,
+      SQUARE_PASEO_BIN: fake.bin,
+      SQUARE_PASEO_BIN_ARGS: JSON.stringify(fake.args),
     };
-    fs.writeFileSync(bin, '#!/bin/sh\nexec /bin/sleep 10\n');
-    fs.chmodSync(bin, 0o755);
     await recordSessionJoin('slow-paseo', 'Bob', item.squarePath, 'paseo', env);
     await upsertWakeRoute({
       location: item.squarePath,
@@ -252,7 +254,7 @@ test('privileged hook exits before its native timeout when a wake transport hang
     assert.equal(result.stderr, '');
     assert.ok(elapsed < 4500, `native hook took ${elapsed}ms`);
   } finally {
-    fs.rmSync(bin, { force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
     item.cleanup();
   }
 });

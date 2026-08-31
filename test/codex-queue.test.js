@@ -15,6 +15,7 @@ import {
   CodexQueueSendError,
   sendCodexQueue,
 } from '../dist/codex-queue.js';
+import { nodeCommandFixture } from './node-command-fixture.js';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-queue-'));
@@ -83,12 +84,12 @@ test('Codex queue adapter sends only after the final boundary check', async () =
 });
 
 test('Codex queue transport uses the exact CLI shape and classifies failures', () => {
-  const bin = path.join(import.meta.dirname, `.square-codex-bin-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(bin, '#!/bin/sh\nexec /usr/bin/printf "%s\\n" "$@" > "$SQUARE_CODEX_ARGS"\n');
-  fs.chmodSync(bin, 0o755);
+  const fake = nodeCommandFixture('square-codex-queue', `
+    require('node:fs').writeFileSync(process.env.SQUARE_CODEX_ARGS, process.argv.slice(2).join('\\n'));
+  `);
   try {
-    const env = { ...process.env, SQUARE_CODEX_ARGS: `${bin}.args` };
-    sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { bin, env });
+    const env = { ...process.env, SQUARE_CODEX_ARGS: path.join(fake.root, 'args') };
+    sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { args: fake.args, bin: fake.bin, env });
     assert.deepEqual(fs.readFileSync(env.SQUARE_CODEX_ARGS, 'utf8').trim().split('\n'), [
       'queue', '--thread', 'thread-a', '--message', 'hello',
     ]);
@@ -97,7 +98,6 @@ test('Codex queue transport uses the exact CLI shape and classifies failures', (
       (error) => error instanceof CodexQueueSendError && error.kind === 'transient',
     );
   } finally {
-    fs.rmSync(bin, { force: true });
-    fs.rmSync(`${bin}.args`, { force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });

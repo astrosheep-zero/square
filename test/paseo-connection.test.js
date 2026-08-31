@@ -20,7 +20,9 @@ test('explicit Paseo host and URI password use the CLI connection contract', () 
   });
 });
 
-test('Paseo IPC targets retain socket paths and environment authentication', () => {
+test('Paseo Unix socket targets retain socket paths and environment authentication', {
+  skip: process.platform === 'win32' ? 'Unix sockets are unsupported on Windows.' : false,
+}, () => {
   assert.deepEqual(resolvePaseoDaemonTarget('unix:///tmp/paseo.sock', { PASEO_PASSWORD: 'secret' }), {
     type: 'ipc',
     url: 'ws+unix:///tmp/paseo.sock:/ws',
@@ -29,16 +31,26 @@ test('Paseo IPC targets retain socket paths and environment authentication', () 
   });
 });
 
+test('Windows reports Paseo Unix socket targets as unsupported', {
+  skip: process.platform !== 'win32' ? 'Windows-only capability boundary.' : false,
+}, () => {
+  assert.throws(
+    () => resolvePaseoDaemonTarget('unix:///tmp/paseo.sock'),
+    /Paseo Unix socket targets are unsupported on Windows; use pipe:\/\/ or tcp:\/\//,
+  );
+});
+
 test('Paseo default hosts prefer the daemon pid target and configured TCP fallback', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-paseo-home-'));
   fs.writeFileSync(path.join(home, 'paseo.pid'), JSON.stringify({ sockPath: '/tmp/paseo-test.sock' }));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ daemon: { listen: '10.0.0.5:6767' } }));
   try {
-    assert.deepEqual(paseoDaemonHosts({ PASEO_HOME: home }), [
-      'unix:///tmp/paseo-test.sock',
-      '10.0.0.5:6767',
-      'localhost:6767',
-    ]);
+    assert.deepEqual(
+      paseoDaemonHosts({ PASEO_HOME: home }),
+      process.platform === 'win32'
+        ? ['10.0.0.5:6767', 'localhost:6767']
+        : ['unix:///tmp/paseo-test.sock', '10.0.0.5:6767', 'localhost:6767'],
+    );
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

@@ -1,17 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import { PaseoWakeSendError, sendPaseoWake } from '../dist/wake-sink.js';
+import { nodeCommandFixture } from './node-command-fixture.js';
 
 function fakePaseo(body) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-sink-'));
-  const file = path.join(dir, 'paseo');
-  fs.writeFileSync(file, `#!/bin/sh\n${body}\n`);
-  fs.chmodSync(file, 0o755);
-  return { dir, file };
+  return nodeCommandFixture('square-wake-sink', body);
 }
 
 function captureKind(run) {
@@ -25,27 +21,21 @@ function captureKind(run) {
 }
 
 test('Paseo connection refusal is a transient pre-accept failure', () => {
-  const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"DAEMON_NOT_RUNNING","message":"connect ECONNREFUSED"}}' >&2\nexit 1`);
-  const previous = process.env.SQUARE_PASEO_BIN;
-  process.env.SQUARE_PASEO_BIN = fake.file;
+  const fake = fakePaseo(`console.error('{"error":{"code":"DAEMON_NOT_RUNNING","message":"connect ECONNREFUSED"}}'); process.exit(1);`);
   try {
-    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'transient');
+    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' }, fake)), 'transient');
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
-    else process.env.SQUARE_PASEO_BIN = previous;
-    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });
 
 test('Paseo wake success forwards the agent and awareness prompt', () => {
-  const fake = fakePaseo('printf \'%s\\n\' "$@" > "$SQUARE_WAKE_ARGS"');
-  const previousBin = process.env.SQUARE_PASEO_BIN;
+  const fake = fakePaseo(`require('node:fs').writeFileSync(process.env.SQUARE_WAKE_ARGS, process.argv.slice(2).join('\\n')); process.exit(0);`);
   const previousArgs = process.env.SQUARE_WAKE_ARGS;
-  const argsFile = path.join(fake.dir, 'args');
-  process.env.SQUARE_PASEO_BIN = fake.file;
+  const argsFile = path.join(fake.root, 'args');
   process.env.SQUARE_WAKE_ARGS = argsFile;
   try {
-    sendPaseoWake({ agentId: 'agent-1', prompt: '<system-reminder>attention</system-reminder>' });
+    sendPaseoWake({ agentId: 'agent-1', prompt: '<system-reminder>attention</system-reminder>' }, fake);
     assert.deepEqual(fs.readFileSync(argsFile, 'utf8').trim().split('\n'), [
       'send',
       'agent-1',
@@ -55,52 +45,38 @@ test('Paseo wake success forwards the agent and awareness prompt', () => {
       '--json',
     ]);
   } finally {
-    if (previousBin === undefined) delete process.env.SQUARE_PASEO_BIN;
-    else process.env.SQUARE_PASEO_BIN = previousBin;
     if (previousArgs === undefined) delete process.env.SQUARE_WAKE_ARGS;
     else process.env.SQUARE_WAKE_ARGS = previousArgs;
-    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });
 
 test('Paseo authentication rejection is a proven pre-accept rejection', () => {
-  const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"SEND_FAILED","message":"Incorrect password"}}' >&2\nexit 1`);
-  const previous = process.env.SQUARE_PASEO_BIN;
-  process.env.SQUARE_PASEO_BIN = fake.file;
+  const fake = fakePaseo(`console.error('{"error":{"code":"SEND_FAILED","message":"Incorrect password"}}'); process.exit(1);`);
   try {
-    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' })), 'rejected');
+    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' }, fake)), 'rejected');
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
-    else process.env.SQUARE_PASEO_BIN = previous;
-    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });
 
 test('Paseo command timeout is unknown and must not be retried', () => {
-  const fake = fakePaseo('sleep 1');
-  const previous = process.env.SQUARE_PASEO_BIN;
-  process.env.SQUARE_PASEO_BIN = fake.file;
+  const fake = fakePaseo('Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);');
   try {
-    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' }, { timeoutMs: 10 })), 'unknown');
+    assert.equal(captureKind(() => sendPaseoWake({ agentId: 'a', prompt: 'wake' }, { ...fake, timeoutMs: 10 })), 'unknown');
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
-    else process.env.SQUARE_PASEO_BIN = previous;
-    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });
 
 test('Paseo URI passwords are redacted from surfaced command failures', () => {
-  const fake = fakePaseo(`printf '%s\\n' '{"error":{"code":"DAEMON_NOT_RUNNING","message":"Cannot connect to tcp://host:6767?password=top-secret"}}' >&2\nexit 1`);
-  const previous = process.env.SQUARE_PASEO_BIN;
-  process.env.SQUARE_PASEO_BIN = fake.file;
+  const fake = fakePaseo(`console.error('{"error":{"code":"DAEMON_NOT_RUNNING","message":"Cannot connect to tcp://host:6767?password=top-secret"}}'); process.exit(1);`);
   try {
     assert.throws(
-      () => sendPaseoWake({ agentId: 'a', prompt: 'wake' }),
+      () => sendPaseoWake({ agentId: 'a', prompt: 'wake' }, fake),
       (error) => error instanceof PaseoWakeSendError && !error.message.includes('top-secret') && error.message.includes('[redacted]')
     );
   } finally {
-    if (previous === undefined) delete process.env.SQUARE_PASEO_BIN;
-    else process.env.SQUARE_PASEO_BIN = previous;
-    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });

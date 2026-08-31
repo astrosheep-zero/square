@@ -38,13 +38,22 @@ function redactUriPassword(value: string): string {
   return value.replace(/([?&]password=)[^&\s]+/gi, '$1[redacted]');
 }
 
+function configuredArguments(name: string): string[] {
+  try {
+    const parsed = JSON.parse(process.env[name] ?? '[]') as unknown;
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function sendPaseoWake(
   { agentId, prompt }: PaseoWakeRequest,
-  opts: { timeoutMs?: number } = {}
+  opts: { args?: string[]; bin?: string; timeoutMs?: number } = {}
 ): void {
   const result = spawnSync(
-    process.env.SQUARE_PASEO_BIN || 'paseo',
-    ['send', agentId, '--prompt', prompt, '--no-wait', '--json'],
+    opts.bin ?? process.env.SQUARE_PASEO_BIN ?? 'paseo',
+    [...(opts.args ?? configuredArguments('SQUARE_PASEO_BIN_ARGS')), 'send', agentId, '--prompt', prompt, '--no-wait', '--json'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env: process.env }
   );
   if (result.error) {

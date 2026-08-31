@@ -19,6 +19,7 @@ import {
   persistSquare,
   build,
 } from './square-cli-helpers.js';
+import { nodeCommandFixture } from './node-command-fixture.js';
 
 test('CLI test runner isolates host delivery identities', () => {
   const previous = process.env.CODEX_THREAD_ID;
@@ -119,21 +120,30 @@ test('listener commands do not rejoin a participant who already left', async () 
 test('install and uninstall manage an explicit OpenCode target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-install-'));
   const config = path.join(home, 'xdg');
+  const fake = nodeCommandFixture('square-opencode-install', `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const target = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, JSON.stringify({ plugin: ['@astrosheep/square'] }, null, 2));
+    process.exit(0);
+  `);
   try {
     const result = run(['install', 'opencode'], {
-      env: { HOME: home, XDG_CONFIG_HOME: config },
+      env: { HOME: home, XDG_CONFIG_HOME: config, SQUARE_OPENCODE_BIN: fake.bin, SQUARE_OPENCODE_BIN_ARGS: JSON.stringify(fake.args) },
     });
     assert.equal(result.status, 0, result.stderr);
     const plugin = path.join(config, 'opencode', 'opencode.jsonc');
     assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, ['@astrosheep/square']);
 
     const removed = run(['uninstall', 'opencode'], {
-      env: { HOME: home, XDG_CONFIG_HOME: config },
+      env: { HOME: home, XDG_CONFIG_HOME: config, SQUARE_OPENCODE_BIN: fake.bin, SQUARE_OPENCODE_BIN_ARGS: JSON.stringify(fake.args) },
     });
     assert.equal(removed.status, 0, removed.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, []);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(fake.root, { recursive: true, force: true });
   }
 });
 

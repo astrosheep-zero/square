@@ -4,9 +4,12 @@ import { waitForPaseoToolBoundary } from './paseo-timeline.js';
 
 export interface PaseoAgent { id: string; name: string; status: string; cwd?: string; }
 
-export function discoverPaseoAgents(timeoutMs = 5000): { agents: PaseoAgent[]; error?: string } {
+export function discoverPaseoAgents(
+  timeoutMs = 5000,
+  opts: { args?: string[]; bin?: string } = {},
+): { agents: PaseoAgent[]; error?: string } {
   try {
-    const raw = execFileSync(process.env.SQUARE_PASEO_BIN || 'paseo', ['ls', '--global', '--json'], {
+    const raw = execFileSync(opts.bin ?? process.env.SQUARE_PASEO_BIN ?? 'paseo', [...(opts.args ?? []), 'ls', '--global', '--json'], {
       encoding: 'utf8',
       timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
