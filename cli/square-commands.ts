@@ -17,6 +17,8 @@ import {
 } from '../presentation.js';
 import {
   hasAutomaticDeliveryIdentity,
+  lookupParticipant,
+  recordSessionDone,
 } from '../registry.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
 import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../square-projections.js';
@@ -170,18 +172,28 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           participant: intent.name,
           sessionIds: sessionIdsFromEnvironment(),
         }) !== undefined;
-      const participant = await square.join(intent.name);
-      const joinedName = participant.name;
       const isRejoin = before.joined;
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
           [
-            `✕ ${participantIdentity(joinedName)} shoos you out of the square`,
+            `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
             `  · a same-named participant stands here — the name is taken`,
             `  · --kick banishes her and the name becomes yours`,
-            `» ${participantCommandPrefix(squarePath, joinedName)} join --kick`,
+            `» ${participantCommandPrefix(squarePath, intent.name)} join --kick`,
           ].join('\n')
         );
+      }
+      const takeoverNeeded = isRejoin && intent.kick && !reconnect;
+      const oldBindings = takeoverNeeded ? await lookupParticipant(squarePath, intent.name) : [];
+      const participant = takeoverNeeded ? await square.takeover(intent.name, oldBindings.map((binding) => binding.sessionId)) : await square.join(intent.name);
+      const joinedName = participant.name;
+      if (takeoverNeeded) {
+        const currentSessions = new Set(sessionIdsFromEnvironment());
+        for (const binding of oldBindings) {
+          if (!currentSessions.has(binding.sessionId)) {
+            await recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel).catch(() => undefined);
+          }
+        }
       }
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);

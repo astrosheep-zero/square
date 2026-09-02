@@ -8,6 +8,7 @@ import {
   ignore,
   implicitJoin,
   join,
+  takeover,
   listen,
   listening,
   resume,
@@ -87,6 +88,11 @@ export class Square {
   async joinWithActivity(name: string): Promise<{ readonly participant: Participant; readonly activity: Activity | null }> {
     const joined = await join(this.context, name);
     return { participant: new ParticipantHandle(joined.name, this.square, this.context), activity: joined.activity };
+  }
+
+  async takeover(name: string, oldSessionIds: readonly string[] = []): Promise<Participant> {
+    const result = await takeover(this.context, name, oldSessionIds);
+    return new ParticipantHandle(result.name, this.square, this.context);
   }
 
   async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {

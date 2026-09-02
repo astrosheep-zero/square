@@ -6,6 +6,7 @@ import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { automaticParticipant } from './participant-identity.js';
+import { SquareError } from './model.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
@@ -58,7 +59,21 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     return undefined;
   }
   const name = automaticParticipant(provider, sessionId, env);
-  await closeOpenSquare(reader);
+  const hostLedger = hostLedgerForEnv(env);
+  let bindings: readonly PresenceRecord[];
+  let entry: Awaited<ReturnType<typeof entryPresentation>>;
+  try {
+    bindings = await hostLedger.listPresence({ location: squarePath, participant: name, scopes: ['user', 'local'] });
+    entry = await entryPresentation(reader, name);
+  } finally {
+    await closeOpenSquare(reader);
+  }
+  if (bindings.some((binding) => binding.session !== sessionId)) {
+    throw new SquareError('already_joined', `${name} is already bound to another session`);
+  }
+  if (entry.joined && !bindings.some((binding) => binding.session === sessionId)) {
+    throw new SquareError('already_joined', `${name} is already joined by another session`);
+  }
   const scopedEnv = operationEnv(provider, sessionId, env);
   const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
   try {

@@ -84,13 +84,15 @@ test('automatic implicit join does not re-enter a participant that has done', { 
   assert.equal((await loadSquare(item.publicPath)).routes?.some((route) => route.sessionId === 'pi-session'), false);
 });
 
-test('automatic implicit join rebinds an active participant without another join', { concurrency: false }, async () => {
+test('automatic implicit join rejects an active participant bound to another session', { concurrency: false }, async () => {
   const item = await fixture();
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
     await automaticSessionStart('pi', 'first-session', item.cwd, env);
-    const resumed = await automaticSessionStart('pi', 'second-session', item.cwd, env);
-    assert.equal(resumed, undefined);
-    assert.equal((await lookupSessionBindings('second-session')).some((binding) => binding.name === 'shared'), true);
+    await assert.rejects(
+      () => automaticSessionStart('pi', 'second-session', item.cwd, env),
+      (error) => error?.code === 'already_joined',
+    );
+    assert.equal((await lookupSessionBindings('second-session')).some((binding) => binding.name === 'shared'), false);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
 });

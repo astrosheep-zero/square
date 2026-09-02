@@ -7,6 +7,8 @@ import test from 'node:test';
 import { formatActivityId } from '../dist/square-core.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
 import { Square } from '../dist/index.js';
+import { lookupSessionBindings } from '../dist/registry.js';
+import { readWakeRoutes } from '../dist/routes.js';
 import {
   ROOT,
   TEST_REGISTRY,
@@ -314,7 +316,7 @@ test('square-accessing commands refuse to invent a default location', () => {
   }
 });
 
-test('join and catch only show fallback catch hints without automatic session delivery', () => {
+test('join and catch only show fallback catch hints without automatic session delivery', async () => {
   const file = tempSquare();
   const registry = `${file}.sessions.ndjsonl`;
   const noDelivery = {
@@ -371,6 +373,14 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stdout, /you banished the original @Bob/);
   assert.doesNotMatch(takeover.stdout, /catch --/);
+
+  const historySquare = await Square.at({ path: file });
+  const lifecycle = (await historySquare.history({ limit: 100 })).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
+  await historySquare.close();
+  assert.deepEqual(lifecycle, ['join', 'done', 'join']);
+  assert.equal((await lookupSessionBindings('codex-bob', Date.now(), { SQUARE_REGISTRY: registry })).length, 0);
+  assert.equal((await lookupSessionBindings('codex-other', Date.now(), { SQUARE_REGISTRY: registry })).some((binding) => binding.name === 'Bob'), true);
+  assert.deepEqual((await readWakeRoutes({ location: file, participant: 'Bob' })).map((route) => route.sessionId), ['codex-other']);
 });
 
 test('doctor is a dry validator and rejects Markdown bytes', () => {

@@ -1,6 +1,6 @@
 import { formatActivityId, parseActivityId, type Act } from './square-core.js';
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin } from './decisions.js';
-import { SquareError, type SquareState, type StoredAct } from './model.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName } from './decisions.js';
+import { nameKey, SquareError, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
@@ -138,6 +138,29 @@ export async function join(square: OperationContext, name: string): Promise<{ re
   await ensureLocalPresence(square, committed.name);
   await publishIdentityRoute(square, committed.name);
   return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+}
+
+/** End the standing participant and immediately let the caller reclaim the name. */
+export async function takeover(square: OperationContext, name: string, oldSessionIds: readonly string[] = []): Promise<{ readonly name: string; readonly activities: readonly Activity[] }> {
+  const now = square.clock();
+  const oldSessions = new Set(oldSessionIds);
+  const committed = await square.artifact.transact<{ name: string; stored: readonly StoredAct[] }>((state) => {
+    const joinedName = resolveKnownName(state, name);
+    const done = coreDone(state, joinedName, '', now);
+    const storedDone = committedActivity(storeActs(state, [done]), 'kick');
+    const decision = decideJoin(state, joinedName, now);
+    if (decision.joinAct === undefined) throw new SquareError('already_joined', `${participantIdentity(joinedName)} could not be reclaimed`);
+    const storedJoin = committedActivity(storeActs(state, [decision.joinAct]), 'join');
+    const participantSessions = new Set([
+      ...oldSessions,
+      ...(state.routes ?? []).filter((route) => nameKey(route.participant) === nameKey(joinedName)).map((route) => route.sessionId),
+    ]);
+    state.routes = (state.routes ?? []).filter((route) => nameKey(route.participant) !== nameKey(joinedName) && !participantSessions.has(route.sessionId));
+    return { state, result: { name: joinedName, stored: [storedDone, storedJoin] } };
+  });
+  await ensureLocalPresence(square, committed.name);
+  await publishIdentityRoute(square, committed.name);
+  return { name: committed.name, activities: committed.stored.map(exposeActivity) };
 }
 
 export async function implicitJoin(square: OperationContext, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {

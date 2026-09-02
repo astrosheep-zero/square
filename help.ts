@@ -23,7 +23,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['join'], usage: '--as <name> join [--last N] [--kick]', usesSquare: true, group: 'participant',
     summary: 'Step into the square and read its current context.',
-    details: ['Options:', '  --last <N>  Show the last N public activities (default 10, maximum 100).'],
+    details: ['Options:', '  --last <N>  Show the last N public activities (default 10, maximum 100).', '  --kick      End the standing participant and reclaim the name for this session.'],
   },
   {
     names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] (--mention <name>... | --no-mention | --bell) [--reply <activity-id>] <activity | ->', usesSquare: true, group: 'participant',
