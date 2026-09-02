@@ -20,7 +20,6 @@ async function attemptWakeWithin(
     if (timer !== undefined) clearTimeout(timer);
   }
 }
-
 export async function observeSquare(input: ObserveSquareInput): Promise<SquareObservation> {
   const snapshot = await input.artifact.read();
   const delivery = deriveDeliveryModel(snapshot.state);
@@ -38,11 +37,9 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
   }));
   return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
 }
-
 export async function reconcileBinding(input: ReconcileBindingInput) {
   return input.hostLedger.reconcileBinding({ artifact: input.artifact, scopes: input.scopes, now: input.now });
 }
-
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
   const observation = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now });
   const routes = (observation.state.routes ?? []).map((route) => ({
@@ -68,13 +65,16 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (requested === undefined || requested !== notification.item.index) continue;
       }
       const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
-      if (candidates.length === 0) { notCapable += 1; continue; }
       let acceptedForAttention = false;
+      let failedForAttention = false;
+      let unknownForAttention = false;
+      let notCapableForAttention = false;
       try {
-        const prior = await input.hostLedger.listWakeAttempts({ attention: { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient }, now: input.now });
+        const prior = await input.hostLedger.listWakeAttempts({ attention: { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient }, now: Date.now() });
         acceptedForAttention = prior.some((attempt) => attempt.outcome === 'accepted');
       } catch { /* capability is handled by the route-level probe */ }
       if (acceptedForAttention) continue;
+      if (candidates.length === 0) notCapableForAttention = true;
       for (const route of candidates) {
         const activity = formatActivityId(notification.item.index);
         const attention = { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient };
@@ -83,13 +83,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (input.transport.probe !== undefined) {
           try {
             const probe = await input.transport.probe(requestRoute);
-            if (probe === false || (typeof probe === 'object' && probe.outcome === 'not-capable')) { notCapable += 1; continue; }
-          } catch { notCapable += 1; continue; }
+            if (probe === false || (typeof probe === 'object' && probe.outcome === 'not-capable')) { notCapableForAttention = true; continue; }
+          } catch { notCapableForAttention = true; continue; }
         }
         let leaseId = randomUUID();
         let lease;
         try { lease = await input.hostLedger.claimWakeDispatch({ attention, leaseId, leaseMs, session: route.session }); }
-        catch { notCapable += 1; continue; }
+        catch { notCapableForAttention = true; continue; }
         if (lease.type === 'ambiguous') {
           let recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: lease.lease.leaseId });
           if (recovered.status === 'busy' && recovered.record.claimToken !== undefined) {
@@ -102,9 +102,10 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId: lease.lease.leaseId, session: route.session });
           break;
         }
+        if (lease.type === 'busy') break;
         if (lease.type !== 'acquired') continue;
         try {
-          const completed = await input.hostLedger.listWakeAttempts({ attention, now: input.now });
+          const completed = await input.hostLedger.listWakeAttempts({ attention, now: Date.now() });
           if (completed.some((attempt) => attempt.outcome === 'accepted')) {
             await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
             acceptedForAttention = true;
@@ -112,8 +113,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           }
         } catch { /* continue with the evidence claim */ }
         let attempts;
-        try { attempts = await input.hostLedger.listWakeAttempts({ attention, now: input.now }); }
-        catch { notCapable += 1; await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined); continue; }
+        try { attempts = await input.hostLedger.listWakeAttempts({ attention, now: Date.now() }); }
+        catch { notCapableForAttention = true; await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined); continue; }
         if (attempts.some((attempt) => attempt.outcome === 'unknown')) {
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
           break;
@@ -123,7 +124,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         const request = { location: input.location, participant: membership.recipient, activity, actor: notification.item.actor, route: requestRoute };
         let outcome;
         const claim = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: leaseId });
-        if (claim.status !== 'acquired') { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }); if (claim.status === 'degraded') notCapable += 1; continue; }
+        if (claim.status !== 'acquired') { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }); if (claim.status === 'degraded') notCapableForAttention = true; continue; }
         const claimToken = claim.claimToken;
         attempted += 1;
         const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session });
@@ -157,22 +158,26 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (outcome.outcome === 'not-capable') {
           await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined);
-          notCapable += 1;
+          notCapableForAttention = true;
           continue;
         }
         if (outcome.outcome === 'failed' && outcome.unavailable) {
           if (outcome.routeStale === true) await retireWakeRouteFromArtifact(input.artifact, { location: route.location, participant: route.participant, sessionId: route.session });
           await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken });
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
-          failed += 1;
+          failedForAttention = true;
           continue;
         }
         await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: outcome.outcome, routeKind: route.route!.kind, attemptN: outcome.attemptN ?? attemptN, ...(outcome.outcome === 'accepted' && outcome.signature === undefined ? {} : outcome.outcome === 'accepted' ? { signature: outcome.signature } : outcome.outcome === 'failed' ? { message: outcome.message } : { diagnostic: outcome.diagnostic }), claimToken });
         await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
-        if (outcome.outcome === 'accepted') { accepted += 1; acceptedForAttention = true; break; }
-        if (outcome.outcome === 'failed') failed += 1;
-        else { unknown += 1; break; }
+        if (outcome.outcome === 'accepted') { acceptedForAttention = true; break; }
+        if (outcome.outcome === 'failed') failedForAttention = true;
+        else { unknownForAttention = true; break; }
       }
+      if (acceptedForAttention) accepted += 1;
+      else if (unknownForAttention) unknown += 1;
+      else if (failedForAttention) failed += 1;
+      else if (notCapableForAttention) notCapable += 1;
     }
   }
   return { attempted, accepted, failed, unknown, notCapable };

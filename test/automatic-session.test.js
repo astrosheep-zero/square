@@ -11,7 +11,10 @@ import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { lookupSessionBindings, readParticipantOwner } from '../dist/registry.js';
-import { readWakeRoutes, retireWakeRoute } from '../dist/routes.js';
+import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { takeover } from '../dist/square-actions.js';
+import { openSquare } from '../dist/square-file-adapter.js';
+import { closeOpenSquare } from '../dist/open-square.js';
 import { Square } from '../dist/square-wiring.js';
 
 async function fixture() {
@@ -20,7 +23,20 @@ async function fixture() {
   const publicPath = path.join(cwd, '.square', 'PUBLIC.square');
   fs.mkdirSync(path.dirname(publicPath), { recursive: true });
   await writeSquareFile(publicPath, await createSquareState({ force: true, hardCap: null }, 'Host context'));
-  const env = { ...process.env, SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'), SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'), SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'), SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'), SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'), SQUARE_LOCATION: path.join(root, 'other.square') };
+  const env = {
+    ...process.env,
+    CLAUDE_CODE_SESSION_ID: '',
+    CODEX_THREAD_ID: '',
+    OPENCODE_SESSION_ID: '',
+    SQUARE_PI_SESSION_ID: '',
+    PASEO_AGENT_ID: '',
+    SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
+    SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
+    SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'),
+    SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
+    SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'),
+    SQUARE_LOCATION: path.join(root, 'other.square'),
+  };
   return { root, cwd, publicPath, env };
 }
 
@@ -53,7 +69,6 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
   assert.equal(squareState.acts.some((act) => JSON.stringify(act).includes('thread-1')), false);
   assert.equal(automaticParticipant('codex', 'thread-1', item.env), `codex-${crypto.createHash('sha256').update('thread-1').digest('hex').slice(0, 12)}`);
 });
-
 test('automatic session end writes ordinary done for its bound owner', { concurrency: false }, async () => {
   const item = await fixture();
   await withEnv(item.env, async (env) => {
@@ -64,6 +79,153 @@ test('automatic session end writes ordinary done for its bound owner', { concurr
   assert.deepEqual(squareState.acts.map((act) => act.kind), ['join', 'done']);
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'changed' }, (env) => automaticSessionEnd('pi', 'pi-session', item.cwd, env));
   assert.equal((await loadSquare(item.publicPath)).acts.length, 2);
+});
+test('automatic session end writes done when the callable route is already missing', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv(item.env, async (env) => {
+    await automaticSessionStart('pi', 'pi-session', item.cwd, env);
+    const square = await openSquare(item.publicPath);
+    try {
+      await square.artifact.transact((state) => ({
+        state: { ...state, routes: (state.routes ?? []).filter((route) => route.sessionId !== 'pi-session') },
+        result: undefined,
+      }));
+    } finally { await closeOpenSquare(square); }
+    await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done']);
+});
+test('automatic session end retires a stale route when its presence row is already gone', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv(item.env, async (env) => {
+    await automaticSessionStart('pi', 'pi-session', item.cwd, env);
+    const ledger = createHostLedgerPort(env);
+    await ledger.removePresence({ location: item.publicPath, participant: automaticParticipant('pi', 'pi-session', env), session: 'pi-session', channel: 'pi' });
+    await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
+  });
+  assert.equal((await readWakeRoutes({ location: item.publicPath, sessionId: 'pi-session' })).length, 0);
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
+});
+
+test('uncapable old SessionEnd cannot done a replacement after takeover', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('pi', 'old-session', item.cwd, env);
+    assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), []);
+    const replacementEnv = { ...env, SQUARE_PI_SESSION_ID: 'new-session' };
+    const replacement = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
+    try { await replacement.takeover('shared', ['old-session']); } finally { await replacement.close(); }
+    await automaticSessionEnd('pi', 'old-session', item.cwd, env);
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
+});
+
+test('takeover fenced before shutdown leaves the replacement owner and route untouched', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'old-session', item.cwd, env);
+    const replacementEnv = { ...env, CODEX_THREAD_ID: 'new-session' };
+    const replacement = await openSquare(item.publicPath, { hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
+    const transact = replacement.artifact.transact.bind(replacement.artifact);
+    let entered;
+    let release;
+    const lifecycleEntered = new Promise((resolve) => { entered = resolve; });
+    const releaseLifecycle = new Promise((resolve) => { release = resolve; });
+    replacement.artifact.transact = async (fn) => {
+      entered();
+      await releaseLifecycle;
+      return transact(fn);
+    };
+    try {
+      const takeoverResult = takeover(replacement, 'shared', ['old-session']);
+      await lifecycleEntered;
+      const shutdown = automaticSessionEnd('codex', 'old-session', item.cwd, env);
+      release();
+      await Promise.all([takeoverResult, shutdown]);
+    } finally { await closeOpenSquare(replacement); }
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
+});
+
+test('automatic session end does not done a replacement that still owns the participant', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('pi', 'old-session', item.cwd, env);
+    const ledger = createHostLedgerPort(env);
+    await ledger.ensurePresence({ location: item.publicPath, participant: 'shared', session: 'new-session', channel: 'pi', updatedAt: Date.now() }, 'user');
+    await upsertWakeRoute({ location: item.publicPath, participant: 'shared', sessionId: 'new-session', channel: 'pi', kind: 'pi-extension', address: { sessionId: 'new-session' } }, { at: Date.now() });
+    await automaticSessionEnd('pi', 'old-session', item.cwd, env);
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
+});
+
+test('done then rejoin leaves only the current session route', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'old-session', item.cwd, env);
+    await automaticSessionEnd('codex', 'old-session', item.cwd, env);
+    const rejoinEnv = { ...env, CODEX_THREAD_ID: 'new-session' };
+    const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(rejoinEnv), env: rejoinEnv });
+    try { await square.join('shared'); } finally { await square.close(); }
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
+});
+
+test('concurrent SessionEnd and kick leave the replacement standing', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'old-session', item.cwd, env);
+    const replacementEnv = { ...env, CODEX_THREAD_ID: 'new-session' };
+    const replacement = Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv }).then(async (square) => {
+      try { return await square.takeover('shared', ['old-session']); }
+      finally { await square.close(); }
+    });
+    const [ended, kicked] = await Promise.allSettled([
+      automaticSessionEnd('codex', 'old-session', item.cwd, env),
+      replacement,
+    ]);
+    assert.equal(ended.status, 'fulfilled');
+    const kinds = (await loadSquare(item.publicPath)).acts.map((act) => act.kind);
+    if (kicked.status === 'fulfilled') {
+      assert.equal(kinds.at(-1), 'join');
+      assert.equal(kinds.filter((kind) => kind === 'done').length, 1);
+      assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
+    } else {
+      assert.deepEqual(kinds, ['join', 'done']);
+    }
+  });
+});
+
+test('a late old-session route refresh does not let SessionEnd done the replacement', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'old-session', item.cwd, env);
+    const replacementEnv = { ...env, CODEX_THREAD_ID: 'new-session' };
+    const replacement = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
+    try { await replacement.takeover('shared', ['old-session']); } finally { await replacement.close(); }
+    await upsertWakeRoute({ location: item.publicPath, participant: 'shared', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' } }, { at: Date.now() + 60_000 });
+    await automaticSessionEnd('codex', 'old-session', item.cwd, env);
+  });
+  const kinds = (await loadSquare(item.publicPath)).acts.map((act) => act.kind);
+  assert.deepEqual(kinds, ['join', 'done', 'join']);
+  assert.equal(kinds.at(-1), 'join');
+  assert.equal(kinds.filter((kind) => kind === 'done').length, 1);
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
+});
+
+test('kick replacement retires the old session route and keeps the new one', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared', CODEX_THREAD_ID: 'new-session' }, async (env) => {
+    await automaticSessionStart('codex', 'old-session', item.cwd, env);
+    const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(env), env });
+    try { await square.takeover('shared', ['old-session']); } finally { await square.close(); }
+    await automaticSessionEnd('codex', 'old-session', item.cwd, env);
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
 });
 
 test('Paseo is the preferred wake route when a native session runs under Paseo', { concurrency: false }, async () => {
@@ -99,6 +261,31 @@ test('automatic implicit join rejects an active participant bound to another ses
     assert.equal((await lookupSessionBindings('second-session')).some((binding) => binding.name === 'shared'), false);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
+});
+
+test('ordinary active join does not publish a replacement identity route', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'first-session', item.cwd, env);
+    const replacementEnv = { ...env, CODEX_THREAD_ID: 'second-session' };
+    const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
+    try { await square.join('shared'); } finally { await square.close(); }
+  });
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['first-session']);
+});
+
+test('active implicit join does not publish a replacement identity route', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('codex', 'first-session', item.cwd, env);
+    const replacementEnv = { ...env, CODEX_THREAD_ID: 'second-session' };
+    const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
+    try {
+      const result = await square.implicitJoin('shared');
+      assert.equal(result.state, 'active');
+    } finally { await square.close(); }
+  });
+  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['first-session']);
 });
 
 test('missing PUBLIC.square is a no-op', { concurrency: false }, async () => {

@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { writeSquareFile } from '../dist/artifact.js';
+import { loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
-import { publishWakeRoute, readWakeRoutes, retireWakeRouteFromArtifact, ROUTE_FRESH_MS, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { publishWakeRoute, readWakeRoutes, retireWakeRouteFromArtifact, retireWakeRoutesForSessionFromArtifact, ROUTE_FRESH_MS, selectPrimaryWakeRoute, sessionCanEndParticipant, sessionOwnsParticipantRoutes, upsertWakeRoute } from '../dist/routes.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_USER: path.join(root, 'user'), SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'local') } }; }
 
@@ -35,22 +35,6 @@ test('callable routes are read from receiver-owned square artifact', async () =>
     assert.deepEqual((await readWakeRoutes({ location, now: 2 })).map((route) => [route.sessionId, route.address]), [['s-a', { threadId: 's-a' }]]);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
-
-test('route publication through an artifact symlink keeps one canonical domain', async () => {
-  const item = fixture();
-  try {
-    const location = path.join(item.root, 'square.square');
-    const alias = path.join(item.root, 'alias.square');
-    await writeSquareFile(location, emptyState());
-    fs.symlinkSync(location, alias);
-    await upsertWakeRoute({ location: alias, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 's-a' } }, { at: 1 });
-    const routes = await readWakeRoutes({ location, now: 2 });
-    assert.equal(routes.length, 1);
-    assert.equal(routes[0].location, fs.realpathSync(location));
-    assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
-  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
-});
-
 test('local presence cannot plant a callable route', async () => {
   const item = fixture();
   try {
@@ -59,7 +43,35 @@ test('local presence cannot plant a callable route', async () => {
     assert.deepEqual(await readWakeRoutes({ location: '/tmp/square-a.square', env: item.env, now: Date.now() }), []);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
-
+test('uncapable native sessions keep ownership in presence without a callable route', async () => {
+  for (const [provider, sessionKey, channel] of [
+    ['pi', 'SQUARE_PI_SESSION_ID', 'pi'],
+    ['claude', 'CLAUDE_CODE_SESSION_ID', 'claude-code'],
+  ]) {
+    const item = fixture();
+    const location = path.join(item.root, 'square.square');
+    await writeSquareFile(location, emptyState());
+    const ledger = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL });
+    const env = {
+      ...process.env,
+      ...item.env,
+      CLAUDE_CODE_SESSION_ID: '',
+      CODEX_THREAD_ID: '',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: '',
+      PASEO_AGENT_ID: '',
+      [sessionKey]: `${provider}-session`,
+    };
+    const square = await openSquare(location, { hostLedger: ledger, env });
+    try { await join(square, 'Agent'); } finally { await closeOpenSquare(square); }
+    assert.deepEqual(await readWakeRoutes({ location }), []);
+    const presence = await ledger.listPresence({ location, session: `${provider}-session`, scopes: ['local', 'user'] });
+    assert.equal(presence.length, 1);
+    assert.equal(presence[0].channel, channel);
+    assert.equal(presence[0].route, undefined);
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
 test('local registry cannot plant or shadow an artifact route', async () => {
   const item = fixture();
   try {
@@ -81,6 +93,102 @@ test('same participant keeps independent routes for multiple sessions', async ()
     await upsertWakeRoute({ location, participant: 'Bob', sessionId: 's2', channel: 'codex', kind: 'codex-queue', address: { threadId: 's2' } }, { at: 2 });
     assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['s1', 's2']);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
+test('session route cleanup compares canonical locations', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    const alias = path.join(item.root, 'alias.square');
+    fs.symlinkSync(location, alias);
+    await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [
+      { location: alias, participant: 'Codex', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 1 },
+      { location, participant: 'Codex', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' }, updatedAt: 2 },
+    ], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+    const square = await openSquare(location);
+    try { await retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
+    assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['new-session']);
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
+test('session route cleanup stays atomic with concurrent publication', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [
+      { location, participant: 'Codex', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 1 },
+    ], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+    const square = await openSquare(location);
+    try {
+      await Promise.all([
+        retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }),
+        publishWakeRoute(square.artifact, { location, participant: 'Codex', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' } }, { at: 2 }),
+      ]);
+    } finally { await closeOpenSquare(square); }
+    assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['new-session']);
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
+test('session route cleanup matches live transaction state instead of a prior snapshot order', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    const oldRoute = { location, participant: 'Codex', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 1 };
+    const newRoute = { location, participant: 'Codex', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' }, updatedAt: 2 };
+    const extraRoute = { location, participant: 'Other', sessionId: 'extra-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'extra-session' }, updatedAt: 3 };
+    await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [extraRoute, newRoute, oldRoute], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+    const square = await openSquare(location);
+    const read = square.artifact.read.bind(square.artifact);
+    square.artifact.read = async () => {
+      const snapshot = await read();
+      return { ...snapshot, state: { ...snapshot.state, routes: [oldRoute] } };
+    };
+    try { await retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
+    assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['extra-session', 'new-session']);
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
+test('session ownership is exclusive session identity, not a refreshable updatedAt race', () => {
+  const location = '/square.square';
+  const state = {
+    hardCap: null, preamble: [], warmup: [], acts: [],
+    routes: [
+      { location, participant: 'shared', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' }, updatedAt: 1 },
+      { location, participant: 'shared', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 99 },
+    ],
+    runtime: { nextActIndex: 0, observations: {}, leases: {} },
+  };
+  assert.equal(sessionOwnsParticipantRoutes(state, location, 'shared', 'old-session'), false);
+  assert.equal(sessionOwnsParticipantRoutes(state, location, 'shared', 'new-session'), false);
+  assert.equal(sessionOwnsParticipantRoutes({ ...state, routes: state.routes.filter((route) => route.sessionId === 'new-session') }, location, 'shared', 'new-session'), true);
+});
+
+test('missing participant routes require current session proof before SessionEnd can write done', () => {
+  const state = emptyState();
+  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session'), false);
+  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session', 'new-session'), false);
+  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session', 'old-session'), true);
+});
+
+test('done to joined clears stale participant routes before publishing the current route', async () => {
+  const item = await openExpressFixture();
+  try {
+    const oldRoute = { location: item.location, participant: 'Alice', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 1 };
+    await item.square.artifact.transact((state) => {
+      state.acts.push(
+        { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+        { kind: 'done', actor: 'Alice', at: 2, body: '', index: 1 },
+      );
+      state.runtime.nextActIndex = 2;
+      state.routes = [oldRoute];
+      return { state, result: undefined };
+    });
+    const replacementEnv = { ...item.square.env, CODEX_THREAD_ID: 'new-session' };
+    const replacement = await openSquare(item.location, { clock: item.square.clock, hostLedger: item.ledger, env: replacementEnv });
+    try { await join(replacement, 'Alice'); } finally { await closeOpenSquare(replacement); }
+    assert.deepEqual((await readWakeRoutes({ location: item.location, participant: 'Alice' })).map((route) => route.sessionId), ['new-session']);
+    assert.equal((await loadSquare(item.location)).acts.at(-1)?.kind, 'join');
+  } finally { await closeOpenSquare(item.square); fs.rmSync(item.item.root, { recursive: true, force: true }); }
 });
 
 test('primary route selection gives Paseo global precedence without changing session key', () => {
@@ -176,6 +284,67 @@ test('route retirement with an expected epoch does not remove a route missing it
   } finally {
     fs.rmSync(item.root, { recursive: true, force: true });
   }
+});
+
+test('route retirement canonicalizes an aliased item location', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    const alias = path.join(item.root, 'alias.square');
+    fs.symlinkSync(location, alias);
+    await writeSquareFile(location, emptyState());
+    const square = await openSquare(location);
+    try {
+      await square.artifact.transact((state) => ({
+        state: {
+          ...state,
+          routes: [{
+            location: alias,
+            participant: 'Alice',
+            sessionId: 'session-a',
+            channel: 'codex',
+            kind: 'codex-queue',
+            address: { threadId: 'session-a' },
+            updatedAt: 1,
+          }],
+        },
+        result: undefined,
+      }));
+      await retireWakeRouteFromArtifact(square.artifact, { location, participant: 'Alice', sessionId: 'session-a' });
+      assert.deepEqual(await readWakeRoutes({ location }), []);
+    } finally {
+      await closeOpenSquare(square);
+    }
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
+test('route publication replaces an aliased persisted identity', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    const alias = path.join(item.root, 'alias.square');
+    await writeSquareFile(location, emptyState());
+    fs.symlinkSync(location, alias);
+    const square = await openSquare(location);
+    try {
+      await square.artifact.transact((state) => ({
+        state: { ...state, routes: [{ location: alias, participant: 'Alice', sessionId: 'session-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 'session-a' }, updatedAt: 1 }] },
+        result: undefined,
+      }));
+      await publishWakeRoute(square.artifact, {
+        location,
+        participant: 'Alice',
+        sessionId: 'session-a',
+        channel: 'codex',
+        kind: 'codex-queue',
+        address: { threadId: 'session-a' },
+      }, { at: 2 });
+      const routes = await readWakeRoutes({ location });
+      assert.deepEqual(routes.map((route) => [route.location, route.sessionId]), [[fs.realpathSync(location), 'session-a']]);
+    } finally { await closeOpenSquare(square); }
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
 test('express refreshes only an expired or changed caller artifact route', async () => {

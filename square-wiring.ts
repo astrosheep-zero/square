@@ -3,6 +3,7 @@ import { buildMemorySquare, buildSquare, openSquare } from './square-file-adapte
 import {
   catchUp,
   done,
+  endOwnedSession,
   express,
   hold,
   ignore,
@@ -122,6 +123,7 @@ export class Square {
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
   reconcileBinding() { return reconcileBindingOperation({ artifact: this.square.artifact, hostLedger: this.square.hostLedger!, location: this.location }); }
+  endOwnedSession(name: string, sessionId: string, expectedEpoch?: number) { return endOwnedSession(this.context, name, sessionId, expectedEpoch); }
 }
 
 export function markBoundarySeen(squarePath: string, name: string, actIndexes: readonly number[], at?: number): Promise<void> {

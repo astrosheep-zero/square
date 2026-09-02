@@ -1,13 +1,13 @@
 import { formatActivityId, parseActivityId, type Act } from './square-core.js';
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName } from './decisions.js';
-import { nameKey, SquareError, validateName, type SquareState, type StoredAct } from './model.js';
+import { isSquareError, nameKey, SquareError, validateName, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
 import { claimSessionParticipant, claimSessionTakeover, readParticipantOwner, sessionOwnsParticipant, withOwnershipClaimLock } from './registry.js';
-import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities, ROUTE_FRESH_MS, type WakeBoundaryProvider } from './routes.js';
+import { applyWakeRouteToState, defaultWakeRouteCapabilities, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, sessionCanEndParticipant, ROUTE_FRESH_MS, type WakeBoundaryProvider, type WakeRoute } from './routes.js';
 
 export interface OperationContext {
   readonly artifact: SquareArtifactPort;
@@ -29,6 +29,14 @@ function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: Pr
   return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };
 }
 
+async function identityRouteDraft(context: OperationContext, participant: string): Promise<Omit<WakeRoute, 'updatedAt'> | undefined> {
+  if (context.location === undefined || context.location === 'memory') return undefined;
+  const identity = processIdentity(context.env ?? process.env);
+  const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
+  const capabilities = context.hostLedger === undefined ? { canUse: () => false } : await defaultWakeRouteCapabilities(context.hostLedger);
+  return resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
+}
+
 async function currentOwnerEpoch(context: OperationContext, participant: string): Promise<number | undefined> {
   if (context.location === undefined || context.location === 'memory') return undefined;
   const owner = await readParticipantOwner(context.location, participant, context.env ?? process.env);
@@ -38,13 +46,12 @@ async function currentOwnerEpoch(context: OperationContext, participant: string)
 async function publishIdentityRoute(context: OperationContext, participant: string, epoch?: number): Promise<void> {
   if (context.location === undefined || context.location === 'memory') return;
   const identity = processIdentity(context.env ?? process.env);
-  if (context.hostLedger === undefined) return;
   const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
-  const capabilities = await defaultWakeRouteCapabilities(context.hostLedger);
-  const route = await resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
+  const capabilities = context.hostLedger === undefined ? { canUse: () => false } : await defaultWakeRouteCapabilities(context.hostLedger);
+  const route = resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
   if (route === undefined) return;
   const ownerEpoch = epoch ?? await currentOwnerEpoch(context, participant);
-  await publishWakeRoute(context.artifact, { ...route, ...(ownerEpoch === undefined ? {} : { epoch: ownerEpoch }) }, { at: context.clock() }).catch(() => undefined);
+  await publishWakeRoute(context.artifact, { ...route, ...(ownerEpoch === undefined ? {} : { epoch: ownerEpoch }) }, { at: context.clock(), requireCurrentSession: true }).catch(() => undefined);
 }
 
 async function retireIdentityRoute(context: OperationContext, participant: string, expectedEpoch?: number): Promise<void> {
@@ -180,15 +187,50 @@ function parseRequiredActivityId(id: import('./square-core.js').ActivityId): num
 export async function join(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activity: Activity | null }> {
   // Rejected validation must not perform an ownership claim.
   validateName(name);
+  const preview = await square.artifact.read();
+  const previewDecision = decideJoin(preview.state, name, square.clock());
+  if (previewDecision.joinAct === undefined) {
+    // An active artifact participant is idempotent only for its current session.
+    // A different owner must still pass through the registry CAS so it is refused
+    // instead of silently reconnecting as a foreign session.
+    if (square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
+      const identity = processIdentity(square.env ?? process.env);
+      const owner = await readParticipantOwner(square.location, previewDecision.joinedName, square.env ?? process.env);
+      if (owner === undefined) {
+        // Keep the claim path for an active artifact whose ledger owner is not
+        // visible yet; concurrent callers must still serialize through CAS.
+      } else if (owner.sessionId !== identity.session) {
+        const userPresence = await square.hostLedger.listPresence({
+          location: square.location,
+          participant: previewDecision.joinedName,
+          scopes: ['user'],
+        });
+        if (userPresence.some((binding) => binding.session === owner.sessionId)) {
+          return { name: previewDecision.joinedName, activity: null };
+        }
+        // Continue into the ownership claim below; it will produce the stable
+        // already_joined error without mutating the artifact.
+      } else {
+        return { name: previewDecision.joinedName, activity: null };
+      }
+    } else {
+      return { name: previewDecision.joinedName, activity: null };
+    }
+  }
   let epoch: number | undefined;
   if (square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
     const claim = await claimSessionParticipant(square.location, name, square.env ?? process.env);
     epoch = claim?.epoch;
   }
   const now = square.clock();
+  const route = await identityRouteDraft(square, name);
   const committed = await square.artifact.transact<{ name: string; stored: StoredAct | null }>((state) => {
     const decision = decideJoin(state, name, now);
-    if (decision.joinAct === undefined) return { result: { name: decision.joinedName, stored: null } };
+    if (decision.joinAct === undefined) {
+      return { result: { name: decision.joinedName, stored: null } };
+    }
+    if (square.location !== undefined && square.location !== 'memory') dropParticipantWakeRoutesFromState(state, square.location, decision.joinedName);
+    if (route !== undefined) applyWakeRouteToState(state, route, now);
     return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   });
   await ensureLocalPresence(square, committed.name, epoch);
@@ -197,7 +239,7 @@ export async function join(square: OperationContext, name: string): Promise<{ re
 }
 
 /** End the standing participant and immediately let the caller reclaim the name. */
-export async function takeover(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly epoch?: number }> {
+export async function takeover(square: OperationContext, name: string, _oldSessionIds: readonly string[] = []): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly epoch?: number }> {
   // Rejected validation must not perform an ownership claim.
   validateName(name);
   const commitLifecycle = async (): Promise<{ name: string; stored: readonly StoredAct[] }> => {
@@ -245,18 +287,28 @@ export async function takeover(square: OperationContext, name: string): Promise<
 
 export async function implicitJoin(square: OperationContext, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
   const now = square.clock();
+  const route = await identityRouteDraft(square, name);
   const committed = await square.artifact.transact<{ name: string; state: 'joined' | 'active' | 'done'; stored: StoredAct | null }>((state) => {
     const decision = decideImplicitJoin(state, name, now);
+    if (decision.state === 'done') {
+      if (square.location !== undefined && square.location !== 'memory') dropSessionWakeRoutesFromState(state, square.location, processIdentity(square.env ?? process.env).session);
+      return { state, result: { name: decision.joinedName, state: decision.state, stored: null } };
+    }
     if (decision.joinAct === undefined) return { result: { name: decision.joinedName, state: decision.state, stored: null } };
+    if (square.location !== undefined && square.location !== 'memory') dropParticipantWakeRoutesFromState(state, square.location, decision.joinedName);
+    if (route !== undefined) applyWakeRouteToState(state, { ...route, participant: decision.joinedName }, now);
     return { state, result: { name: decision.joinedName, state: decision.state, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   });
   await ensureLocalPresence(square, committed.name);
   if (committed.state === 'done') await retireIdentityRoute(square, committed.name);
-  else await publishIdentityRoute(square, committed.name);
+  else if (committed.stored !== null) await publishIdentityRoute(square, committed.name);
   return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
 export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {
+  if (!await assertLiveOwner(square, name)) {
+    throw new SquareError('already_joined', `${participantIdentity(name)} is already bound to another session`);
+  }
   const now = square.clock();
   const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
   const committed = await square.artifact.transact((state) => {
@@ -308,7 +360,7 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
   // be completed by a stale done — an old expected epoch refuses instead of appending.
   const commit = async (): Promise<StoredAct> => {
     if (verb === 'done' && !await assertLiveOwner(square, actor, fence.expectedEpoch)) {
-      throw new SquareError('already_done', `${participantIdentity(actor)} is no longer owned by this session`);
+      throw new SquareError('already_done', `${participantIdentity(actor)} is already bound to another session`);
     }
     const now = square.clock();
     return square.artifact.transact((state) => {
@@ -326,6 +378,41 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
 
 export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}): Promise<ExpressResult> {
   return landCore(square, 'done', name, body, fence);
+}
+
+/** SessionEnd retires the ended session's routes even when its presence row is gone. */
+export async function endOwnedSession(square: OperationContext, name: string, sessionId: string, expectedEpoch?: number): Promise<ExpressResult | null> {
+  const location = square.location;
+  const run = async () => {
+    const now = square.clock();
+    let currentSessionId: string | undefined;
+    let ownerMatches = expectedEpoch === undefined;
+    if (location !== undefined && location !== 'memory' && square.hostLedger !== undefined) {
+      try {
+        const bindings = await square.hostLedger.listPresence({ location, participant: name, scopes: ['user', 'local'], now });
+        currentSessionId = bindings.find((binding) => binding.session !== sessionId)?.session
+          ?? bindings.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))[0]?.session;
+        if (expectedEpoch !== undefined) {
+          const owner = await readParticipantOwner(location, name, square.env ?? process.env);
+          ownerMatches = owner?.sessionId === sessionId && owner.epoch === expectedEpoch;
+        }
+      } catch { /* stale evidence leaves ownership fenced by artifact routes */ }
+    }
+    return square.artifact.transact<StoredAct | null>((state) => {
+      let committed: StoredAct | null = null;
+      if (location !== undefined && location !== 'memory' && ownerMatches && sessionCanEndParticipant(state, location, name, sessionId, currentSessionId)) {
+        try { committed = committedActivity(storeActs(state, [coreDone(state, name, '', now)]), 'done'); }
+        catch (error) { if (!isSquareError(error) || (error.code !== 'already_done' && error.code !== 'not_joined')) throw error; }
+      }
+      if (location !== undefined && location !== 'memory') dropSessionWakeRoutesFromState(state, location, sessionId);
+      return { state, result: committed };
+    });
+  };
+  const fenced = location !== undefined && location !== 'memory' && square.hostLedger !== undefined;
+  const stored = fenced
+    ? await withOwnershipClaimLock(square.env ?? process.env, run)
+    : await run();
+  return stored === null ? null : { activity: exposeActivity(stored) };
 }
 export function hold(square: OperationContext, name: string, reason = ''): Promise<ExpressResult> { return landCore(square, 'hold', name, reason); }
 export function resume(square: OperationContext, name: string): Promise<ExpressResult> { return landCore(square, 'resume', name); }

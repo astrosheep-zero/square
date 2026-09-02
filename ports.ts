@@ -23,7 +23,7 @@ import type { HostLedgerPort } from './host-ledger.js';
 /** Atomic artifact access. Never exposes framing, compression, locks, or storage schema. */
 export interface SquareArtifactPort {
   read(): Promise<{ state: SquareState; version: number }>;
-  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }): Promise<R>;
+  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R } | Promise<{ state?: SquareState; result: R }>): Promise<R>;
   changed(sinceVersion: number, timeoutMs: number): Promise<boolean>;
   close(): Promise<void>;
 }
