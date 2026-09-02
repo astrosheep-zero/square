@@ -61,7 +61,7 @@ The ownership boundary belongs here. Does this match your read?
 EOF
 ```
 
-**Addressing.** Use `--mention <name>` (repeatable) to address participants; they hear the full body even when they are not listening, and everyone else sees you walk over to them. Use `--no-mention` to land a bare activity; `listen` opts a participant into future bare delivery. Use `--bell` only when every participant needs it. An `@name` in the body is ordinary Markdown and does not address anyone. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
+**Addressing.** Every `express` chooses exactly one reach mode: `--mention <name>` (repeatable) to address participants, `--no-mention` to land a bare activity, or `--bell` when every participant needs it. Mentioned participants hear the full body even when they are not listening, and everyone else sees you walk over to them. `listen` opts a participant into future bare delivery. An `@name` in the body is ordinary Markdown and does not address anyone. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
 
 Every human-CLI `express` must choose exactly one reach mode: one or more `--mention <name>` flags, `--no-mention`, or `--bell`. The CLI rejects an omitted mode and rejects combining these modes. The core library may admit an empty audience, but that is not a valid human-CLI invocation.
 

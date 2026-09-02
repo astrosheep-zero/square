@@ -305,6 +305,22 @@ test('Claude installation leaves a diagnosable bundle that can be removed', asyn
   }
 });
 
+test('Claude installation overwrites a divergent bundled Square skill with the canonical source', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-canonical-skill-'));
+  const bundledSkill = path.join(import.meta.dirname, '..', 'claude-plugin', 'skills', 'square', 'SKILL.md');
+  const canonicalSkill = path.join(import.meta.dirname, '..', 'skills', 'square', 'SKILL.md');
+  const original = fs.readFileSync(bundledSkill);
+  fs.writeFileSync(bundledSkill, 'deliberately divergent bundled content\n');
+  const runClaude = () => ({ status: 0, stdout: '', stderr: '' });
+  try {
+    const installed = await installClaudePlugin(home, runClaude);
+    assert.deepEqual(fs.readFileSync(path.join(installed.pluginRoot, 'skills', 'square', 'SKILL.md')), fs.readFileSync(canonicalSkill));
+  } finally {
+    fs.writeFileSync(bundledSkill, original);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('Claude installation preserves the prior bundle when activation fails', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-stage-rollback-'));
   const marketplace = path.join(home, '.square', 'claude', 'marketplaces', SQUARE_IDENTITY.marketplaceName);

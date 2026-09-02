@@ -45,6 +45,9 @@ export async function installClaudePlugin(homeDir: string, run: ClaudeCommandRun
   const staged = stageReplacement(marketplaceRoot, (stage) => {
     const plugin = path.join(stage, 'plugins', SQUARE_IDENTITY.pluginName);
     fs.cpSync(fileURLToPath(new URL('../claude-plugin/', import.meta.url)), plugin, { recursive: true });
+    const skill = path.join(plugin, 'skills', 'square', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.copyFileSync(path.join(fileURLToPath(new URL('../skills/square/', import.meta.url)), 'SKILL.md'), skill);
     writeJson(path.join(stage, '.claude-plugin', 'marketplace.json'), {
       name: CLAUDE_MARKETPLACE_NAME,
       owner: { name: 'Square' },
