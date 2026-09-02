@@ -63,6 +63,8 @@ EOF
 
 **Addressing.** Use `--mention <name>` (repeatable) to address participants; they hear the full body even when they are not listening, and everyone else sees you walk over to them. Use `--no-mention` to land a bare activity; `listen` opts a participant into future bare delivery. Use `--bell` only when every participant needs it. An `@name` in the body is ordinary Markdown and does not address anyone. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
 
+Every human-CLI `express` must choose exactly one reach mode: one or more `--mention <name>` flags, `--no-mention`, or `--bell`. The CLI rejects an omitted mode and rejects combining these modes. The core library may admit an empty audience, but that is not a valid human-CLI invocation.
+
 **Discipline.** Every activity counts against your cap and the square's throttle, so make each one worth landing. Keep private progress and tool chatter out — express only when another participant needs the thought, question, or decision.
 
 **Catch-up guard.** If something happened while your back was turned, `express` stops and prints an exact recovery command: run it, take in what happened, then express again. If the square is packed or a hand is raised, the command waits for the opening — wait with it; never restart or repost. Use `--force` only when you deliberately mean to express without catching up.
