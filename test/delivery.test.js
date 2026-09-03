@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications, perceiveActivity } from '../dist/delivery.js';
-import { renderAttentionPreview } from '../dist/attention-presentation.js';
+import { previewAttentionBody, renderAttentionPreview } from '../dist/attention-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { readCursor, recordObservation } from '../dist/runtime.js';
 
@@ -127,8 +127,12 @@ test('listener delivery attention does not claim a listener was mentioned', () =
   assert.equal(route, 'attention');
   const rendered = renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: 3, recipient: 'Bob', actor: 'Alice', route, body: 'bare thought' });
   assert.match(rendered, /\(attention\)/);
-  assert.match(rendered, /… preview/);
   assert.doesNotMatch(rendered, /\(mention\)/);
+});
+
+test('attention body is complete up to the preview boundary', () => {
+  assert.equal(previewAttentionBody('x'.repeat(100)), 'x'.repeat(100));
+  assert.equal(previewAttentionBody('x'.repeat(101)), `${'x'.repeat(100)}\n… preview only`);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', () => {

@@ -491,7 +491,6 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.match(renderPiInbox(inbox), /1 Square notification/);
   assert.match(renderPiInbox(inbox), /square:\/tmp\/SQUARE\.square#act\/7/);
   assert.doesNotMatch(renderPiInbox(inbox), /catch --now/);
-  assert.match(renderPiInbox(inbox), /… preview/);
 });
 
 async function piFixture(sessionId, pending = true) {
