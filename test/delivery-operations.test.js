@@ -11,6 +11,67 @@ import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 
+test('release preserves token authority and rejects late or tokenless terminal evidence', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-fence-'));
+  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root });
+  const claim = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'presentation' };
+  try {
+    const first = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 1 });
+    const second = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 11 });
+    assert.equal(first.status, 'acquired');
+    assert.equal(second.status, 'acquired');
+    await ledger.releaseEvidence({ ...claim, claimToken: second.claimToken, now: 12 });
+    await ledger.appendEvidence({ ...claim, outcome: 'presented', claimToken: second.claimToken, at: 13 });
+    await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: first.claimToken, at: 13 });
+    await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: 'forged-token', at: 13 });
+    await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: '', at: 13 });
+    await ledger.appendWakeAttempt({ ...claim, kind: 'wake', outcome: 'failed', routeKind: 'paseo', attemptN: 1, claimToken: 'forged-token', at: 13 });
+    assert.deepEqual(await ledger.listEvidence({ ...claim, now: 13 }), []);
+    assert.deepEqual(await ledger.listEvidence({ ...claim, kind: 'wake', now: 13 }), []);
+    const rows = fs.readFileSync(path.join(root, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(rows.map((row) => [row.outcome, row.claimToken]), [['released', second.claimToken]]);
+    const replacement = await ledger.claimEvidence({ ...claim, leaseMs: 10, claimToken: 'forged-token', now: 14 });
+    assert.equal(replacement.status, 'acquired');
+    assert.notEqual(replacement.claimToken, 'forged-token');
+    await ledger.appendEvidence({ ...claim, outcome: 'presented', claimToken: second.claimToken, at: 15 });
+    await ledger.appendEvidence({ ...claim, outcome: 'presented', claimToken: replacement.claimToken, at: 15 });
+    assert.deepEqual((await ledger.listEvidence({ ...claim, now: 15 })).map((row) => [row.outcome, row.claimToken]), [['presented', replacement.claimToken]]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('evidence claims use a fresh lease clock at each acquisition', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-clock-'));
+  let now = 100;
+  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root, now: () => now });
+  const claim = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'presentation' };
+  try {
+    const first = await ledger.claimEvidence({ ...claim, leaseMs: 10 });
+    await ledger.releaseEvidence({ ...claim, claimToken: first.claimToken });
+    now = 250;
+    const second = await ledger.claimEvidence({ ...claim, leaseMs: 10 });
+    assert.equal(second.status, 'acquired');
+    const busy = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 259 });
+    assert.equal(busy.status, 'busy');
+    assert.equal(busy.record.expiresAt, 260);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('accepted wake evidence survives retention only while attention is pending', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-retention-'));
+  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root, now: () => 10 * 86400000 });
+  const row = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'wake', outcome: 'accepted', at: 1, attemptN: 1 };
+  try {
+    const claim = await ledger.claimEvidence({ ...row, leaseMs: 10, claimToken: 'retention-test', now: 1 });
+    assert.equal(claim.status, 'acquired');
+    await ledger.appendEvidence({ ...row, claimToken: claim.claimToken });
+    assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 1);
+    await ledger.gcEvidence({ before: 2, pendingWakeActivities: ['act/1'] });
+    assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 1);
+    await ledger.gcEvidence({ before: 2, pendingWakeActivities: [] });
+    assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('activity-scoped wake results ignore older pending attention without routes', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-activity-scope-'));
   const location = path.join(root, 'SQUARE.square');
@@ -86,7 +147,7 @@ test('presentation evidence from an older session does not block a new binding',
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ userPath, localPath: path.join(root, 'local') });
-  await ledger.appendEvidence({ location, participant: 'Bob', session: 'old-session', activity: 'act/2', kind: 'presentation', outcome: 'presented', at: 4 });
+  await ledger.appendEvidence({ location, participant: 'Bob', session: 'old-session', activity: 'act/2', kind: 'presentation', outcome: 'presented', at: 4, claimToken: 'old-test' });
   const square = await openSquare(location, { hostLedger: ledger });
   try {
     let calls = 0;
@@ -114,7 +175,7 @@ test('unknown wake evidence remains retryable in the same session', async () => 
   try {
     const first = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 1 });
     assert.equal(first.status, 'acquired');
-    await ledger.appendEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', outcome: 'unknown', routeKind: 'paseo', attemptN: 1, at: 1 });
+    await ledger.appendEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', outcome: 'unknown', routeKind: 'paseo', attemptN: 1, at: 1, claimToken: first.claimToken });
     const retry = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 2 });
     assert.equal(retry.status, 'acquired');
   } finally {
@@ -133,7 +194,7 @@ test('expired wake dispatching claim is reclaimed after a crash', async () => {
     assert.equal(busy.status, 'busy');
     const recovered = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 110 });
     assert.equal(recovered.status, 'acquired');
-    await ledger.appendEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', outcome: 'accepted', at: 111 });
+    await ledger.appendEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', outcome: 'accepted', at: 111, claimToken: recovered.claimToken });
     const terminal = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 500 });
     assert.equal(terminal.status, 'delivered');
   } finally {
@@ -169,7 +230,7 @@ test('expired presentation dispatching claim is reclaimed while presented is ter
     assert.equal(busy.status, 'busy');
     const recovered = await ledger.claimEvidence({ location, participant: 'Bob', session: 'presentation-session', activity: 'act/2', kind: 'presentation', leaseMs: 10, now: 110 });
     assert.equal(recovered.status, 'acquired');
-    await ledger.appendEvidence({ location, participant: 'Bob', session: 'presentation-session', activity: 'act/2', kind: 'presentation', outcome: 'presented', at: 111 });
+    await ledger.appendEvidence({ location, participant: 'Bob', session: 'presentation-session', activity: 'act/2', kind: 'presentation', outcome: 'presented', at: 111, claimToken: recovered.claimToken });
     const terminal = await ledger.claimEvidence({ location, participant: 'Bob', session: 'presentation-session', activity: 'act/2', kind: 'presentation', leaseMs: 10, now: 500 });
     assert.equal(terminal.status, 'delivered');
   } finally {
@@ -199,7 +260,7 @@ test('clipped presentation stays retryable and never records presented evidence'
     assert.equal(second.presented, true);
     assert.equal(calls, 2);
     assert.equal((await loadSquare(location)).runtime.observations.Bob?.['act/2'], undefined);
-    const evidence = await ledger.listEvidence({ location, participant: 'Bob', session: 'clip-session', activity: 'act/2', kind: 'presentation', now: 6 });
+    const evidence = await ledger.listEvidence({ location, participant: 'Bob', session: 'clip-session', activity: 'act/2', kind: 'presentation' });
     assert.equal(evidence.some((row) => row.outcome === 'presented'), false);
     assert.equal(evidence.at(-1)?.outcome, 'clipped');
   } finally {

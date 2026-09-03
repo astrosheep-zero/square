@@ -120,7 +120,9 @@ export async function recordWakeAttempt(
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
   const safe = redact(value, env.PASEO_PASSWORD) as WakeAttempt;
-  await ledger(env).appendWakeAttempt({ location: safe.attention.squarePath, participant: safe.attention.recipient, session: safe.session ?? safe.signature ?? `route:${safe.routeKind}`, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', outcome: safe.outcome, routeKind: safe.routeKind, signature: safe.signature, attemptN: safe.attemptN, message: safe.message, diagnostic: safe.diagnostic, at: safe.at });
+  const session = safe.session ?? safe.signature ?? `route:${safe.routeKind}`;
+  const claim = await ledger(env).claimEvidence({ location: safe.attention.squarePath, participant: safe.attention.recipient, session, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', leaseMs: 5000 });
+  if (claim.status === 'acquired') await ledger(env).appendWakeAttempt({ location: safe.attention.squarePath, participant: safe.attention.recipient, session, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', outcome: safe.outcome, routeKind: safe.routeKind, signature: safe.signature, attemptN: safe.attemptN, message: safe.message, diagnostic: safe.diagnostic, at: safe.at, claimToken: claim.claimToken });
   return value;
 }
 
@@ -152,7 +154,9 @@ export async function recordRecoveredUnknown(
       attemptN: lease.attemptN!,
       message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
     };
-    await ledger(env).appendWakeAttempt({ location: attention.squarePath, participant: attention.recipient, session: lease.session ?? value.signature!, activity: formatActivityId(attention.actIndex), kind: 'wake', outcome: 'unknown', routeKind, signature: value.signature, attemptN: value.attemptN, message: value.message, at });
+    const session = lease.session ?? value.signature!;
+    const claim = await ledger(env).claimEvidence({ location: attention.squarePath, participant: attention.recipient, session, activity: formatActivityId(attention.actIndex), kind: 'wake', leaseMs: 5000 });
+    if (claim.status === 'acquired') await ledger(env).appendWakeAttempt({ location: attention.squarePath, participant: attention.recipient, session, activity: formatActivityId(attention.actIndex), kind: 'wake', outcome: 'unknown', routeKind, signature: value.signature, attemptN: value.attemptN, message: value.message, at, claimToken: claim.claimToken });
     return value;
   }
 }

@@ -81,7 +81,7 @@ test('wake attempt persistence redacts transport credentials recursively', async
 
 test('a wake attempt write drops expired and malformed ledger rows', async () => {
   const item = fixture();
-  const now = 8 * DAY_MS;
+  const now = Date.now();
   fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_USER, { recursive: true });
   fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), [
     '{bad json',

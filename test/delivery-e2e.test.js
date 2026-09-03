@@ -119,7 +119,9 @@ function inboxFor(item, act) {
 
 async function markPresentedEvidence(item, session, act, participant = 'Bob') {
   const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
-  await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome: 'presented', at: Date.now() });
+  const claim = await ledger.claimEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', leaseMs: 5000, claimToken: `fixture-${session}-${act.index}` });
+  assert.equal(claim.status, 'acquired');
+  await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome: 'presented', at: Date.now(), claimToken: claim.claimToken });
 }
 
 function acceptedAdapter(onBeforeSend) {
@@ -229,7 +231,7 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.filter((row) => row.outcome === 'presented').length, 0);
-    assert.ok(rows.every((row) => row.session === 'bob-native'));
+    assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
     assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
@@ -594,7 +596,9 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     };
     await writeSquareFile(item.squarePath, state);
     const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
-    await ledger.appendEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', outcome: 'presented', at: now - 1 });
+    const claim = await ledger.claimEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', leaseMs: 5000, claimToken: 'fixture-carol-owner' });
+    assert.equal(claim.status, 'acquired');
+    await ledger.appendEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', outcome: 'presented', at: now - 1, claimToken: claim.claimToken });
     await recordWakeAttempt({
       attention: { squarePath: item.squarePath, recipient: 'Bob', actIndex: terminal.index },
       routeKind: 'paseo', outcome: 'accepted', signature: 'accepted', session: 'bob-session', attemptN: 1, at: now - 1,
