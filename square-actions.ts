@@ -7,7 +7,7 @@ import { deliverPending } from './delivery-operations.js';
 import type { Activity, ExpressOptions, ExpressResult } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
 import type { CatchOptions, CatchResult, PerceivedActivity } from './square-facade.js';
-import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities, type WakeBoundaryProvider } from './routes.js';
+import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities, ROUTE_FRESH_MS, type WakeBoundaryProvider } from './routes.js';
 
 export interface OperationContext {
   readonly artifact: SquareArtifactPort;
@@ -48,8 +48,14 @@ async function retireIdentityRoute(context: OperationContext, participant: strin
 async function ensureLocalPresence(context: OperationContext, participant: string): Promise<void> {
   if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return;
   const identity = processIdentity(context.env ?? process.env);
+  const now = context.clock();
+  // Semantic publish: an unexpired presence row for this session already stands, so skip the rewrite.
+  try {
+    const existing = await context.hostLedger.listPresence({ location: context.location, participant, session: identity.session, scopes: ['local'], now });
+    if (existing.some((row) => row.channel === identity.channel && now - (row.updatedAt ?? 0) < ROUTE_FRESH_MS)) return;
+  } catch { /* fall through to the best-effort ensure below */ }
   const result = await context.hostLedger.ensurePresence({
-    location: context.location, participant, session: identity.session, channel: identity.channel, updatedAt: context.clock(),
+    location: context.location, participant, session: identity.session, channel: identity.channel, updatedAt: now,
   }, 'local').catch((error) => ({ status: 'degraded' as const, record: { location: context.location!, participant, session: identity.session, channel: identity.channel }, error }));
   if (result.status === 'degraded') process.stderr.write(`! host presence degraded: ${result.error instanceof Error ? result.error.message : String(result.error)}\n`);
 }
@@ -88,7 +94,16 @@ export async function catchUp(square: OperationContext, name: string, options: C
       };
     }
     const remaining = deadline - Date.now();
-    if (remaining <= 0 || !await square.artifact.changed(attempt.version, remaining)) {
+    if (remaining <= 0) {
+      return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true, remaining: 0 };
+    }
+    // Publication above is a semantic no-op while the route and presence stay unchanged and
+    // unexpired, so only a real external change can move the artifact version. Establish the
+    // wait baseline after those self-side effects; if the version moved anyway (own refresh or
+    // a racing external commit), re-snapshot instead of waiting on a stale baseline.
+    const baseline = (await square.artifact.read()).version;
+    if (baseline !== attempt.version) continue;
+    if (!await square.artifact.changed(baseline, remaining)) {
       return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true, remaining: 0 };
     }
   }

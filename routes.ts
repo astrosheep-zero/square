@@ -80,9 +80,26 @@ export async function upsertWakeRoute(route: Omit<WakeRoute, 'updatedAt'>, opts:
   const location = await canonicalRouteLocation(route.location);
   await withArtifact(location, async (square) => publishWakeRoute(square.artifact, { ...route, location }, opts));
 }
+function sameRouteAddress(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => rightKeys[index] === key && left[key] === right[key]);
+}
+
+/** Semantic publish: a route that already stands unchanged and unexpired is not rewritten. */
 export async function publishWakeRoute(artifact: import('./ports.js').SquareArtifactPort, route: Omit<WakeRoute, 'updatedAt'>, opts: { at?: number } = {}): Promise<void> {
   const location = await canonicalRouteLocation(route.location);
-  await artifact.transact((state) => ({ state: { ...state, routes: [...(state.routes ?? []).filter((item) => routeIdentityKey(item) !== routeIdentityKey({ ...route, location })), { ...route, location, participant: route.participant, updatedAt: opts.at ?? Date.now() }] }, result: undefined }));
+  const at = opts.at ?? Date.now();
+  await artifact.transact((state) => {
+    const identity = routeIdentityKey({ ...route, location });
+    const existing = (state.routes ?? []).find((item) => routeIdentityKey(item) === identity);
+    if (existing !== undefined && existing.updatedAt > at - ROUTE_FRESH_MS
+      && existing.kind === route.kind && existing.channel === route.channel
+      && sameRouteAddress(existing.address, route.address)) {
+      return { result: undefined };
+    }
+    return { state: { ...state, routes: [...(state.routes ?? []).filter((item) => routeIdentityKey(item) !== identity), { ...route, location, participant: route.participant, updatedAt: at }] }, result: undefined };
+  });
 }
 export async function retireWakeRoute(route: WakeRoute, opts: { at?: number; env?: NodeJS.ProcessEnv } = {}): Promise<void> {
   const location = await canonicalRouteLocation(route.location);

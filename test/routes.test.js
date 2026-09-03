@@ -8,7 +8,7 @@ import { writeSquareFile } from '../dist/artifact.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
-import { readWakeRoutes, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { readWakeRoutes, ROUTE_FRESH_MS, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_USER: path.join(root, 'user'), SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'local') } }; }
 
@@ -99,7 +99,7 @@ test('primary route selection is independent for same participant sessions', () 
   assert.equal(one?.sessionId, 's1');
   assert.equal(two?.sessionId, 's2');
 });
-test('express refreshes the current caller artifact route timestamp', async () => {
+test('express refreshes only an expired or changed caller artifact route', async () => {
   const item = await openExpressFixture();
   try {
     await join(item.square, 'Alice');
@@ -108,10 +108,21 @@ test('express refreshes the current caller artifact route timestamp', async () =
     item.setNow(500);
     const result = await express(item.square, 'Alice', 'fresh route', { force: true });
     assert.equal(result.activity.actor, 'Alice');
-    const routes = await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' });
-    assert.equal(routes.length, 1);
-    assert.ok(routes[0].updatedAt >= 500);
-    assert.equal(routes[0].address.threadId, 'alice-session');
+    const standing = await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' });
+    assert.equal(standing.length, 1);
+    // Publication is a semantic no-op while the same route stands unexpired.
+    assert.equal(standing[0].updatedAt, before.updatedAt);
+    assert.equal(standing[0].address.threadId, 'alice-session');
+
+    // A route past its freshness horizon is refreshed by the next publication.
+    const { state } = await item.square.artifact.read();
+    state.routes[0].updatedAt = before.updatedAt - ROUTE_FRESH_MS;
+    await writeSquareFile(item.location, state);
+    item.setNow(700);
+    await express(item.square, 'Alice', 'expired route refreshed', { force: true });
+    const refreshed = (await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' }))[0];
+    assert.equal(refreshed.updatedAt, 700);
+    assert.equal(refreshed.address.threadId, 'alice-session');
   } finally {
     await closeOpenSquare(item.square);
     fs.rmSync(item.item.root, { recursive: true, force: true });

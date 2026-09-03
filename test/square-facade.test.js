@@ -5,7 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { Square, SquareError } from '../dist/index.js';
+import { loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { recordJoin } from '../dist/registry.js';
+import { ROUTE_FRESH_MS, upsertWakeRoute } from '../dist/routes.js';
 
 test('fixed facade builds, opens, and exposes participant activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));
@@ -118,6 +120,94 @@ test('idle catch wakes for a committed activity and expires while quiet', async 
   assert.equal(expired.consumedThrough, expressed.activity.id);
   assert.equal(expired.idleExpired, true);
   await square.close();
+});
+
+test('idle catch with a stable route stays quiet and wakes once for an external activity', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-idle-quiet-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const presenceFile = path.join(root, 'host-ledger-local', 'presence.ndjsonl');
+  const env = {
+    ...process.env,
+    HOME: root,
+    CLAUDE_CODE_SESSION_ID: '',
+    CLAUDE_CODE_CHILD_SESSION: '',
+    CODEX_THREAD_ID: 'codex-session',
+    OPENCODE_SESSION_ID: '',
+    SQUARE_PI_SESSION_ID: '',
+    PASEO_AGENT_ID: '',
+    SQUARE_DISABLE_PASEO_WAKE: '1',
+    SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
+    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger-user'),
+    SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'host-ledger-local'),
+  };
+  const square = await Square.build({ path: squarePath, markdown: 'context', env });
+  try {
+    const alice = await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.catch();
+    const routeBefore = (await loadSquare(squarePath)).routes.find((route) => route.participant === 'Bob');
+    assert.ok(routeBefore);
+
+    const snapshot = () => ({
+      artifact: fs.readFileSync(squarePath),
+      presence: fs.existsSync(presenceFile) ? fs.readFileSync(presenceFile) : Buffer.alloc(0),
+    });
+    const waiting = bob.catch({ idle: 900 });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const during = snapshot();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    // Self-side publication must not rewrite the artifact or the presence file while quiet.
+    assert.deepEqual(snapshot(), during);
+
+    const expressed = await alice.express('wake @Bob', { force: true, mentions: ['Bob'] });
+    const caught = await waiting;
+    assert.deepEqual(caught.activities, [{ ...expressed.activity, perception: 'full' }]);
+    assert.equal(caught.consumedThrough, expressed.activity.id);
+    assert.equal(caught.idleExpired, false);
+
+    const routeAfter = (await loadSquare(squarePath)).routes.find((route) => route.participant === 'Bob');
+    assert.equal(routeAfter.updatedAt, routeBefore.updatedAt);
+
+    const quietExpiry = await bob.catch({ idle: 80 });
+    assert.deepEqual(quietExpiry.activities, []);
+    assert.equal(quietExpiry.consumedThrough, expressed.activity.id);
+    assert.equal(quietExpiry.idleExpired, true);
+  } finally {
+    await square.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('publishing an unchanged fresh route is a no-op and expiry still refreshes once', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-route-idempotent-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const built = await Square.build({ path: squarePath, markdown: 'context' });
+  await built.close();
+  try {
+    const route = { location: squarePath, participant: 'Bob', sessionId: 'route-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'route-session' } };
+    await upsertWakeRoute(route, { at: 5_000 });
+    const bytes = fs.readFileSync(squarePath);
+    assert.equal((await loadSquare(squarePath)).routes.length, 1);
+
+    await upsertWakeRoute(route, { at: 5_000 + 3_600_000 });
+    assert.equal(fs.readFileSync(squarePath).equals(bytes), true);
+    assert.equal((await loadSquare(squarePath)).routes[0].updatedAt, 5_000);
+
+    // A changed address is a meaningful publication and still replaces the standing route.
+    await upsertWakeRoute({ ...route, address: { threadId: 'other-session' } }, { at: 6_000 });
+    const replaced = await loadSquare(squarePath);
+    assert.equal(replaced.routes[0].address.threadId, 'other-session');
+    assert.equal(replaced.routes[0].updatedAt, 6_000);
+
+    // An expired route must still be refreshed so a standing publication never goes stale.
+    const stale = await loadSquare(squarePath);
+    stale.routes[0].updatedAt = 6_000 - ROUTE_FRESH_MS;
+    await writeSquareFile(squarePath, stale);
+    await upsertWakeRoute({ ...route, address: { threadId: 'other-session' } }, { at: 7_000 });
+    assert.equal((await loadSquare(squarePath)).routes[0].updatedAt, 7_000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('invalid facade join retains the stable coded error and commits nothing', async () => {
