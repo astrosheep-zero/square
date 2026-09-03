@@ -165,11 +165,12 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
         return { outcome: 'not-capable', diagnostic: error instanceof Error ? error.message : String(error) };
       }
     },
-    attempt: async (request, timeoutMs): Promise<WakeOutcome> => {
+    attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => wakeRequestIsCurrent(request, hostLedger, clock()), timeoutMs);
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () =>
+          (await (beforeSend ?? (async () => true))()) && await wakeRequestIsCurrent(request, hostLedger, clock()), timeoutMs);
         if (result.outcome === 'accepted') return { outcome: 'accepted' };
         if (result.outcome === 'failed') return { outcome: 'failed', message: result.message };
         if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };

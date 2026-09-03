@@ -81,6 +81,21 @@ export async function projectPresentationEvidence(input: {
   return rows.map((row) => ({ location: row.location, participant: row.participant, sessionId: row.session, activity: row.activity, outcome: row.outcome, ...(row.at === undefined ? {} : { at: row.at }) }));
 }
 
+/** Successful boundary output, including a clipped preview, suppresses awareness wake. */
+export function presentationSuppressesWake(evidence: readonly Pick<PresentationEvidenceProjection, 'outcome'>[]): boolean {
+  return evidence.some((row) => row.outcome === 'clipped' || row.outcome === 'presented');
+}
+
+/** The most recently published session owns wake eligibility for its participant. */
+export function currentSessionBindings<T extends { readonly participant: string; readonly updatedAt?: number }>(bindings: readonly T[]): T[] {
+  const latest = new Map<string, number>();
+  for (const binding of bindings) {
+    const participant = nameKey(binding.participant);
+    latest.set(participant, Math.max(latest.get(participant) ?? Number.NEGATIVE_INFINITY, binding.updatedAt ?? 0));
+  }
+  return bindings.filter((binding) => (binding.updatedAt ?? 0) === latest.get(nameKey(binding.participant)));
+}
+
 export interface WakeAttempt {
   readonly at: number;
   readonly attention: { readonly squarePath: string; readonly actIndex: number; readonly recipient: string };
@@ -136,14 +151,14 @@ export async function projectWakeEvidenceFromState(input: {
   const presentedRows = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: canonicalLocation, now: input.now });
   return {
     evidence(recipient: string, actIndex: number): WakeEvidence {
-      const recipientBindings = bindings.filter((binding) => nameKey(binding.participant) === nameKey(recipient));
+      const recipientBindings = currentSessionBindings(bindings.filter((binding) => nameKey(binding.participant) === nameKey(recipient)));
       const routes = recipientBindings.flatMap((binding) => binding.route === undefined ? [] : [binding.route]);
       const attempts = recipientBindings.flatMap((binding) => attemptsByBinding.get(JSON.stringify([nameKey(recipient), actIndex, binding.sessionId])) ?? []);
       const terminal = terminalWakeEvidence(attempts);
-      const presented = presentedRows.some((row) => row.activity === formatActivityId(actIndex) && row.participant.toLocaleLowerCase() === recipient.toLocaleLowerCase() && recipientBindings.some((binding) => binding.sessionId === row.sessionId));
+      const presented = presentedRows.some((row) => row.activity === formatActivityId(actIndex) && row.participant.toLocaleLowerCase() === recipient.toLocaleLowerCase() && recipientBindings.some((binding) => binding.sessionId === row.sessionId) && presentationSuppressesWake([row]));
       return { delivered: delivery.isSeen(recipient, actIndex), presented, attempts, ...(terminal === undefined ? {} : { terminal }), attemptableRoutes: terminal === undefined ? routes.filter((route) => isWakeRouteAttemptable(route, attempts)) : [] };
     },
   };
 }
 
-export function wakeIsEligible(evidence: WakeEvidence): boolean { return !evidence.delivered && evidence.terminal === undefined && evidence.attemptableRoutes.length > 0; }
+export function wakeIsEligible(evidence: WakeEvidence): boolean { return !evidence.delivered && !evidence.presented && evidence.terminal === undefined && evidence.attemptableRoutes.length > 0; }

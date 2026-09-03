@@ -5,7 +5,7 @@ import type { DirectedNotificationRoute } from './model.js';
 import { participantIdentity } from './presentation.js';
 import { formatActivityId } from './square-core.js';
 
-export const ATTENTION_BODY_MAX = 100;
+export const ATTENTION_BODY_MAX = 200;
 
 export interface AttentionPreview {
   squarePath: string;

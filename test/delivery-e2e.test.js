@@ -14,7 +14,7 @@ import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
-import { retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts, recordWakeAttempt } from '../dist/wake-attempts.js';
 import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
 import { readCursor } from '../dist/runtime.js';
@@ -119,18 +119,20 @@ function inboxFor(item, act) {
   }];
 }
 
-async function markPresentedEvidence(item, session, act, participant = 'Bob') {
+async function markPresentationEvidence(item, session, act, participant = 'Bob', outcome = 'presented') {
   const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
   const claim = await ledger.claimEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', leaseMs: 5000, claimToken: `fixture-${session}-${act.index}` });
   assert.equal(claim.status, 'acquired');
-  await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome: 'presented', at: Date.now(), claimToken: claim.claimToken });
+  await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome, at: Date.now(), claimToken: claim.claimToken });
 }
+
+const markPresentedEvidence = (item, session, act, participant = 'Bob') => markPresentationEvidence(item, session, act, participant, 'presented');
 
 function acceptedAdapter(onBeforeSend) {
   return {
     kind: 'paseo',
     calls: 0,
-    async dispatch(_route, _request, beforeSend) {
+  async dispatch(_route, _request, beforeSend) {
       if (onBeforeSend) await onBeforeSend();
       if (!(await beforeSend())) return { outcome: 'cancelled' };
       this.calls += 1;
@@ -198,7 +200,7 @@ test('artifact roundtrip derives only directed pending attention', async () => {
   }
 });
 
-test('a native boundary presents bounded awareness and leaves clipped attention retryable', async () => {
+test('a native boundary presents bounded awareness and suppresses wake after a clipped preview', async () => {
   const item = workshop();
   try {
     const body = `@Bob ${'x'.repeat(400)}`;
@@ -224,7 +226,7 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
     assert.equal(first, 'presented');
     assert.equal(second, 'presented');
     assert.equal(secondCalls, 1);
-    assert.match(payload, /@Bob x{95}…/);
+    assert.match(payload, /@Bob x{195}…/);
     assert.doesNotMatch(payload, /ignore if you have already seen this\./);
     assert.doesNotMatch(payload, /Read and respond in the square when appropriate/);
     assert.doesNotMatch(payload, /unread/);
@@ -238,7 +240,13 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
     assert.equal(evidence.presented, true);
-    assert.equal(wakeIsEligible(evidence), true);
+    assert.equal(wakeIsEligible(evidence), false);
+    assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' },
+      now: Date.now(),
+      dispatchCandidate: () => { throw new Error('clipped presentation must not dispatch'); },
+    })), []);
+    assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   } finally {
     item.cleanup();
   }
@@ -412,7 +420,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
   }
 });
 
-test('presentation does not suppress wake before worker start or at the final pre-send check', async () => {
+test('presentation suppresses wake before worker start and at the final pre-send check', async () => {
   const item = workshop();
   try {
     await registerRoute(item);
@@ -427,32 +435,47 @@ test('presentation does not suppress wake before worker start or at the final pr
     const second = acceptedAdapter(() => markPresentedEvidence(item, 'bob-session', racing));
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, racing.index, { env: item.env, adapters: [second] }));
 
-    assert.equal(first.calls, 1);
-    assert.equal(second.calls, 1);
-    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted', 'accepted']);
+    assert.equal(first.calls, 0);
+    assert.equal(second.calls, 0);
+    assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   } finally {
     item.cleanup();
   }
 });
 
-test('presented evidence is scoped to the current participant owner', async () => {
+test('an old route and clipped presentation do not suppress the replacement session', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'new owner must see this @Bob'], 30);
     const act = (await loadSquare(item.squarePath)).acts.at(-1);
-    await registerRoute(item, 'old-owner', 'old-session');
-    await markPresentedEvidence(item, 'old-session', act);
+    const oldAt = Date.now() - 1_000;
+    const newAt = oldAt + 1;
+    await registerRoute(item, 'old-owner', 'old-session', oldAt);
+    await markPresentationEvidence(item, 'old-session', act, 'Bob', 'clipped');
     await withRegistry(item.env, async () => {
-      await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 2 });
-      await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', at: Date.now() - 1 });
+      await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: oldAt + 1 });
+      await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', at: newAt });
     });
-    await retireWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'old-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'old-session' }, updatedAt: Date.now() });
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
-    }, { env: item.env });
+    }, { env: item.env, at: newAt + 1 });
     const newLedger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: Date.now() }, 'user');
+    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: newAt + 1 }, 'user');
     const adapter = acceptedAdapter();
+
+    const routes = (await loadSquare(item.squarePath)).routes;
+    assert.equal(routes.some((route) => route.sessionId === 'old-session'), true);
+    assert.equal(routes.some((route) => route.sessionId === 'new-session'), true);
+    const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
+    assert.equal(evidence.presented, false);
+    assert.equal(wakeIsEligible(evidence), true);
+    assert.deepEqual(await withRegistry(item.env, () => sweepPendingNotifications(item.squarePath, {
+      env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' }, now: Date.now(),
+    })), [act.index]);
+    const healthBefore = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
+      graceMs: wakeGraceMs(item.env), env: item.env,
+    }));
+    assert.equal(healthBefore.find(({ actIndex }) => actIndex === act.index).kind, 'awaiting');
 
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] }));
     const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
@@ -461,7 +484,6 @@ test('presented evidence is scoped to the current participant owner', async () =
     }));
 
     assert.equal(adapter.calls, 1);
-    // Presentation evidence is session-scoped; a new binding reports its own accepted wake.
     assert.equal(health.find(({ actIndex }) => actIndex === act.index).kind, 'wake-accepted');
   } finally {
     item.cleanup();

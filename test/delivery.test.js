@@ -131,8 +131,8 @@ test('listener delivery attention does not claim a listener was mentioned', () =
 });
 
 test('attention body is complete up to the preview boundary', () => {
-  assert.equal(previewAttentionBody('x'.repeat(100)), 'x'.repeat(100));
-  assert.equal(previewAttentionBody('x'.repeat(101)), `${'x'.repeat(100)}…`);
+  assert.equal(previewAttentionBody('x'.repeat(200)), 'x'.repeat(200));
+  assert.equal(previewAttentionBody('x'.repeat(201)), `${'x'.repeat(200)}…`);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', () => {

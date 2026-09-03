@@ -32,7 +32,7 @@ export interface SquareArtifactPort {
 export interface WakeTransportPort {
   /** Capability check that performs no external wake and writes no evidence. */
   probe?(route: WakeRoute): Promise<boolean | { readonly outcome: 'not-capable'; readonly diagnostic?: string }>;
-  attempt(request: WakeRequest, timeoutMs: number): Promise<WakeOutcome>;
+  attempt(request: WakeRequest, timeoutMs: number, beforeSend?: () => Promise<boolean>): Promise<WakeOutcome>;
   /** Optional route retirement supplied by the concrete executor adapter. */
   invalidate?(request: WakeRequest): Promise<void>;
 }
