@@ -107,6 +107,8 @@ async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-sessi
     kind: 'paseo',
     address: { agentId: sessionId },
   }, { env: item.env, at });
+  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId: sessionId } }, updatedAt: at }, 'user');
 }
 
 function inboxFor(item, act) {
@@ -448,6 +450,8 @@ test('presented evidence is scoped to the current participant owner', async () =
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env });
+    const newLedger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
+    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: Date.now() }, 'user');
     const adapter = acceptedAdapter();
 
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] }));

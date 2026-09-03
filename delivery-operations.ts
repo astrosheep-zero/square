@@ -53,6 +53,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     route: { kind: route.kind, address: route.address },
     updatedAt: route.updatedAt,
   }));
+  const liveRoutes = routes.filter((route) => observation.bindings.some((binding) =>
+    nameKey(binding.participant) === nameKey(route.participant)
+    && binding.sessionId === route.session
+    && binding.location === route.location
+    && (binding.route !== undefined && binding.route.kind === route.route!.kind
+      && JSON.stringify(binding.route.address) === JSON.stringify(route.route!.address))
+  ));
   let attempted = 0; let accepted = 0; let failed = 0; let unknown = 0; let notCapable = 0;
   for (const membership of observation.pending) {
     for (const notification of membership.notifications) {
@@ -60,7 +67,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         const requested = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
         if (requested === undefined || requested !== notification.item.index) continue;
       }
-      const candidates = routes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
+      const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
       if (candidates.length === 0) { notCapable += 1; continue; }
       let acceptedForAttention = false;
       try {
@@ -84,27 +91,63 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         try { lease = await input.hostLedger.claimWakeDispatch({ attention, leaseId, leaseMs, session: route.session }); }
         catch { notCapable += 1; continue; }
         if (lease.type === 'ambiguous') {
-          await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: 'unknown', routeKind: lease.lease.routeKind ?? route.route!.kind, attemptN: lease.lease.attemptN ?? 1, signature: 'worker_interrupted_during_dispatch', message: 'The notification worker ended after dispatch began; transport acceptance is unknown.', claimToken: lease.lease.leaseId });
-          await input.hostLedger.releaseWakeDispatch({ attention, leaseId: lease.lease.leaseId, session: route.session });
-          continue;
+          let recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, now: input.now, claimToken: lease.lease.leaseId });
+          if (recovered.status === 'busy' && recovered.record.claimToken !== undefined) {
+            await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', now: input.now, claimToken: recovered.record.claimToken });
+            recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, now: input.now, claimToken: lease.lease.leaseId });
+          }
+          if (recovered.status === 'acquired') {
+            await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: 'unknown', routeKind: lease.lease.routeKind ?? route.route!.kind, attemptN: lease.lease.attemptN ?? 1, signature: 'worker_interrupted_during_dispatch', message: 'The notification worker ended after dispatch began; transport acceptance is unknown.', at: input.now, claimToken: recovered.claimToken });
+          }
+          await input.hostLedger.releaseWakeDispatch({ attention, leaseId: lease.lease.leaseId, session: route.session, at: input.now });
+          break;
         }
         if (lease.type !== 'acquired') continue;
+        try {
+          const completed = await input.hostLedger.listWakeAttempts({ attention, now: input.now });
+          if (completed.some((attempt) => attempt.outcome === 'accepted')) {
+            await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now });
+            acceptedForAttention = true;
+            break;
+          }
+        } catch { /* continue with the evidence claim */ }
         let attempts;
-        try { attempts = await input.hostLedger.listWakeAttempts({ attention, session: route.session, now: input.now }); }
-        catch { notCapable += 1; await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined); continue; }
-        if (attempts.some((attempt) => attempt.routeKind === route.route!.kind && attempt.outcome === 'unknown')) {
-          await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
-          continue;
+        try { attempts = await input.hostLedger.listWakeAttempts({ attention, now: input.now }); }
+        catch { notCapable += 1; await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now }).catch(() => undefined); continue; }
+        if (attempts.some((attempt) => attempt.outcome === 'unknown')) {
+          await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now });
+          break;
         }
-        const attemptN = attempts.reduce((highest, record) => Math.max(highest, record.attemptN ?? 0), 0) + 1;
+        const sessionAttempts = attempts.filter((attempt) => attempt.session === route.session);
+        const attemptN = sessionAttempts.reduce((highest, record) => Math.max(highest, record.attemptN ?? 0), 0) + 1;
         const request = { location: input.location, participant: membership.recipient, activity, actor: notification.item.actor, route: requestRoute };
         let outcome;
         const claim = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: leaseId });
         if (claim.status !== 'acquired') { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }); if (claim.status === 'degraded') notCapable += 1; continue; }
         const claimToken = claim.claimToken;
         attempted += 1;
-        const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session });
-        if (!dispatching) { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }); continue; }
+        const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session, at: input.now });
+        if (!dispatching) { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now }); continue; }
+        let current: SquareObservation;
+        try { current = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now }); }
+        catch { current = { ...observation, pending: [], bindings: [] }; }
+        const stillPending = current.pending.some((entry) => nameKey(entry.recipient) === nameKey(membership.recipient)
+          && entry.notifications.some((entryNotification) => entryNotification.item.index === notification.item.index));
+        const stillBound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(route.participant)
+          && binding.sessionId === route.session
+          && binding.location === route.location
+          && (binding.route !== undefined && binding.route.kind === route.route!.kind
+            && JSON.stringify(binding.route.address) === JSON.stringify(route.route!.address)));
+        const stillPublished = (current.state.routes ?? []).some((published) => published.location === route.location
+          && nameKey(published.participant) === nameKey(route.participant)
+          && published.sessionId === route.session
+          && published.kind === route.route!.kind
+          && JSON.stringify(published.address) === JSON.stringify(route.route!.address));
+        if (!stillPending || !stillBound || !stillPublished) {
+          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', now: input.now, claimToken }).catch(() => undefined);
+          await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now }).catch(() => undefined);
+          continue;
+        }
         try { outcome = await attemptWakeWithin(input.transport, request, leaseMs); }
         catch (error) { outcome = { outcome: 'unknown' as const, diagnostic: error instanceof Error ? error.message : String(error) }; }
         if (outcome.outcome === 'not-capable') {
@@ -123,7 +166,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: outcome.outcome, routeKind: route.route!.kind, attemptN: outcome.attemptN ?? attemptN, ...(outcome.outcome === 'accepted' && outcome.signature === undefined ? {} : outcome.outcome === 'accepted' ? { signature: outcome.signature } : outcome.outcome === 'failed' ? { message: outcome.message } : { diagnostic: outcome.diagnostic }), claimToken });
         await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
         if (outcome.outcome === 'accepted') { accepted += 1; acceptedForAttention = true; break; }
-        if (outcome.outcome === 'failed') failed += 1; else unknown += 1;
+        if (outcome.outcome === 'failed') failed += 1;
+        else { unknown += 1; break; }
       }
     }
   }

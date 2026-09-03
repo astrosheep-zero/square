@@ -12,6 +12,7 @@ import { sessionInbox } from '../dist/inbox.js';
 import { lookupParticipant, recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
 
 const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
@@ -215,6 +216,8 @@ test('privileged hook sweep wakes a different recipient after local failure', as
     await item.persist();
     await recordSessionJoin('bob-session', 'Bob', item.squarePath, 'claude-code', env);
     await upsertWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'bob-session', channel: 'claude-code', kind: 'claude-native', address: { sessionId: 'bob-session' } });
+    const ledger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER, localPath: env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'bob-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'bob-session' } } }, 'user');
     const failed = { kind: 'claude-native', async dispatch() { return { outcome: 'failed', signature: 'temporary', message: 'offline' }; } };
     await processActNotificationsOnce(item.squarePath, 2, { env, adapters: [failed] });
     let calls = 0;

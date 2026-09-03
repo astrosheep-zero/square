@@ -7,6 +7,7 @@ import test from 'node:test';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
@@ -75,6 +76,8 @@ async function route(item, options = {}) {
     kind: 'paseo',
     address: { agentId },
   }, { env: item.env, at: options.at });
+  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId } }, updatedAt: options.at ?? Date.now() }, 'user');
 }
 
 function fakeAdapter(kind, dispatch) {
@@ -124,6 +127,8 @@ test('privileged sweep stops at its native hook deadline', async () => {
       kind: 'claude-native',
       address: { sessionId: 'deadline-session' },
     }, { env: item.env });
+    const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'deadline-session' } } }, 'user');
     let timeoutMs;
     const hanging = {
       kind: 'claude-native',
@@ -276,5 +281,26 @@ test('a worker with no route writes no synthetic attempt', async () => {
 
   assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
+  fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('wake transport rechecks pending and route ownership before send', async () => {
+  const item = await fixture();
+  await route(item, { agentId: 'race-agent' });
+  let calls = 0;
+  await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
+    env: item.env,
+    adapters: [{
+      kind: 'paseo',
+      dispatch: async (_address, _payload, beforeSend) => {
+        const current = await loadSquare(item.squarePath);
+        await writeSquareFile(item.squarePath, { ...current, routes: [] });
+        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        calls += 1;
+        return { outcome: 'accepted' };
+      },
+    }],
+  }));
+  assert.equal(calls, 0);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
