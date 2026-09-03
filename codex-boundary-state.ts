@@ -79,7 +79,7 @@ export async function recordCodexBoundary(
 ): Promise<void> {
   if (!threadId) return;
   const filePath = statePath(env);
-  await withFileLock(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, async () => {
+  await withFileLock(lockPath(filePath), { retryMs: 10 }, async () => {
     const value = await readFile(filePath);
     value.nextSequence += 1;
     const current = value.threads[threadId] ?? { lastStop: 0, lastNonStop: 0 };
@@ -93,7 +93,7 @@ export async function recordCodexBoundary(
 export async function clearCodexBoundary(threadId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (!threadId) return;
   const filePath = statePath(env);
-  await withFileLock(lockPath(filePath), { retryMs: 10, staleMs: 30_000 }, async () => {
+  await withFileLock(lockPath(filePath), { retryMs: 10 }, async () => {
     const value = await readFile(filePath);
     if (!(threadId in value.threads)) return;
     delete value.threads[threadId];

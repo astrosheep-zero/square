@@ -5,7 +5,7 @@ import { withFileLock } from './file-lock.js';
 import { nameKey } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import type { HostLedgerPort, HostLedgerScope, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, EvidenceGc, ClaimResult, ReconcileBindingInput, ReconcileBindingResult, WakeDispatchClaim, WakeDispatchClaimInput, WakeDispatchReleaseInput, WakeDispatchTransitionInput, WakeAttemptLookup } from './host-ledger.js';
-const LOCK = { retryMs: 10, staleMs: 300000 } as const; const RETENTION = 7 * 86400000;
+const LOCK = { retryMs: 10 } as const; const RETENTION = 7 * 86400000;
 export interface HostLedgerFileAdapterOptions { userPath?: string; localPath?: string; writableScope?: HostLedgerScope; readableScopes?: readonly HostLedgerScope[]; claimsPath?: string; now?: () => number }
 async function canon(value:string):Promise<string>{const absolute=path.resolve(value);try{return await fs.realpath(absolute)}catch{return absolute}}
 async function read<T extends {v:1;at?:number;updatedAt?:number}>(file:string,now:number,includeFuture=false):Promise<T[]>{try{return (await fs.readFile(file,'utf8')).split('\n').flatMap(line=>{try{const row=JSON.parse(line) as T;const at=row.at??row.updatedAt;return row.v===1&&typeof at==='number'&&at>=now-RETENTION&&(includeFuture||at<=now)?[row]:[]}catch{return[]}})}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e}}

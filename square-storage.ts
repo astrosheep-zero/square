@@ -11,7 +11,7 @@ import {
 import { withFileLock } from './file-lock.js';
 import type { StateCell } from './state-cell.js';
 import { type SquareState } from './model.js';
-import { LOCK_RETRY_MS, LOCK_STALE_MS } from './runtime.js';
+import { LOCK_RETRY_MS } from './runtime.js';
 
 /**
  * The only production module allowed to cross the .square byte boundary.
@@ -42,7 +42,7 @@ export async function writeSquareSnapshot(squarePath: string, squareState: Squar
 export function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
   return withFileLock(
     `${squarePath}.lock`,
-    { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS },
+    { retryMs: LOCK_RETRY_MS },
     fn,
   );
 }
@@ -171,7 +171,7 @@ export function createFileCell(squarePath: string): StateCell {
   return {
     async transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
       assertCellOpen(closed);
-      return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, staleMs: LOCK_STALE_MS }, async () => {
+      return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS }, async () => {
         assertCellOpen(closed);
         const current = await currentStateUnderLock();
         const working = cloneState(current);

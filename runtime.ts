@@ -60,7 +60,6 @@ export const STALE_MS = parseIntegerEnvAlias(
 );
 export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_STALE_SCALE', 3)));
 export const LOCK_RETRY_MS = parseIntegerEnv('SQUARE_LOCK_RETRY_MS', 25);
-export const LOCK_STALE_MS = parseIntegerEnv('SQUARE_LOCK_STALE_MS', 30000);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
 

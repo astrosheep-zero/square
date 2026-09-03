@@ -160,6 +160,6 @@ export async function presentPendingAtBoundary<T>(
   const ledgerRoot = env.SQUARE_HOST_LEDGER_USER
     ?? (env.SQUARE_REGISTRY === undefined ? path.join(os.homedir(), '.square', 'host-ledger') : path.dirname(env.SQUARE_REGISTRY));
   const ownerKey = createHash('sha256').update(sessionId).digest('hex');
-  return withFileLock(path.join(ledgerRoot, `presentation-boundary-${ownerKey}.lock`), { retryMs: 10, staleMs: 300_000, signal }, () =>
+  return withFileLock(path.join(ledgerRoot, `presentation-boundary-${ownerKey}.lock`), { retryMs: 10, signal }, () =>
     presentPendingAtBoundaryUnlocked(sessionId, present, lookup, env, signal));
 }
