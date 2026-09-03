@@ -36,6 +36,21 @@ test('callable routes are read from receiver-owned square artifact', async () =>
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
+test('route publication through an artifact symlink keeps one canonical domain', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    const alias = path.join(item.root, 'alias.square');
+    await writeSquareFile(location, emptyState());
+    fs.symlinkSync(location, alias);
+    await upsertWakeRoute({ location: alias, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 's-a' } }, { at: 1 });
+    const routes = await readWakeRoutes({ location, now: 2 });
+    assert.equal(routes.length, 1);
+    assert.equal(routes[0].location, fs.realpathSync(location));
+    assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
 test('local presence cannot plant a callable route', async () => {
   const item = fixture();
   try {

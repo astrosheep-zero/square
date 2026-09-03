@@ -123,7 +123,7 @@ test('concurrent kick losers claim no ownership and mutate no artifact lifecycle
     const { withFileLock } = await import('../dist/file-lock.js');
     const claimLockPath = path.join(path.dirname(process.env.SQUARE_REGISTRY), 'presence-claim.lock');
     let attempts;
-    await withFileLock(claimLockPath, { retryMs: 10, staleMs: 300_000 }, async () => {
+    await withFileLock(claimLockPath, { retryMs: 10 }, async () => {
       attempts = Promise.allSettled([kick('kicker-a')(), kick('kicker-b')()]);
       await new Promise((resolve) => setTimeout(resolve, 300));
     });

@@ -129,9 +129,45 @@ test('file cells reuse unchanged snapshots without sharing caller state', async 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('artifact aliases share one canonical lock and publication target', async () => {
+  const { dir, squarePath } = await writeFixture({ preamble: ['canonical snapshot'] });
+  const aliasPath = path.join(dir, 'alias.square');
+  fs.symlinkSync(squarePath, aliasPath);
+  const realCell = createFileCell(squarePath);
+  const aliasCell = createFileCell(aliasPath);
+  let active = 0;
+  let maximum = 0;
+  const hold = (location) => withSquareFileLock(location, async () => {
+    active += 1;
+    maximum = Math.max(maximum, active);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    active -= 1;
+  });
+
+  try {
+    const started = Date.now();
+    await Promise.all([hold(squarePath), hold(aliasPath)]);
+    assert.equal(maximum, 1);
+    assert.ok(Date.now() - started >= 80);
+
+    await aliasCell.transact((state) => ({
+      state: { ...state, preamble: ['published through alias'] },
+      result: undefined,
+    }));
+    assert.equal((await loadSquare(squarePath)).preamble[0], 'published through alias');
+    assert.equal(fs.lstatSync(aliasPath).isSymbolicLink(), true);
+    assert.equal(fs.realpathSync(aliasPath), fs.realpathSync(squarePath));
+  } finally {
+    await realCell.close();
+    await aliasCell.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('all production snapshot readers wait behind the artifact publication lock', async () => {
   const { dir, squarePath } = await writeFixture({ preamble: ['locked snapshot'] });
   const cell = createFileCell(squarePath);
+  const canonicalSquarePath = fs.realpathSync(squarePath);
   const originalOpen = fs.promises.open;
   const originalReadFile = fs.promises.readFile;
 
@@ -147,11 +183,11 @@ test('all production snapshot readers wait behind the artifact publication lock'
 
     let targetOpened = false;
     fs.promises.open = async (...args) => {
-      if (String(args[0]) === squarePath) targetOpened = true;
+      if (String(args[0]) === canonicalSquarePath) targetOpened = true;
       return originalOpen(...args);
     };
     fs.promises.readFile = async (...args) => {
-      if (String(args[0]) === squarePath) targetOpened = true;
+      if (String(args[0]) === canonicalSquarePath) targetOpened = true;
       return originalReadFile(...args);
     };
 

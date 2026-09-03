@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   createSquareState,
@@ -22,29 +23,40 @@ export {
   createSquareState,
 };
 
+async function canonicalPath(squarePath: string): Promise<string> {
+  const absolute = path.resolve(squarePath);
+  try {
+    return await fs.promises.realpath(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const parent = await fs.promises.realpath(path.dirname(absolute)).catch(() => path.dirname(absolute));
+    return path.join(parent, path.basename(absolute));
+  }
+}
+
 export async function readSquareFile(squarePath: string): Promise<SquareState> {
-  return withSquareFileLock(squarePath, () => loadSquare(squarePath));
+  const canonical = await canonicalPath(squarePath);
+  return withSquareFileLock(canonical, () => loadSquare(canonical));
 }
 
 export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
-  return withSquareFileLock(squarePath, () => probeSquare(squarePath));
+  const canonical = await canonicalPath(squarePath);
+  return withSquareFileLock(canonical, () => probeSquare(canonical));
 }
 
 export async function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
-  return withSquareFileLock(squarePath, () => diagnoseArtifactFile(squarePath));
+  const canonical = await canonicalPath(squarePath);
+  return withSquareFileLock(canonical, () => diagnoseArtifactFile(canonical));
 }
 
 export async function writeSquareSnapshot(squarePath: string, squareState: SquareState): Promise<void> {
-  await writeSquareFile(squarePath, squareState);
+  await writeSquareFile(await canonicalPath(squarePath), squareState);
 }
 
-export function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
-  return withFileLock(
-    `${squarePath}.lock`,
-    { retryMs: LOCK_RETRY_MS },
-    fn,
-  );
+export async function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
+  const canonical = await canonicalPath(squarePath);
+  return withFileLock(`${canonical}.lock`, { retryMs: LOCK_RETRY_MS }, fn);
 }
 
 function cloneState(squareState: SquareState): SquareState {
@@ -146,9 +158,15 @@ export function createFileCell(squarePath: string): StateCell {
   let version = 0;
   let fingerprint: string | undefined;
   let cached: { fingerprint: string; state: SquareState } | undefined;
+  let canonicalSquarePath: string | undefined;
+
+  async function storagePath(): Promise<string> {
+    canonicalSquarePath ??= await canonicalPath(squarePath);
+    return canonicalSquarePath;
+  }
 
   async function observe(): Promise<string> {
-    const next = await fileFingerprint(squarePath);
+    const next = await fileFingerprint(await storagePath());
     if (fingerprint === undefined) {
       fingerprint = next;
     } else if (next !== fingerprint) {
@@ -163,7 +181,7 @@ export function createFileCell(squarePath: string): StateCell {
     const observed = await observe();
     if (cached?.fingerprint === observed) return cloneState(cached.state);
 
-    const decoded = await loadSquare(squarePath);
+    const decoded = await loadSquare(await storagePath());
     cached = { fingerprint: observed, state: cloneState(decoded) };
     return cloneState(cached.state);
   }
@@ -171,14 +189,15 @@ export function createFileCell(squarePath: string): StateCell {
   return {
     async transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
       assertCellOpen(closed);
-      return withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS }, async () => {
+      const canonical = await storagePath();
+      return withFileLock(`${canonical}.lock`, { retryMs: LOCK_RETRY_MS }, async () => {
         assertCellOpen(closed);
         const current = await currentStateUnderLock();
         const working = cloneState(current);
         const outcome = fn(working, version);
         if (outcome.state !== undefined) {
-          await writeSquareSnapshot(squarePath, outcome.state);
-          fingerprint = await fileFingerprint(squarePath);
+          await writeSquareFile(canonical, outcome.state);
+          fingerprint = await fileFingerprint(canonical);
           cached = { fingerprint, state: cloneState(outcome.state) };
           version += 1;
         }
@@ -187,7 +206,7 @@ export function createFileCell(squarePath: string): StateCell {
     },
     async read() {
       assertCellOpen(closed);
-      return withSquareFileLock(squarePath, async () => {
+      return withSquareFileLock(await storagePath(), async () => {
         assertCellOpen(closed);
         return { state: await currentStateUnderLock(), version };
       });
