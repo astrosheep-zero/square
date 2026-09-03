@@ -222,6 +222,7 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
     assert.equal(secondCalls, 1);
     assert.match(payload, /@Bob x{95}\n… preview only/);
     assert.match(payload, /ignore if you have already seen this\./);
+    assert.doesNotMatch(payload, /Read and respond in the square when appropriate/);
     assert.doesNotMatch(payload, /unread/);
     assert.doesNotMatch(payload, /catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));

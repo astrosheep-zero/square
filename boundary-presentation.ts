@@ -53,7 +53,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const count = pendingCount(inbox);
   const noun = count === 1 ? 'notification' : 'notifications';
   const header = `<system-reminder source="square">You have ${count} Square ${noun}.`;
-  const footer = ['Read and respond in the square when appropriate.</system-reminder>'];
+  const footer = ['</system-reminder>'];
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
