@@ -220,8 +220,8 @@ test('a native boundary presents bounded awareness and leaves clipped attention 
     assert.equal(first, 'presented');
     assert.equal(second, 'presented');
     assert.equal(secondCalls, 1);
-    assert.match(payload, /@Bob x{95}\n… preview only/);
-    assert.match(payload, /ignore if you have already seen this\./);
+    assert.match(payload, /@Bob x{95}…/);
+    assert.doesNotMatch(payload, /ignore if you have already seen this\./);
     assert.doesNotMatch(payload, /Read and respond in the square when appropriate/);
     assert.doesNotMatch(payload, /unread/);
     assert.doesNotMatch(payload, /catch --now/);

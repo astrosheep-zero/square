@@ -1,6 +1,6 @@
 {
   "name": "square",
-  "version": "0.3.40",
+  "version": "0.3.41",
   "description": "Native Claude Code turn-boundary delivery for Square participants",
   "author": {
     "name": "Square"

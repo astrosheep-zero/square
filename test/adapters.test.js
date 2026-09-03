@@ -732,7 +732,7 @@ test('Pi presents a clipped body without marking it seen', async () => {
     try {
       const actIndex = await expressToPi(item, `${'x'.repeat(140)} @Bob`);
       await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
-      assert.match(sent[0].message.content, /… preview only/);
+      assert.match(sent[0].message.content, /x{95}…/);
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
       assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
