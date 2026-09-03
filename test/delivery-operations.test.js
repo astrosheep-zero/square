@@ -11,6 +11,25 @@ import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 
+async function pendingWakeFixture(now = () => 10) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-delivery-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
+  );
+  state.runtime.nextActIndex = 3;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync(location);
+  state.routes = [{ location: canonicalLocation, participant: 'Bob', sessionId: 'wake-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'bob' }, updatedAt: 3 }];
+  await writeSquareFile(location, state);
+  const base = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'wake-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'bob' } }, updatedAt: 3 }, 'user');
+  return { root, location, base, square: await openSquare(location, { hostLedger: base }) };
+}
+
 test('release preserves token authority and rejects late or tokenless terminal evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-fence-'));
   const ledger = new FileHostLedgerPort({ userPath: root, localPath: root });
@@ -100,6 +119,46 @@ test('activity-scoped wake results ignore older pending attention without routes
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('wake dispatch renewal uses its operation clock after the observation time has elapsed', async () => {
+  let now = 100;
+  const item = await pendingWakeFixture(() => now);
+  let competing;
+  const ledger = Object.create(item.base);
+  ledger.claimEvidence = async (input) => {
+    const claim = await item.base.claimEvidence(input);
+    now = 10_000;
+    return claim;
+  };
+  ledger.transitionWakeDispatch = async (input) => {
+    assert.equal(input.at, undefined);
+    assert.equal(await item.base.transitionWakeDispatch(input), true);
+    competing = await item.base.claimWakeDispatch({ attention: input.attention, leaseId: 'competing-worker', leaseMs: input.leaseMs, session: input.session });
+    return false;
+  };
+  try {
+    await deliverPending({ artifact: item.square.artifact, hostLedger: ledger, transport: { attempt: async () => ({ outcome: 'accepted' }) }, location: item.location, now: 10 });
+    assert.deepEqual(competing, { type: 'busy' });
+  } finally {
+    await item.square.artifact.close();
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
+test('a failed wake dispatch transition releases its fenced evidence claim', async () => {
+  const item = await pendingWakeFixture();
+  const ledger = Object.create(item.base);
+  ledger.transitionWakeDispatch = async () => false;
+  try {
+    const result = await deliverPending({ artifact: item.square.artifact, hostLedger: ledger, transport: { attempt: async () => ({ outcome: 'accepted' }) }, location: item.location, now: 10 });
+    assert.equal(result.attempted, 1);
+    const next = await item.base.claimEvidence({ location: item.location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 5_000 });
+    assert.equal(next.status, 'acquired');
+  } finally {
+    await item.square.artifact.close();
+    fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
 
