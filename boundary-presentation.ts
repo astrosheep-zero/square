@@ -52,7 +52,7 @@ interface BoundaryRender {
 function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const count = pendingCount(inbox);
   const noun = count === 1 ? 'notification' : 'notifications';
-  const header = `<system-reminder source="square">You have ${count} unread Square ${noun}.`;
+  const header = `<system-reminder source="square">You have ${count} Square ${noun}.`;
   const footer = ['Read and respond in the square when appropriate.</system-reminder>'];
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
@@ -80,7 +80,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       ...blocks,
       block,
       ...(omittedAfter > 0
-        ? [`… ${omittedAfter} unread ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
+        ? [`… ${omittedAfter} ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
       duplicateHint,
       ...footer,
@@ -102,7 +102,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       header,
       ...blocks,
       ...(omitted > 0
-        ? [`… ${omitted} unread ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
+        ? [`… ${omitted} ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
       duplicateHint,
       ...footer,

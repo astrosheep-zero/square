@@ -19,7 +19,7 @@ export interface AttentionPreview {
 
 export function previewAttentionBody(body: string): string {
   const compact = body.replace(/\r\n/g, '\n');
-  if (compact.length <= ATTENTION_BODY_MAX) return compact;
+  if (compact.length <= ATTENTION_BODY_MAX) return `${compact}\n… preview`;
   return `${compact.slice(0, ATTENTION_BODY_MAX).trimEnd()}\n… preview only`;
 }
 

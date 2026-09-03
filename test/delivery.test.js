@@ -127,6 +127,7 @@ test('listener delivery attention does not claim a listener was mentioned', () =
   assert.equal(route, 'attention');
   const rendered = renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: 3, recipient: 'Bob', actor: 'Alice', route, body: 'bare thought' });
   assert.match(rendered, /\(attention\)/);
+  assert.match(rendered, /… preview/);
   assert.doesNotMatch(rendered, /\(mention\)/);
 });
 
