@@ -141,6 +141,23 @@ test('expired wake dispatching claim is reclaimed after a crash', async () => {
   }
 });
 
+test('an old wake lease cannot release a replacement lease', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-dispatch-lease-'));
+  const location = path.join(root, 'SQUARE.square');
+  const attention = { squarePath: location, recipient: 'Bob', actIndex: 2 };
+  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  try {
+    assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-a', leaseMs: 10, session: 'wake-session', at: 100 }), { type: 'acquired', leaseId: 'lease-a' });
+    assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-b', leaseMs: 10, session: 'wake-session', at: 111 }), { type: 'acquired', leaseId: 'lease-b' });
+    await ledger.releaseWakeDispatch({ attention, leaseId: 'lease-a', session: 'wake-session', at: 112 });
+    assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-c', leaseMs: 10, session: 'wake-session', at: 113 }), { type: 'busy' });
+    await ledger.releaseWakeDispatch({ attention, leaseId: 'lease-b', session: 'wake-session', at: 114 });
+    assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-c', leaseMs: 10, session: 'wake-session', at: 115 }), { type: 'acquired', leaseId: 'lease-c' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('expired presentation dispatching claim is reclaimed while presented is terminal', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-lease-'));
   const location = path.join(root, 'SQUARE.square');

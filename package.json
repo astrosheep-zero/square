@@ -36,6 +36,9 @@
   ],
   "author": "astrosheep",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "devDependencies": {
     "@getpaseo/client": "^0.3.1",
     "@types/cross-spawn": "^6.0.6",
