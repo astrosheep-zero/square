@@ -25,6 +25,11 @@ export interface SquareBuildInput extends SquareSource {
   env?: NodeJS.ProcessEnv;
 }
 
+/** Optional fence for owner-scoped lifecycle actions. */
+export interface OwnershipFenceOptions {
+  readonly expectedEpoch?: number;
+}
+
 export interface Participant {
   readonly name: string;
   express(body: string, options?: ExpressOptions): Promise<ExpressResult>;

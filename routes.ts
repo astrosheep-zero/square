@@ -80,34 +80,58 @@ export async function upsertWakeRoute(route: Omit<WakeRoute, 'updatedAt'>, opts:
   const location = await canonicalRouteLocation(route.location);
   await withArtifact(location, async (square) => publishWakeRoute(square.artifact, { ...route, location }, opts));
 }
+export type RouteEpoch = { readonly epoch?: number };
 function sameRouteAddress(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
   const leftKeys = Object.keys(left).sort();
   const rightKeys = Object.keys(right).sort();
   return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => rightKeys[index] === key && left[key] === right[key]);
 }
 
-/** Semantic publish: a route that already stands unchanged and unexpired is not rewritten. */
-export async function publishWakeRoute(artifact: import('./ports.js').SquareArtifactPort, route: Omit<WakeRoute, 'updatedAt'>, opts: { at?: number } = {}): Promise<void> {
+/** Semantic publish: an unchanged, unexpired route is not rewritten. */
+export async function publishWakeRoute(
+  artifact: import('./ports.js').SquareArtifactPort,
+  route: Omit<WakeRoute, 'updatedAt'> & RouteEpoch,
+  opts: { at?: number } = {},
+): Promise<void> {
   const location = await canonicalRouteLocation(route.location);
   const at = opts.at ?? Date.now();
   await artifact.transact((state) => {
     const identity = routeIdentityKey({ ...route, location });
     const existing = (state.routes ?? []).find((item) => routeIdentityKey(item) === identity);
+    const existingEpoch = (existing as (WakeRoute & RouteEpoch) | undefined)?.epoch;
+    const epochMatches = route.epoch === undefined ? existingEpoch === undefined : existingEpoch === route.epoch;
     if (existing !== undefined && existing.updatedAt > at - ROUTE_FRESH_MS
       && existing.kind === route.kind && existing.channel === route.channel
-      && sameRouteAddress(existing.address, route.address)) {
+      && sameRouteAddress(existing.address, route.address)
+      && epochMatches) {
       return { result: undefined };
     }
     return { state: { ...state, routes: [...(state.routes ?? []).filter((item) => routeIdentityKey(item) !== identity), { ...route, location, participant: route.participant, updatedAt: at }] }, result: undefined };
   });
 }
-export async function retireWakeRoute(route: WakeRoute, opts: { at?: number; env?: NodeJS.ProcessEnv } = {}): Promise<void> {
+export async function retireWakeRoute(route: WakeRoute, opts: { at?: number; env?: NodeJS.ProcessEnv; expectedEpoch?: number } = {}): Promise<void> {
   const location = await canonicalRouteLocation(route.location);
-  await withArtifact(location, async (square) => retireWakeRouteFromArtifact(square.artifact, { ...route, location }));
+  await withArtifact(location, async (square) => retireWakeRouteFromArtifact(square.artifact, { ...route, location }, opts));
 }
-export async function retireWakeRouteFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>): Promise<void> {
+export async function retireWakeRouteFromArtifact(
+  artifact: import('./ports.js').SquareArtifactPort,
+  route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>,
+  opts: { readonly expectedEpoch?: number } = {},
+): Promise<void> {
   const location = await canonicalRouteLocation(route.location);
-  await artifact.transact((state) => ({ state: { ...state, routes: (state.routes ?? []).filter((item) => routeIdentityKey(item) !== routeIdentityKey({ ...route, location })) }, result: undefined }));
+  const target = routeIdentityKey({ ...route, location });
+  await artifact.transact((state) => ({
+    state: {
+      ...state,
+      routes: (state.routes ?? []).filter((item) => {
+        if (routeIdentityKey(item) !== target) return true;
+        const itemEpoch = (item as WakeRoute & RouteEpoch).epoch;
+        if (opts.expectedEpoch !== undefined && itemEpoch !== opts.expectedEpoch) return true;
+        return false;
+      }),
+    },
+    result: undefined,
+  }));
 }
 
 export async function canonicalRouteLocation(location: string): Promise<string> {

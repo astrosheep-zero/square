@@ -217,6 +217,49 @@ test('invalid facade join retains the stable coded error and commits nothing', a
   await square.close();
 });
 
+test('concurrent facade joins for one participant keep a single live owner', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-cas-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const registryPath = path.join(root, 'sessions.ndjsonl');
+  const previousRegistry = process.env.SQUARE_REGISTRY;
+  process.env.SQUARE_REGISTRY = registryPath;
+  try {
+    const { createHostLedgerPort } = await import('../dist/host-ledger-file-adapter.js');
+    const { lookupParticipant } = await import('../dist/registry.js');
+    const hostLedger = createHostLedgerPort();
+    const base = await Square.build({ path: squarePath, markdown: 'context', hostLedger });
+    await base.close();
+
+    const [left, right] = await Promise.allSettled([
+      (async () => {
+        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-a', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
+        const square = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env });
+        try { return await square.join('Alice'); }
+        finally { await square.close(); }
+      })(),
+      (async () => {
+        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-b', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
+        const square = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env });
+        try { return await square.join('Alice'); }
+        finally { await square.close(); }
+      })(),
+    ]);
+    const accepted = [left, right].filter((result) => result.status === 'fulfilled');
+    const refused = [left, right].filter((result) => result.status === 'rejected');
+    assert.equal(accepted.length, 1);
+    assert.equal(refused.length, 1);
+    assert.equal(refused[0].reason?.code, 'already_joined');
+    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    const reopened = await Square.at({ path: squarePath });
+    assert.equal((await reopened.snapshot()).actCount, 1);
+    await reopened.close();
+  } finally {
+    if (previousRegistry === undefined) delete process.env.SQUARE_REGISTRY;
+    else process.env.SQUARE_REGISTRY = previousRegistry;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('listener facade commits only edge changes and exposes canonical listener state', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });

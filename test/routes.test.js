@@ -8,7 +8,7 @@ import { writeSquareFile } from '../dist/artifact.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
-import { readWakeRoutes, ROUTE_FRESH_MS, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { publishWakeRoute, readWakeRoutes, retireWakeRouteFromArtifact, ROUTE_FRESH_MS, selectPrimaryWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_USER: path.join(root, 'user'), SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'local') } }; }
 
@@ -99,6 +99,70 @@ test('primary route selection is independent for same participant sessions', () 
   assert.equal(one?.sessionId, 's1');
   assert.equal(two?.sessionId, 's2');
 });
+test('route retirement with an old epoch leaves the current owner route in place', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    await writeSquareFile(location, emptyState());
+    const square = await openSquare(location);
+    try {
+      await publishWakeRoute(square.artifact, {
+        location,
+        participant: 'Alice',
+        sessionId: 'current',
+        channel: 'codex',
+        kind: 'codex-queue',
+        address: { threadId: 'current' },
+        epoch: 2,
+      }, { at: 20 });
+      await retireWakeRouteFromArtifact(
+        square.artifact,
+        { location, participant: 'Alice', sessionId: 'current' },
+        { expectedEpoch: 1 },
+      );
+      const routes = await readWakeRoutes({ location, now: 30 });
+      assert.equal(routes.length, 1);
+      assert.equal(routes[0].sessionId, 'current');
+      assert.equal(routes[0].epoch, 2);
+    } finally {
+      await closeOpenSquare(square);
+    }
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
+test('route retirement with an expected epoch does not remove a route missing its epoch', async () => {
+  const item = fixture();
+  try {
+    const location = path.join(item.root, 'square.square');
+    await writeSquareFile(location, emptyState());
+    const square = await openSquare(location);
+    try {
+      await publishWakeRoute(square.artifact, {
+        location,
+        participant: 'Alice',
+        sessionId: 'current',
+        channel: 'codex',
+        kind: 'codex-queue',
+        address: { threadId: 'current' },
+      }, { at: 20 });
+      await retireWakeRouteFromArtifact(
+        square.artifact,
+        { location, participant: 'Alice', sessionId: 'current' },
+        { expectedEpoch: 1 },
+      );
+      const routes = await readWakeRoutes({ location, now: 30 });
+      assert.equal(routes.length, 1);
+      assert.equal(routes[0].epoch, undefined);
+    } finally {
+      await closeOpenSquare(square);
+    }
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
 test('express refreshes only an expired or changed caller artifact route', async () => {
   const item = await openExpressFixture();
   try {

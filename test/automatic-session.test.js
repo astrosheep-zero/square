@@ -9,7 +9,10 @@ import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
-import { lookupSessionBindings } from '../dist/registry.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { lookupSessionBindings, readParticipantOwner } from '../dist/registry.js';
+import { readWakeRoutes, retireWakeRoute } from '../dist/routes.js';
+import { Square } from '../dist/square-wiring.js';
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-auto-'));
@@ -41,6 +44,7 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
   await withEnv(item.env, async (env) => {
     const first = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(first, undefined);
+    assert.equal((await readParticipantOwner(item.publicPath, automaticParticipant('codex', 'thread-1', env), env))?.epoch, 1);
     const second = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(second, undefined);
   });
@@ -101,6 +105,101 @@ test('missing PUBLIC.square is a no-op', { concurrency: false }, async () => {
   const item = await fixture();
   fs.unlinkSync(item.publicPath);
   assert.equal(await automaticSessionStart('claude', 'session', item.cwd, item.env), undefined);
+});
+
+test('old shutdown paused across a replacement cannot mark the new owner done', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
+    await automaticSessionStart('pi', 'owner-a', item.cwd, env);
+    const { createHostLedgerPort } = await import('../dist/host-ledger-file-adapter.js');
+    const { projectSessionBindings } = await import('../dist/square-projections.js');
+    const { readParticipantOwner } = await import('../dist/registry.js');
+    const { done } = await import('../dist/square-actions.js');
+    const { openSquare } = await import('../dist/square-file-adapter.js');
+    const { closeOpenSquare } = await import('../dist/open-square.js');
+    const { Square } = await import('../dist/square-wiring.js');
+
+    const hostLedger = createHostLedgerPort({
+      userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(env.SQUARE_REGISTRY),
+      localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? path.dirname(env.SQUARE_REGISTRY),
+    });
+    const pausedBinding = (await projectSessionBindings({
+      hostLedger,
+      sessionId: 'owner-a',
+      location: item.publicPath,
+      scopes: ['user', 'local'],
+    }))[0];
+    assert.ok(pausedBinding);
+    const expectedEpoch = (await readParticipantOwner(item.publicPath, pausedBinding.participant, env))?.epoch ?? 0;
+    assert.equal(expectedEpoch, 1);
+
+    // Mirror operationEnv: only the pi session claims ownership; ambient runner identities must not leak in.
+    const replacementEnv = {
+      ...env,
+      CLAUDE_CODE_SESSION_ID: '',
+      CLAUDE_CODE_CHILD_SESSION: '',
+      CODEX_THREAD_ID: '',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: 'owner-b',
+    };
+    const square = await Square.at({ path: item.publicPath, hostLedger, env: replacementEnv });
+    try {
+      await square.takeover('shared');
+    } finally {
+      await square.close();
+    }
+
+    const oldSession = await openSquare(item.publicPath, {
+      hostLedger,
+      env: { ...env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: 'owner-a' },
+    });
+    try {
+      await assert.rejects(
+        () => done(oldSession, pausedBinding.participant, '', { expectedEpoch }),
+        (error) => error?.code === 'already_done',
+      );
+    } finally {
+      await closeOpenSquare(oldSession);
+    }
+  });
+  const acts = (await loadSquare(item.publicPath)).acts.map((act) => act.kind);
+  assert.deepEqual(acts, ['join', 'done', 'join']);
+  assert.equal((await lookupSessionBindings('owner-a', Date.now(), item.env)).some((binding) => binding.name === 'shared'), false);
+  assert.equal((await lookupSessionBindings('owner-b', Date.now(), item.env)).some((binding) => binding.name === 'shared'), true);
+});
+
+test('automatic resume republishes the current epoch and stale retirement leaves it in place', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared', PASEO_AGENT_ID: 'paseo-agent' }, async (env) => {
+    await automaticSessionStart('pi', 'owner-a', item.cwd, env);
+    const participant = 'shared';
+    assert.equal((await readParticipantOwner(item.publicPath, participant, env))?.epoch, 1);
+    assert.equal((await readWakeRoutes({ location: item.publicPath, participant, sessionId: 'owner-a', now: Date.now() }))[0]?.epoch, 1);
+
+    const replacement = await Square.at({
+      path: item.publicPath,
+      hostLedger: createHostLedgerPort({
+        userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(env.SQUARE_REGISTRY),
+        localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? path.dirname(env.SQUARE_REGISTRY),
+      }),
+      env: { ...env, CODEX_THREAD_ID: '', SQUARE_PI_SESSION_ID: 'owner-a' },
+    });
+    try {
+      await replacement.takeover(participant);
+    } finally {
+      await replacement.close();
+    }
+    assert.equal((await readParticipantOwner(item.publicPath, participant, env))?.epoch, 2);
+
+    await automaticSessionStart('pi', 'owner-a', item.cwd, env);
+    const currentRoute = (await readWakeRoutes({ location: item.publicPath, participant, sessionId: 'owner-a', now: Date.now() }))[0];
+    assert.equal(currentRoute?.epoch, 2);
+    assert.ok(currentRoute);
+    await retireWakeRoute(currentRoute, { expectedEpoch: 1, env });
+    const routes = await readWakeRoutes({ location: item.publicPath, participant, sessionId: 'owner-a', now: Date.now() });
+    assert.equal(routes.length, 1);
+    assert.equal(routes[0].epoch, 2);
+  });
 });
 
 test('Codex hook command joins and ends through the real CLI boundary', { concurrency: false }, async () => {
