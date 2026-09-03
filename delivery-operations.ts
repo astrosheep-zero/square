@@ -97,7 +97,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           continue;
         }
         const attemptN = attempts.reduce((highest, record) => Math.max(highest, record.attemptN ?? 0), 0) + 1;
-        const request = { location: input.location, participant: membership.recipient, activity, route: requestRoute };
+        const request = { location: input.location, participant: membership.recipient, activity, actor: notification.item.actor, route: requestRoute };
         let outcome;
         const claim = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, now: input.now });
         if (claim.status !== 'acquired') { await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session, at: input.now }); if (claim.status === 'degraded') notCapable += 1; continue; }

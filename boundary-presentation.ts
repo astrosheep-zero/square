@@ -60,6 +60,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const blocks: string[] = [];
   const complete: CompleteBoundaryMembership[] = [];
   let omitted = 0;
+  const duplicateHint = 'ignore if you have already seen this.';
 
   for (const [index, entry] of queued.entries()) {
     const { membership, notification } = entry;
@@ -81,6 +82,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       ...(omittedAfter > 0
         ? [`… ${omittedAfter} unread ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
+      duplicateHint,
       ...footer,
     ].join('\n');
     if (prospective.length > CONTEXT_MAX) {
@@ -102,6 +104,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       ...(omitted > 0
         ? [`… ${omitted} unread ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
+      duplicateHint,
       ...footer,
     ].join('\n'),
     complete,

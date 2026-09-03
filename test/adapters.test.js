@@ -490,7 +490,6 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(renderPiInbox(inbox), /1 unread Square notification/);
   assert.match(renderPiInbox(inbox), /square:\/tmp\/SQUARE\.square#act\/7/);
-  assert.match(renderPiInbox(inbox), /✓ shown in full/);
   assert.doesNotMatch(renderPiInbox(inbox), /catch --now/);
 });
 
@@ -568,7 +567,6 @@ test('Pi presents each pending notification once to the current owner', async ()
     assert.equal(process.env.SQUARE_PI_SESSION_ID, 'pi-session-id');
     const first = await handlers.get('before_agent_start')({}, context);
     assert.equal(first.message.customType, 'square');
-    assert.match(first.message.content, /✓ shown in full/);
     assert.doesNotMatch(first.message.content, /catch --now/);
     assert.equal(await handlers.get('before_agent_start')({}, context), undefined);
     await handlers.get('session_shutdown')({}, context);

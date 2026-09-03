@@ -44,7 +44,7 @@ function renderWakePayload(request: WakeRequest): string {
   return [
     `<system-reminder source="square" wake="${wakeLabel(request.route.kind)}">`,
     `square: ${displayAttentionPath(request.location)}`,
-    `attention: ${request.activity} for ${request.participant}`,
+    `attention: ${request.activity} for ${request.participant} from ${request.actor}`,
     '</system-reminder>',
   ].join('\n');
 }

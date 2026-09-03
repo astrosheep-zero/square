@@ -3,13 +3,14 @@ import path from 'node:path';
 
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { Square } from './square-wiring.js';
+import { openParticipant, Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { automaticParticipant } from './participant-identity.js';
 import { SquareError } from './model.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
+import { claimSessionParticipant, releaseSessionParticipant } from './registry.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
@@ -75,10 +76,14 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     throw new SquareError('already_joined', `${name} is already joined by another session`);
   }
   const scopedEnv = operationEnv(provider, sessionId, env);
+  const claim = await claimSessionParticipant(squarePath, name, scopedEnv);
   const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
   try {
     const implicit = await square.implicitJoin(name);
-    if (implicit.state === 'done') return undefined;
+    if (implicit.state === 'done') {
+      if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, scopedEnv);
+      return undefined;
+    }
     const route = resolvePrimaryWakeRoute({ location: squarePath, participant: name, sessionId, provider }, env, await defaultWakeRouteCapabilities(hostLedgerForEnv(env)));
     if (route !== undefined) {
       const publisher = await openSquare(squarePath, { hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
@@ -87,6 +92,9 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     await hostLedgerForEnv(env).ensurePresence({ location: squarePath, participant: name, session: sessionId, channel: provider === 'claude' ? 'claude-code' : provider, updatedAt: Date.now() }, 'user');
     await square.reconcileBinding();
     return undefined;
+  } catch (error) {
+    if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, scopedEnv).catch(() => undefined);
+    throw error;
   } finally {
     await square.close();
   }
@@ -108,14 +116,14 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   const reader = await openSquare(squarePath);
   const joined = await entryPresentation(reader, binding.participant).finally(() => closeOpenSquare(reader));
   if (!joined.joined) return;
-  const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
+  const opened = await openParticipant({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv }, binding.participant);
   try {
-    const participant = await square.join(binding.participant);
-    await participant.done();
-    await square.reconcileBinding();
+    await opened.participant.done();
+    const reconciler = await openSquare(squarePath);
+    try { await hostLedger.reconcileBinding({ artifact: reconciler.artifact }); } finally { await closeOpenSquare(reconciler); }
     const cleanup = await openSquare(squarePath);
     try { await retireWakeRouteFromArtifact(cleanup.artifact, { location: squarePath, participant: binding.participant, sessionId }); } finally { await closeOpenSquare(cleanup); }
   } finally {
-    await square.close();
+    await opened.close();
   }
 }

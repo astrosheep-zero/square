@@ -16,6 +16,7 @@ import {
   withPathOutput,
 } from '../presentation.js';
 import {
+  claimSessionParticipant,
   hasAutomaticDeliveryIdentity,
   lookupParticipant,
   recordSessionDone,
@@ -28,6 +29,7 @@ import { closeOpenSquare } from '../open-square.js';
 import { openParticipant, Square } from '../square-wiring.js';
 import { entryPresentation, eventPresentation } from '../views.js';
 import { createDefaultWakeTransport } from '../notifications.js';
+import type { Participant } from '../square-facade.js';
 
 import {
   type CommandContext,
@@ -185,16 +187,22 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       }
       const takeoverNeeded = isRejoin && intent.kick && !reconnect;
       const oldBindings = takeoverNeeded ? await lookupParticipant(squarePath, intent.name) : [];
-      const participant = takeoverNeeded ? await square.takeover(intent.name, oldBindings.map((binding) => binding.sessionId)) : await square.join(intent.name);
-      const joinedName = participant.name;
+      let participant: Participant;
       if (takeoverNeeded) {
         const currentSessions = new Set(sessionIdsFromEnvironment());
+        await square.takeover(intent.name);
         for (const binding of oldBindings) {
           if (!currentSessions.has(binding.sessionId)) {
             await recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel).catch(() => undefined);
           }
         }
+        await claimSessionParticipant(squarePath, intent.name, process.env);
+        participant = await square.join(intent.name);
+      } else {
+        await claimSessionParticipant(squarePath, intent.name, process.env);
+        participant = await square.join(intent.name);
       }
+      const joinedName = participant.name;
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);

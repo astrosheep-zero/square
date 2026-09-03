@@ -141,9 +141,8 @@ export async function join(square: OperationContext, name: string): Promise<{ re
 }
 
 /** End the standing participant and immediately let the caller reclaim the name. */
-export async function takeover(square: OperationContext, name: string, oldSessionIds: readonly string[] = []): Promise<{ readonly name: string; readonly activities: readonly Activity[] }> {
+export async function takeover(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activities: readonly Activity[] }> {
   const now = square.clock();
-  const oldSessions = new Set(oldSessionIds);
   const committed = await square.artifact.transact<{ name: string; stored: readonly StoredAct[] }>((state) => {
     const joinedName = resolveKnownName(state, name);
     const done = coreDone(state, joinedName, '', now);
@@ -151,15 +150,9 @@ export async function takeover(square: OperationContext, name: string, oldSessio
     const decision = decideJoin(state, joinedName, now);
     if (decision.joinAct === undefined) throw new SquareError('already_joined', `${participantIdentity(joinedName)} could not be reclaimed`);
     const storedJoin = committedActivity(storeActs(state, [decision.joinAct]), 'join');
-    const participantSessions = new Set([
-      ...oldSessions,
-      ...(state.routes ?? []).filter((route) => nameKey(route.participant) === nameKey(joinedName)).map((route) => route.sessionId),
-    ]);
-    state.routes = (state.routes ?? []).filter((route) => nameKey(route.participant) !== nameKey(joinedName) && !participantSessions.has(route.sessionId));
+    state.routes = (state.routes ?? []).filter((route) => nameKey(route.participant) !== nameKey(joinedName));
     return { state, result: { name: joinedName, stored: [storedDone, storedJoin] } };
   });
-  await ensureLocalPresence(square, committed.name);
-  await publishIdentityRoute(square, committed.name);
   return { name: committed.name, activities: committed.stored.map(exposeActivity) };
 }
 

@@ -5,7 +5,7 @@ import type { DirectedNotificationRoute } from './model.js';
 import { participantIdentity } from './presentation.js';
 import { formatActivityId } from './square-core.js';
 
-export const ATTENTION_BODY_MAX = 120;
+export const ATTENTION_BODY_MAX = 100;
 
 export interface AttentionPreview {
   squarePath: string;
@@ -38,6 +38,5 @@ export function renderAttentionPreview(attention: AttentionPreview): string {
   return [
     `${id}: ${participantIdentity(attention.recipient)} from ${participantIdentity(attention.actor)} (${attentionKind})`,
     previewAttentionBody(normalizedBody),
-    ...(normalizedBody.length <= ATTENTION_BODY_MAX ? ['✓ shown in full'] : []),
   ].join('\n');
 }

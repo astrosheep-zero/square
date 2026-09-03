@@ -133,7 +133,6 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     assert.match(response.hookSpecificOutput.additionalContext, /1 unread Square notification/);
     assert.match(response.hookSpecificOutput.additionalContext, new RegExp(`square:${item.squarePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#act/2`));
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
-    assert.match(response.hookSpecificOutput.additionalContext, /✓ shown in full/);
     assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /catch --now/);
     assert.equal(await claudeHookResponse({ session_id: 'session', hook_event_name: 'PostToolBatch' }, () => inbox, { ...item.env, SQUARE_PRESENTED: presented }), undefined);
   } finally {

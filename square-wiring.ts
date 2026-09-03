@@ -90,8 +90,8 @@ export class Square {
     return { participant: new ParticipantHandle(joined.name, this.square, this.context), activity: joined.activity };
   }
 
-  async takeover(name: string, oldSessionIds: readonly string[] = []): Promise<Participant> {
-    const result = await takeover(this.context, name, oldSessionIds);
+  async takeover(name: string): Promise<Participant> {
+    const result = await takeover(this.context, name);
     return new ParticipantHandle(result.name, this.square, this.context);
   }
 

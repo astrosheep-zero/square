@@ -40,6 +40,20 @@ export async function localParticipantOwner(squarePath: string, name: string, en
 export async function localParticipantName(squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> { const canonicalPath = await canonicalSquarePath(squarePath); const names = new Set((await Promise.all(localSessionIdentities(env).map(async (identity) => (await lookupSession(identity.sessionId, Date.now(), env)).filter((item) => item.squarePath === canonicalPath).map((item) => item.name)))).flat()); return names.size === 1 ? [...names][0] : undefined; }
 export function squareAssignedParticipantName(env: NodeJS.ProcessEnv = process.env): string | undefined { return computeSquareAssignedParticipantName(env); }
 export type CurrentParticipantBinding = Readonly<{ created: boolean; sessionId: string }>;
+export async function claimSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<{ readonly status: 'acquired' | 'owned'; readonly sessionId: string } | undefined> {
+  const identity = localSessionIdentities(env)[0];
+  if (identity === undefined) return undefined;
+  const location = await canonicalSquarePath(squarePath);
+  const result = await ledger(env).claimPresence({ location, participant: name, session: identity.sessionId, channel: identity.channel, updatedAt: Date.now() }, 'local');
+  if (result.status === 'busy') throw new SquareError('already_joined', `${name} is already bound to another session`);
+  if (result.status === 'degraded') throw result.error;
+  return { status: result.status, sessionId: identity.sessionId };
+}
+export async function releaseSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const identity = localSessionIdentities(env)[0];
+  if (identity === undefined) return;
+  await ledger(env).removePresence({ location: squarePath, participant: name, session: identity.sessionId, channel: identity.channel });
+}
 export async function bindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<CurrentParticipantBinding> { if (squareAssignedParticipantName(env) !== name) throw new SquareError('invalid_args', `The current session is not assigned ${name}`); const sessionId = await localParticipantOwner(squarePath, name, env); if (sessionId !== undefined) return { created: false, sessionId }; if ((await lookupParticipant(squarePath, name, Date.now(), env)).at(0) !== undefined) throw new SquareError('already_joined', `${name} is already bound to another session`); await recordLocalJoin(name, squarePath, env); const currentSessionId = await localParticipantOwner(squarePath, name, env); if (currentSessionId === undefined) throw new Error(`Current participant binding did not commit for ${name}`); return { created: true, sessionId: currentSessionId }; }
 export async function unbindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, Date.now(), env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel, env); return current.length > 0; }
 export interface RegistryPruneResult { removed: number; kept: number; }

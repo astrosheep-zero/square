@@ -12,6 +12,7 @@ export type {
   PresenceKey,
   PresenceLookup,
   PresenceRecord,
+  PresenceClaimResult,
   PresenceChannel,
   PresenceResult,
   ReconcileBindingInput as HostLedgerReconcileBindingInput,
@@ -40,6 +41,7 @@ export interface WakeRequest {
   readonly location: string;
   readonly participant: string;
   readonly activity: string;
+  readonly actor: string;
   readonly route: WakeRoute;
 }
 

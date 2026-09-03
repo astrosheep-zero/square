@@ -16,8 +16,7 @@
             "type": "command",
             "command": "square codex-hook",
             "timeout": 5,
-            "statusMessage": "square-codex-hook",
-            "additionalContextLimit": 1200
+            "statusMessage": "square-codex-hook"
           }
         ]
       }

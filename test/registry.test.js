@@ -9,6 +9,7 @@ import { decodeSquare, loadSquare } from '../dist/artifact.js';
 import {
   canonicalSquarePath,
   bindCurrentParticipant,
+  claimSessionParticipant,
   squareAssignedParticipantName,
   unbindCurrentParticipant,
   hasAutomaticDeliveryIdentity,
@@ -51,6 +52,33 @@ function withRegistry() {
     fs.rmSync(root, { recursive: true, force: true });
   };
 }
+
+test('participant name claims are exclusive across concurrent sessions', async () => {
+  const cleanup = withRegistry();
+  try {
+    const squarePath = path.join(os.tmpdir(), 'exclusive-claim.square');
+    const base = {
+      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
+      CLAUDE_CODE_SESSION_ID: '',
+      CODEX_THREAD_ID: '',
+      OPENCODE_SESSION_ID: '',
+      SQUARE_PI_SESSION_ID: '',
+      PASEO_AGENT_ID: '',
+    };
+    const [first, second] = await Promise.allSettled([
+      claimSessionParticipant(squarePath, 'Alice', { ...base, CODEX_THREAD_ID: 'session-a' }),
+      claimSessionParticipant(squarePath, 'alice', { ...base, CODEX_THREAD_ID: 'session-b' }),
+    ]);
+    const acquired = [first, second].filter((result) => result.status === 'fulfilled');
+    const refused = [first, second].filter((result) => result.status === 'rejected');
+    assert.equal(acquired.length, 1);
+    assert.equal(refused.length, 1);
+    assert.equal(refused[0].reason?.code, 'already_joined');
+    assert.equal((await lookupParticipant(squarePath, 'ALICE')).length, 1);
+  } finally {
+    cleanup();
+  }
+});
 
 test('registry folds lifecycle by session, square, and participant name', async () => {
   const cleanup = withRegistry();
