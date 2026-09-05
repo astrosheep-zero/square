@@ -280,6 +280,7 @@ test('file cells do not cache missing or malformed artifacts', async () => {
   const cell = createFileCell(squarePath);
 
   await assert.rejects(cell.read(), /square file not found/);
+  assert.equal(fs.existsSync(`${squarePath}.lock`), false);
   await writeSquareFile(squarePath, makeState({ preamble: ['repaired missing'] }));
   assert.deepEqual((await cell.read()).state.preamble, ['repaired missing']);
 
@@ -289,6 +290,31 @@ test('file cells do not cache missing or malformed artifacts', async () => {
   assert.deepEqual((await cell.read()).state.preamble, ['repaired malformed']);
   await cell.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a file read does not recreate a root deleted after observing the artifact', async () => {
+  const { dir, squarePath } = await writeFixture({ preamble: ['about to disappear'] });
+  const cell = createFileCell(squarePath);
+  const canonicalSquarePath = fs.realpathSync(squarePath);
+  const originalAccess = fs.promises.access;
+  let deleted = false;
+  fs.promises.access = async (...args) => {
+    await originalAccess(...args);
+    if (!deleted && String(args[0]) === canonicalSquarePath) {
+      deleted = true;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  try {
+    await assert.rejects(cell.read(), /square file not found/);
+    assert.equal(fs.existsSync(dir), false);
+    assert.equal(fs.existsSync(`${squarePath}.lock`), false);
+  } finally {
+    fs.promises.access = originalAccess;
+    await cell.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('loadSquare rejects paths that are not .square artifacts', async () => {

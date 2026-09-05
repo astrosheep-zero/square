@@ -12,6 +12,7 @@ import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
+import { codexHookResponse } from '../dist/codex-hook.js';
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
@@ -22,6 +23,7 @@ async function fixture() {
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
     SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
+    SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'),
   };
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -142,6 +144,36 @@ test('privileged sweep stops at its native hook deadline', async () => {
     const elapsed = Date.now() - startedAt;
     assert.ok(timeoutMs > 0 && timeoutMs <= 150, `transport timeout ${timeoutMs}`);
     assert.ok(elapsed < 750, `privileged sweep took ${elapsed}ms`);
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
+test('Codex privileged hook sweep still delivers attention from an indexed live square', async () => {
+  const item = await fixture();
+  try {
+    await route(item, { agentId: 'live-agent' });
+    let calls = 0;
+    const accepted = fakeAdapter('paseo', async (_address, _payload, beforeSend) => {
+      assert.equal(await beforeSend(), true);
+      calls += 1;
+      return { outcome: 'accepted' };
+    });
+
+    await codexHookResponse(
+      { session_id: 'observing-session', hook_event_name: 'PostToolUse', cwd: path.join(item.root, 'workspace') },
+      () => [],
+      item.env,
+      [accepted],
+    );
+    await codexHookResponse(
+      { session_id: 'observing-session', hook_event_name: 'PostToolUse', cwd: path.join(item.root, 'workspace') },
+      () => [],
+      item.env,
+      [accepted],
+    );
+
+    assert.equal(calls, 1);
   } finally {
     fs.rmSync(item.root, { recursive: true, force: true });
   }

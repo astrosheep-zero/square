@@ -34,20 +34,40 @@ async function canonicalPath(squarePath: string): Promise<string> {
   }
 }
 
+async function squareFileExists(squarePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(squarePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function withSquareFileReadLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
+  if (!await squareFileExists(squarePath)) return fn();
+  try {
+    return await withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, createParent: false }, fn);
+  } catch (error) {
+    if (!await squareFileExists(squarePath)) return fn();
+    throw error;
+  }
+}
+
 export async function readSquareFile(squarePath: string): Promise<SquareState> {
   const canonical = await canonicalPath(squarePath);
-  return withSquareFileLock(canonical, () => loadSquare(canonical));
+  return withSquareFileReadLock(canonical, () => loadSquare(canonical));
 }
 
 export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
   const canonical = await canonicalPath(squarePath);
-  return withSquareFileLock(canonical, () => probeSquare(canonical));
+  return withSquareFileReadLock(canonical, () => probeSquare(canonical));
 }
 
 export async function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
   const canonical = await canonicalPath(squarePath);
-  return withSquareFileLock(canonical, () => diagnoseArtifactFile(canonical));
+  return withSquareFileReadLock(canonical, () => diagnoseArtifactFile(canonical));
 }
 
 export async function writeSquareSnapshot(squarePath: string, squareState: SquareState): Promise<void> {
@@ -206,7 +226,7 @@ export function createFileCell(squarePath: string): StateCell {
     },
     async read() {
       assertCellOpen(closed);
-      return withSquareFileLock(await storagePath(), async () => {
+      return withSquareFileReadLock(await storagePath(), async () => {
         assertCellOpen(closed);
         return { state: await currentStateUnderLock(), version };
       });

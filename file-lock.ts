@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 export interface FileLockOptions {
   retryMs: number;
   signal?: AbortSignal;
+  createParent?: boolean;
 }
 
 export class FileLockError extends Error {
@@ -27,7 +28,7 @@ function isNotADatabase(error: unknown): boolean {
 }
 
 export async function withFileLock<T>(lockPath: string, options: FileLockOptions, fn: () => T | Promise<T>): Promise<T> {
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  if (options.createParent !== false) await fs.mkdir(path.dirname(lockPath), { recursive: true });
   while (true) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error('File lock acquisition aborted');
     let database: DatabaseSync | undefined;

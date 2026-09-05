@@ -36,9 +36,10 @@ test('opening a file square validates and projects one unchanged artifact snapsh
   await built.close();
 
   const originalReadFile = fs.promises.readFile;
+  const canonicalSquarePath = fs.realpathSync(squarePath);
   let artifactReads = 0;
   fs.promises.readFile = async function (...args) {
-    if (args[0] === squarePath) artifactReads += 1;
+    if (String(args[0]) === canonicalSquarePath) artifactReads += 1;
     return originalReadFile.apply(this, args);
   };
   try {

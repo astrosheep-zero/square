@@ -400,6 +400,31 @@ test('Codex hook command joins and ends through the real CLI boundary', { concur
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'done']);
 });
 
+test('Codex PostToolUse does not recreate a deleted root for a stale indexed square', { concurrency: false }, async () => {
+  const item = await fixture();
+  const staleRoot = path.join(item.root, 'deleted-square-root');
+  const stalePath = path.join(staleRoot, 'SQUARE.square');
+  fs.mkdirSync(staleRoot, { recursive: true });
+  await writeSquareFile(stalePath, await createSquareState({ force: true, hardCap: null }, 'stale'));
+  const ledger = createHostLedgerPort({ userPath: item.root, localPath: item.root, writableScope: 'user' });
+  await ledger.ensurePresence({
+    location: stalePath,
+    participant: 'stale-participant',
+    session: 'stale-session',
+    channel: 'codex',
+  }, 'user');
+  fs.rmSync(staleRoot, { recursive: true, force: true });
+
+  await runCodexHookAsync(JSON.stringify({
+    session_id: 'observing-session',
+    hook_event_name: 'PostToolUse',
+    cwd: path.join(item.root, 'workspace-without-a-square'),
+  }), item.env);
+
+  assert.equal(fs.existsSync(staleRoot), false);
+  assert.equal(fs.existsSync(`${stalePath}.lock`), false);
+});
+
 test('Codex SessionResume uses the hook process cwd when the payload omits cwd', { concurrency: false }, async () => {
   const item = await fixture();
   const previousCwd = process.cwd();
