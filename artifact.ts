@@ -1,370 +1,350 @@
-import crypto from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { TextDecoder } from 'node:util';
-import zlib from 'node:zlib';
+import { pathToFileURL } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 
-import {
-  isWakeRouteKind,
-  InternalSquareError,
-  nameKey,
-  SquareError,
-  type BuildOptions,
-  type ActivityObservation,
-  type HardCap,
-  type SquareState,
-  type SquareRuntimeState,
-  type StoredAct,
-  type WatchLease,
-  type ReceiverRoute,
-} from './model.js';
-import { parseActivityId } from './square-core.js';
+import { InternalSquareError, SquareError, type SquareState } from './model.js';
+import { createSquareState, emptyRuntimeState, validateSquareState } from './square-state.js';
 
-const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
-const LENGTH_BYTES = 4;
-const DIGEST_BYTES = 32;
-const HEADER_BYTES = SQUARE_MAGIC.length + LENGTH_BYTES + DIGEST_BYTES;
-const utf8 = new TextDecoder('utf-8', { fatal: true });
-const guideNames = ['participant', 'architect', 'brainstorm'];
-const guideContents = new Map<string, string>(await Promise.all(
-  guideNames.map(async (name) => [name, (await fs.promises.readFile(new URL(`../guides/${name}.md`, import.meta.url), 'utf8')).trim()] as const),
-));
+const APPLICATION_ID = 0x53515245;
+const USER_VERSION = 1;
+const SNAPSHOT_TABLE = 'square_snapshot';
+const SNAPSHOT_DDL = `CREATE TABLE ${SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
+const SNAPSHOT_COLUMNS = [
+  { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },
+  { cid: 1, name: 'revision', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+  { cid: 2, name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+] as const;
 
-export interface DoctorProblem {
-  kind: string;
-  message: string;
-}
+export { createSquareState, emptyRuntimeState } from './square-state.js';
 
-export interface DiagnoseResult {
-  unfixable?: string;
-  problems: DoctorProblem[];
-  state?: SquareState;
-}
+export interface DoctorProblem { kind: string; message: string; }
+export interface DiagnoseResult { unfixable?: string; problems: DoctorProblem[]; state?: SquareState; }
+export interface SquareSnapshot { readonly state: SquareState; readonly revision: number; }
 
 function invalidArtifact(detail: string): SquareError {
   return new SquareError('invalid_args', `Invalid square artifact: ${detail}`);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.hasOwn(value, key))
-    && Object.keys(value).every((key) => allowed.has(key));
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isNonblankString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function validateObservation(value: unknown): value is ActivityObservation {
-  return isObject(value)
-    && hasExactKeys(value, ['state', 'at'])
-    && value.state === 'seen'
-    && isFiniteNumber(value.at)
-    ;
-}
-
-function validateWatchLease(value: unknown): value is WatchLease {
-  if (!isObject(value)
-    || !hasExactKeys(value, ['leaseId', 'heartbeatAt', 'expiresAt'], ['filter'])
-    || !isNonblankString(value.leaseId)
-    || !isFiniteNumber(value.heartbeatAt)
-    || !isFiniteNumber(value.expiresAt)
-    || value.expiresAt < value.heartbeatAt) return false;
-  if (value.filter === undefined) return true;
-  return isObject(value.filter)
-    && hasExactKeys(value.filter, [], ['participants', 'mention'])
-    && (value.filter.participants === undefined || isStringArray(value.filter.participants))
-    && (value.filter.mention === undefined || typeof value.filter.mention === 'string');
-}
-
-function validateRecord(value: unknown, item: (candidate: unknown) => boolean): value is Record<string, unknown> {
-  return isObject(value)
-    && Object.entries(value).every(([key, candidate]) => key.length > 0 && item(candidate));
-}
-
-function validateRuntime(value: unknown): value is SquareRuntimeState {
-  if (!isObject(value)
-    || !hasExactKeys(value, ['nextActIndex', 'observations', 'leases'])
-    || !isNonNegativeInteger(value.nextActIndex)
-    || !validateRecord(value.observations, (candidate) => isObject(candidate) && Object.entries(candidate).every(([id, observation]) => parseActivityId(id) !== undefined && validateObservation(observation)))
-    || !validateRecord(value.leases, validateWatchLease)
-    ) return false;
-  return true;
-}
-
-function validateAssignedRuntimeReferences(runtime: SquareRuntimeState): 'ok' | 'malformed' | 'future' {
-  const bound = runtime.nextActIndex;
-  for (const observations of Object.values(runtime.observations)) {
-    for (const id of Object.keys(observations)) {
-      const index = parseActivityId(id);
-      if (index === undefined) return 'malformed';
-      if (index >= bound) return 'future';
-    }
-  }
-  return 'ok';
-}
-
-function validateActor(value: unknown, required: boolean): boolean {
-  return required ? isNonblankString(value) : value === undefined || isNonblankString(value);
-}
-
-function validateStoredAct(value: unknown): value is StoredAct {
-  if (!isObject(value)
-    || typeof value.kind !== 'string'
-    || !isNonNegativeInteger(value.index)
-    || !isFiniteNumber(value.at)) return false;
-
-  switch (value.kind) {
-    case 'join':
-      return hasExactKeys(value, ['kind', 'actor', 'at', 'index']) && validateActor(value.actor, true);
-    case 'done':
-      return hasExactKeys(value, ['kind', 'actor', 'at', 'index'], ['body'])
-        && validateActor(value.actor, true)
-        && (value.body === undefined || typeof value.body === 'string');
-    case 'say':
-      return hasExactKeys(value, ['kind', 'actor', 'at', 'body', 'index'], ['mentions', 'reach', 'reply'])
-        && validateActor(value.actor, true)
-        && typeof value.body === 'string'
-        && (value.mentions === undefined || isStringArray(value.mentions))
-        && (value.reach === undefined || value.reach === 'bell')
-        && (value.reply === undefined || isNonNegativeInteger(value.reply));
-    case 'hold':
-      return hasExactKeys(value, ['kind', 'at', 'index'], ['actor', 'body'])
-        && validateActor(value.actor, false)
-        && (value.body === undefined || typeof value.body === 'string');
-    case 'resume':
-      return hasExactKeys(value, ['kind', 'at', 'index'], ['actor']) && validateActor(value.actor, false);
-    case 'read':
-      return hasExactKeys(value, ['kind', 'actor', 'at', 'through', 'index'])
-        && validateActor(value.actor, true)
-        && isNonNegativeInteger(value.through);
-    case 'listen':
-    case 'ignore':
-      return hasExactKeys(value, ['kind', 'actor', 'target', 'at', 'index'])
-        && validateActor(value.actor, true)
-        && validateActor(value.target, true);
-    default:
-      return false;
-  }
-}
-
-function validateActs(value: unknown): value is StoredAct[] {
-  if (!Array.isArray(value) || !value.every(validateStoredAct)) return false;
-  let previous = -1;
-  for (const act of value) {
-    if (act.index <= previous) return false;
-    if (act.kind === 'say' && act.reply !== undefined && act.reply >= act.index) return false;
-    previous = act.index;
-  }
-  return true;
-}
-
-function validateSquareState(value: unknown): SquareState {
-  if (!isObject(value)
-    || !hasExactKeys(value, ['hardCap', 'preamble', 'warmup', 'acts', 'runtime'], ['throttlePerMinute', 'routes'])
-    || !(value.hardCap === null || (Number.isSafeInteger(value.hardCap) && (value.hardCap as number) > 0))
-    || (value.throttlePerMinute !== undefined
-      && (!Number.isSafeInteger(value.throttlePerMinute) || (value.throttlePerMinute as number) <= 0))
-    || !isStringArray(value.preamble)
-    || !isStringArray(value.warmup)
-    || !validateActs(value.acts)
-    || (value.routes !== undefined && (!Array.isArray(value.routes) || !value.routes.every((route) => isObject(route) && isWakeRouteKind(route.kind) && typeof route.location === 'string' && typeof route.participant === 'string' && typeof route.sessionId === 'string' && typeof route.channel === 'string' && isObject(route.address) && Object.values(route.address).every((item) => typeof item === 'string') && typeof route.updatedAt === 'number')))
-    || !validateRuntime(value.runtime)) {
-    throw invalidArtifact('snapshot schema is malformed.');
-  }
-  const acts = value.acts as StoredAct[];
-  const runtime = value.runtime as SquareRuntimeState;
-  const historyBoundary = acts.at(-1)?.index ?? -1;
-  if (runtime.nextActIndex <= historyBoundary) {
-    throw invalidArtifact('nextActIndex is behind the activity history.');
-  }
-  const references = validateAssignedRuntimeReferences(runtime);
-  if (references === 'malformed') throw invalidArtifact('snapshot schema is malformed.');
-  if (references === 'future') throw invalidArtifact('runtime references an unassigned activity index.');
-  return value as unknown as SquareState;
-}
-
-function encodeEnvelope(magic: Buffer, value: unknown): Buffer {
-  const json = Buffer.from(JSON.stringify(value), 'utf8');
-  const payload = zlib.gzipSync(json, { level: 9 });
-  if (payload.length > 0xffff_ffff) throw invalidArtifact('compressed payload is too large.');
-  const header = Buffer.alloc(HEADER_BYTES);
-  magic.copy(header, 0);
-  header.writeUInt32BE(payload.length, magic.length);
-  crypto.createHash('sha256').update(payload).digest().copy(header, magic.length + LENGTH_BYTES);
-  return Buffer.concat([header, payload]);
-}
-
-function decodeEnvelope(bytes: Buffer, magic: Buffer): unknown {
-  if (bytes.length < HEADER_BYTES) throw invalidArtifact('truncated header.');
-  if (!bytes.subarray(0, magic.length).equals(magic)) throw invalidArtifact('bad magic or unsupported format version.');
-  const length = bytes.readUInt32BE(magic.length);
-  if (bytes.length !== HEADER_BYTES + length) throw invalidArtifact('payload length does not match the file.');
-  const expected = bytes.subarray(magic.length + LENGTH_BYTES, HEADER_BYTES);
-  const payload = bytes.subarray(HEADER_BYTES);
-  const actual = crypto.createHash('sha256').update(payload).digest();
-  if (!crypto.timingSafeEqual(expected, actual)) throw invalidArtifact('payload digest mismatch.');
-
-  let inflated: Buffer;
-  try {
-    inflated = zlib.gunzipSync(payload);
-  } catch {
-    throw invalidArtifact('payload is not valid gzip data.');
-  }
-  let text: string;
-  try {
-    text = utf8.decode(inflated);
-  } catch {
-    throw invalidArtifact('payload is not valid UTF-8.');
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw invalidArtifact('payload is not valid JSON.');
-  }
-}
-
-export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
-  return {
-    nextActIndex,
-    observations: {},
-    leases: {},
-  };
-}
-
-function normalizedLines(value: string): string[] {
-  const normalized = value.replace(/\r\n/g, '\n').trim();
-  return normalized === '' ? [] : normalized.split('\n');
-}
-
-function readGuide(name: string): string {
-  try {
-    const guide = guideContents.get(name);
-    if (guide === undefined) throw Object.assign(new Error('missing guide'), { code: 'ENOENT' });
-    return guide;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new SquareError('invalid_args', `Unknown square guide: ${name}`);
-    }
-    throw error;
-  }
-}
-
-export function createSquareState(
-  options: BuildOptions & { hardCap: HardCap },
-  snippet: string,
-): SquareState {
-  const guides = [readGuide('participant')];
-  if (options.template !== undefined) guides.push(readGuide(options.template));
-  return {
-    hardCap: options.hardCap,
-    ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
-    preamble: normalizedLines(snippet),
-    warmup: normalizedLines(guides.join('\n\n')),
-    acts: [],
-    routes: [],
-    runtime: emptyRuntimeState(),
-  };
-}
-
-export function encodeSquare(squareState: SquareState): Buffer {
-  return encodeEnvelope(SQUARE_MAGIC, validateSquareState(squareState));
-}
-
-export function decodeSquare(bytes: Buffer): SquareState {
-  return validateSquareState(decodeEnvelope(bytes, SQUARE_MAGIC));
-}
-
-async function readArtifact(squarePath: string): Promise<Buffer> {
-  try {
-    return await fs.promises.readFile(squarePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
-    }
-    throw error;
-  }
-}
-
 function requireSquareExtension(squarePath: string): void {
-  if (!squarePath.endsWith('.square')) {
-    throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${squarePath}`);
+  if (!squarePath.endsWith('.square')) throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${squarePath}`);
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && /unable to open database file|no such file|SQLITE_CANTOPEN/i.test(error.message);
+}
+
+function isNotADatabase(error: unknown): boolean {
+  return error instanceof Error && /not a database|file is not a database|SQLITE_NOTADB/i.test(error.message);
+}
+
+function existingDatabaseUri(squarePath: string): string {
+  const uri = pathToFileURL(path.resolve(squarePath));
+  uri.searchParams.set('mode', 'rw');
+  return uri.href;
+}
+
+function openExistingDatabase(squarePath: string): DatabaseSync {
+  try {
+    return new DatabaseSync(existingDatabaseUri(squarePath));
+  } catch (error) {
+    if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
+    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
+    throw error;
   }
 }
 
-async function atomicWrite(target: string, bytes: Buffer): Promise<void> {
-  const temporary = path.join(
-    path.dirname(target),
-    `.${path.basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
-  );
-  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+function closeQuietly(database: DatabaseSync | undefined): void {
+  try { database?.close(); } catch { /* closing does not alter the primary failure */ }
+}
+
+function parseState(state: unknown): SquareState {
+  if (typeof state !== 'string') throw invalidArtifact('snapshot state is malformed.');
+  try { return validateSquareState(JSON.parse(state) as unknown); } catch (error) {
+    if (error instanceof SquareError) throw error;
+    throw invalidArtifact('snapshot state is not valid JSON.');
+  }
+}
+
+function normalizedSql(sql: string): string {
+  return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
+}
+
+function isOwnedSnapshotSchema(database: DatabaseSync): boolean {
+  const objects = database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+    .all() as { type?: unknown; name?: unknown; tbl_name?: unknown; sql?: unknown }[];
+  if (objects.length !== 1) return false;
+  const [object] = objects;
+  if (object.type !== 'table' || object.name !== SNAPSHOT_TABLE || object.tbl_name !== SNAPSHOT_TABLE
+    || typeof object.sql !== 'string' || normalizedSql(object.sql) !== normalizedSql(SNAPSHOT_DDL)) return false;
+  const columns = database.prepare('SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid')
+    .all(SNAPSHOT_TABLE) as { cid?: unknown; name?: unknown; type?: unknown; notnull?: unknown; dflt_value?: unknown; pk?: unknown; hidden?: unknown }[];
+  return columns.length === SNAPSHOT_COLUMNS.length && columns.every((column, index) => {
+    const expected = SNAPSHOT_COLUMNS[index];
+    return column.cid === expected.cid && column.name === expected.name && column.type === expected.type
+      && column.notnull === expected.notnull && column.dflt_value === expected.dflt_value
+      && column.pk === expected.pk && column.hidden === expected.hidden;
+  });
+}
+
+function validateDatabase(database: DatabaseSync): SquareSnapshot {
   try {
-    await fs.promises.writeFile(temporary, bytes);
-    await fs.promises.rename(temporary, target);
+    const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
+    if (identity.application_id !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
+    if (identity.user_version !== USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
+    if (!isOwnedSnapshotSchema(database)) throw invalidArtifact('unsupported snapshot schema.');
+    const rows = database.prepare(`SELECT id, revision, state FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown; state?: unknown }[];
+    if (rows.length !== 1 || rows[0].id !== 1 || !Number.isSafeInteger(rows[0].revision) || (rows[0].revision as number) < 0) throw invalidArtifact('snapshot row is malformed.');
+    return { state: parseState(rows[0].state), revision: rows[0].revision as number };
   } catch (error) {
-    try { await fs.promises.unlink(temporary); } catch {}
+    if (error instanceof SquareError) throw error;
+    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
     throw error;
   }
+}
+
+function configureDatabase(database: DatabaseSync): void {
+  database.exec('PRAGMA busy_timeout = 0; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;');
+}
+
+/** Opens an existing artifact without permitting SQLite to create a missing path. */
+function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
+  requireSquareExtension(squarePath);
+  let database: DatabaseSync | undefined;
+  try {
+    database = openExistingDatabase(squarePath);
+    return validateDatabase(database);
+  } catch (error) {
+    if (error instanceof SquareError) throw error;
+    if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
+    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
+    throw error;
+  } finally {
+    closeQuietly(database);
+  }
+}
+
+async function createTemporaryArtifact(squarePath: string): Promise<string> {
+  const directory = path.dirname(squarePath);
+  await fs.promises.mkdir(directory, { recursive: true });
+  while (true) {
+    const temporary = path.join(directory, `.${path.basename(squarePath)}.${process.pid}.${randomUUID()}.tmp`);
+    try {
+      const handle = await fs.promises.open(temporary, 'wx');
+      await handle.close();
+      return temporary;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw error;
+    }
+  }
+}
+
+async function syncTemporaryArtifact(temporary: string): Promise<void> {
+  const handle = await fs.promises.open(temporary, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function removeTemporaryArtifact(temporary: string): Promise<void> {
+  try { await fs.promises.unlink(temporary); } catch { /* cleanup cannot invalidate a published artifact */ }
+}
+
+function initializeDatabase(squarePath: string, state: SquareState): void {
+  const encoded = JSON.stringify(state);
+  let database: DatabaseSync | undefined;
+  try {
+    database = openExistingDatabase(squarePath);
+    database.exec(`PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${USER_VERSION}; ${SNAPSHOT_DDL};`);
+    database.prepare(`INSERT INTO ${SNAPSHOT_TABLE} (id, revision, state) VALUES (1, 0, ?)`).run(encoded);
+    database.exec('COMMIT;');
+  } catch (error) {
+    try { database?.exec('ROLLBACK;'); } catch { /* retain initialization failure */ }
+    throw error;
+  } finally {
+    closeQuietly(database);
+  }
+}
+
+/** Creates a new SQLite artifact only when its pathname did not already exist. */
+export async function createSquareFile(squarePath: string, state: SquareState): Promise<boolean> {
+  requireSquareExtension(squarePath);
+  const validated = validateSquareState(state);
+  const temporary = await createTemporaryArtifact(squarePath);
+  try {
+    initializeDatabase(temporary, validated);
+    await syncTemporaryArtifact(temporary);
+    try {
+      await fs.promises.link(temporary, squarePath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  } finally {
+    await removeTemporaryArtifact(temporary);
+  }
+}
+
+function isBusy(error: unknown): boolean {
+  return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null
+    && typeof (value as { then?: unknown }).then === 'function';
+}
+
+function discardThenable(value: PromiseLike<unknown>): void {
+  void Promise.resolve(value).catch(() => undefined);
+}
+
+function closedError(): Error {
+  return new Error('Square artifact is closed');
+}
+
+async function pauseForBusy(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? closedError();
+  try {
+    await sleep(25, undefined, { signal });
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? closedError();
+    throw error;
+  }
+}
+
+/**
+ * Reads a complete validated snapshot, yielding between transient SQLite lock
+ * conflicts. The URI remains create-disabled throughout the retry loop.
+ */
+export async function readSquareSnapshot(squarePath: string, signal?: AbortSignal): Promise<SquareSnapshot> {
+  while (true) {
+    if (signal?.aborted) throw signal.reason ?? closedError();
+    try {
+      return readSquareSnapshotOnce(squarePath);
+    } catch (error) {
+      if (!isBusy(error)) throw error;
+      await pauseForBusy(signal);
+    }
+  }
+}
+
+export type SquareTransition<R> = (state: SquareState, revision: number) => { state?: SquareState; result: R };
+
+/**
+ * Executes one synchronous SquareState transition under SQLite's write lock.
+ * A busy COMMIT retries on this same transaction, so fn is never replayed.
+ */
+export async function transactSquareSnapshot<R>(
+  squarePath: string,
+  fn: SquareTransition<R>,
+  signal?: AbortSignal,
+  forceCommit = false,
+): Promise<{ result: R; revision: number; changed: boolean }> {
+  requireSquareExtension(squarePath);
+  let database: DatabaseSync | undefined;
+  let begun = false;
+  try {
+    database = openExistingDatabase(squarePath);
+    // Validate before any persistent pragma can touch an unsupported artifact.
+    while (true) {
+      try {
+        validateDatabase(database);
+        break;
+      } catch (error) {
+        if (!isBusy(error)) throw error;
+        await pauseForBusy(signal);
+      }
+    }
+    while (true) {
+      if (signal?.aborted) throw signal.reason ?? closedError();
+      try {
+        configureDatabase(database);
+        database.exec('BEGIN IMMEDIATE;');
+        begun = true;
+        break;
+      } catch (error) {
+        if (!isBusy(error)) throw error;
+        await pauseForBusy(signal);
+      }
+    }
+    const current = validateDatabase(database);
+    const outcome = fn(structuredClone(current.state), current.revision);
+    if (isThenable(outcome)) {
+      discardThenable(outcome);
+      throw new TypeError('Square artifact transitions must be synchronous.');
+    }
+    if (typeof outcome !== 'object' || outcome === null || !Object.hasOwn(outcome, 'result')) {
+      throw new TypeError('Square artifact transition must return { state?, result }.');
+    }
+    if (outcome.state === undefined || (!forceCommit && isDeepStrictEqual(outcome.state, current.state))) {
+      database.exec('ROLLBACK;');
+      begun = false;
+      return { result: outcome.result, revision: current.revision, changed: false };
+    }
+    const state = validateSquareState(outcome.state);
+    if (current.revision === Number.MAX_SAFE_INTEGER) {
+      throw invalidArtifact('snapshot revision cannot advance beyond the safe integer limit.');
+    }
+    const revision = current.revision + 1;
+    database.prepare(`UPDATE ${SNAPSHOT_TABLE} SET revision = ?, state = ? WHERE id = 1`)
+      .run(revision, JSON.stringify(state));
+    while (true) {
+      if (signal?.aborted) throw signal.reason ?? closedError();
+      try {
+        database.exec('COMMIT;');
+        begun = false;
+        return { result: outcome.result, revision, changed: true };
+      } catch (error) {
+        if (!isBusy(error)) throw error;
+        await pauseForBusy(signal);
+      }
+    }
+  } catch (error) {
+    if (begun) {
+      try { database?.exec('ROLLBACK;'); } catch { /* retain callback and SQLite failures */ }
+    }
+    throw error;
+  } finally {
+    closeQuietly(database);
+  }
+}
+
+/** Replaces an existing validated snapshot in place and always advances its revision. */
+export async function replaceSquareSnapshot(squarePath: string, state: SquareState): Promise<SquareSnapshot> {
+  const replacement = structuredClone(validateSquareState(state));
+  const committed = await transactSquareSnapshot(
+    squarePath,
+    () => ({ state: replacement, result: undefined }),
+    undefined,
+    true,
+  );
+  return { state: replacement, revision: committed.revision };
 }
 
 export async function writeSquareFile(squarePath: string, squareState: SquareState): Promise<void> {
   requireSquareExtension(squarePath);
-  await atomicWrite(squarePath, encodeSquare(squareState));
+  if (await createSquareFile(squarePath, squareState)) return;
+  await replaceSquareSnapshot(squarePath, squareState);
 }
 
 export async function loadSquare(squarePath: string): Promise<SquareState> {
-  requireSquareExtension(squarePath);
-  return decodeSquare(await readArtifact(squarePath));
+  return structuredClone((await readSquareSnapshot(squarePath)).state);
 }
 
 export async function probeSquare(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
-  let descriptor: fs.promises.FileHandle | undefined;
-  try {
-    descriptor = await fs.promises.open(squarePath, 'r');
-    const magic = Buffer.alloc(SQUARE_MAGIC.length);
-    if ((await descriptor.read(magic, 0, magic.length, 0)).bytesRead !== magic.length || !magic.equals(SQUARE_MAGIC)) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  } finally {
-    if (descriptor !== undefined) await descriptor.close();
-  }
-  try {
-    return await loadSquare(squarePath);
-  } catch {
-    return undefined;
-  }
+  try { return structuredClone(readSquareSnapshotOnce(squarePath).state); } catch { return undefined; }
 }
 
 export async function diagnoseSquareFile(squarePath: string): Promise<DiagnoseResult> {
-  try {
-    return { problems: [], state: await loadSquare(squarePath) };
-  } catch (error) {
-    return {
-      unfixable: error instanceof Error ? error.message : String(error),
-      problems: [],
-    };
+  try { return { problems: [], state: await loadSquare(squarePath) }; } catch (error) {
+    return { unfixable: error instanceof Error ? error.message : String(error), problems: [] };
   }
 }

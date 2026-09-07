@@ -29,28 +29,23 @@ test('fixed facade builds, opens, and exposes participant activity', async () =>
   await reopened.close();
 });
 
-test('opening a file square validates and projects one unchanged artifact snapshot', async () => {
+test('opening a file square validates and projects unchanged persisted state', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-cache-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const built = await Square.build({ path: squarePath, markdown: '# context' });
   await built.close();
 
-  const originalReadFile = fs.promises.readFile;
-  const canonicalSquarePath = fs.realpathSync(squarePath);
-  let artifactReads = 0;
-  fs.promises.readFile = async function (...args) {
-    if (String(args[0]) === canonicalSquarePath) artifactReads += 1;
-    return originalReadFile.apply(this, args);
-  };
+  const persisted = await loadSquare(squarePath);
   try {
     const square = await Square.at({ path: squarePath });
-    await square.snapshot();
-    await square.history();
-    await square.participants();
-    assert.equal(artifactReads, 1);
+    const snapshot = await square.snapshot();
+    assert.match(snapshot.context, /^# context(?:\n|$)/);
+    assert.equal(snapshot.actCount, 0);
+    assert.deepEqual(await square.history(), []);
+    assert.deepEqual(await square.participants(), []);
     await square.close();
+    assert.deepEqual(await loadSquare(squarePath), persisted);
   } finally {
-    fs.promises.readFile = originalReadFile;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

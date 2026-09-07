@@ -1,33 +1,27 @@
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import zlib from 'node:zlib';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   createSquareState,
-  decodeSquare,
   diagnoseSquareFile,
   emptyRuntimeState,
-  encodeSquare,
   loadSquare,
   probeSquare,
   writeSquareFile,
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
-import { formatActivityId } from '../dist/square-core.js';
 import { express } from '../dist/landing.js';
-import {
-  createFileCell,
-  diagnoseSquareFile as diagnoseStoredSquareFile,
-  probeSquareFile,
-  readSquareFile,
-  withSquareFileLock,
-} from '../dist/square-storage.js';
+import { formatActivityId } from '../dist/square-core.js';
+import { validateSquareState } from '../dist/square-state.js';
+import { createFileCell, createMemoryCell } from '../dist/square-storage.js';
 
-const SQUARE_MAGIC = Buffer.from('SQUARE01', 'ascii');
+const APPLICATION_ID = 0x53515245;
+const USER_VERSION = 1;
+
 function withIndexes(acts) {
   return acts.map((act, index) => ({ ...act, index }));
 }
@@ -44,378 +38,152 @@ function makeState(overrides = {}) {
   };
 }
 
-async function writeFixture(overrides = {}) {
+async function writeFixture(t, overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-artifact-'));
   const squarePath = path.join(dir, 'SQUARE.square');
   const squareState = makeState(overrides);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   await writeSquareFile(squarePath, squareState);
   return { dir, squarePath, squareState };
 }
 
-function envelope(magic, payload) {
-  const header = Buffer.alloc(magic.length + 4 + 32);
-  magic.copy(header, 0);
-  header.writeUInt32BE(payload.length, magic.length);
-  crypto.createHash('sha256').update(payload).digest().copy(header, magic.length + 4);
-  return Buffer.concat([header, payload]);
+function readSnapshot(squarePath) {
+  const database = new DatabaseSync(squarePath, { readOnly: true });
+  try {
+    const identity = database.prepare('PRAGMA application_id').get().application_id;
+    const version = database.prepare('PRAGMA user_version').get().user_version;
+    const journalMode = database.prepare('PRAGMA journal_mode').get().journal_mode;
+    const row = database.prepare('SELECT id, revision, state FROM square_snapshot').get();
+    const table = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'square_snapshot'").get().sql;
+    return { identity, version, journalMode, row, table };
+  } finally {
+    database.close();
+  }
 }
 
-test('encode/decode roundtrip preserves Square state', () => {
-  const squareState = makeState({
+function createRawDatabase(squarePath, options = {}) {
+  const database = new DatabaseSync(squarePath);
+  try {
+    database.exec(`PRAGMA application_id = ${options.applicationId ?? APPLICATION_ID}`);
+    database.exec(`PRAGMA user_version = ${options.userVersion ?? USER_VERSION}`);
+    database.exec(options.schema ?? 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL)');
+    if (options.row !== false) {
+      database.prepare('INSERT INTO square_snapshot (id, revision, state) VALUES (?, ?, ?)').run(
+        1,
+        options.revision ?? 0,
+        options.state ?? JSON.stringify(makeState()),
+      );
+    }
+  } finally {
+    database.close();
+  }
+}
+
+function databaseBytes(squarePath) {
+  return fs.readFileSync(squarePath);
+}
+
+test('requires the Node SQLite runtime promised by the package minimum', () => {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  assert.ok(
+    (major === 22 && minor >= 16) || major >= 24,
+    `node ${process.versions.node} does not provide the supported SQLite runtime`,
+  );
+  assert.equal(typeof DatabaseSync, 'function');
+  assert.equal(
+    JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).engines.node,
+    '^22.16.0 || >=24.0.0',
+  );
+});
+
+test('a written square is the pinned SQLite singleton snapshot with no square lock or business sidecar', async (t) => {
+  const { dir, squarePath, squareState } = await writeFixture(t, {
     hardCap: null,
     throttlePerMinute: 5,
     acts: [
-      { kind: 'join', actor: 'Alice', at: 1700000000000 },
-      { kind: 'listen', actor: 'Alice', target: 'aku/riko/7a', at: 1700000000500 },
-      { kind: 'say', actor: 'Alice', at: 1700000001000, body: 'hello @Bob', mentions: ['Bob'] },
-      { kind: 'ignore', actor: 'Alice', target: 'aku/riko/7a', at: 1700000001500 },
-      { kind: 'hold', actor: 'Host', at: 1700000002000, body: 'pause' },
-      { kind: 'resume', actor: 'Host', at: 1700000003000 },
-      { kind: 'done', actor: 'Alice', at: 1700000004000, body: 'bye' },
-    ],
-  });
-  squareState.runtime.observations.Alice = { [formatActivityId(6)]: { state: 'seen', at: 1700000004000 } };
-  squareState.runtime.observations.Bob = { [formatActivityId(2)]: { state: 'seen', at: 1700000001500 } };
-  squareState.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 3, expiresAt: 4 };
-
-  const decoded = decodeSquare(encodeSquare(squareState));
-  assert.deepEqual(decoded, squareState);
-  assert.equal('version' in decoded.runtime, false);
-});
-
-test('a written snapshot is one SQUARE01 file with no runtime sidecar', async () => {
-  const { dir, squarePath, squareState } = await writeFixture({
-    acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'hello' },
+      { kind: 'listen', actor: 'Alice', target: 'Bob', at: 2 },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'] },
+      { kind: 'ignore', actor: 'Alice', target: 'Bob', at: 4 },
+      { kind: 'hold', actor: 'Host', at: 5, body: 'pause' },
+      { kind: 'resume', actor: 'Host', at: 6 },
+      { kind: 'done', actor: 'Alice', at: 7, body: 'bye' },
     ],
   });
+  squareState.runtime.observations.Alice = { [formatActivityId(6)]: { state: 'seen', at: 8 } };
+  squareState.runtime.leases.Alice = { leaseId: 'lease-1', heartbeatAt: 9, expiresAt: 10 };
+  await writeSquareFile(squarePath, squareState);
 
-  const bytes = fs.readFileSync(squarePath);
-  assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => name !== path.basename(squarePath)), []);
+  const snapshot = readSnapshot(squarePath);
+  assert.equal(snapshot.identity, APPLICATION_ID);
+  assert.equal(snapshot.version, USER_VERSION);
+  assert.equal(snapshot.journalMode, 'delete');
+  assert.equal(snapshot.row.id, 1);
+  assert.equal(snapshot.row.revision, 1);
+  assert.equal(snapshot.row.state, JSON.stringify(squareState));
+  assert.match(snapshot.table, /id\s+INTEGER\s+PRIMARY KEY\s+CHECK\s*\(\s*id\s*=\s*1\s*\)/i);
+  assert.match(snapshot.table, /revision\s+INTEGER\s+NOT NULL\s+CHECK\s*\(\s*revision\s*>=\s*0\s*\)/i);
+  assert.match(snapshot.table, /state\s+TEXT\s+NOT NULL/i);
   assert.deepEqual(await loadSquare(squarePath), squareState);
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('file landing never reuses an index and publishes the complete next snapshot', async () => {
-  const { dir, squarePath } = await writeFixture({
-    acts: [{ kind: 'join', actor: 'Alice', at: 1 }],
-  });
-  const cell = createFileCell(squarePath);
-  const appended = await express({ cell, clock: () => 2, location: squarePath }, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
-  assert.equal(appended.activity.id, 'act/1');
-  const persisted = await loadSquare(squarePath);
-  assert.deepEqual(persisted.acts.map((act) => act.index), [0, 1]);
-  assert.equal(persisted.runtime.nextActIndex, 2);
-  assert.deepEqual(fs.readdirSync(dir).filter((name) => !name.endsWith('.lock') && name !== path.basename(squarePath)), []);
-  await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('file cells reuse unchanged snapshots without sharing caller state', async () => {
-  const { dir, squarePath, squareState } = await writeFixture({ preamble: ['cached snapshot'] });
-  const cell = createFileCell(squarePath);
-
-  const first = await cell.read();
-  first.state.preamble[0] = 'caller mutation';
-  const second = await cell.read();
-
-  assert.equal(first.version, 0);
-  assert.equal(second.version, 0);
-  assert.notEqual(first.state, second.state);
-  assert.deepEqual(second.state, squareState);
-  await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('artifact aliases share one canonical lock and publication target', async () => {
-  const { dir, squarePath } = await writeFixture({ preamble: ['canonical snapshot'] });
-  const aliasPath = path.join(dir, 'alias.square');
-  fs.symlinkSync(squarePath, aliasPath);
-  const realCell = createFileCell(squarePath);
-  const aliasCell = createFileCell(aliasPath);
-  let active = 0;
-  let maximum = 0;
-  const hold = (location) => withSquareFileLock(location, async () => {
-    active += 1;
-    maximum = Math.max(maximum, active);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    active -= 1;
-  });
-
-  try {
-    const started = Date.now();
-    await Promise.all([hold(squarePath), hold(aliasPath)]);
-    assert.equal(maximum, 1);
-    assert.ok(Date.now() - started >= 80);
-
-    await aliasCell.transact((state) => ({
-      state: { ...state, preamble: ['published through alias'] },
-      result: undefined,
-    }));
-    assert.equal((await loadSquare(squarePath)).preamble[0], 'published through alias');
-    assert.equal(fs.lstatSync(aliasPath).isSymbolicLink(), true);
-    assert.equal(fs.realpathSync(aliasPath), fs.realpathSync(squarePath));
-  } finally {
-    await realCell.close();
-    await aliasCell.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('all production snapshot readers wait behind the artifact publication lock', async () => {
-  const { dir, squarePath } = await writeFixture({ preamble: ['locked snapshot'] });
-  const cell = createFileCell(squarePath);
-  const canonicalSquarePath = fs.realpathSync(squarePath);
-  const originalOpen = fs.promises.open;
-  const originalReadFile = fs.promises.readFile;
-
-  async function assertReaderWaits(name, read) {
-    let releaseLock;
-    let lockHeld;
-    const entered = new Promise((resolve) => { lockHeld = resolve; });
-    const held = withSquareFileLock(squarePath, async () => {
-      lockHeld();
-      await new Promise((resolve) => { releaseLock = resolve; });
-    });
-    await entered;
-
-    let targetOpened = false;
-    fs.promises.open = async (...args) => {
-      if (String(args[0]) === canonicalSquarePath) targetOpened = true;
-      return originalOpen(...args);
-    };
-    fs.promises.readFile = async (...args) => {
-      if (String(args[0]) === canonicalSquarePath) targetOpened = true;
-      return originalReadFile(...args);
-    };
-
-    let pending;
-    try {
-      pending = read();
-      for (let index = 0; index < 3; index += 1) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      assert.equal(targetOpened, false, `${name} opened the artifact while publication held its lock`);
-    } finally {
-      releaseLock();
-      await held;
-      await pending;
-    }
-    assert.equal(targetOpened, true, `${name} never opened the artifact after publication released its lock`);
-  }
-
-  try {
-    await assertReaderWaits('readSquareFile', () => readSquareFile(squarePath));
-    await assertReaderWaits('probeSquareFile', () => probeSquareFile(squarePath));
-    await assertReaderWaits('diagnoseSquareFile', () => diagnoseStoredSquareFile(squarePath));
-    await assertReaderWaits('file cell read', () => cell.read());
-  } finally {
-    fs.promises.open = originalOpen;
-    fs.promises.readFile = originalReadFile;
-    await cell.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('file cells invalidate a cached snapshot for external writes, replacements, deletion, and recreation', async () => {
-  const { dir, squarePath } = await writeFixture({ preamble: ['initial'] });
-  const cell = createFileCell(squarePath);
-  await cell.read();
-
-  fs.writeFileSync(squarePath, encodeSquare(makeState({ preamble: ['in-place write'] })));
-  const written = await cell.read();
-  assert.equal(written.version, 1);
-  assert.deepEqual(written.state.preamble, ['in-place write']);
-
-  await writeSquareFile(squarePath, makeState({ preamble: ['replacement'] }));
-  const replaced = await cell.read();
-  assert.equal(replaced.version, 2);
-  assert.deepEqual(replaced.state.preamble, ['replacement']);
-
-  fs.unlinkSync(squarePath);
-  await assert.rejects(cell.read(), /square file not found/);
-
-  await writeSquareFile(squarePath, makeState({ preamble: ['recreated'] }));
-  const recreated = await cell.read();
-  assert.equal(recreated.version, 4);
-  assert.deepEqual(recreated.state.preamble, ['recreated']);
-  await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('file transactions retain cached authority until committing the current snapshot', async () => {
-  const { dir, squarePath } = await writeFixture({ preamble: ['initial'] });
-  const cell = createFileCell(squarePath);
-  await cell.read();
-  await writeSquareFile(squarePath, makeState({ preamble: ['external'] }));
-
-  const observedVersion = await cell.transact((state, version) => {
-    assert.deepEqual(state.preamble, ['external']);
-    return { result: version };
-  });
-  assert.equal(observedVersion, 1);
-
-  await cell.transact((state) => {
-    state.preamble[0] = 'uncommitted callback mutation';
-    return { result: undefined };
-  });
-  assert.deepEqual((await cell.read()).state.preamble, ['external']);
-  assert.deepEqual((await loadSquare(squarePath)).preamble, ['external']);
-
-  await cell.transact((state) => {
-    state.preamble[0] = 'committed';
-    return { state, result: undefined };
-  });
-  assert.deepEqual((await cell.read()).state.preamble, ['committed']);
-  assert.deepEqual((await loadSquare(squarePath)).preamble, ['committed']);
-  await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('file cells do not cache missing or malformed artifacts', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-file-cell-failure-'));
-  const squarePath = path.join(dir, 'SQUARE.square');
-  const cell = createFileCell(squarePath);
-
-  await assert.rejects(cell.read(), /square file not found/);
   assert.equal(fs.existsSync(`${squarePath}.lock`), false);
-  await writeSquareFile(squarePath, makeState({ preamble: ['repaired missing'] }));
-  assert.deepEqual((await cell.read()).state.preamble, ['repaired missing']);
-
-  fs.writeFileSync(squarePath, 'malformed artifact');
-  await assert.rejects(cell.read(), /Invalid square artifact/);
-  await writeSquareFile(squarePath, makeState({ preamble: ['repaired malformed'] }));
-  assert.deepEqual((await cell.read()).state.preamble, ['repaired malformed']);
-  await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(fs.readdirSync(dir), [path.basename(squarePath)]);
 });
 
-test('a file read does not recreate a root deleted after observing the artifact', async () => {
-  const { dir, squarePath } = await writeFixture({ preamble: ['about to disappear'] });
+test('SQLite artifact access preserves escaped special-character paths', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-special-path-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const squarePath = path.join(dir, 'square #? [名].square');
+  const state = makeState({ preamble: ['escaped path'] });
+  await writeSquareFile(squarePath, state);
+  assert.deepEqual(await loadSquare(squarePath), state);
   const cell = createFileCell(squarePath);
-  const canonicalSquarePath = fs.realpathSync(squarePath);
-  const originalAccess = fs.promises.access;
-  let deleted = false;
-  fs.promises.access = async (...args) => {
-    await originalAccess(...args);
-    if (!deleted && String(args[0]) === canonicalSquarePath) {
-      deleted = true;
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  };
+  t.after(() => cell.close());
+  await cell.transact((current) => ({ state: { ...current, preamble: ['still escaped'] }, result: undefined }));
+  assert.deepEqual((await loadSquare(squarePath)).preamble, ['still escaped']);
+  assert.equal(readSnapshot(squarePath).row.revision, 1);
+});
 
-  try {
-    await assert.rejects(cell.read(), /square file not found/);
-    assert.equal(fs.existsSync(dir), false);
-    assert.equal(fs.existsSync(`${squarePath}.lock`), false);
-  } finally {
-    fs.promises.access = originalAccess;
-    await cell.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+test('SquareState validation retains historical indexes, runtime, lease, and activity-shape invariants', () => {
+  const archived = makeState({ acts: [{ kind: 'say', actor: 'Alice', at: 5, body: 'archived @Bob', mentions: ['Bob'] }] });
+  archived.acts[0].index = 4;
+  archived.runtime.nextActIndex = 5;
+  archived.runtime.observations.Bob = { [formatActivityId(1)]: { state: 'seen', at: 2 } };
+  assert.equal(validateSquareState(archived), archived);
+
+  const cases = [
+    ['future observation', (state) => { state.runtime.observations.Bob = { [formatActivityId(state.runtime.nextActIndex)]: { state: 'seen', at: 3 } }; }, /unassigned activity index/],
+    ['reused index', (state) => { state.acts[1].index = 0; }, /schema is malformed/],
+    ['out-of-order index', (state) => { state.acts[0].index = 2; state.acts[1].index = 1; }, /schema is malformed/],
+    ['extra runtime key', (state) => { state.runtime.version = 1; }, /schema is malformed/],
+    ['invalid lease', (state) => { state.runtime.leases.Alice = { leaseId: 'lease', heartbeatAt: 2, expiresAt: 1 }; }, /schema is malformed/],
+    ['malformed listen', (state) => { state.acts = [{ kind: 'listen', actor: 'Alice', at: 1, index: 0 }]; state.runtime.nextActIndex = 1; }, /schema is malformed/],
+    ['malformed ignore', (state) => { state.acts = [{ kind: 'ignore', actor: 'Alice', target: 'Bob', at: 1, index: 0, route: 'mention' }]; state.runtime.nextActIndex = 1; }, /schema is malformed/],
+  ];
+  for (const [name, mutate, expected] of cases) {
+    const state = makeState({ acts: [{ kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 }] });
+    mutate(state);
+    assert.throws(() => validateSquareState(state), expected, name);
   }
 });
 
-test('loadSquare rejects paths that are not .square artifacts', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ext-'));
-  const file = path.join(dir, 'square.md');
-  fs.writeFileSync(file, 'not a square');
-  await assert.rejects(() => loadSquare(file), /must use the \.square extension/);
-  assert.equal(await probeSquare(file), undefined);
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('decodeSquare rejects bad framing, digest, and payload', () => {
-  const squareState = makeState();
-  const valid = encodeSquare(squareState);
-
-  assert.throws(() => decodeSquare(valid.subarray(0, 10)), /truncated header/);
-  assert.throws(() => decodeSquare(Buffer.concat([Buffer.from('NOTSQUARE'), valid.subarray(8)])), /bad magic or unsupported format version/);
-
-  const truncated = Buffer.from(valid);
-  truncated.writeUInt32BE(truncated.readUInt32BE(8) + 4, 8);
-  assert.throws(() => decodeSquare(truncated), /payload length does not match/);
-
-  const digest = Buffer.from(valid);
-  digest[20] ^= 0xff;
-  assert.throws(() => decodeSquare(digest), /payload digest mismatch/);
-
-  const notGzip = envelope(SQUARE_MAGIC, Buffer.from('not-gzip'));
-  assert.throws(() => decodeSquare(notGzip), /not valid gzip/);
-
-  const notJson = envelope(SQUARE_MAGIC, zlib.gzipSync(Buffer.from('not-json')));
-  assert.throws(() => decodeSquare(notJson), /not valid JSON/);
-});
-
-test('decodeSquare rejects malformed snapshot schema and a nextActIndex behind history', () => {
-  const squareState = makeState({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'say', actor: 'Alice', at: 2, body: 'hello @Bob', mentions: ['Bob'] },
-    ],
-  });
-
-  const behind = structuredClone(squareState);
-  behind.runtime.nextActIndex = 1;
-  assert.throws(() => encodeSquare(behind), /nextActIndex is behind/);
-
-  const reused = structuredClone(squareState);
-  reused.acts[1].index = 0;
-  assert.throws(() => encodeSquare(reused), /snapshot schema is malformed/);
-
-  const extraRuntime = structuredClone(squareState);
-  extraRuntime.runtime.version = 2;
-  assert.throws(() => encodeSquare(extraRuntime), /snapshot schema is malformed/);
-
-  const invalidObservation = structuredClone(squareState);
-  invalidObservation.runtime.observations.Alice = { bad: { state: 'seen', at: 1 } };
-  assert.throws(() => encodeSquare(invalidObservation), /snapshot schema is malformed/);
-
-  const invalidLease = structuredClone(squareState);
-  invalidLease.runtime.leases.Alice = { leaseId: 'lease', heartbeatAt: 2, expiresAt: 1 };
-  assert.throws(() => encodeSquare(invalidLease), /snapshot schema is malformed/);
-
-  const beside = structuredClone(squareState);
-  beside.acts[1].reach = { beside: 'Bob' };
-  assert.throws(() => encodeSquare(beside), /snapshot schema is malformed/);
-
-  const malformedListen = makeState({ acts: [{ kind: 'listen', actor: 'Alice', at: 1 }] });
-  assert.throws(() => encodeSquare(malformedListen), /snapshot schema is malformed/);
-
-  const extraIgnore = makeState({ acts: [{ kind: 'ignore', actor: 'Alice', target: 'Bob', at: 1, route: 'mention' }] });
-  assert.throws(() => encodeSquare(extraIgnore), /snapshot schema is malformed/);
-});
-
-test('codec rejects future observation references', () => {
-  const squareState = makeState({
+test('bell and reply metadata persist as validated SquareState', async (t) => {
+  const state = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
+      { kind: 'say', actor: 'Alice', at: 3, body: 'center @Bob', mentions: ['Bob'] },
+      { kind: 'say', actor: 'Alice', at: 4, body: 'bell', reach: 'bell', reply: 2 },
     ],
   });
-
-  const futureObservation = structuredClone(squareState);
-  futureObservation.runtime.observations.Bob = { [formatActivityId(2)]: { state: 'seen', at: 3 } };
-  assert.throws(() => encodeSquare(futureObservation), /runtime references an unassigned activity index/);
-
-  const underscoreObservation = structuredClone(squareState);
-  underscoreObservation.runtime.observations.Bob = { [['act', '1'].join('_')]: { state: 'seen', at: 3 } };
-  assert.throws(() => encodeSquare(underscoreObservation), /snapshot schema is malformed/);
+  const { squarePath } = await writeFixture(t, state);
+  const persisted = await loadSquare(squarePath);
+  assert.equal(persisted.acts[2].reach, undefined);
+  assert.equal(persisted.acts[3].reach, 'bell');
+  assert.equal(persisted.acts[3].reply, 2);
 });
 
-test('archived activity references remain valid below nextActIndex', () => {
-  const squareState = makeState({
-    acts: [{ kind: 'say', actor: 'Alice', at: 5, body: 'later @Bob', mentions: ['Bob'] }],
-  });
-  squareState.acts[0].index = 4;
-  squareState.runtime.nextActIndex = 5;
-  squareState.runtime.observations.Bob = { [formatActivityId(1)]: { state: 'seen', at: 2 } };
-  assert.deepEqual(decodeSquare(encodeSquare(squareState)), squareState);
-});
-
-test('a future observation cannot persist and suppress the next real mention', async () => {
-  const { dir, squarePath } = await writeFixture({
+test('a rejected future observation cannot suppress the next real directed activity', async (t) => {
+  const { squarePath } = await writeFixture(t, {
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
@@ -425,48 +193,235 @@ test('a future observation cannot persist and suppress the next real mention', a
   poisoned.runtime.observations.Bob = {
     [formatActivityId(poisoned.runtime.nextActIndex)]: { state: 'seen', at: 3 },
   };
-  await assert.rejects(() => writeSquareFile(squarePath, poisoned), /runtime references an unassigned activity index/);
+  await assert.rejects(() => writeSquareFile(squarePath, poisoned), /unassigned activity index/);
 
   const cell = createFileCell(squarePath);
+  t.after(() => cell.close());
   await express({ cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true, mentions: ['Bob'] });
   const persisted = await loadSquare(squarePath);
-  assert.equal(persisted.acts.at(-1).index, 2);
+  assert.equal(persisted.acts.at(-1)?.index, 2);
   assert.deepEqual(deriveDeliveryModel(persisted).pendingFor('Bob').map((item) => item.item.index), [2]);
+});
+
+test('file cells preserve model validation, rollback, no-op revisions, and synchronous callbacks', async (t) => {
+  const { squarePath, squareState } = await writeFixture(t);
+  const cell = createFileCell(squarePath);
+  t.after(async () => cell.close());
+
+  assert.equal((await cell.read()).version, 0);
+  await cell.transact((state) => ({ result: state.preamble[0] }));
+  assert.equal((await cell.read()).version, 0);
+
+  await assert.rejects(() => cell.transact(() => { throw new Error('abort this transition'); }), /abort this transition/);
+  assert.equal((await cell.read()).version, 0);
+  assert.deepEqual(await loadSquare(squarePath), squareState);
+
+  await assert.rejects(
+    () => cell.transact(async (state) => ({ state: { ...state, preamble: ['must not commit'] }, result: undefined })),
+    /synchronous|thenable|Promise/i,
+  );
+  assert.equal((await cell.read()).version, 0);
+  assert.deepEqual(await loadSquare(squarePath), squareState);
+
+  const malformed = structuredClone(squareState);
+  malformed.runtime.nextActIndex = -1;
+  await assert.rejects(
+    () => cell.transact(() => ({ state: malformed, result: undefined })),
+    /nextActIndex is behind|Invalid square artifact|malformed/i,
+  );
+  assert.equal((await cell.read()).version, 0);
+  assert.deepEqual(await loadSquare(squarePath), squareState);
+
+  await cell.transact((state) => ({ state: { ...state, preamble: ['committed'] }, result: undefined }));
+  assert.equal((await cell.read()).version, 1);
+  assert.deepEqual((await loadSquare(squarePath)).preamble, ['committed']);
+});
+
+test('memory cells reject asynchronous transitions and retain file-cell no-op and rollback semantics', async () => {
+  const initial = makeState();
+  const cell = createMemoryCell(initial);
+  assert.equal((await cell.read()).version, 0);
+  await cell.transact((state) => ({ result: state.preamble[0] }));
+  assert.equal((await cell.read()).version, 0);
+  await assert.rejects(
+    () => cell.transact(async (state) => ({ state: { ...state, preamble: ['must not commit'] }, result: undefined })),
+    /synchronous|thenable|Promise/i,
+  );
+  await assert.rejects(() => cell.transact(() => { throw new Error('memory rollback'); }), /memory rollback/);
+  assert.equal((await cell.read()).version, 0);
+  assert.deepEqual((await cell.read()).state, initial);
   await cell.close();
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('say metadata roundtrips through the binary snapshot', () => {
-  const squareState = makeState({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'join', actor: 'Bob', at: 2 },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'center @Bob', mentions: ['Bob'] },
-      { kind: 'say', actor: 'Alice', at: 4, body: 'bell', reach: 'bell', reply: 2 },
-    ],
-  });
+test('memory and file cells keep same-state returns as no-ops and isolate caller mutations', async (t) => {
+  const initial = makeState({ preamble: ['isolated'] });
+  const { squarePath } = await writeFixture(t, initial);
+  const file = createFileCell(squarePath);
+  const memory = createMemoryCell(initial);
+  t.after(async () => Promise.all([file.close(), memory.close()]));
 
-  const decoded = decodeSquare(encodeSquare(squareState));
-  assert.equal(decoded.acts[2].reach, undefined);
-  assert.equal(decoded.acts[3].reach, 'bell');
-  assert.equal(decoded.acts[3].reply, 2);
+  for (const cell of [file, memory]) {
+    const first = await cell.read();
+    first.state.preamble[0] = 'caller changed only its copy';
+    const second = await cell.read();
+    assert.equal(second.version, 0);
+    assert.deepEqual(second.state.preamble, ['isolated']);
+
+    await cell.transact((state) => ({ state: structuredClone(state), result: undefined }));
+    assert.equal((await cell.read()).version, 0);
+    assert.deepEqual((await cell.read()).state.preamble, ['isolated']);
+  }
 });
 
-test('doctor reports unreadable snapshots without repairing them', async () => {
-  const { dir, squarePath } = await writeFixture();
-  const clean = await diagnoseSquareFile(squarePath);
-  assert.equal(clean.unfixable, undefined);
-  assert.equal(clean.state.runtime.nextActIndex, 0);
+test('missing probes do not create a database and malformed or unsupported candidates are never overwritten', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-invalid-sqlite-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const missing = path.join(dir, 'missing.square');
+  assert.equal(await probeSquare(missing), undefined);
+  assert.equal(fs.existsSync(missing), false);
+  const invalidInitial = path.join(dir, 'invalid-initial.square');
+  const invalidState = makeState();
+  invalidState.runtime.nextActIndex = -1;
+  await assert.rejects(() => writeSquareFile(invalidInitial, invalidState), /schema is malformed/);
+  assert.equal(fs.existsSync(invalidInitial), false, 'invalid initial state left a placeholder artifact');
+  const vanished = path.join(dir, 'vanished #? [名].square');
+  await writeSquareFile(vanished, makeState());
+  fs.unlinkSync(vanished);
+  await assert.rejects(() => loadSquare(vanished), /not found|Invalid square artifact|unable to open/i);
+  assert.equal(fs.existsSync(vanished), false, 'a missing artifact was recreated after disappearing before open');
 
-  fs.writeFileSync(squarePath, 'not a snapshot');
-  const broken = await diagnoseSquareFile(squarePath);
-  assert.match(broken.unfixable, /Invalid square artifact/);
-  assert.equal(broken.state, undefined);
-  assert.equal(fs.readFileSync(squarePath, 'utf8'), 'not a snapshot');
-  fs.rmSync(dir, { recursive: true, force: true });
+  const candidates = [
+    { name: 'old binary artifact', prepare(file) { fs.writeFileSync(file, Buffer.from('SQUARE01 obsolete')); } },
+    { name: 'unrelated database', prepare(file) { createRawDatabase(file, { applicationId: 0x12345678 }); } },
+    { name: 'unsupported version', prepare(file) { createRawDatabase(file, { userVersion: 2 }); } },
+    { name: 'missing singleton row', prepare(file) { createRawDatabase(file, { row: false }); } },
+    { name: 'malformed state JSON', prepare(file) { createRawDatabase(file, { state: '{not valid JSON' }); } },
+    { name: 'invalid state model', prepare(file) { createRawDatabase(file, { state: JSON.stringify({ ...makeState(), runtime: { nextActIndex: -1, observations: {}, leases: {} } }) }); } },
+  ];
+
+  for (const candidate of candidates) {
+    const squarePath = path.join(dir, `${candidate.name.replaceAll(' ', '-')}.square`);
+    candidate.prepare(squarePath);
+    const before = databaseBytes(squarePath);
+    assert.equal(await probeSquare(squarePath), undefined, candidate.name);
+    await assert.rejects(() => loadSquare(squarePath), /Invalid square artifact|unsupported|not a SQLite|malformed/i, candidate.name);
+    await assert.rejects(() => writeSquareFile(squarePath, makeState({ preamble: ['must not replace'] })), /Invalid square artifact|unsupported|not a SQLite|malformed/i, candidate.name);
+    assert.deepEqual(databaseBytes(squarePath), before, `${candidate.name} was mutated`);
+  }
 });
 
-test('createSquareState builds a snapshot from options and stdin without Markdown markers', async () => {
+test('only the pinned singleton schema is accepted and unsupported shapes are never rewritten', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-schema-shape-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const expected = makeState({ preamble: ['raw pinned schema'] });
+  const pinnedFixture = path.join(dir, 'pinned-fixture.square');
+  createRawDatabase(pinnedFixture, { state: JSON.stringify(expected) });
+  assert.deepEqual(await loadSquare(pinnedFixture), expected);
+  assert.deepEqual(await probeSquare(pinnedFixture), expected);
+
+  const productionOutput = path.join(dir, 'production-output.square');
+  await writeSquareFile(productionOutput, expected);
+  assert.deepEqual(await loadSquare(productionOutput), expected);
+  assert.deepEqual(await probeSquare(productionOutput), expected);
+
+  const unsupported = [
+    {
+      name: 'extra ordinary column',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL, note TEXT)',
+    },
+    {
+      name: 'extra generated column',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL, state_length INTEGER GENERATED ALWAYS AS (length(state)) VIRTUAL)',
+    },
+    {
+      name: 'missing singleton check',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL)',
+    },
+    {
+      name: 'without-rowid table shape',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL) WITHOUT ROWID',
+    },
+    {
+      name: 'additional application table',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL); CREATE TABLE square_audit (entry TEXT NOT NULL)',
+    },
+    {
+      name: 'application table resembling an internal prefix',
+      schema: 'CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0), state TEXT NOT NULL); CREATE TABLE sqlitex_audit (entry TEXT NOT NULL)',
+    },
+  ];
+
+  for (const candidate of unsupported) {
+    const squarePath = path.join(dir, `${candidate.name.replaceAll(' ', '-')}.square`);
+    createRawDatabase(squarePath, { schema: candidate.schema, state: JSON.stringify(expected) });
+    const before = databaseBytes(squarePath);
+    assert.equal(await probeSquare(squarePath), undefined, candidate.name);
+    await assert.rejects(() => loadSquare(squarePath), (error) => error?.code === 'invalid_args', candidate.name);
+    await assert.rejects(
+      () => writeSquareFile(squarePath, makeState({ preamble: ['must not force-replace unsupported schema'] })),
+      (error) => error?.code === 'invalid_args',
+      candidate.name,
+    );
+    assert.deepEqual(databaseBytes(squarePath), before, `${candidate.name} was mutated by force replacement`);
+  }
+});
+
+test('a missing file cell transaction reports typed not_found without creating an artifact', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-missing-cell-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const squarePath = path.join(dir, 'missing.square');
+  const cell = createFileCell(squarePath);
+  t.after(() => cell.close());
+  let called = false;
+
+  await assert.rejects(
+    () => cell.transact((state) => {
+      called = true;
+      return { state, result: undefined };
+    }),
+    (error) => error?.code === 'not_found',
+  );
+  assert.equal(called, false);
+  assert.equal(fs.existsSync(squarePath), false);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test('extension rejection and doctor corruption reporting preserve the unreadable artifact', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-extension-doctor-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const markdown = path.join(dir, 'square.md');
+  fs.writeFileSync(markdown, 'not a square');
+  await assert.rejects(() => loadSquare(markdown), /must use the \.square extension/);
+  assert.equal(await probeSquare(markdown), undefined);
+
+  const squarePath = path.join(dir, 'SQUARE.square');
+  await writeSquareFile(squarePath, makeState());
+  fs.writeFileSync(squarePath, 'not a SQLite snapshot');
+  const diagnosis = await diagnoseSquareFile(squarePath);
+  assert.match(diagnosis.unfixable, /Invalid square artifact/);
+  assert.equal(diagnosis.state, undefined);
+  assert.equal(fs.readFileSync(squarePath, 'utf8'), 'not a SQLite snapshot');
+});
+
+test('symlink aliases share one SQLite authority without a square lock', async (t) => {
+  const { dir, squarePath } = await writeFixture(t, { preamble: ['initial'] });
+  const aliasPath = path.join(dir, 'alias.square');
+  fs.symlinkSync(squarePath, aliasPath);
+  const real = createFileCell(squarePath);
+  const alias = createFileCell(aliasPath);
+  t.after(async () => Promise.all([real.close(), alias.close()]));
+
+  await Promise.all([
+    real.transact((state) => ({ state: { ...state, preamble: [...state.preamble, 'real'] }, result: undefined })),
+    alias.transact((state) => ({ state: { ...state, preamble: [...state.preamble, 'alias'] }, result: undefined })),
+  ]);
+  assert.deepEqual((await loadSquare(squarePath)).preamble.sort(), ['alias', 'initial', 'real']);
+  assert.equal(fs.lstatSync(aliasPath).isSymbolicLink(), true);
+  assert.equal(fs.existsSync(`${squarePath}.lock`), false);
+  assert.equal(fs.existsSync(`${aliasPath}.lock`), false);
+});
+
+test('createSquareState still creates a model without persistence framing', async () => {
   const squareState = await createSquareState({ force: true, hardCap: null, throttlePerMinute: 4 }, '## Topic\n\nHost context');
   assert.equal(squareState.hardCap, null);
   assert.equal(squareState.throttlePerMinute, 4);

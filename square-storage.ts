@@ -1,27 +1,23 @@
-import { setTimeout as sleep } from 'node:timers/promises';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
+  createSquareFile,
   createSquareState,
   diagnoseSquareFile as diagnoseArtifactFile,
   loadSquare,
   probeSquare,
+  readSquareSnapshot,
+  transactSquareSnapshot,
   writeSquareFile,
+  type SquareTransition,
 } from './artifact.js';
-import { withFileLock } from './file-lock.js';
+import type { SquareState } from './model.js';
 import type { StateCell } from './state-cell.js';
-import { type SquareState } from './model.js';
-import { LOCK_RETRY_MS } from './runtime.js';
 
-/**
- * The only production module allowed to cross the .square byte boundary.
- * Consumers receive a SquareState and never need to know which codec or lock
- * protects it.
- */
-export {
-  createSquareState,
-};
+export { createSquareState };
 
 async function canonicalPath(squarePath: string): Promise<string> {
   const absolute = path.resolve(squarePath);
@@ -34,49 +30,27 @@ async function canonicalPath(squarePath: string): Promise<string> {
   }
 }
 
-async function squareFileExists(squarePath: string): Promise<boolean> {
-  try {
-    await fs.promises.access(squarePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
-async function withSquareFileReadLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
-  if (!await squareFileExists(squarePath)) return fn();
-  try {
-    return await withFileLock(`${squarePath}.lock`, { retryMs: LOCK_RETRY_MS, createParent: false }, fn);
-  } catch (error) {
-    if (!await squareFileExists(squarePath)) return fn();
-    throw error;
-  }
-}
-
 export async function readSquareFile(squarePath: string): Promise<SquareState> {
-  const canonical = await canonicalPath(squarePath);
-  return withSquareFileReadLock(canonical, () => loadSquare(canonical));
+  return loadSquare(await canonicalPath(squarePath));
 }
 
 export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
-  const canonical = await canonicalPath(squarePath);
-  return withSquareFileReadLock(canonical, () => probeSquare(canonical));
+  return probeSquare(await canonicalPath(squarePath));
 }
 
 export async function diagnoseSquareFile(squarePath: string): ReturnType<typeof diagnoseArtifactFile> {
-  const canonical = await canonicalPath(squarePath);
-  return withSquareFileReadLock(canonical, () => diagnoseArtifactFile(canonical));
+  return diagnoseArtifactFile(await canonicalPath(squarePath));
 }
 
+/** Test-helper snapshot replacement backed by one SQLite artifact. */
 export async function writeSquareSnapshot(squarePath: string, squareState: SquareState): Promise<void> {
   await writeSquareFile(await canonicalPath(squarePath), squareState);
 }
 
-export async function withSquareFileLock<T>(squarePath: string, fn: () => T | Promise<T>): Promise<T> {
-  const canonical = await canonicalPath(squarePath);
-  return withFileLock(`${canonical}.lock`, { retryMs: LOCK_RETRY_MS }, fn);
+/** Race-safe non-force creation for the file adapter. */
+export async function createSquareSnapshot(squarePath: string, squareState: SquareState): Promise<boolean> {
+  return createSquareFile(await canonicalPath(squarePath), squareState);
 }
 
 function cloneState(squareState: SquareState): SquareState {
@@ -85,6 +59,19 @@ function cloneState(squareState: SquareState): SquareState {
 
 function assertCellOpen(closed: boolean): void {
   if (closed) throw new Error('StateCell is closed');
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null
+    && typeof (value as { then?: unknown }).then === 'function';
+}
+
+function discardThenable(value: PromiseLike<unknown>): void {
+  void Promise.resolve(value).catch(() => undefined);
+}
+
+function isBusy(error: unknown): boolean {
+  return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
 
 interface MemoryWaiter {
@@ -110,15 +97,21 @@ export function createMemoryCell(initial: SquareState): StateCell {
     }
   }
 
-  const cell: StateCell = {
-    transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
+  return {
+    transact<R>(fn: SquareTransition<R>) {
       assertCellOpen(closed);
-      let operation!: Promise<R>;
-      operation = tail.then(() => {
+      const operation = tail.then(() => {
         assertCellOpen(closed);
-        const working = cloneState(state);
-        const outcome = fn(working, version);
-        if (outcome.state !== undefined) {
+        const current = cloneState(state);
+        const outcome = fn(current, version);
+        if (isThenable(outcome)) {
+          discardThenable(outcome);
+          throw new TypeError('Square artifact transitions must be synchronous.');
+        }
+        if (typeof outcome !== 'object' || outcome === null || !Object.hasOwn(outcome, 'result')) {
+          throw new TypeError('Square artifact transition must return { state?, result }.');
+        }
+        if (outcome.state !== undefined && !isDeepStrictEqual(outcome.state, state)) {
           state = cloneState(outcome.state);
           version += 1;
           publish();
@@ -131,6 +124,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
     async read() {
       assertCellOpen(closed);
       await tail;
+      assertCellOpen(closed);
       return { state: cloneState(state), version };
     },
     changed(sinceVersion, timeoutMs) {
@@ -141,10 +135,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
         const waiter: MemoryWaiter = {
           since: sinceVersion,
           resolve,
-          timer: setTimeout(() => {
-            waiters.delete(waiter);
-            resolve(false);
-          }, timeoutMs),
+          timer: setTimeout(() => { waiters.delete(waiter); resolve(false); }, timeoutMs),
         };
         waiters.add(waiter);
       });
@@ -160,96 +151,76 @@ export function createMemoryCell(initial: SquareState): StateCell {
       }
     },
   };
-  return cell;
 }
 
-async function fileFingerprint(squarePath: string): Promise<string> {
-  try {
-    const stat = await fs.promises.stat(squarePath);
-    return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-  } catch {
-    return 'missing';
-  }
-}
-
-/** File-backed cell retaining the existing .square codec and lock boundary. */
+/** SQLite-backed cell. Revisions are read from the authoritative database, not file metadata. */
 export function createFileCell(squarePath: string): StateCell {
   let closed = false;
-  let version = 0;
-  let fingerprint: string | undefined;
-  let cached: { fingerprint: string; state: SquareState } | undefined;
-  let canonicalSquarePath: string | undefined;
+  let storage: Promise<string> | undefined;
+  let tail: Promise<void> = Promise.resolve();
+  const cancel = new AbortController();
 
-  async function storagePath(): Promise<string> {
-    canonicalSquarePath ??= await canonicalPath(squarePath);
-    return canonicalSquarePath;
+  function storagePath(): Promise<string> {
+    storage ??= canonicalPath(squarePath);
+    return storage;
   }
 
-  async function observe(): Promise<string> {
-    const next = await fileFingerprint(await storagePath());
-    if (fingerprint === undefined) {
-      fingerprint = next;
-    } else if (next !== fingerprint) {
-      fingerprint = next;
-      cached = undefined;
-      version += 1;
-    }
-    return fingerprint;
-  }
-
-  async function currentStateUnderLock(): Promise<SquareState> {
-    const observed = await observe();
-    if (cached?.fingerprint === observed) return cloneState(cached.state);
-
-    const decoded = await loadSquare(await storagePath());
-    cached = { fingerprint: observed, state: cloneState(decoded) };
-    return cloneState(cached.state);
+  function abortError(): Error {
+    return new Error('StateCell is closed');
   }
 
   return {
-    async transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }) {
+    transact<R>(fn: SquareTransition<R>) {
       assertCellOpen(closed);
-      const canonical = await storagePath();
-      return withFileLock(`${canonical}.lock`, { retryMs: LOCK_RETRY_MS }, async () => {
+      const operation = tail.then(async () => {
         assertCellOpen(closed);
-        const current = await currentStateUnderLock();
-        const working = cloneState(current);
-        const outcome = fn(working, version);
-        if (outcome.state !== undefined) {
-          await writeSquareFile(canonical, outcome.state);
-          fingerprint = await fileFingerprint(canonical);
-          cached = { fingerprint, state: cloneState(outcome.state) };
-          version += 1;
-        }
-        return outcome.result;
+        const result = await transactSquareSnapshot(await storagePath(), fn, cancel.signal);
+        return result.result;
       });
+      tail = operation.then(() => undefined, () => undefined);
+      return operation;
     },
     async read() {
       assertCellOpen(closed);
-      return withSquareFileReadLock(await storagePath(), async () => {
-        assertCellOpen(closed);
-        return { state: await currentStateUnderLock(), version };
-      });
+      await tail;
+      assertCellOpen(closed);
+      const snapshot = await readSquareSnapshot(await storagePath(), cancel.signal);
+      return { state: cloneState(snapshot.state), version: snapshot.revision };
     },
     async changed(sinceVersion, timeoutMs) {
       assertCellOpen(closed);
       const deadline = Date.now() + Math.max(0, timeoutMs);
-      while (true) {
-        await observe();
-        if (version > sinceVersion) return true;
+      while (!closed) {
         const remaining = deadline - Date.now();
-        if (remaining <= 0) return false;
-        await sleep(Math.min(25, remaining));
-        assertCellOpen(closed);
+        const timeout = AbortSignal.timeout(Math.max(1, remaining));
+        const readSignal = AbortSignal.any([cancel.signal, timeout]);
+        try {
+          if ((await readSquareSnapshot(await storagePath(), readSignal)).revision > sinceVersion) return true;
+        } catch (error) {
+          if (closed || cancel.signal.aborted || timeout.aborted) return false;
+          if (!isBusy(error)) throw error;
+        }
+        const nextRemaining = deadline - Date.now();
+        if (nextRemaining <= 0) return false;
+        try {
+          await sleep(Math.min(25, nextRemaining), undefined, { signal: cancel.signal });
+        } catch (error) {
+          if (closed || cancel.signal.aborted) return false;
+          throw error;
+        }
       }
+      return false;
     },
     async close() {
+      if (closed) return;
       closed = true;
+      cancel.abort(abortError());
+      await tail;
     },
   };
 }
 
-/** Consumer-facing file cell factory; keeps storage choice behind this module. */
+/** Consumer-facing file cell factory; keeps SQLite framing behind this module. */
 export function openSquareCell(squarePath: string): StateCell {
   return createFileCell(squarePath);
 }

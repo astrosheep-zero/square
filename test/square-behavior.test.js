@@ -30,7 +30,7 @@ async function closeSquare(square) {
   await square.close();
 }
 
-test('build persists one SQUARE01 snapshot that reopens through the facade', async () => {
+test('build persists a square that reopens through the facade', async () => {
   const squarePath = tempSquarePath();
   const square = await Square.build({
     path: squarePath,
@@ -45,12 +45,9 @@ test('build persists one SQUARE01 snapshot that reopens through the facade', asy
   assert.equal(snapshot.held, null);
   await closeSquare(square);
 
-  const bytes = fs.readFileSync(squarePath);
-  assert.equal(bytes.subarray(0, 8).toString('ascii'), 'SQUARE01');
-  assert.deepEqual(
-    fs.readdirSync(path.dirname(squarePath)).filter((name) => name !== path.basename(squarePath) && !name.endsWith('.lock')),
-    [],
-  );
+  const persisted = await loadSquare(squarePath);
+  assert.equal(persisted.hardCap, 3);
+  assert.deepEqual(persisted.acts, []);
 
   const reopened = await Square.at({ path: squarePath });
   assert.equal((await reopened.snapshot()).hardCap, 3);

@@ -14,7 +14,7 @@ the conversation easier to follow.
 Boundaries should be light and useful:
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
-- The per-square lock protects atomic writes without leaking scheduling machinery into the artifact.
+- Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
 - If someone is speaking to a specific participant, they must use explicit `--mention name` metadata; an `@name` in the body is ordinary Markdown.
   The speaker and mentioned participants perceive the full body; everyone else perceives only the
@@ -30,13 +30,13 @@ Boundaries should be light and useful:
   with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
-`history`; the binary artifact persists the square's state and is not participant-facing. Activity bodies,
+`history`; the `.square` artifact persists the square's state and is not participant-facing. Activity bodies,
 warmup, and host context may still contain natural Markdown.
 
 Preferred language:
 - Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
 - In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path.
-- `history` is the only read path for square activity. Never tell agents to read or parse the binary artifact directly; use stable activity-id cursors to read older or newer pages.
+- `history` is the only read path for square activity. Never tell agents to read or parse the artifact directly; use stable activity-id cursors to read older or newer pages.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 
@@ -55,9 +55,9 @@ CLI voice:
 Implementation taste:
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
-- The authoritative artifact is one versioned `.square` binary snapshot containing the square's state; there is no runtime sidecar.
-- Keep the binary codec and the internal square model strictly layered. Only the artifact boundary reads or writes square bytes.
-- All behavior operates on `SquareState`, never on binary framing, compressed payloads, storage schema fields, or display text.
+- The authoritative artifact is one versioned SQLite `.square` database containing the square's state; there is no independent runtime sidecar. SQLite-owned recovery journals are allowed.
+- Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
+- All behavior operates on `SquareState`, never on SQLite schema fields, storage framing, or display text.
 - Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.

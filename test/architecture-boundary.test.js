@@ -45,12 +45,38 @@ test('the internal aggregate is state, never a document', () => {
   assert.deepEqual(leaks, [], `stale document-shaped aggregate API:\n${leaks.join('\n')}`);
 });
 
-test('artifact bytes have one production import boundary', () => {
+test('artifact storage has one production import boundary', () => {
   const bypasses = filesContaining(
     /from ['"](?:\.\.\/)*artifact\.js['"]/,
     ['artifact.ts', 'square-storage.ts'],
   );
   assert.deepEqual(bypasses, [], `production modules bypass square-storage.ts: ${bypasses.join(', ')}`);
+});
+
+test('SQLite snapshot ownership stays at the artifact boundary', () => {
+  const sqliteImports = filesContaining(/from ['"]node:sqlite['"]/, ['artifact.ts', 'file-lock.ts']);
+  assert.deepEqual(sqliteImports, [], `SQLite escaped its storage owners: ${sqliteImports.join(', ')}`);
+
+  const artifact = productionSources.get('artifact.ts') ?? '';
+  assert.match(artifact, /from ['"]node:sqlite['"]/);
+  for (const identifier of ['square_snapshot', 'application_id', 'user_version']) {
+    assert.match(artifact, new RegExp(`\\b${identifier}\\b`), `artifact.ts must own ${identifier}`);
+    assert.deepEqual(
+      ownershipLeaks(identifier, ['artifact.ts']),
+      [],
+      `${identifier} escaped artifact.ts`,
+    );
+  }
+});
+
+test('artifact port transactions accept synchronous state transitions only', () => {
+  for (const file of ['ports.ts', 'state-cell.ts']) {
+    const source = productionSources.get(file) ?? '';
+    const signature = source.match(/transact<R>\(fn:[\s\S]*?\): Promise<R>;/)?.[0];
+    assert.ok(signature, `${file} must declare StateCell transaction access`);
+    const callback = signature.slice(0, signature.lastIndexOf('): Promise<R>;'));
+    assert.doesNotMatch(callback, /\bPromise(?:Like)?\b/, `${file} lets an asynchronous transition cross the port`);
+  }
 });
 
 test('raw file state APIs stay inside storage and the file artifact adapter', () => {

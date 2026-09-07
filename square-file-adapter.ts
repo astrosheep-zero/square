@@ -1,11 +1,10 @@
-import fs from 'node:fs';
 import path from 'node:path';
 
 import {
   createSquareState,
+  createSquareSnapshot,
   probeSquareFile,
   writeSquareSnapshot,
-  withSquareFileLock,
   openSquareCell,
   createMemoryCell,
 } from './square-storage.js';
@@ -26,12 +25,14 @@ export async function createSquare(
   options: BuildOptions & { hardCap: HardCap },
   snippet: string
 ): Promise<void> {
-  await withSquareFileLock(squarePath, async () => {
-    if (await fs.promises.access(squarePath).then(() => true, () => false) && !options.force) {
-      throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
-    }
-    await writeSquareSnapshot(squarePath, await createSquareState(options, snippet));
-  });
+  const state = createSquareState(options, snippet);
+  if (options.force) {
+    await writeSquareSnapshot(squarePath, state);
+    return;
+  }
+  if (!await createSquareSnapshot(squarePath, state)) {
+    throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
+  }
 }
 
 export interface SquareBuildOptions {

@@ -37,7 +37,7 @@
   "author": "astrosheep",
   "license": "MIT",
   "engines": {
-    "node": ">=22.5.0"
+    "node": "^22.16.0 || >=24.0.0"
   },
   "devDependencies": {
     "@getpaseo/client": "^0.3.1",

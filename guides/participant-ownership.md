@@ -110,7 +110,7 @@ row.
 1. Resolve the requested name and collect the currently active bindings for
    that name. The current session is excluded from the old-owner set only when
    it is already the owner and this is a reconnect, not a kick.
-2. Under the artifact lock, commit two lifecycle activities as one transaction:
+2. In one artifact transaction, commit two lifecycle activities:
    `done` for the standing participant, followed immediately by `join` for the
    reclaimed name. If this transaction cannot commit, nothing is kicked.
 3. In the same artifact transaction, remove every route for the kicked
@@ -152,8 +152,8 @@ owner. It must not append a second `done` for the new owner.
 ## Concurrency and Recovery
 
 The artifact transaction serializes participant lifecycle activities. The host
-ledger lock serializes binding rows. These locks protect different facts and
-must not be replaced with a copied sidecar or a display-level mutex.
+ledger lock serializes binding rows. They protect different facts and must not
+be replaced with a copied sidecar or a display-level mutex.
 
 The safe ordering is:
 

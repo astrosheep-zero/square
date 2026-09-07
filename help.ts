@@ -80,7 +80,7 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',
-    summary: 'Validate binary artifact integrity.',
+    summary: 'Validate artifact integrity.',
   },
 ];
 

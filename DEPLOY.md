@@ -7,7 +7,7 @@ native harness commands. Pi receives Square as the published npm package.
 
 - Claude Code installed
 - Agents runtime installed
-- Node.js
+- Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
 ## Steps
 
@@ -30,3 +30,12 @@ square install --all -f
 
 No restart is needed. Claude Code and Agents read their installed support on
 demand.
+
+## Square persistence
+
+Each `.square` artifact is a transactional SQLite database using DELETE journal
+mode and FULL synchronous writes. Legacy artifact formats are not migrated.
+
+Close all Square access before moving an artifact. For a live artifact, use
+SQLite's backup facilities; copying only the main `.square` file is not a safe
+backup.
