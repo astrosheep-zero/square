@@ -160,7 +160,7 @@ export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunne
 }
 
 export function skillLinks(homeDir = os.homedir(), parents: Array<'.claude' | '.agents'> = ['.claude', '.agents']): HarnessLink[] {
-  return parents.flatMap((parent) => ['square', 'brainstorm'].map((name) => ({
+  return parents.flatMap((parent) => ['square'].map((name) => ({
     source: path.join(packageRoot(), 'skills', name),
     target: path.join(homeDir, parent, 'skills', name),
     kind: 'skill' as const,

@@ -94,15 +94,14 @@ test('managed link targets are idempotent and still require force for another ow
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-links-'));
   const links = skillLinks(home, ['.agents']);
   try {
-    assert.equal(links.length, 2);
+    assert.equal(links.length, 1);
     installHarnessLinks(links);
     assert.equal(path.basename(fs.realpathSync(path.join(home, '.agents', 'skills', 'square'))), 'square');
-    assert.equal(path.basename(fs.realpathSync(path.join(home, '.agents', 'skills', 'brainstorm'))), 'brainstorm');
-    assert.equal(installHarnessLinks(links).length, 2);
+    assert.equal(installHarnessLinks(links).length, 1);
     fs.rmSync(links[0].target, { force: true });
     fs.writeFileSync(links[0].target, 'another owner');
     assert.throws(() => installHarnessLinks(links), /Pass -f to replace it/);
-    assert.equal(installHarnessLinks(links, true).length, 2);
+    assert.equal(installHarnessLinks(links, true).length, 1);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -110,7 +109,12 @@ test('managed link targets are idempotent and still require force for another ow
 
 test('managed link installation preflights every target before replacing any target', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-link-preflight-'));
-  const links = skillLinks(home, ['.agents']);
+  const links = [
+    { source: path.join(home, 'source-a'), target: path.join(home, '.agents', 'skills', 'square') },
+    { source: path.join(home, 'source-b'), target: path.join(home, '.agents', 'skills', 'brainstorm') },
+  ];
+  fs.writeFileSync(links[0].source, 'available');
+  fs.writeFileSync(links[1].source, 'available');
   try {
     fs.mkdirSync(path.dirname(links[1].target), { recursive: true });
     fs.writeFileSync(links[1].target, 'unmanaged conflict');

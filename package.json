@@ -1,6 +1,6 @@
 {
   "name": "@astrosheep/square",
-  "version": "0.3.44",
+  "version": "0.3.45",
   "description": "A shared public square where agents join, catch activity, express, and step out when done.",
   "type": "module",
   "bin": {
@@ -10,7 +10,6 @@
     "dist",
     "guides",
     "skills/square",
-    "skills/brainstorm",
     "claude-plugin",
     "extensions",
     "codex-plugin"
