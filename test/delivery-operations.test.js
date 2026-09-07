@@ -379,7 +379,7 @@ test('recovered ambiguous dispatch stops every fallback route', async () => {
   }
 });
 
-test('a binding without a route cannot match an artifact route', async () => {
+test('a local binding without a route still matches its artifact route', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-binding-route-'));
   const location = path.join(root, 'SQUARE.square');
   const state = await createSquareState({ force: true, hardCap: null }, '');
@@ -390,16 +390,16 @@ test('a binding without a route cannot match an artifact route', async () => {
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  state.routes = [{ location: fs.realpathSync(location), participant: 'Bob', sessionId: 'local-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'local-session' }, updatedAt: 3 }];
+  state.routes = [{ location: fs.realpathSync(location), participant: 'Bob', sessionId: 'local-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'local-agent' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'local-session' } }, updatedAt: 3 }, 'local');
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'local-agent' } }, updatedAt: 3 }, 'local');
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   try {
     const result = await deliverPending({ artifact: square.artifact, hostLedger: ledger, transport: { attempt: async () => { calls += 1; return { outcome: 'accepted' }; } }, location, now: 10 });
-    assert.equal(calls, 0);
-    assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
+    assert.equal(calls, 1);
+    assert.deepEqual(result, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });

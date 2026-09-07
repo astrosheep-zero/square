@@ -56,8 +56,6 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     nameKey(binding.participant) === nameKey(route.participant)
     && binding.sessionId === route.session
     && binding.location === route.location
-    && (binding.route !== undefined && binding.route.kind === route.route!.kind
-      && JSON.stringify(binding.route.address) === JSON.stringify(route.route!.address))
   )));
   let presentations: readonly PresentationEvidenceProjection[] = [];
   try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* capability is handled by the route-level wake checks */ }
@@ -145,9 +143,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           && entry.notifications.some((entryNotification) => entryNotification.item.index === notification.item.index));
         const stillBound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(route.participant)
           && binding.sessionId === route.session
-          && binding.location === route.location
-          && (binding.route !== undefined && binding.route.kind === route.route!.kind
-            && JSON.stringify(binding.route.address) === JSON.stringify(route.route!.address)));
+          && binding.location === route.location);
         const stillPublished = (current.state.routes ?? []).some((published) => published.location === route.location
           && nameKey(published.participant) === nameKey(route.participant)
           && published.sessionId === route.session

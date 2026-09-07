@@ -221,6 +221,49 @@ test('the notification worker records an accepted wake through the real Paseo ad
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
+test('the notification worker uses an artifact Paseo route with a local binding', async () => {
+  const item = await fixture();
+  try {
+    item.env.SQUARE_HOST_LEDGER_LOCAL = path.join(item.root, 'local-ledger');
+    await upsertWakeRoute({
+      location: item.squarePath,
+      participant: 'Bob',
+      sessionId: 'local-paseo-session',
+      channel: 'paseo',
+      kind: 'paseo',
+      address: { agentId: 'local-paseo-agent' },
+    }, { env: item.env, at: 3 });
+    const localLedger = createHostLedgerPort({
+      userPath: item.env.SQUARE_HOST_LEDGER_USER,
+      localPath: item.env.SQUARE_HOST_LEDGER_LOCAL,
+      writableScope: 'local',
+    });
+    await localLedger.ensurePresence({
+      location: item.squarePath,
+      participant: 'Bob',
+      session: 'local-paseo-session',
+      channel: 'claude-code',
+      route: { kind: 'paseo', address: { agentId: 'local-paseo-agent' } },
+      updatedAt: Date.now(),
+    }, 'local');
+
+    let calls = 0;
+    await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
+      env: item.env,
+      adapters: [fakeAdapter('paseo', async (_address, _payload, beforeSend) => {
+        assert.equal(await beforeSend(), true);
+        calls += 1;
+        return { outcome: 'accepted' };
+      })],
+    }));
+
+    assert.equal(calls, 1);
+    assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
 test('PaseoAdapter records transport certainty without leaking retry policy', async () => {
   const item = await fixture();
   await route(item);

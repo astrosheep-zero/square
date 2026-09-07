@@ -137,10 +137,7 @@ async function wakeRequestIsCurrent(request: WakeRequest, hostLedger: import('./
       && entry.notifications.some((notification) => notification.item.index === activity));
     const bound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(request.route.participant)
       && binding.sessionId === request.route.sessionId
-      && binding.location === request.route.location
-      && binding.route !== undefined
-      && binding.route.kind === request.route.kind
-      && JSON.stringify(binding.route.address) === JSON.stringify(request.route.address));
+      && binding.location === request.route.location);
     const published = (current.state.routes ?? []).some((route) => route.location === request.route.location
       && nameKey(route.participant) === nameKey(request.route.participant)
       && route.sessionId === request.route.sessionId
