@@ -14,7 +14,7 @@ import {
   writeSquareFile,
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
-import { express } from '../dist/landing.js';
+import { express } from '../dist/square-actions.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { validateSquareState } from '../dist/square-state.js';
 import { createFileCell, createMemoryCell } from '../dist/square-storage.js';
@@ -214,7 +214,7 @@ test('a rejected future observation cannot suppress the next real directed activ
 
   const cell = createFileCell(squarePath);
   t.after(() => cell.close());
-  await express({ cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true, mentions: ['Bob'] });
+  await express({ artifact: cell, clock: () => 3, location: squarePath }, 'Alice', 'hey @Bob', { force: true, mentions: ['Bob'] });
   const persisted = await loadSquare(squarePath);
   assert.equal(persisted.acts.at(-1)?.index, 2);
   assert.deepEqual(deriveDeliveryModel(persisted).pendingFor('Bob').map((item) => item.item.index), [2]);

@@ -11,7 +11,8 @@ import {
   sameName,
 } from './model.js';
 import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } from './square-core.js';
-import { matchesMentionTarget, readCursor, recordObservation } from './runtime.js';
+import { derivePerceptionProjection } from './perception-projection.js';
+import { matchesMentionTarget, recordObservation } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
@@ -90,18 +91,14 @@ export function isActivitySeen(squareState: SquareState, name: string, actOrInde
  */
 export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
   const landed = replayLandedAudiences(squareState.acts);
+  const perception = derivePerceptionProjection(squareState, landed);
   const roster = [...landed.joined];
   const plannedByIndex = new Map<number, PlannedNotification[]>();
   let pendingByRecipient: Map<string, PlannedNotification[]> | undefined;
 
-  function canonicalRecipient(name: string): string {
-    return landed.resolveParticipant(name) ?? name;
-  }
-
   function isSeen(requestedRecipient: string, actOrIndex: StoredAct | number): boolean {
-    const recipient = canonicalRecipient(requestedRecipient);
     const index = typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index;
-    return squareState.runtime.observations?.[recipient]?.[formatActivityId(index)]?.state === 'seen';
+    return perception.isSeen(requestedRecipient, index);
   }
 
   function plan(item: StoredAct): PlannedNotification[] {
@@ -141,26 +138,17 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     return [...(pendingByRecipient.get(recipient) ?? [])];
   }
 
-  function directedTo(item: StoredAct, recipient: string): boolean {
-    return item.kind === 'say' && landed.includes(item, recipient);
-  }
-
-  function perceive(item: StoredAct, viewer: string): Perception {
-    if (item.kind !== 'say' || sameName(item.actor, viewer)) return 'full';
-    return directedTo(item, viewer) ? 'full' : 'presence';
-  }
-
   return {
     plan,
     pendingFor,
-    directedTo,
-    perceive,
-    cursorFor: (recipient) => readCursor(squareState, recipient, landed),
+    directedTo: perception.directedTo,
+    perceive: perception.perceive,
+    cursorFor: perception.cursorFor,
     isSeen,
     knownParticipant: (name) => landed.resolveParticipant(name),
     participants: () => landed.participants,
     joinedRecipients: () => roster,
-    replayedActivityCount: landed.replayedActivityCount,
+    replayedActivityCount: perception.replayedActivityCount,
   };
 }
 

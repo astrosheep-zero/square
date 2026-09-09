@@ -1,5 +1,6 @@
-import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } from './square-core.js';
-import { matchesMentionTarget, observationFor, readCursor, recordObservation } from './runtime.js';
+import { audienceOf, formatActivityId, type Perception } from './square-core.js';
+import { derivePerceptionProjection, type PerceptionProjection } from './perception-projection.js';
+import { matchesMentionTarget, recordObservation } from './runtime.js';
 import { participantIdentity } from './participant-identity.js';
 import { SquareError, sameName, type SquareState, type StoredAct, validateName } from './model.js';
 import { resolveRosterName } from './runtime.js';
@@ -25,22 +26,7 @@ function catchLimit(value: number | undefined): number {
   return limit;
 }
 
-export interface CatchProjection {
-  cursorFor(name: string): number;
-  directedTo(activity: StoredAct, name: string): boolean;
-  perceive(activity: StoredAct, name: string): Perception;
-  isSeen(name: string, index: number): boolean;
-}
-
-function defaultProjection(state: SquareState): CatchProjection {
-  const landed = replayLandedAudiences(state.acts);
-  return {
-    cursorFor: (name) => readCursor(state, name, landed),
-    directedTo: (activity, name) => activity.kind === 'say' && landed.includes(activity, name),
-    perceive: (activity, name) => activity.kind !== 'say' || sameName(activity.actor, name) || landed.includes(activity, name) ? 'full' : 'presence',
-    isSeen: (name, index) => observationFor(state, name, index)?.state === 'seen',
-  };
-}
+export type CatchProjection = Pick<PerceptionProjection, 'cursorFor' | 'directedTo' | 'perceive' | 'isSeen'>;
 
 function resolveCatchName(state: SquareState, requestedName: string): string {
   validateName(requestedName);
@@ -57,7 +43,7 @@ export function decideCatch(
   requestedName: string,
   options: CatchOptions,
   at: number,
-  project: (state: SquareState) => CatchProjection = defaultProjection,
+  project: (state: SquareState) => CatchProjection = derivePerceptionProjection,
 ): CatchDecision {
   const viewer = resolveCatchName(state, requestedName);
   const limit = catchLimit(options.limit);

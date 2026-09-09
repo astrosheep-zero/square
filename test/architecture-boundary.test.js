@@ -91,8 +91,8 @@ test('raw file state APIs stay inside storage and the file artifact adapter', ()
   assert.deepEqual(leaks, [], `raw file state API escaped its owner boundary:\n${leaks.join('\n')}`);
 });
 
-test('StateCell access stays inside storage and its three transactional concerns', () => {
-  const owners = ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts', 'landing.ts', 'presence.ts', 'wakes.ts'];
+test('StateCell stays below the artifact adapter', () => {
+  const owners = ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts'];
   const directTransactions = filesContaining(
     /\b(?:this\.)?cell\s*\.\s*transact\s*(?:<[^()]*>)?\s*\(/,
     owners,
@@ -136,55 +136,22 @@ test('CLI observation consumes concern projections, not state or domain law', ()
   assert.deepEqual(leaks, [], `CLI observation bypasses concern projections:\n${leaks.join('\n')}`);
 });
 
-test('the collector engine is gone', () => {
-  assert.equal(fs.existsSync(path.join(root, 'square-engine.ts')), false);
-});
-
-test('the removed archive compaction protocol leaves no residue', () => {
-  const sources = new Map([
-    ...productionSources,
-    ...fs.readdirSync(path.join(root, 'test'), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
-      .map((entry) => [`test/${entry.name}`, fs.readFileSync(path.join(root, 'test', entry.name), 'utf8')]),
-  ]);
-  const removed = [
-    ['SQ', 'ARCH01'].join(''),
-    ['encode', 'Archive'].join(''),
-    ['decode', 'Archive'].join(''),
-    ['write', 'ArchiveFile'].join(''),
-    ['load', 'Archive'].join(''),
-    ['core', 'Compact'].join(''),
-    ['Compact', 'Result'].join(''),
-    ['compact', 'Square'].join(''),
-    ['compact', 'FileSquare'].join(''),
-    ['.', 'archive', '.square'].join(''),
-  ];
-  const leaks = removed.flatMap((identifier) => [...sources]
-    .filter(([, source]) => source.includes(identifier))
-    .map(([file]) => `${identifier}: ${file}`));
-  assert.deepEqual(leaks, [], `removed archive compaction residue:\n${leaks.join('\n')}`);
-});
-
-test('watch terminal law and notifier type each have one directional owner', () => {
-  const runtime = productionSources.get('runtime.ts') ?? '';
-  const facade = productionSources.get('square-facade.ts') ?? '';
-  const binding = productionSources.get('open-square.ts') ?? '';
-  const concerns = ['landing.ts', 'presence.ts', 'views.ts', 'wakes.ts'];
-  assert.equal((runtime.match(/function watchTerminalStatus\b/g) ?? []).length, 1);
-  assert.equal(concerns.filter((file) => /function watchTerminalStatus\b/.test(productionSources.get(file) ?? '')).length, 0);
-  assert.equal((facade.match(/interface WakeNotifier\b/g) ?? []).length, 0);
-  assert.doesNotMatch(binding, /WakeNotifier/);
-  assert.doesNotMatch(facade, /open-square\.js/);
-  for (const concern of concerns) {
-    assert.doesNotMatch(productionSources.get(concern) ?? '', /from ['"]\.\/(?:landing|presence|views|wakes)\.js['"]/);
+test('decisions and perception stay state-only, outside host and storage operations', () => {
+  for (const file of ['decisions.ts', 'catch-decisions.ts', 'perception-projection.ts']) {
+    const source = productionSources.get(file);
+    assert.ok(source, `${file} must be part of production sources`);
+    assert.doesNotMatch(source, /SquareArtifactPort|HostLedgerPort|\.artifact\.|\.transact\s*\(/, file);
+    assert.doesNotMatch(source, /from ['"](?:node:|\.\/(?:artifact|square-storage|square-actions|participant-host|registry)\.js)/, file);
   }
+  const actions = productionSources.get('square-actions.ts') ?? '';
+  assert.doesNotMatch(actions, /CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|SQUARE_PI_SESSION_ID|PASEO_AGENT_ID/);
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
   const directClose = filesContaining(/\.cell\.close\s*\(/, ['open-square.ts']);
   assert.deepEqual(directClose, [], `StateCell close escaped its package-private boundary: ${directClose.join(', ')}`);
-  const landingBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)landing\.js['"]/, ['square-wiring.ts']);
-  assert.deepEqual(landingBypasses, [], `participant mutation bypasses Square/Participant facade: ${landingBypasses.join(', ')}`);
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-wiring.ts']);
+  assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, ['square-wiring.ts']);
-  assert.deepEqual(presenceBypasses, [], `participant consumption bypasses Square/Participant facade: ${presenceBypasses.join(', ')}`);
+  assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);
 });

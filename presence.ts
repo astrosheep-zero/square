@@ -1,32 +1,7 @@
-import { formatActivityId } from './square-core.js';
-import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
-import { SquareError, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { resolveKnownName } from './decisions.js';
 import { recordObservation } from './runtime.js';
-import type { CatchOptions, CatchResult } from './square-facade.js';
-import { catchUp as actionCatchUp } from './square-actions.js';
-import type { CatchProjection } from './catch-decisions.js';
-
-function operationContext(square: OpenSquare | { readonly cell: OpenSquare['artifact']; readonly clock: () => number }) {
-  return 'artifact' in square
-    ? { artifact: square.artifact, clock: square.clock, location: square.location, hostLedger: square.hostLedger, wakeTransport: square.wakeTransport, env: square.env }
-    : { artifact: square.cell, clock: square.clock };
-}
-
-export async function catchUp(
-  square: OpenSquare,
-  name: string,
-  options: CatchOptions = {},
-  deriveDelivery: (state: import('./model.js').SquareState) => DeliveryModel = deriveDeliveryModel,
-): Promise<CatchResult> {
-  const project = deriveDelivery === deriveDeliveryModel
-    ? undefined
-    : (state: import('./model.js').SquareState): CatchProjection => deriveDelivery(state);
-  return actionCatchUp(operationContext(square), name, options, project);
-}
 
 /** Commit seen only for complete, actually rendered boundary bodies. */
 export async function markBoundarySeen(

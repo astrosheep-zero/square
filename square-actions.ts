@@ -2,104 +2,19 @@ import { formatActivityId, parseActivityId, type Act } from './square-core.js';
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
-import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
+import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
-import { claimSessionParticipant, claimSessionTakeover, readParticipantOwner, sessionOwnsParticipant, withOwnershipClaimLock } from './registry.js';
-import { applyWakeRouteToState, defaultWakeRouteCapabilities, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, sessionCanEndParticipant, ROUTE_FRESH_MS, type WakeBoundaryProvider, type WakeRoute } from './routes.js';
+import { claimSessionParticipant, claimSessionTakeover, readParticipantOwner, withOwnershipClaimLock } from './registry.js';
+import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
+import { applyWakeRouteToState, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, sessionCanEndParticipant } from './routes.js';
 
-export interface OperationContext {
-  readonly artifact: SquareArtifactPort;
-  readonly clock: () => number;
-  readonly location?: string;
-  readonly hostLedger?: HostLedgerPort;
-  readonly wakeTransport?: import('./ports.js').WakeTransportPort;
-  readonly env?: NodeJS.ProcessEnv;
+export interface OperationContext extends HostContext {
+  readonly wakeTransport?: WakeTransportPort;
 }
 
 export type { OwnershipFenceOptions };
-
-function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
-  const choices: readonly [string | undefined, PresenceChannel][] = [
-    [env.CLAUDE_CODE_SESSION_ID, 'claude-code'], [env.CODEX_THREAD_ID, 'codex'],
-    [env.OPENCODE_SESSION_ID, 'opencode'], [env.SQUARE_PI_SESSION_ID, 'pi'], [env.PASEO_AGENT_ID, 'paseo'],
-  ];
-  const found = choices.find(([session]) => session?.trim());
-  return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };
-}
-
-async function identityRouteDraft(context: OperationContext, participant: string): Promise<Omit<WakeRoute, 'updatedAt'> | undefined> {
-  if (context.location === undefined || context.location === 'memory') return undefined;
-  const identity = processIdentity(context.env ?? process.env);
-  const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
-  const capabilities = context.hostLedger === undefined ? { canUse: () => false } : await defaultWakeRouteCapabilities(context.hostLedger);
-  return resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
-}
-
-async function currentOwnerEpoch(context: OperationContext, participant: string): Promise<number | undefined> {
-  if (context.location === undefined || context.location === 'memory') return undefined;
-  const owner = await readParticipantOwner(context.location, participant, context.env ?? process.env);
-  return owner?.epoch;
-}
-
-async function publishIdentityRoute(context: OperationContext, participant: string, epoch?: number): Promise<void> {
-  if (context.location === undefined || context.location === 'memory') return;
-  const identity = processIdentity(context.env ?? process.env);
-  const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
-  const capabilities = context.hostLedger === undefined ? { canUse: () => false } : await defaultWakeRouteCapabilities(context.hostLedger);
-  const route = resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
-  if (route === undefined) return;
-  const ownerEpoch = epoch ?? await currentOwnerEpoch(context, participant);
-  await publishWakeRoute(context.artifact, { ...route, ...(ownerEpoch === undefined ? {} : { epoch: ownerEpoch }) }, { at: context.clock(), requireCurrentSession: true }).catch(() => undefined);
-}
-
-async function retireIdentityRoute(context: OperationContext, participant: string, expectedEpoch?: number): Promise<void> {
-  if (context.location === undefined || context.location === 'memory') return;
-  const identity = processIdentity(context.env ?? process.env);
-  await retireWakeRouteFromArtifact(
-    context.artifact,
-    { location: context.location, participant, sessionId: identity.session },
-    expectedEpoch === undefined ? {} : { expectedEpoch },
-  ).catch(() => undefined);
-}
-
-async function assertLiveOwner(context: OperationContext, participant: string, expectedEpoch?: number): Promise<boolean> {
-  if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return true;
-  const identity = processIdentity(context.env ?? process.env);
-  // Library callers without a harness session are not ownership-fenced unless an epoch was supplied.
-  if (identity.channel === 'unknown' && expectedEpoch === undefined) return true;
-  return sessionOwnsParticipant(context.location, participant, identity.session, context.env ?? process.env, expectedEpoch);
-}
-
-/** Presence is best effort and runs only after the artifact mutation commits. */
-async function ensureLocalPresence(context: OperationContext, participant: string, epoch?: number): Promise<void> {
-  if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return;
-  const identity = processIdentity(context.env ?? process.env);
-  const ownerEpoch = epoch ?? await currentOwnerEpoch(context, participant);
-  const now = context.clock();
-  // Semantic publish: an unexpired presence row already stands when it carries the same owner epoch.
-  try {
-    const existing = await context.hostLedger.listPresence({ location: context.location, participant, session: identity.session, scopes: ['local'], now });
-    if (existing.some((row) => row.channel === identity.channel
-      && now - (row.updatedAt ?? 0) < ROUTE_FRESH_MS
-      && (ownerEpoch === undefined || (row as import('./ports.js').PresenceRecord & { epoch?: number }).epoch === ownerEpoch))) return;
-  } catch { /* fall through to the best-effort ensure below */ }
-  const result = await context.hostLedger.ensurePresence({
-    location: context.location,
-    participant,
-    session: identity.session,
-    channel: identity.channel,
-    // Presence rows are host-ledger wall-time evidence; the square clock belongs to artifact activities.
-    updatedAt: Date.now(),
-    ...(ownerEpoch === undefined || ownerEpoch <= 0 ? {} : { epoch: ownerEpoch }),
-  } as import('./ports.js').PresenceRecord & { epoch?: number }, 'local').catch((error) => ({
-    status: 'degraded' as const,
-    record: { location: context.location!, participant, session: identity.session, channel: identity.channel },
-    error,
-  }));
-  if (result.status === 'degraded') process.stderr.write(`! host presence degraded: ${result.error instanceof Error ? result.error.message : String(result.error)}\n`);
-}
 
 function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
   if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);

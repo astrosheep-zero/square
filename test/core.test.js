@@ -5,7 +5,7 @@ import { emptyRuntimeState } from '../dist/artifact.js';
 import { deliveryDelta } from '../dist/activity-feed.js';
 import { decideCatch } from '../dist/catch-decisions.js';
 import { coreActivities, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
-import { done, express, ignore, join, listen, listening } from '../dist/landing.js';
+import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 import { readCursor } from '../dist/runtime.js';
 
@@ -99,7 +99,7 @@ test('host controls preserve the requesting actor and body', () => {
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
   const cell = createMemoryCell(makeState());
-  const square = { cell, clock: () => (now += 1), location: 'memory' };
+  const square = { artifact: cell, clock: () => (now += 1), location: 'memory' };
   await join(square, 'Alice');
   await express(square, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
   await done(square, 'Alice', 'bye');
@@ -206,7 +206,7 @@ test('mention and listening caps reject without enumerating the roster', () => {
 test('listener landings append only real edge changes', async () => {
   let now = 10;
   const cell = createMemoryCell(makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
-  const square = { cell, clock: () => ++now, location: 'memory' };
+  const square = { artifact: cell, clock: () => ++now, location: 'memory' };
 
   const first = await listen(square, 'Caller', 'aku/riko');
   const repeated = await listen(square, 'caller', 'AKU/RIKO');

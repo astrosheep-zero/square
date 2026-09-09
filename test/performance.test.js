@@ -4,7 +4,7 @@ import test from 'node:test';
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { pendingNotificationSweepFromState } from '../dist/notifications.js';
-import { catchUp } from '../dist/presence.js';
+import { catchUp } from '../dist/square-actions.js';
 import { renderWatchOutput } from '../dist/presentation.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 import { pendingDeliveries } from '../dist/views.js';
@@ -77,7 +77,7 @@ test('large delivered catch carries its settled perception into rendering withou
 
   const state = squareState(acts);
   const cell = createMemoryCell(state);
-  const square = { cell, clock: () => 100_000, location: 'memory' };
+  const square = { artifact: cell, clock: () => 100_000, location: 'memory' };
   let derivations = 0;
   try {
     const caught = await catchUp(square, 'P0', {}, (snapshot) => {
