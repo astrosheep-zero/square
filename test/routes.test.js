@@ -344,7 +344,7 @@ test('route publication replaces an aliased persisted identity', async () => {
         address: { threadId: 'session-a' },
       }, { at: 2 });
       const routes = await readWakeRoutes({ location });
-      assert.deepEqual(routes.map((route) => [route.location, route.sessionId]), [[fs.realpathSync(location), 'session-a']]);
+      assert.deepEqual(routes.map((route) => [route.location, route.sessionId]), [[fs.realpathSync.native(location), 'session-a']]);
     } finally { await closeOpenSquare(square); }
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });

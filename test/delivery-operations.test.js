@@ -111,7 +111,7 @@ test('a failed candidate followed by an accepted candidate is accepted once for 
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
@@ -149,7 +149,7 @@ test('all not-capable candidates classify one attention and persist no attempts'
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
@@ -186,7 +186,7 @@ test('concurrent sessions serialize one attention to one transport call', { conc
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'paseo', kind: 'paseo', address: { agentId: 'b' }, updatedAt: 3 },
@@ -223,7 +223,7 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'paseo', kind: 'paseo', address: { agentId: 'b' }, updatedAt: 3 },
@@ -258,7 +258,7 @@ test('unknown outcome stops fallback across sessions and route kinds', async () 
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
@@ -297,7 +297,7 @@ test('route ledger read failure stays attention-local when a later route accepts
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
@@ -342,7 +342,7 @@ test('recovered ambiguous dispatch stops every fallback route', async () => {
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync(location);
+  const canonicalLocation = fs.realpathSync.native(location);
   state.routes = [
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
@@ -390,7 +390,7 @@ test('a local binding without a route still matches its artifact route', async (
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  state.routes = [{ location: fs.realpathSync(location), participant: 'Bob', sessionId: 'local-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'local-agent' }, updatedAt: 3 }];
+  state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'local-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'local-agent' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
   await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'local-agent' } }, updatedAt: 3 }, 'local');
@@ -417,7 +417,7 @@ test('attention caught after claim is not sent', async () => {
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  state.routes = [{ location: fs.realpathSync(location), participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 }];
+  state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
   const base = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
   await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
