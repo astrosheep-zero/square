@@ -4,16 +4,15 @@ import { waitForSessionPending } from '../dist/inbox.js';
 import { projectSessionBindings } from '../dist/square-projections.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
-const PI_SEND_TIMEOUT_MS = 5_000;
-const DEFAULT_PI_BOUNDARY_TIMEOUT_MS = 2_000;
+class PiDeliveryDroppedError extends Error {
+  constructor() {
+    super('Pi discarded the queued Square notification');
+    this.name = 'PiDeliveryDroppedError';
+  }
+}
 
 function sessionBindings(sessionId) {
   return projectSessionBindings({ hostLedger: createHostLedgerPort(), sessionId });
-}
-
-function piBoundaryTimeoutMs() {
-  const configured = Number.parseInt(process.env.SQUARE_PI_BOUNDARY_TIMEOUT_MS || '', 10);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PI_BOUNDARY_TIMEOUT_MS;
 }
 
 export function pendingInbox(inbox) {
@@ -33,67 +32,87 @@ export function renderPiInbox(inbox) {
 export default function squarePiExtension(pi) {
   let sessionId;
   let sessionCwd;
-  let joiningContext;
   let previousSessionId;
   let watcher;
   let watcherAbort;
   let generation = 0;
-  let presenting = false;
-  let settledSerial = 0;
-  let settledWaiters = [];
   const handledPending = new Set();
+  const landingAcks = new Map();
   let retryAfterChange = false;
   let retryWait;
-  const present = (deliver, signal) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver, undefined, undefined, signal);
+  let turnIndex = 0;
+  let activeTurn;
+  let currentRunSignal;
+  const deferredSteers = new Set();
 
-  let boundaryPending;
-  const boundaryControllers = new Set();
-  const presentAtBoundary = async (deliver) => {
-    // One slow Square operation must neither hold Pi's prompt nor accumulate
-    // another unresolved lookup on every prompt while the first unwinds.
-    if (boundaryPending !== undefined || sessionId === undefined) return undefined;
-    const controller = new AbortController();
-    boundaryControllers.add(controller);
-    let timer;
-    const expired = new Promise((resolve) => {
-      controller.signal.addEventListener('abort', () => resolve(undefined), { once: true });
-      timer = setTimeout(() => controller.abort(new Error('Pi boundary presentation timed out')), piBoundaryTimeoutMs());
-    });
-    try {
-      const pending = present((context) => {
-        // A lookup may finish after the deadline or after session replacement.
-        // Refuse before rendering so that late work cannot acknowledge anything.
-        controller.signal.throwIfAborted();
-        return deliver(context);
-      }, controller.signal);
-      boundaryPending = pending;
-      void pending?.finally(() => {
-        if (boundaryPending === pending) boundaryPending = undefined;
-      }).catch(() => undefined);
-      return await Promise.race([pending, expired]);
-    } finally {
-      clearTimeout(timer);
-      boundaryControllers.delete(controller);
-    }
+  const waitForAgentSettled = (signal) => new Promise((resolve, reject) => {
+    const deferred = {
+      release() {
+        deferredSteers.delete(deferred);
+        signal.removeEventListener('abort', abort);
+        resolve();
+      },
+    };
+    const abort = () => {
+      deferredSteers.delete(deferred);
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason || new Error('Pi native injection aborted'));
+    };
+    deferredSteers.add(deferred);
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+  });
+
+  const releaseDeferredSteers = () => {
+    for (const deferred of [...deferredSteers]) deferred.release();
   };
 
-  const waitForSettled = (serial, signal) => {
-    if (settledSerial !== serial) return Promise.resolve();
-    return new Promise((resolve) => {
-      const waiter = { serial, resolve };
-      settledWaiters.push(waiter);
-      if (signal) signal.addEventListener('abort', () => {
-        const index = settledWaiters.indexOf(waiter);
-        if (index >= 0) settledWaiters.splice(index, 1);
-        resolve();
-      }, { once: true });
+  const failAcks = (error) => {
+    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
+    for (const ack of acks) ack.settle(error);
+  };
+
+  const acknowledgeLanding = (message) => {
+    if (message?.role !== 'custom' || message.customType !== 'square' || typeof message.content !== 'string') return;
+    const acks = landingAcks.get(message.content);
+    if (acks === undefined) return;
+    for (const ack of [...acks]) ack.settle();
+  };
+
+  const waitForLanding = (content, signal, kind) => {
+    let ack;
+    const promise = new Promise((resolve, reject) => {
+      const abort = () => ack.settle(signal.reason || new Error('Pi native injection aborted'));
+      ack = {
+        kind,
+        sentAfterTurn: turnIndex,
+        emptyTurnWindows: 0,
+        dropAfterSettled: false,
+        settle(error) {
+          if (ack.settled) return;
+          ack.settled = true;
+          signal.removeEventListener('abort', abort);
+          const acks = landingAcks.get(content);
+          if (acks?.delete(ack) && acks.size === 0) landingAcks.delete(content);
+          if (error === undefined) resolve();
+          else reject(error);
+        },
+      };
+      let acks = landingAcks.get(content);
+      if (acks === undefined) {
+        acks = new Set();
+        landingAcks.set(content, acks);
+      }
+      acks.add(ack);
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
     });
+    return { promise, ack };
   };
 
   // A transport may keep its promise pending while Pi is shutting down or
   // replacing a session. Never make a lifecycle hook wait for that transport.
   const stopWatcher = () => {
-    for (const controller of boundaryControllers) controller.abort(new Error('Pi session ended'));
     watcherAbort?.abort();
     watcher = undefined;
     watcherAbort = undefined;
@@ -109,7 +128,7 @@ export default function squarePiExtension(pi) {
     signal.addEventListener('abort', finish, { once: true });
   });
 
-  const wake = async (piContext, token, signal) => {
+  const wake = async (token, signal) => {
     const armDeferredRetry = () => {
       const controller = new AbortController();
       let resolveArmed;
@@ -129,14 +148,26 @@ export default function squarePiExtension(pi) {
     };
 
     while (sessionId !== undefined && token === generation && !signal.aborted) {
-      if ((await sessionBindings(sessionId)).length === 0) {
+      try {
+        if ((await sessionBindings(sessionId)).length === 0) {
+          await pause(signal, 1_000);
+          continue;
+        }
+      } catch {
         await pause(signal, 1_000);
         continue;
       }
+
       const deferredRetry = retryAfterChange;
-      const pending = deferredRetry && retryWait !== undefined
-        ? await retryWait
-        : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending });
+      let pending;
+      try {
+        pending = deferredRetry && retryWait !== undefined
+          ? await retryWait
+          : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending });
+      } catch {
+        await pause(signal, 1_000);
+        continue;
+      }
       if (sessionId === undefined || token !== generation || signal.aborted) return;
       if (pending.length === 0) {
         if (deferredRetry) {
@@ -147,112 +178,136 @@ export default function squarePiExtension(pi) {
       }
       retryAfterChange = false;
       retryWait = undefined;
-      if (!piContext.isIdle()) {
-        const serial = settledSerial;
-        await waitForSettled(serial, signal);
-        continue;
-      }
-      if (presenting) continue;
+
       const keys = inboxKeys(pending);
-      presenting = true;
       const deferred = armDeferredRetry();
       const retryArmed = await deferred.armed;
       if (!retryArmed) {
         deferred.cancel();
-        presenting = false;
         continue;
       }
       let keepDeferred = false;
       try {
-        const delivered = await presentPendingAtBoundary(
+        await presentPendingAtBoundary(
           sessionId,
           async (content) => {
-            const send = Promise.resolve(pi.sendMessage(
-              { customType: 'square', content, display: true },
-              { deliverAs: 'steer', triggerTurn: true },
-            ));
-            let timer;
+            if (currentRunSignal?.aborted) await waitForAgentSettled(signal);
+            const landing = waitForLanding(content, signal, 'steer');
             try {
-              await Promise.race([
-                send,
-                new Promise((_, reject) => {
-                  if (signal.aborted) {
-                    reject(signal.reason || new Error('Pi native injection aborted'));
-                    return;
-                  }
-                  signal.addEventListener('abort', () => reject(signal.reason || new Error('Pi native injection aborted')), { once: true });
-                }),
-                new Promise((_, reject) => {
-                  timer = setTimeout(() => reject(new Error('Pi native injection timed out')), PI_SEND_TIMEOUT_MS);
-                }),
-              ]);
-            } finally {
-              if (timer !== undefined) clearTimeout(timer);
+              Promise.resolve(pi.sendMessage(
+                { customType: 'square', content, display: true },
+                { deliverAs: 'steer', triggerTurn: true },
+              )).catch((error) => landing.ack.settle(error));
+            } catch (error) {
+              landing.ack.settle(error);
             }
-            return true;
+            return landing.promise;
           },
           undefined,
           undefined,
           signal,
         );
-        if (delivered === true || delivered === undefined) {
-          for (const key of keys) handledPending.add(key);
+        for (const key of keys) handledPending.add(key);
+      } catch (error) {
+        if (error instanceof PiDeliveryDroppedError) {
+          deferred.cancel();
+          continue;
         }
-      } catch {
         // The next state edge is already being observed before native injection starts.
         retryAfterChange = true;
         retryWait = deferred.pending;
         keepDeferred = true;
       } finally {
         if (!keepDeferred) deferred.cancel();
-        presenting = false;
       }
     }
   };
 
   pi.on('session_start', async (_event, ctx) => {
     generation += 1;
+    failAcks(new Error('Pi session replaced'));
     stopWatcher();
     handledPending.clear();
     retryAfterChange = false;
     retryWait = undefined;
+    turnIndex = 0;
+    activeTurn = undefined;
+    currentRunSignal = undefined;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     previousSessionId = process.env.SQUARE_PI_SESSION_ID;
     process.env.SQUARE_PI_SESSION_ID = sessionId;
-    joiningContext = undefined;
-    void automaticSessionStart('pi', sessionId, sessionCwd).catch(() => undefined);
-    watcherAbort = new AbortController();
     const token = generation;
-    watcher = wake(ctx, token, watcherAbort.signal).catch(() => undefined);
+    watcherAbort = new AbortController();
+    const signal = watcherAbort.signal;
+    void automaticSessionStart('pi', sessionId, sessionCwd).then((context) => {
+      if (context === undefined || sessionId === undefined || token !== generation) return;
+      const landing = waitForLanding(context, signal, 'nextTurn');
+      try {
+        Promise.resolve(pi.sendMessage(
+          { customType: 'square', content: context, display: true },
+          { deliverAs: 'nextTurn' },
+        )).catch((error) => landing.ack.settle(error));
+      } catch {
+        // Joining context is advisory; an unavailable Pi transport does not block startup.
+        landing.ack.settle(new Error('Pi joining-context injection failed'));
+      }
+      void landing.promise.catch(() => undefined);
+    }).catch(() => undefined);
+    watcher = wake(token, signal).catch(() => undefined);
+  });
+
+  pi.on('agent_start', async (_event, ctx) => {
+    currentRunSignal = ctx?.getSignal?.();
+  });
+
+  pi.on('message_end', async (event) => {
+    if (activeTurn !== undefined && (event.message?.role === 'user' || event.message?.role === 'custom')) {
+      activeTurn.hasInput = true;
+    }
+    acknowledgeLanding(event.message);
+  });
+
+  pi.on('turn_start', async () => {
+    turnIndex += 1;
+    activeTurn = { index: turnIndex, hasInput: false, signal: currentRunSignal };
+  });
+
+  pi.on('turn_end', async (event, ctx) => {
+    const turn = activeTurn;
+    activeTurn = undefined;
+    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
+    if (event.message?.stopReason === 'aborted' && ctx?.mode === 'tui' && turn?.signal !== undefined) {
+      for (const ack of acks) {
+        if (ack.kind === 'steer') ack.dropAfterSettled = true;
+      }
+      return;
+    }
+    if (turn === undefined) return;
+    for (const ack of acks) {
+      if (ack.kind !== 'steer' || ack.dropAfterSettled || turn.index <= ack.sentAfterTurn) continue;
+      if (turn.hasInput) {
+        ack.emptyTurnWindows = 0;
+      } else {
+        ack.emptyTurnWindows += 1;
+        if (ack.emptyTurnWindows >= 2) ack.settle(new PiDeliveryDroppedError());
+      }
+    }
   });
 
   pi.on('agent_settled', async () => {
-    settledSerial += 1;
-    const waiters = settledWaiters;
-    settledWaiters = [];
-    for (const waiter of waiters) waiter.resolve();
-  });
-
-  pi.on('before_agent_start', async () => {
-    try {
-      if (joiningContext) {
-        const context = joiningContext;
-        joiningContext = undefined;
-        return { message: { customType: 'square', content: context, display: true } };
-      }
-      if (presenting) return undefined;
-      return await presentAtBoundary((context) => ({ message: { customType: 'square', content: context, display: true } }));
-    } catch {
-      return undefined;
+    currentRunSignal = undefined;
+    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
+    for (const ack of acks) {
+      if (ack.dropAfterSettled) ack.settle(new PiDeliveryDroppedError());
     }
+    releaseDeferredSteers();
   });
 
   pi.on('session_shutdown', async () => {
     generation += 1;
+    failAcks(new Error('Pi session ended'));
     stopWatcher();
-    for (const waiter of settledWaiters) waiter.resolve();
-    settledWaiters = [];
     if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd).catch(() => undefined);
     if (process.env.SQUARE_PI_SESSION_ID === sessionId) {
       if (previousSessionId === undefined) delete process.env.SQUARE_PI_SESSION_ID;
@@ -260,8 +315,8 @@ export default function squarePiExtension(pi) {
     }
     sessionId = undefined;
     sessionCwd = undefined;
-    joiningContext = undefined;
-    presenting = false;
     retryWait = undefined;
+    activeTurn = undefined;
+    currentRunSignal = undefined;
   });
 }

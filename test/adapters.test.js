@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -559,90 +560,273 @@ async function waitUntil(predicate, message) {
   assert.fail(message);
 }
 
-test('Pi presents each pending notification once to the current owner', async () => {
-  await withPiFixture('pi-session-id', async () => {
-    const handlers = new Map();
-    const pi = {
-      on(event, handler) { handlers.set(event, handler); },
-    };
-    squarePiExtension(pi);
-    const context = {
-      sessionManager: { getSessionId: () => 'pi-session-id' },
-      isIdle: () => false,
-    };
-
-    await handlers.get('session_start')({}, context);
-    assert.equal(process.env.SQUARE_PI_SESSION_ID, 'pi-session-id');
-    const first = await handlers.get('before_agent_start')({}, context);
-    assert.equal(first.message.customType, 'square');
-    assert.doesNotMatch(first.message.content, /catch --now/);
-    assert.equal(await handlers.get('before_agent_start')({}, context), undefined);
-    await handlers.get('session_shutdown')({}, context);
+function piMessageEnd(handlers, content) {
+  return handlers.get('message_end')({
+    message: { role: 'custom', customType: 'square', content },
   });
-});
+}
 
-test('Pi idle watcher wakes only after a new directed activity lands', async () => {
-  await withPiFixture('pi-wake-session', async (item) => {
+function piInputMessageEnd(handlers, role = 'user') {
+  return handlers.get('message_end')({ message: { role, content: 'ordinary queued input' } });
+}
+
+function piTurnStart(handlers) {
+  return handlers.get('turn_start')({});
+}
+
+function piAgentStart(handlers, ctx) {
+  return handlers.get('agent_start')({}, ctx);
+}
+
+function piTurnEnd(handlers, stopReason = 'stop', ctx = {}) {
+  return handlers.get('turn_end')({ message: { stopReason } }, ctx);
+}
+
+test('Pi steers pending activity into a running agent and commits only when it lands', async () => {
+  await withPiFixture('pi-running-session', async (item) => {
     const handlers = new Map();
     const sent = [];
     const pi = {
       on(event, handler) { handlers.set(event, handler); },
-      async sendMessage(message, options) { sent.push({ message, options }); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
     squarePiExtension(pi);
     const context = {
-      sessionManager: { getSessionId: () => 'pi-wake-session' },
+      sessionManager: { getSessionId: () => 'pi-running-session' },
       cwd: '/tmp/no-public-square',
-      isIdle: () => true,
+      isIdle() { throw new Error('the watcher must not inspect idle state'); },
     };
+    assert.deepEqual([...handlers.keys()].sort(), ['agent_settled', 'agent_start', 'message_end', 'session_shutdown', 'session_start', 'turn_end', 'turn_start']);
     await handlers.get('session_start')({}, context);
     try {
-      assert.equal(sent.length, 0);
-      const actIndex = await expressToPi(item, 'native wake @Bob');
-      await waitUntil(() => sent.length === 1, 'Pi did not wake for new directed activity');
-      await waitUntil(async () => await hasPresentedForOwner('pi-wake-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit presentation');
-      await waitUntil(async () => (await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)]?.state === 'seen', 'Pi did not mark notification seen');
-      assert.equal(sent.length, 1);
-      assert.equal(sent[0].message.customType, 'square');
-      assert.equal(sent[0].options.triggerTurn, true);
-      assert.match(sent[0].message.content, /source="square"/);
-      assert.match(sent[0].message.content, /native wake @Bob/);
-      assert.equal(await hasPresentedForOwner('pi-wake-session', item.squarePath, 'Bob', actIndex), true);
+      const actIndex = await expressToPi(item, 'steer me while running @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not steer the new directed activity');
+      assert.deepEqual(sent[0].options, { deliverAs: 'steer', triggerTurn: true });
+      assert.match(sent[0].message.content, /steer me while running @Bob/);
+      assert.equal(await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), false);
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+
+      await piMessageEnd(handlers, 'another Square message');
+      assert.equal(await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), false);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(async () => await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the landed notification');
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal(sent.length, 1);
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }
   }, false);
 });
 
-test('Pi keeps directed activity pending while busy and wakes after agent_settled', async () => {
-  await withPiFixture('pi-busy-session', async (item) => {
+test('Pi retries a dropped steer immediately and commits the retry once it lands', async () => {
+  await withPiFixture('pi-dropped-session', async (item) => {
     const handlers = new Map();
     const sent = [];
-    let idle = false;
     const pi = {
       on(event, handler) { handlers.set(event, handler); },
-      async sendMessage(message, options) { sent.push({ message, options }); },
-    };
-    const context = {
-      sessionManager: { getSessionId: () => 'pi-busy-session' },
-      cwd: '/tmp/no-public-square',
-      isIdle: () => idle,
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
     squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
     await handlers.get('session_start')({}, context);
     try {
-      await expressToPi(item, 'wait until settled @Bob');
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(sent.length, 0);
-      idle = true;
-      await handlers.get('agent_settled')({}, context);
-      await waitUntil(() => sent.length === 1, 'Pi did not wake after agent_settled');
-      assert.match(sent[0].message.content, /wait until settled @Bob/);
+      const actIndex = await expressToPi(item, 'retry the dropped steer @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not attempt the first steer');
+      await piTurnStart(handlers);
+      await piTurnEnd(handlers);
+      assert.equal(sent.length, 1);
+      await piTurnStart(handlers);
+      await piTurnEnd(handlers);
+      await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
+      assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
+      await piMessageEnd(handlers, sent[1].message.content);
+      await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal(sent.length, 2);
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }
   }, false);
+});
+
+test('Pi retries a TUI-cleared steer after the agent settles despite a second Esc', async () => {
+  await withPiFixture('pi-tui-aborted-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-tui-aborted-session' }, cwd: '/tmp/no-public-square' };
+    await handlers.get('session_start')({}, context);
+    try {
+      const run = new AbortController();
+      await piAgentStart(handlers, { getSignal: () => run.signal });
+      const actIndex = await expressToPi(item, 'retry after the TUI clears the queue @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
+      await piTurnStart(handlers);
+      run.abort();
+      run.abort();
+      await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+      assert.equal(sent.length, 1);
+      await handlers.get('agent_settled')({});
+      await waitUntil(() => sent.length === 2, 'Pi did not retry after the TUI abort settled');
+      assert.deepEqual(sent[1].options, { deliverAs: 'steer', triggerTurn: true });
+      await piMessageEnd(handlers, sent[1].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-tui-aborted-session', item.squarePath, 'Bob', actIndex),
+        'Pi did not commit the retry after the TUI abort',
+      );
+      assert.equal(sent.length, 2);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi defers a steer that arrives after the TUI abort signal until the agent settles', async () => {
+  await withPiFixture('pi-post-abort-steer-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-post-abort-steer-session' }, cwd: '/tmp/no-public-square' };
+    await handlers.get('session_start')({}, context);
+    try {
+      const abortedRun = new AbortController();
+      await piAgentStart(handlers, { getSignal: () => abortedRun.signal });
+      await piTurnStart(handlers);
+      abortedRun.abort();
+      const actIndex = await expressToPi(item, 'defer until the TUI abort settles @Bob');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(sent.length, 0);
+      await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+      await handlers.get('agent_settled')({});
+      await waitUntil(() => sent.length === 1, 'Pi did not steer after the abort settled');
+
+      await piAgentStart(handlers, { getSignal: () => new AbortController().signal });
+      await piTurnStart(handlers);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', actIndex),
+        'Pi did not commit the deferred post-abort steer',
+      );
+      assert.equal(sent.length, 1);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi lets a steer retained past errored and RPC-aborted runs land at the next drain', async () => {
+  await withPiFixture('pi-retained-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-retained-session' }, cwd: '/tmp/no-public-square' };
+    await handlers.get('session_start')({}, context);
+    try {
+      const actIndex = await expressToPi(item, 'land after the next initial drain @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
+      await piTurnStart(handlers);
+      await piInputMessageEnd(handlers);
+      await piTurnEnd(handlers, 'error', { mode: 'tui' });
+      await piTurnStart(handlers);
+      await piInputMessageEnd(handlers);
+      await piTurnEnd(handlers, 'aborted', { mode: 'rpc' });
+      await handlers.get('agent_settled')({});
+      assert.equal(sent.length, 1);
+      await piTurnStart(handlers);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-retained-session', item.squarePath, 'Bob', actIndex),
+        'Pi did not commit the retained steer after it landed',
+      );
+      assert.equal(sent.length, 1);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi does not drop a Square steer queued behind ordinary steers', async () => {
+  await withPiFixture('pi-queued-steer-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-queued-steer-session' }, cwd: '/tmp/no-public-square' };
+    await handlers.get('session_start')({}, context);
+    try {
+      const actIndex = await expressToPi(item, 'wait behind ordinary steers @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
+      for (let index = 0; index < 4; index += 1) {
+        await piTurnStart(handlers);
+        await piInputMessageEnd(handlers);
+        await piTurnEnd(handlers);
+      }
+      assert.equal(sent.length, 1);
+      await piTurnStart(handlers);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-queued-steer-session', item.squarePath, 'Bob', actIndex),
+        'Pi did not commit the late queued steer',
+      );
+      assert.equal(sent.length, 1);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  }, false);
+});
+
+test('Pi releases a settled landing acknowledgment from its watcher signal', async () => {
+  const NativeAbortController = globalThis.AbortController;
+  const controllers = [];
+  globalThis.AbortController = class extends NativeAbortController {
+    constructor() {
+      super();
+      controllers.push(this);
+    }
+  };
+  try {
+    await withPiFixture('pi-settled-ack-session', async (item) => {
+      const handlers = new Map();
+      const sent = [];
+      const pi = {
+        on(event, handler) { handlers.set(event, handler); },
+        sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+      };
+      squarePiExtension(pi);
+      const context = { sessionManager: { getSessionId: () => 'pi-settled-ack-session' }, cwd: '/tmp/no-public-square' };
+      await handlers.get('session_start')({}, context);
+      try {
+        await expressToPi(item, 'release this ack @Bob');
+        await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
+        const watcherSignal = controllers[0].signal;
+        const listenersBeforeLanding = getEventListeners(watcherSignal, 'abort').length;
+        await piMessageEnd(handlers, sent[0].message.content);
+        await waitUntil(
+          () => getEventListeners(watcherSignal, 'abort').length === listenersBeforeLanding - 1,
+          'Pi retained the settled landing acknowledgment abort listener',
+        );
+      } finally {
+        await handlers.get('session_shutdown')({}, context);
+      }
+    }, false);
+  } finally {
+    globalThis.AbortController = NativeAbortController;
+  }
 });
 
 test('Pi lifecycle hooks do not wait for a stuck native injection', async () => {
@@ -659,7 +843,6 @@ test('Pi lifecycle hooks do not wait for a stuck native injection', async () => 
     const context = {
       sessionManager: { getSessionId: () => 'pi-stuck-session' },
       cwd: '/tmp/no-public-square',
-      isIdle: () => true,
     };
     squarePiExtension(pi);
     await handlers.get('session_start')({}, context);
@@ -673,24 +856,23 @@ test('Pi lifecycle hooks do not wait for a stuck native injection', async () => 
   });
 });
 
-test('Pi retries failed native injection without committing presented or seen', async () => {
+test('Pi defers a rejected native injection until the next Square change', async () => {
   await withPiFixture('pi-retry-session', async (item) => {
     const handlers = new Map();
     let calls = 0;
-    let releaseSecond;
-    const secondSend = new Promise((resolve) => { releaseSecond = resolve; });
+    const sent = [];
     const pi = {
       on(event, handler) { handlers.set(event, handler); },
-      sendMessage() {
+      sendMessage(message, options) {
         calls += 1;
+        sent.push({ message, options });
         if (calls === 1) return Promise.reject(new Error('native injection failed'));
-        return secondSend;
+        return Promise.resolve();
       },
     };
     const context = {
       sessionManager: { getSessionId: () => 'pi-retry-session' },
       cwd: '/tmp/no-public-square',
-      isIdle: () => true,
     };
     squarePiExtension(pi);
     await handlers.get('session_start')({}, context);
@@ -709,20 +891,19 @@ test('Pi retries failed native injection without committing presented or seen', 
         await square.close();
       }
       await waitUntil(() => calls === 2, 'Pi did not retry after the next Square change');
-      releaseSecond();
+      await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex),
         'successful retry did not commit presentation',
       );
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
-      releaseSecond();
       await handlers.get('session_shutdown')({}, context);
     }
   }, false);
 });
 
-test('Pi presents a clipped body without marking it seen', async () => {
+test('Pi presents a clipped body without marking it seen after it lands', async () => {
   await withPiFixture('pi-preview-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -733,7 +914,6 @@ test('Pi presents a clipped body without marking it seen', async () => {
     const context = {
       sessionManager: { getSessionId: () => 'pi-preview-session' },
       cwd: '/tmp/no-public-square',
-      isIdle: () => true,
     };
     squarePiExtension(pi);
     await handlers.get('session_start')({}, context);
@@ -744,15 +924,9 @@ test('Pi presents a clipped body without marking it seen', async () => {
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
       assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
-
-      const square = await Square.at({ path: item.squarePath });
-      try {
-        const alice = await square.join('Alice');
-        await alice.listen('Bob');
-      } finally {
-        await square.close();
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await piMessageEnd(handlers, sent[0].message.content);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
       assert.equal(sent.length, 1);
     } finally {
       await handlers.get('session_shutdown')({}, context);
