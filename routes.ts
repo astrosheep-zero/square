@@ -82,7 +82,8 @@ function sameRouteAddress(left: Readonly<Record<string, string>>, right: Readonl
 }
 function canonicalRouteLocationSync(location: string): string {
   const absolute = path.resolve(location);
-  try { return fs.realpathSync(absolute); } catch { return absolute; }
+  // Match fs.promises.realpath used by artifact and presence adapters, including Windows 8.3 aliases.
+  try { return fs.realpathSync.native(absolute); } catch { return absolute; }
 }
 
 export function applyWakeRouteToState(state: import('./model.js').SquareState, route: Omit<WakeRoute, 'updatedAt'> & RouteEpoch, at = Date.now()): void {

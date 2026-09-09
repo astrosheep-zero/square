@@ -301,7 +301,7 @@ test('missing probes do not create a database and malformed or unsupported candi
   invalidState.runtime.nextActIndex = -1;
   await assert.rejects(() => writeSquareFile(invalidInitial, invalidState), /schema is malformed/);
   assert.equal(fs.existsSync(invalidInitial), false, 'invalid initial state left a placeholder artifact');
-  const vanished = path.join(dir, 'vanished #? [名].square');
+  const vanished = path.join(dir, process.platform === 'win32' ? 'vanished # [名].square' : 'vanished #? [名].square');
   await writeSquareFile(vanished, makeState());
   fs.unlinkSync(vanished);
   await assert.rejects(() => loadSquare(vanished), /not found|Invalid square artifact|unable to open/i);

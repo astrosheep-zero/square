@@ -90,7 +90,11 @@ test('abort interrupts busy retry without entering the critical section', async 
     await assert.rejects(pending, (error) => error?.cause?.message === 'test timeout' || error?.message === 'test timeout');
     assert.equal(entered, false);
   } finally {
-    child.kill();
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = new Promise((resolve) => child.once('close', resolve));
+      child.kill();
+      await closed;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

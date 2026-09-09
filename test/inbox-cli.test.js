@@ -18,9 +18,10 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
   }, { hardCap: null });
   const root = path.dirname(source);
   const canonicalSource = await fs.promises.realpath(source);
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
 
-  const copyDirectory = path.join(root, 'z'.repeat(180));
+  // Exceed the 160-character preview without exceeding SQLite's Windows path limit.
+  const copyDirectory = path.join(root, 'z'.repeat(Math.max(1, 180 - root.length)));
   fs.mkdirSync(copyDirectory);
   const copies = Array.from({ length: 100 }, (_value, index) => {
     const squarePath = path.join(copyDirectory, `membership-${String(index).padStart(3, '0')}.square`);

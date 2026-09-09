@@ -33,6 +33,8 @@ test('callable routes are read from receiver-owned square artifact', async () =>
     await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
     await upsertWakeRoute({ location, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 's-a' } }, { env: item.env, at: 1 });
     assert.deepEqual((await readWakeRoutes({ location, now: 2 })).map((route) => [route.sessionId, route.address]), [['s-a', { threadId: 's-a' }]]);
+    const canonical = await fs.promises.realpath(location);
+    assert.equal((await loadSquare(location)).routes[0].location, canonical, 'published routes must use the same native path as presence and artifact adapters');
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 test('local presence cannot plant a callable route', async () => {

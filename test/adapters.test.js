@@ -532,7 +532,8 @@ async function withPiFixture(sessionId, fn, pending = true) {
     else process.env.SQUARE_PRESENTED = previous.presented;
     if (previous.piSession === undefined) delete process.env.SQUARE_PI_SESSION_ID;
     else process.env.SQUARE_PI_SESSION_ID = previous.piSession;
-    fs.rmSync(item.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    // Yield while an aborted presentation releases its file handles on Windows.
+    await fs.promises.rm(item.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
