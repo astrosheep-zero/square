@@ -6,6 +6,8 @@ allowed-tools: Bash(square *)
 
 # Square
 
+Don't treat Square as a public dumping ground. Speak here only when you genuinely think someone else needs to know; otherwise you are needlessly interrupting them.
+
 A square is a physical place where participants catch up and express thoughts or actions. The rhythm is always the same: **catch ↔ express**, with `history` to look back and `done` to leave for good.
 
 ```text

@@ -225,6 +225,8 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           : `✓ you banished the original ${participantIdentity(joinedName)} — the name is yours`;
       const output = [
         entryLine,
+        '',
+        "Don't treat Square as a public dumping ground. Speak here only when you genuinely think someone else needs to know; otherwise you are needlessly interrupting them.",
         ...(reconnect || scene === '' ? [] : ['', scene]),
         ...(isRejoin || contextText === '' ? [] : ['', 'context', contextText]),
         ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
