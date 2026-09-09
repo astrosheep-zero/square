@@ -129,10 +129,27 @@ test('a written square is the pinned SQLite singleton snapshot with no square lo
   assert.deepEqual(fs.readdirSync(dir), [path.basename(squarePath)]);
 });
 
+test('initial publication flushes through a writable non-creating handle', async (t) => {
+  const open = fs.promises.open.bind(fs.promises);
+  let flushed = false;
+  t.mock.method(fs.promises, 'open', async (file, flags, ...args) => {
+    const handle = await open(file, flags, ...args);
+    const sync = handle.sync.bind(handle);
+    handle.sync = async () => {
+      assert.equal(flags, 'r+', 'fsync needs write access on Windows without creating a file');
+      flushed = true;
+      return sync();
+    };
+    return handle;
+  });
+  await writeFixture(t);
+  assert.equal(flushed, true);
+});
+
 test('SQLite artifact access preserves escaped special-character paths', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-special-path-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const squarePath = path.join(dir, 'square #? [名].square');
+  const squarePath = path.join(dir, process.platform === 'win32' ? 'square # [名].square' : 'square #? [名].square');
   const state = makeState({ preamble: ['escaped path'] });
   await writeSquareFile(squarePath, state);
   assert.deepEqual(await loadSquare(squarePath), state);

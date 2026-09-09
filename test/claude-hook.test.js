@@ -19,7 +19,7 @@ const CLI = path.resolve(import.meta.dirname, '../dist/square.js');
 
 function spawnHook(sessionId, env, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, 'claude-hook'], {
+    const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', CLI, 'claude-hook'], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -57,6 +57,7 @@ async function fixture() {
   await writeSquareFile(squarePath, squareState);
   await recordJoin('claude-session', 'Bob', squarePath, { channel: 'claude-code', env });
   return {
+    root,
     squarePath,
     env,
     runtime,

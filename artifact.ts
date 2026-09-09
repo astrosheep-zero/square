@@ -144,7 +144,8 @@ async function createTemporaryArtifact(squarePath: string): Promise<string> {
 }
 
 async function syncTemporaryArtifact(temporary: string): Promise<void> {
-  const handle = await fs.promises.open(temporary, 'r');
+  // Windows FlushFileBuffers requires a writable handle; r+ never creates a missing file.
+  const handle = await fs.promises.open(temporary, 'r+');
   try {
     await handle.sync();
   } finally {
