@@ -112,12 +112,19 @@ export const catchCommand: CommandSpec<WatchOptions> = {
     const name = requireParticipant(context.name);
     let idleMs: number | undefined;
     let mention: string | undefined;
-    let limit = CATCH_DEFAULT_LIMIT;
+    let limit: number | undefined;
+    let id: WatchOptions['id'];
     let replace = false;
     let now = false;
     const participants: string[] = [];
     for (let index = 0; index < argv.length; index++) {
-      if (argv[index] === '--from') {
+      if (argv[index] === '--id') {
+        if (id !== undefined) fail('✕ catch accepts one --id\n» square catch --help');
+        const value = requireValue(argv, index, '--id');
+        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\n» square catch --help');
+        id = value as WatchOptions['id'];
+        index += 1;
+      } else if (argv[index] === '--from') {
         participants.push(...parseNameList(requireValue(argv, index, argv[index]), argv[index]));
         index += 1;
       } else if (argv[index] === '--idle') {
@@ -132,12 +139,18 @@ export const catchCommand: CommandSpec<WatchOptions> = {
       else if (argv[index] === '--now') now = true;
       else fail(`✕ catch does not know ${argv[index]}\n» square catch --help`);
     }
+    if (id !== undefined) {
+      if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--replace'].includes(flag))) {
+        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\n» square catch --help');
+      }
+      return { id, now: true };
+    }
     if (now === (idleMs !== undefined)) fail('catch requires exactly one mode: --now or --idle <duration>.');
     if (replace && now) fail('--replace can only be used with --idle.');
     return {
       ...(participants.length > 0 ? { participants } : {}),
       ...(mention === undefined ? {} : { mention }),
-      limit,
+      limit: limit ?? CATCH_DEFAULT_LIMIT,
       ...(idleMs === undefined ? {} : { idleMs }),
       ...(replace ? { replace } : {}),
       ...(now ? { now } : {}),

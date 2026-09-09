@@ -1,6 +1,6 @@
 // Shared model and constants for Square.
 
-import type { Act } from './square-core.js';
+import type { Act, ActivityId } from './square-core.js';
 export { formatActivityId, parseActivityId } from './square-core.js';
 export type { Act, ActivityId, Audience, Reach } from './square-core.js';
 
@@ -154,6 +154,7 @@ export interface ActivitiesOptions {
 }
 
 export interface WatchOptions {
+  id?: ActivityId;
   participants?: string[];
   mention?: string;
   limit?: number;

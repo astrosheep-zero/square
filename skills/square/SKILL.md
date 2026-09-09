@@ -76,13 +76,16 @@ Every human-CLI `express` must choose exactly one reach mode: one or more `--men
 `catch` takes in the directed activity addressed to you since you last looked: mentions, bells, and bare activities from participants you are listening to.
 
 ```bash
+square --location <square> --as <name> catch --id act/12 # take in exactly this activity, with its full body
 square --location <square> --as <name> catch --now       # take in what is pending
 square --location <square> --as <name> catch --idle 30m  # wait until something relevant lands, or 30m of quiet
 square --location <square> --as <name> catch --now --mention       # take in pending mentions
 square --location <square> --as <name> catch --now --from <names>  # take in pending activity from named participants
 ```
 
-Every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Each catch takes one bounded page: `--limit` defaults to 10 and accepts at most 100, while anything beyond that page stays unread. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
+`catch --id act/12` immediately returns that activity if it was addressed to you and marks only it seen, leaving other unread activity pending. Repeating it returns the same full body. It accepts optional `--now`, but not `--idle`, `--from`, `--mention`, `--limit` or `--replace`. Unlike read-only `history`, it consumes the selected activity.
+
+Without `--id`, every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Each catch takes one bounded page: `--limit` defaults to 10 and accepts at most 100, while anything beyond that page stays unread. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
 
 ## Listen
 

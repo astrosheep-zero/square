@@ -1,4 +1,4 @@
-import { audienceOf, formatActivityId, type Perception } from './square-core.js';
+import { audienceOf, formatActivityId, parseActivityId, type Perception } from './square-core.js';
 import { derivePerceptionProjection, type PerceptionProjection } from './perception-projection.js';
 import { matchesMentionTarget, recordObservation } from './runtime.js';
 import { participantIdentity } from './participant-identity.js';
@@ -48,6 +48,28 @@ export function decideCatch(
   const viewer = resolveCatchName(state, requestedName);
   const limit = catchLimit(options.limit);
   const delivery = project(state);
+  if (options.id !== undefined) {
+    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) {
+      throw new SquareError('invalid_args', 'Catch id cannot be combined with idle, from, mention or limit.');
+    }
+    const index = parseActivityId(options.id);
+    if (index === undefined) throw new SquareError('invalid_args', 'Invalid catch id: expected an activity id like act/12.');
+    const activity = state.acts.find((item) => item.index === index);
+    if (activity === undefined || activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) {
+      throw new SquareError('invalid_args', 'That activity is not available to catch.');
+    }
+    const perception = delivery.perceive(activity, viewer);
+    const changed = recordObservation(state, viewer, index, 'seen', at);
+    const cursor = delivery.cursorFor(viewer);
+    return {
+      viewer,
+      delivered: [activity],
+      perceptions: new Map([[index, perception]]),
+      consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
+      changed,
+      remaining: state.acts.filter((item) => item.kind === 'say' && delivery.directedTo(item, viewer) && !delivery.isSeen(viewer, item.index)).length,
+    };
+  }
   const from = options.from;
   const mentionOnly = options.mention === true;
   const delivered: StoredAct[] = [];

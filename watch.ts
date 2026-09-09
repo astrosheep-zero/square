@@ -194,6 +194,7 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions)
   const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
   try {
     const caught: CatchResult = await facade.participant.catch({
+      ...(opts.id === undefined ? {} : { id: opts.id }),
       ...(opts.participants === undefined ? {} : { from: opts.participants }),
       ...(opts.mention === undefined ? {} : { mention: true }),
       ...(opts.limit === undefined ? {} : { limit: opts.limit }),
