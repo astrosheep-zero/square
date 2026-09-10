@@ -62,3 +62,9 @@ Implementation taste:
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.
 - Prefer explicit, simple behavior over hidden cleverness.
+- In Pi's interactive terminal, cancelling a run cancels its outstanding Square
+  notification deliveries, including queued work and retries. Cancellation must
+  not wake the agent or revive that batch on later activity. This suppression is
+  local to the active host session; it is not a claim that the activity was seen
+  or presented, and it does not remove activity from Square history. New activity
+  after cancellation completes may notify normally.

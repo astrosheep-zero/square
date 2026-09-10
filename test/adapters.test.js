@@ -649,7 +649,7 @@ test('Pi retries a dropped steer immediately and commits the retry once it lands
   }, false);
 });
 
-test('Pi retries a TUI-cleared steer after the agent settles despite a second Esc', async () => {
+test('Pi cancels the entire TUI pending batch without resurrecting it on later activity', async () => {
   await withPiFixture('pi-tui-aborted-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -662,22 +662,34 @@ test('Pi retries a TUI-cleared steer after the agent settles despite a second Es
     await handlers.get('session_start')({}, context);
     try {
       const run = new AbortController();
-      await piAgentStart(handlers, { getSignal: () => run.signal });
+      await piAgentStart(handlers, { mode: 'tui', getSignal: () => run.signal });
       const actIndex = await expressToPi(item, 'retry after the TUI clears the queue @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
+      const queuedIndex = await expressToPi(item, 'cancel the unsent backlog too @Bob');
       await piTurnStart(handlers);
       run.abort();
       run.abort();
       await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
       assert.equal(sent.length, 1);
       await handlers.get('agent_settled')({});
-      await waitUntil(() => sent.length === 2, 'Pi did not retry after the TUI abort settled');
-      assert.deepEqual(sent[1].options, { deliverAs: 'steer', triggerTurn: true });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(sent.length, 1);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await piTurnStart(handlers);
+      await piInputMessageEnd(handlers);
+      await piTurnEnd(handlers);
+      const freshIndex = await expressToPi(item, 'only the new notification @Bob');
+      await waitUntil(() => sent.length === 2, 'Pi did not deliver new activity');
+      assert.doesNotMatch(sent[1].message.content, /retry after|unsent backlog/);
       await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(
-        async () => await hasPresentedForOwner('pi-tui-aborted-session', item.squarePath, 'Bob', actIndex),
-        'Pi did not commit the retry after the TUI abort',
+        async () => await hasPresentedForOwner('pi-tui-aborted-session', item.squarePath, 'Bob', freshIndex),
+        'Pi did not commit the new notification',
       );
+      for (const index of [actIndex, queuedIndex]) {
+        assert.equal(await hasPresentedForOwner('pi-tui-aborted-session', item.squarePath, 'Bob', index), false);
+        assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(index)], undefined);
+      }
       assert.equal(sent.length, 2);
     } finally {
       await handlers.get('session_shutdown')({}, context);
@@ -685,7 +697,7 @@ test('Pi retries a TUI-cleared steer after the agent settles despite a second Es
   }, false);
 });
 
-test('Pi defers a steer that arrives after the TUI abort signal until the agent settles', async () => {
+test('Pi cancels notifications during TUI abort instead of deferring a wake', async () => {
   await withPiFixture('pi-post-abort-steer-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -698,7 +710,7 @@ test('Pi defers a steer that arrives after the TUI abort signal until the agent 
     await handlers.get('session_start')({}, context);
     try {
       const abortedRun = new AbortController();
-      await piAgentStart(handlers, { getSignal: () => abortedRun.signal });
+      await piAgentStart(handlers, { mode: 'tui', getSignal: () => abortedRun.signal });
       await piTurnStart(handlers);
       abortedRun.abort();
       const actIndex = await expressToPi(item, 'defer until the TUI abort settles @Bob');
@@ -706,14 +718,16 @@ test('Pi defers a steer that arrives after the TUI abort signal until the agent 
       assert.equal(sent.length, 0);
       await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
       await handlers.get('agent_settled')({});
-      await waitUntil(() => sent.length === 1, 'Pi did not steer after the abort settled');
-
-      await piAgentStart(handlers, { getSignal: () => new AbortController().signal });
-      await piTurnStart(handlers);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(sent.length, 0);
+      assert.equal(await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', actIndex), false);
+      const freshIndex = await expressToPi(item, 'fresh after cancellation @Bob');
+      await waitUntil(() => sent.length === 1, 'Pi did not deliver fresh activity');
+      assert.doesNotMatch(sent[0].message.content, /defer until/);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
-        async () => await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', actIndex),
-        'Pi did not commit the deferred post-abort steer',
+        async () => await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', freshIndex),
+        'Pi did not commit fresh activity',
       );
       assert.equal(sent.length, 1);
     } finally {

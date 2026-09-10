@@ -1,6 +1,6 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
-import { waitForSessionPending } from '../dist/inbox.js';
+import { sessionInbox, waitForSessionPending } from '../dist/inbox.js';
 import { projectSessionBindings } from '../dist/square-projections.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
@@ -37,34 +37,24 @@ export default function squarePiExtension(pi) {
   let watcherAbort;
   let generation = 0;
   const handledPending = new Set();
+  const observedPending = new Set();
   const landingAcks = new Map();
   let retryAfterChange = false;
   let retryWait;
   let turnIndex = 0;
   let activeTurn;
   let currentRunSignal;
-  const deferredSteers = new Set();
+  let detachRunAbort;
+  let cancelledRun = false;
 
-  const waitForAgentSettled = (signal) => new Promise((resolve, reject) => {
-    const deferred = {
-      release() {
-        deferredSteers.delete(deferred);
-        signal.removeEventListener('abort', abort);
-        resolve();
-      },
-    };
-    const abort = () => {
-      deferredSteers.delete(deferred);
-      signal.removeEventListener('abort', abort);
-      reject(signal.reason || new Error('Pi native injection aborted'));
-    };
-    deferredSteers.add(deferred);
-    if (signal.aborted) abort();
-    else signal.addEventListener('abort', abort, { once: true });
-  });
-
-  const releaseDeferredSteers = () => {
-    for (const deferred of [...deferredSteers]) deferred.release();
+  const cancelRunDelivery = () => {
+    cancelledRun = true;
+    for (const key of observedPending) handledPending.add(key);
+    generation += 1;
+    stopWatcher();
+    failAcks(new Error('Pi notification delivery cancelled'));
+    retryAfterChange = false;
+    retryWait = undefined;
   };
 
   const failAcks = (error) => {
@@ -87,7 +77,6 @@ export default function squarePiExtension(pi) {
         kind,
         sentAfterTurn: turnIndex,
         emptyTurnWindows: 0,
-        dropAfterSettled: false,
         settle(error) {
           if (ack.settled) return;
           ack.settled = true;
@@ -180,6 +169,7 @@ export default function squarePiExtension(pi) {
       retryWait = undefined;
 
       const keys = inboxKeys(pending);
+      for (const key of keys) observedPending.add(key);
       const deferred = armDeferredRetry();
       const retryArmed = await deferred.armed;
       if (!retryArmed) {
@@ -191,7 +181,7 @@ export default function squarePiExtension(pi) {
         await presentPendingAtBoundary(
           sessionId,
           async (content) => {
-            if (currentRunSignal?.aborted) await waitForAgentSettled(signal);
+            if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
             const landing = waitForLanding(content, signal, 'steer');
             try {
               Promise.resolve(pi.sendMessage(
@@ -203,12 +193,23 @@ export default function squarePiExtension(pi) {
             }
             return landing.promise;
           },
-          undefined,
+          async (id, env) => {
+            const inbox = await sessionInbox(id, env);
+            if (signal.aborted || token !== generation) return [];
+            for (const key of inboxKeys(inbox)) observedPending.add(key);
+            return inbox.map((membership) => ({
+              ...membership,
+              notifications: membership.notifications.filter((note) => !handledPending.has(
+                `${membership.squarePath}\u0000${membership.name.toLocaleLowerCase()}\u0000${note.actIndex}`,
+              )),
+            }));
+          },
           undefined,
           signal,
         );
         for (const key of keys) handledPending.add(key);
       } catch (error) {
+        if (signal.aborted || token !== generation) return;
         if (error instanceof PiDeliveryDroppedError) {
           deferred.cancel();
           continue;
@@ -224,10 +225,13 @@ export default function squarePiExtension(pi) {
   };
 
   pi.on('session_start', async (_event, ctx) => {
+    detachRunAbort?.();
+    cancelledRun = false;
     generation += 1;
     failAcks(new Error('Pi session replaced'));
     stopWatcher();
     handledPending.clear();
+    observedPending.clear();
     retryAfterChange = false;
     retryWait = undefined;
     turnIndex = 0;
@@ -258,7 +262,13 @@ export default function squarePiExtension(pi) {
   });
 
   pi.on('agent_start', async (_event, ctx) => {
+    detachRunAbort?.();
     currentRunSignal = ctx?.getSignal?.();
+    if (ctx?.mode !== 'tui' || currentRunSignal === undefined) return;
+    const runSignal = currentRunSignal;
+    detachRunAbort = () => runSignal.removeEventListener('abort', cancelRunDelivery);
+    if (runSignal.aborted) cancelRunDelivery();
+    else runSignal.addEventListener('abort', cancelRunDelivery, { once: true });
   });
 
   pi.on('message_end', async (event) => {
@@ -277,15 +287,13 @@ export default function squarePiExtension(pi) {
     const turn = activeTurn;
     activeTurn = undefined;
     const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
-    if (event.message?.stopReason === 'aborted' && ctx?.mode === 'tui' && turn?.signal !== undefined) {
-      for (const ack of acks) {
-        if (ack.kind === 'steer') ack.dropAfterSettled = true;
-      }
+    if (event.message?.stopReason === 'aborted' && ctx?.mode === 'tui') {
+      if (!cancelledRun) cancelRunDelivery();
       return;
     }
     if (turn === undefined) return;
     for (const ack of acks) {
-      if (ack.kind !== 'steer' || ack.dropAfterSettled || turn.index <= ack.sentAfterTurn) continue;
+      if (ack.kind !== 'steer' || turn.index <= ack.sentAfterTurn) continue;
       if (turn.hasInput) {
         ack.emptyTurnWindows = 0;
       } else {
@@ -296,15 +304,25 @@ export default function squarePiExtension(pi) {
   });
 
   pi.on('agent_settled', async () => {
+    detachRunAbort?.();
+    detachRunAbort = undefined;
     currentRunSignal = undefined;
-    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
-    for (const ack of acks) {
-      if (ack.dropAfterSettled) ack.settle(new PiDeliveryDroppedError());
-    }
-    releaseDeferredSteers();
+    if (!cancelledRun || sessionId === undefined) return;
+    const token = generation;
+    // Cancel the entire pending batch, including entries not yet sent to Pi.
+    // This is local suppression, never evidence that the model saw the activity.
+    const cancelled = await sessionInbox(sessionId);
+    if (token !== generation || sessionId === undefined) return;
+    for (const key of inboxKeys(cancelled)) handledPending.add(key);
+    cancelledRun = false;
+    watcherAbort = new AbortController();
+    watcher = wake(token, watcherAbort.signal).catch(() => undefined);
   });
 
   pi.on('session_shutdown', async () => {
+    detachRunAbort?.();
+    detachRunAbort = undefined;
+    cancelledRun = false;
     generation += 1;
     failAcks(new Error('Pi session ended'));
     stopWatcher();
