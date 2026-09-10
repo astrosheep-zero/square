@@ -324,7 +324,7 @@ test('join and catch only show fallback catch hints without automatic session de
     CLAUDE_CODE_SESSION_ID: '',
     CODEX_THREAD_ID: '',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
   };
   const codexDelivery = { ...noDelivery, CODEX_THREAD_ID: 'codex-bob' };

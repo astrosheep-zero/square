@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { localParticipantOwner, recordSessionJoin, squareAssignedParticipantName } from '../dist/registry.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
@@ -47,7 +48,7 @@ test('local presence cannot plant a callable route', async () => {
 });
 test('uncapable native sessions keep ownership in presence without a callable route', async () => {
   for (const [provider, sessionKey, channel] of [
-    ['pi', 'SQUARE_PI_SESSION_ID', 'pi'],
+    ['pi', 'PI_SESSION_ID', 'pi'],
     ['claude', 'CLAUDE_CODE_SESSION_ID', 'claude-code'],
   ]) {
     const item = fixture();
@@ -60,7 +61,7 @@ test('uncapable native sessions keep ownership in presence without a callable ro
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
       [sessionKey]: `${provider}-session`,
     };
@@ -73,6 +74,36 @@ test('uncapable native sessions keep ownership in presence without a callable ro
     assert.equal(presence[0].route, undefined);
     fs.rmSync(item.root, { recursive: true, force: true });
   }
+});
+test('distinct parent and child native Pi sessions resolve distinct participants and routes', async () => {
+  const item = fixture();
+  const location = path.join(item.root, 'square.square');
+  const base = {
+    ...process.env,
+    ...item.env,
+    CLAUDE_CODE_SESSION_ID: '',
+    CODEX_THREAD_ID: '',
+    OPENCODE_SESSION_ID: '',
+    PASEO_AGENT_ID: '',
+    SQUARE_PARTICIPANT_NAME: '',
+  };
+  const parentEnv = { ...base, PI_SESSION_ID: 'pi-parent-session' };
+  const childEnv = { ...base, PI_SESSION_ID: 'pi-child-session' };
+  const parentName = squareAssignedParticipantName(parentEnv);
+  const childName = squareAssignedParticipantName(childEnv);
+  assert.notEqual(parentName, childName, 'distinct native Pi sessions must not share one participant');
+  await recordSessionJoin('pi-parent-session', parentName, location, 'pi', parentEnv);
+  await recordSessionJoin('pi-child-session', childName, location, 'pi', childEnv);
+  assert.equal(await localParticipantOwner(location, parentName, parentEnv), 'pi-parent-session');
+  assert.equal(await localParticipantOwner(location, childName, childEnv), 'pi-child-session');
+  assert.equal(await localParticipantOwner(location, childName, parentEnv), undefined, 'the parent session must not be attributed to the child participant');
+  const capabilities = { canUse: (kind) => kind === 'pi-extension' };
+  const parentRoute = selectPrimaryWakeRoute({ boundary: { location, participant: parentName, sessionId: 'pi-parent-session', provider: 'pi' }, env: parentEnv, capabilities });
+  const childRoute = selectPrimaryWakeRoute({ boundary: { location, participant: childName, sessionId: 'pi-child-session', provider: 'pi' }, env: childEnv, capabilities });
+  assert.deepEqual(parentRoute?.address, { sessionId: 'pi-parent-session' });
+  assert.deepEqual(childRoute?.address, { sessionId: 'pi-child-session' });
+  assert.notEqual(parentRoute?.participant, childRoute?.participant);
+  fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('local registry cannot plant or shadow an artifact route', async () => {
   const item = fixture();

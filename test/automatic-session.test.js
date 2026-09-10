@@ -28,7 +28,7 @@ async function fixture() {
     CLAUDE_CODE_SESSION_ID: '',
     CODEX_THREAD_ID: '',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
     SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
@@ -112,7 +112,7 @@ test('uncapable old SessionEnd cannot done a replacement after takeover', { conc
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared' }, async (env) => {
     await automaticSessionStart('pi', 'old-session', item.cwd, env);
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), []);
-    const replacementEnv = { ...env, SQUARE_PI_SESSION_ID: 'new-session' };
+    const replacementEnv = { ...env, PI_SESSION_ID: 'new-session' };
     const replacement = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort(replacementEnv), env: replacementEnv });
     try { await replacement.takeover('shared', ['old-session']); } finally { await replacement.close(); }
     await automaticSessionEnd('pi', 'old-session', item.cwd, env);
@@ -327,7 +327,7 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
       CLAUDE_CODE_CHILD_SESSION: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: 'owner-b',
+      PI_SESSION_ID: 'owner-b',
     };
     const square = await Square.at({ path: item.publicPath, hostLedger, env: replacementEnv });
     try {
@@ -338,7 +338,7 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
 
     const oldSession = await openSquare(item.publicPath, {
       hostLedger,
-      env: { ...env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: 'owner-a' },
+      env: { ...env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: 'owner-a' },
     });
     try {
       await assert.rejects(
@@ -369,7 +369,7 @@ test('automatic resume republishes the current epoch and stale retirement leaves
         userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(env.SQUARE_REGISTRY),
         localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? path.dirname(env.SQUARE_REGISTRY),
       }),
-      env: { ...env, CODEX_THREAD_ID: '', SQUARE_PI_SESSION_ID: 'owner-a' },
+      env: { ...env, CODEX_THREAD_ID: '', PI_SESSION_ID: 'owner-a' },
     });
     try {
       await replacement.takeover(participant);

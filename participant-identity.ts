@@ -9,13 +9,13 @@ export function participantIdentity(name: string): string {
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
 const nativeSessions: ReadonlyArray<{
-  variable: 'CLAUDE_CODE_SESSION_ID' | 'CODEX_THREAD_ID' | 'OPENCODE_SESSION_ID' | 'SQUARE_PI_SESSION_ID';
+  variable: 'CLAUDE_CODE_SESSION_ID' | 'CODEX_THREAD_ID' | 'OPENCODE_SESSION_ID' | 'PI_SESSION_ID';
   provider: AutomaticProvider;
 }> = [
   { variable: 'CLAUDE_CODE_SESSION_ID', provider: 'claude' },
   { variable: 'CODEX_THREAD_ID', provider: 'codex' },
   { variable: 'OPENCODE_SESSION_ID', provider: 'opencode' },
-  { variable: 'SQUARE_PI_SESSION_ID', provider: 'pi' },
+  { variable: 'PI_SESSION_ID', provider: 'pi' },
 ];
 
 export function automaticParticipant(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): string {

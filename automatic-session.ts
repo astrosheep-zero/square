@@ -21,7 +21,7 @@ const providerEnv: Record<AutomaticProvider, string> = {
   codex: 'CODEX_THREAD_ID',
   claude: 'CLAUDE_CODE_SESSION_ID',
   opencode: 'OPENCODE_SESSION_ID',
-  pi: 'SQUARE_PI_SESSION_ID',
+  pi: 'PI_SESSION_ID',
 };
 
 function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -31,7 +31,7 @@ function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJ
     CLAUDE_CODE_CHILD_SESSION: '',
     CODEX_THREAD_ID: '',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     [providerEnv[provider]]: sessionId,
   };
 }

@@ -17,11 +17,11 @@ type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PRESENCE_CLAIM_LOCK = { retryMs: 10 } as const;
-const LOCAL_SESSION_SOURCES: ReadonlyArray<{ variable: 'CLAUDE_CODE_SESSION_ID' | 'CODEX_THREAD_ID' | 'OPENCODE_SESSION_ID' | 'SQUARE_PI_SESSION_ID'; channel: Exclude<SessionChannel, 'paseo' | 'unknown'>; child?: 'CLAUDE_CODE_CHILD_SESSION'; }> = [
+const LOCAL_SESSION_SOURCES: ReadonlyArray<{ variable: 'CLAUDE_CODE_SESSION_ID' | 'CODEX_THREAD_ID' | 'OPENCODE_SESSION_ID' | 'PI_SESSION_ID'; channel: Exclude<SessionChannel, 'paseo' | 'unknown'>; child?: 'CLAUDE_CODE_CHILD_SESSION'; }> = [
   { variable: 'CLAUDE_CODE_SESSION_ID', channel: 'claude-code', child: 'CLAUDE_CODE_CHILD_SESSION' },
   { variable: 'CODEX_THREAD_ID', channel: 'codex' },
   { variable: 'OPENCODE_SESSION_ID', channel: 'opencode' },
-  { variable: 'SQUARE_PI_SESSION_ID', channel: 'pi' },
+  { variable: 'PI_SESSION_ID', channel: 'pi' },
 ];
 
 export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(homedir(), '.square', 'sessions.ndjsonl'); }

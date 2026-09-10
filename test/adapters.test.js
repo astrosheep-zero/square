@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { getEventListeners } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -34,6 +35,7 @@ import {
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
+import { withFileLock } from '../dist/file-lock.js';
 import { hasPresentedForOwner } from '../dist/presented.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/index.js';
@@ -521,11 +523,11 @@ async function withPiFixture(sessionId, fn, pending = true) {
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
     presented: process.env.SQUARE_PRESENTED,
-    piSession: process.env.SQUARE_PI_SESSION_ID,
+    piSession: process.env.PI_SESSION_ID,
   };
   process.env.SQUARE_REGISTRY = item.registry;
   process.env.SQUARE_PRESENTED = item.presented;
-  delete process.env.SQUARE_PI_SESSION_ID;
+  delete process.env.PI_SESSION_ID;
   await recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
   try {
     await fn(item);
@@ -534,8 +536,8 @@ async function withPiFixture(sessionId, fn, pending = true) {
     else process.env.SQUARE_REGISTRY = previous.registry;
     if (previous.presented === undefined) delete process.env.SQUARE_PRESENTED;
     else process.env.SQUARE_PRESENTED = previous.presented;
-    if (previous.piSession === undefined) delete process.env.SQUARE_PI_SESSION_ID;
-    else process.env.SQUARE_PI_SESSION_ID = previous.piSession;
+    if (previous.piSession === undefined) delete process.env.PI_SESSION_ID;
+    else process.env.PI_SESSION_ID = previous.piSession;
     // Yield while an aborted presentation releases its file handles on Windows.
     await fs.promises.rm(item.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
@@ -581,6 +583,135 @@ function piAgentStart(handlers, ctx) {
 function piTurnEnd(handlers, stopReason = 'stop', ctx = {}) {
   return handlers.get('turn_end')({ message: { stopReason } }, ctx);
 }
+
+function presentationBoundaryLockPath(sessionId) {
+  const root = process.env.SQUARE_HOST_LEDGER_USER
+    ?? (process.env.SQUARE_REGISTRY === undefined ? path.join(os.homedir(), '.square', 'host-ledger') : path.dirname(process.env.SQUARE_REGISTRY));
+  return path.join(root, `presentation-boundary-${crypto.createHash('sha256').update(sessionId).digest('hex')}.lock`);
+}
+
+/** Hold the per-session presentation boundary lock so the next boundary must wait for it. */
+async function holdBoundaryLock(sessionId) {
+  let release;
+  let acquired;
+  const acquiredPromise = new Promise((resolve) => { acquired = resolve; });
+  const held = withFileLock(presentationBoundaryLockPath(sessionId), { retryMs: 10 }, async () => {
+    acquired();
+    await new Promise((resolve) => { release = resolve; });
+  });
+  await acquiredPromise;
+  return { release: () => release(), held: () => held };
+}
+
+test('Pi leaves process.env.PI_SESSION_ID to Pi across start, replacement, and shutdown', async () => {
+  await withPiFixture('pi-native-identity', async () => {
+    const handlers = new Map();
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage() { return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const native = '01a0912e-native-parent-session';
+    process.env.PI_SESSION_ID = native;
+    try {
+      const child = { sessionManager: { getSessionId: () => 'pi-child-session' }, cwd: '/tmp/no-public-square' };
+      await handlers.get('session_start')({}, child);
+      assert.equal(process.env.PI_SESSION_ID, native, 'session_start must not overwrite the native identity');
+      await handlers.get('session_start')({}, { sessionManager: { getSessionId: () => 'pi-replacement-session' }, cwd: '/tmp/no-public-square' });
+      assert.equal(process.env.PI_SESSION_ID, native, 'session replacement must not overwrite the native identity');
+      await handlers.get('session_shutdown')({}, child);
+      assert.equal(process.env.PI_SESSION_ID, native, 'session_shutdown must not restore or delete the native identity');
+    } finally {
+      delete process.env.PI_SESSION_ID;
+    }
+  }, false);
+});
+
+test('Pi waits on a contended boundary lock and binds delivery to its ctx session, not the ancestor in process.env', async () => {
+  await withPiFixture('pi-boundary-child-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const ancestor = '01a08fbf-ancestor-native-session';
+    process.env.PI_SESSION_ID = ancestor;
+    const lock = await holdBoundaryLock('pi-boundary-child-session');
+    const context = { sessionManager: { getSessionId: () => 'pi-boundary-child-session' }, cwd: '/tmp/no-public-square' };
+    try {
+      await handlers.get('session_start')({}, context);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(sent.length, 0, 'a held boundary lock must make this operation wait, not fail its abort signal');
+      assert.equal(process.env.PI_SESSION_ID, ancestor, 'the extension must not rewrite the process identity');
+      lock.release();
+      await lock.held();
+      await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
+      assert.match(sent[0].message.content, /hello @Bob/);
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),
+        'Pi did not commit the boundary delivery under its own ctx session',
+      );
+    } finally {
+      lock.release();
+      await handlers.get('session_shutdown')({}, context);
+      delete process.env.PI_SESSION_ID;
+    }
+  });
+});
+
+test('Pi aborts a contended boundary wait on TUI cancellation without touching the ancestor process identity', async () => {
+  await withPiFixture('pi-boundary-cancel-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const ancestor = '01a08fbf-ancestor-native-session';
+    process.env.PI_SESSION_ID = ancestor;
+    const context = { sessionManager: { getSessionId: () => 'pi-boundary-cancel-session' }, cwd: '/tmp/no-public-square' };
+    try {
+      await handlers.get('session_start')({}, context);
+      await waitUntil(() => sent.length === 1, 'Pi did not steer the initial pending activity');
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-boundary-cancel-session', item.squarePath, 'Bob', 2),
+        'the initial delivery did not commit',
+      );
+
+      const lock = await holdBoundaryLock('pi-boundary-cancel-session');
+      const run = new AbortController();
+      await piAgentStart(handlers, { mode: 'tui', getSignal: () => run.signal });
+      const cancelledIndex = await expressToPi(item, 'cancelled while the boundary lock is held @Bob');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(sent.length, 1, 'the cancelled batch must not reach Pi while the boundary lock is held');
+      run.abort();
+      lock.release();
+      await lock.held();
+      await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+      await handlers.get('agent_settled')({});
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(sent.length, 1, 'the cancelled batch must not be delivered after the lock releases');
+      assert.equal(process.env.PI_SESSION_ID, ancestor, 'cancellation must not rewrite the ancestor identity');
+      assert.equal(await hasPresentedForOwner('pi-boundary-cancel-session', item.squarePath, 'Bob', cancelledIndex), false);
+
+      const freshIndex = await expressToPi(item, 'fresh after boundary cancellation @Bob');
+      await waitUntil(() => sent.length === 2, 'Pi did not deliver new activity after cancellation');
+      await piMessageEnd(handlers, sent[1].message.content);
+      await waitUntil(
+        async () => await hasPresentedForOwner('pi-boundary-cancel-session', item.squarePath, 'Bob', freshIndex),
+        'fresh activity did not commit after cancellation',
+      );
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+      delete process.env.PI_SESSION_ID;
+    }
+  });
+});
 
 test('Pi steers pending activity into a running agent and commits only when it lands', async () => {
   await withPiFixture('pi-running-session', async (item) => {

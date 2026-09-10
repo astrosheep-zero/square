@@ -129,7 +129,7 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
     CLAUDE_CODE_CHILD_SESSION: '',
     CODEX_THREAD_ID: 'codex-session',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_DISABLE_PASEO_WAKE: '1',
     SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
@@ -228,13 +228,13 @@ test('concurrent facade joins for one participant keep a single live owner', asy
 
     const [left, right] = await Promise.allSettled([
       (async () => {
-        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-a', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
+        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-a', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
         const square = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env });
         try { return await square.join('Alice'); }
         finally { await square.close(); }
       })(),
       (async () => {
-        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-b', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', SQUARE_PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
+        const env = { SQUARE_REGISTRY: registryPath, CODEX_THREAD_ID: 'facade-b', CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '' };
         const square = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env });
         try { return await square.join('Alice'); }
         finally { await square.close(); }

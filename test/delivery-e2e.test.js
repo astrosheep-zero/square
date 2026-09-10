@@ -33,7 +33,7 @@ function workshop() {
     CLAUDE_CODE_CHILD_SESSION: '',
     CODEX_THREAD_ID: '',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_DISABLE_PASEO_WAKE: '1',
     SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),

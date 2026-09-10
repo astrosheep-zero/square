@@ -144,7 +144,7 @@ test('decisions and perception stay state-only, outside host and storage operati
     assert.doesNotMatch(source, /from ['"](?:node:|\.\/(?:artifact|square-storage|square-actions|participant-host|registry)\.js)/, file);
   }
   const actions = productionSources.get('square-actions.ts') ?? '';
-  assert.doesNotMatch(actions, /CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|SQUARE_PI_SESSION_ID|PASEO_AGENT_ID/);
+  assert.doesNotMatch(actions, /CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|PI_SESSION_ID|PASEO_AGENT_ID/);
 });
 
 test('product adapters stay behind the facade and close boundary', () => {

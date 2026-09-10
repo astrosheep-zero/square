@@ -39,7 +39,7 @@ export async function projectSessionBindings(input: {
 }
 
 export function sessionIdsFromEnvironment(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  return [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.SQUARE_PI_SESSION_ID, env.PASEO_AGENT_ID]
+  return [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.PI_SESSION_ID, env.PASEO_AGENT_ID]
     .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
 }
 

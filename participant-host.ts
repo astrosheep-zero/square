@@ -13,7 +13,7 @@ export interface HostContext {
 export function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
   const choices: readonly [string | undefined, PresenceChannel][] = [
     [env.CLAUDE_CODE_SESSION_ID, 'claude-code'], [env.CODEX_THREAD_ID, 'codex'],
-    [env.OPENCODE_SESSION_ID, 'opencode'], [env.SQUARE_PI_SESSION_ID, 'pi'], [env.PASEO_AGENT_ID, 'paseo'],
+    [env.OPENCODE_SESSION_ID, 'opencode'], [env.PI_SESSION_ID, 'pi'], [env.PASEO_AGENT_ID, 'paseo'],
   ];
   const found = choices.find(([session]) => session?.trim());
   return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };

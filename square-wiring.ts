@@ -108,7 +108,7 @@ export class Square {
   history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
     if (this.square.hostLedger === undefined) return null;
-    const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.SQUARE_PI_SESSION_ID, env.PASEO_AGENT_ID]
+    const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.PI_SESSION_ID, env.PASEO_AGENT_ID]
       .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
     if (sessions.length === 0) return null;
     const candidates = (await Promise.all(sessions.map((sessionId) => projectSessionBindings({

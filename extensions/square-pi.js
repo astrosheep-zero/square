@@ -32,7 +32,6 @@ export function renderPiInbox(inbox) {
 export default function squarePiExtension(pi) {
   let sessionId;
   let sessionCwd;
-  let previousSessionId;
   let watcher;
   let watcherAbort;
   let generation = 0;
@@ -99,6 +98,10 @@ export default function squarePiExtension(pi) {
     return { promise, ack };
   };
 
+  // Each operation carries its own session coordinate. Never rewrite the process environment:
+  // Pi owns PI_SESSION_ID and several SDK sessions may coexist in one process.
+  const sessionEnv = (id) => ({ ...process.env, ...(id === undefined ? {} : { PI_SESSION_ID: id }) });
+
   // A transport may keep its promise pending while Pi is shutting down or
   // replacing a session. Never make a lifecycle hook wait for that transport.
   const stopWatcher = () => {
@@ -129,7 +132,7 @@ export default function squarePiExtension(pi) {
         excludeKeys: handledPending,
         skipImmediate: true,
         onChangeArmed: resolveArmed,
-      }).catch(() => {
+      }, sessionEnv(sessionId)).catch(() => {
         resolveArmed(false);
         return [];
       }).finally(() => signal.removeEventListener('abort', abort));
@@ -152,7 +155,7 @@ export default function squarePiExtension(pi) {
       try {
         pending = deferredRetry && retryWait !== undefined
           ? await retryWait
-          : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending });
+          : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending }, sessionEnv(sessionId));
       } catch {
         await pause(signal, 1_000);
         continue;
@@ -194,7 +197,7 @@ export default function squarePiExtension(pi) {
             return landing.promise;
           },
           async (id, env) => {
-            const inbox = await sessionInbox(id, env);
+            const inbox = await sessionInbox(id, env ?? sessionEnv(id));
             if (signal.aborted || token !== generation) return [];
             for (const key of inboxKeys(inbox)) observedPending.add(key);
             return inbox.map((membership) => ({
@@ -204,7 +207,7 @@ export default function squarePiExtension(pi) {
               )),
             }));
           },
-          undefined,
+          sessionEnv(sessionId),
           signal,
         );
         for (const key of keys) handledPending.add(key);
@@ -239,12 +242,10 @@ export default function squarePiExtension(pi) {
     currentRunSignal = undefined;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
-    previousSessionId = process.env.SQUARE_PI_SESSION_ID;
-    process.env.SQUARE_PI_SESSION_ID = sessionId;
     const token = generation;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
-    void automaticSessionStart('pi', sessionId, sessionCwd).then((context) => {
+    void automaticSessionStart('pi', sessionId, sessionCwd, sessionEnv(sessionId)).then((context) => {
       if (context === undefined || sessionId === undefined || token !== generation) return;
       const landing = waitForLanding(context, signal, 'nextTurn');
       try {
@@ -311,7 +312,7 @@ export default function squarePiExtension(pi) {
     const token = generation;
     // Cancel the entire pending batch, including entries not yet sent to Pi.
     // This is local suppression, never evidence that the model saw the activity.
-    const cancelled = await sessionInbox(sessionId);
+    const cancelled = await sessionInbox(sessionId, sessionEnv(sessionId));
     if (token !== generation || sessionId === undefined) return;
     for (const key of inboxKeys(cancelled)) handledPending.add(key);
     cancelledRun = false;
@@ -326,11 +327,7 @@ export default function squarePiExtension(pi) {
     generation += 1;
     failAcks(new Error('Pi session ended'));
     stopWatcher();
-    if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd).catch(() => undefined);
-    if (process.env.SQUARE_PI_SESSION_ID === sessionId) {
-      if (previousSessionId === undefined) delete process.env.SQUARE_PI_SESSION_ID;
-      else process.env.SQUARE_PI_SESSION_ID = previousSessionId;
-    }
+    if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd, sessionEnv(sessionId)).catch(() => undefined);
     sessionId = undefined;
     sessionCwd = undefined;
     retryWait = undefined;

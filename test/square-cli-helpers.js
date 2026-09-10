@@ -26,7 +26,7 @@ export function testEnv(overrides = {}) {
     CLAUDE_CODE_CHILD_SESSION: '',
     CODEX_THREAD_ID: '',
     OPENCODE_SESSION_ID: '',
-    SQUARE_PI_SESSION_ID: '',
+    PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_REGISTRY: path.join(TEST_STATE, `sessions-${id}.ndjsonl`),
     SQUARE_ROUTES: path.join(TEST_STATE, `routes-${id}.ndjsonl`),

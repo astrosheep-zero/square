@@ -70,7 +70,7 @@ test('participant name claims are exclusive across concurrent sessions', async (
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const [first, second] = await Promise.allSettled([
@@ -100,7 +100,7 @@ test('concurrent kick losers claim no ownership and mutate no artifact lifecycle
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const originalEnv = { ...base, CODEX_THREAD_ID: 'owner-0' };
@@ -158,7 +158,7 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const owner = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'owner-0' } });
@@ -214,7 +214,7 @@ test('a stale takeover observation cannot append a lifecycle after a newer takeo
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const owner = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'owner-0' } });
@@ -269,7 +269,7 @@ test('self-takeover success leaves exactly one current owner', async () => {
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const ownerEnv = { ...base, CODEX_THREAD_ID: 'owner-s' };
@@ -323,7 +323,7 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const ownerEnv = { ...base, CODEX_THREAD_ID: 'owner-s' };
@@ -380,7 +380,7 @@ test('a stale done paused across a completed takeover refuses and appends nothin
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const ownerEnv = { ...base, CODEX_THREAD_ID: 'owner-a' };
@@ -435,7 +435,7 @@ test('a takeover cannot append when the old owner completed first', async () => 
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const ownerEnv = { ...base, CODEX_THREAD_ID: 'owner-a' };
@@ -482,7 +482,7 @@ test('invalid join name validates before any ownership claim', async () => {
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: 'invalid-joiner',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const square = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env });
@@ -511,7 +511,7 @@ test('invalid takeover name performs no ownership mutation', async () => {
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const original = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'owner-0' } });
@@ -548,7 +548,7 @@ test('takeover of a never-joined participant refuses before any ownership claim'
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const kicker = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'kicker-x' } });
@@ -623,7 +623,7 @@ test('presence follows active session lifecycle without delivery routes', async 
       CLAUDE_CODE_CHILD_SESSION: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: 'resume-paseo-agent',
     };
     const built = runCli(['--location', squarePath, 'build', '--cap', 'unlimited'], {
@@ -646,7 +646,7 @@ test('presence follows active session lifecycle without delivery routes', async 
       CLAUDE_CODE_CHILD_SESSION: '',
       CODEX_THREAD_ID: 'observer-session',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     const status = runCli(['--location', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
@@ -714,7 +714,7 @@ test('registry pruning removes only bindings disproved by their square artifacts
       CLAUDE_CODE_SESSION_ID: '',
       CODEX_THREAD_ID: '',
       OPENCODE_SESSION_ID: '',
-      SQUARE_PI_SESSION_ID: '',
+      PI_SESSION_ID: '',
       PASEO_AGENT_ID: '',
     };
     assert.equal(runCli(['--location', squarePath, 'build', '--cap', '3'], { input: 'prune\n', env: isolatedEnv }).status, 0);
@@ -813,7 +813,7 @@ test('local session discovery recognizes native Codex, OpenCode, and Pi session 
     localSessionIdentities({
       CODEX_THREAD_ID: 'codex-thread',
       OPENCODE_SESSION_ID: 'opencode-session',
-      SQUARE_PI_SESSION_ID: 'pi-session',
+      PI_SESSION_ID: 'pi-session',
     }),
     [
       { sessionId: 'codex-thread', channel: 'codex', child: false },
@@ -828,7 +828,7 @@ test('automatic delivery capability follows native and Paseo session identities'
   assert.equal(hasAutomaticDeliveryIdentity({ CODEX_THREAD_ID: 'codex-thread' }), true);
   assert.equal(hasAutomaticDeliveryIdentity({ CLAUDE_CODE_SESSION_ID: 'claude-session' }), true);
   assert.equal(hasAutomaticDeliveryIdentity({ OPENCODE_SESSION_ID: 'opencode-session' }), true);
-  assert.equal(hasAutomaticDeliveryIdentity({ SQUARE_PI_SESSION_ID: 'pi-session' }), true);
+  assert.equal(hasAutomaticDeliveryIdentity({ PI_SESSION_ID: 'pi-session' }), true);
   assert.equal(hasAutomaticDeliveryIdentity({ PASEO_AGENT_ID: 'paseo-agent' }), true);
 });
 

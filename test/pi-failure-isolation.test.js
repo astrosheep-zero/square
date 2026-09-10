@@ -27,7 +27,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', asy
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
     presented: process.env.SQUARE_PRESENTED,
-    piSession: process.env.SQUARE_PI_SESSION_ID,
+    piSession: process.env.PI_SESSION_ID,
   };
   const runtime = { ...emptyRuntimeState(3), nextActIndex: 3 };
   await writeSquareFile(squarePath, {
@@ -43,7 +43,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', asy
   });
   process.env.SQUARE_REGISTRY = registry;
   process.env.SQUARE_PRESENTED = presented;
-  delete process.env.SQUARE_PI_SESSION_ID;
+  delete process.env.PI_SESSION_ID;
   await recordJoin(sessionId, 'Bob', squarePath, { channel: 'pi', ownerId: 'pi-owner' });
 
   const original = fs.readFileSync(squarePath);
@@ -84,8 +84,8 @@ test('Pi watcher survives an unreadable bound artifact without changing it', asy
     else process.env.SQUARE_REGISTRY = previous.registry;
     if (previous.presented === undefined) delete process.env.SQUARE_PRESENTED;
     else process.env.SQUARE_PRESENTED = previous.presented;
-    if (previous.piSession === undefined) delete process.env.SQUARE_PI_SESSION_ID;
-    else process.env.SQUARE_PI_SESSION_ID = previous.piSession;
+    if (previous.piSession === undefined) delete process.env.PI_SESSION_ID;
+    else process.env.PI_SESSION_ID = previous.piSession;
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 });
