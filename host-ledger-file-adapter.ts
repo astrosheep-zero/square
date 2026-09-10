@@ -2,11 +2,24 @@ import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { withFileLock } from './file-lock.js';
+import { withFileLock as acquireFileLock, type FileLockOptions } from './file-lock.js';
 import { nameKey } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import type { HostLedgerPort, HostLedgerScope, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, EvidenceGc, ClaimResult, ReconcileBindingInput, ReconcileBindingResult, WakeDispatchClaim, WakeDispatchClaimInput, WakeDispatchReleaseInput, WakeDispatchTransitionInput, WakeAttemptLookup } from './host-ledger.js';
 const LOCK = { retryMs: 10 } as const; const RETENTION = 7 * 86400000;
+
+// Prepare before locking: lock databases and their journals are local runtime data too.
+async function withFileLock<T>(file: string, options: FileLockOptions, fn: () => T | Promise<T>): Promise<T> {
+  const directory = path.dirname(file);
+  await fs.mkdir(directory, { recursive: true });
+  try {
+    await fs.writeFile(path.join(directory, '.gitignore'), '*\n', { flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  return acquireFileLock(file, options, fn);
+}
+
 export interface HostLedgerFileAdapterOptions { userPath?: string; localPath?: string; writableScope?: HostLedgerScope; readableScopes?: readonly HostLedgerScope[]; claimsPath?: string; now?: () => number }
 async function canon(value:string):Promise<string>{const absolute=path.resolve(value);try{return await fs.realpath(absolute)}catch{return absolute}}
 function canonRoot(value:string):string{let current=path.resolve(value),suffix:string[]=[];for(;;){try{return path.join(fsSync.realpathSync.native(current),...suffix.reverse())}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')return path.resolve(value);const parent=path.dirname(current);if(parent===current)return path.resolve(value);suffix.push(path.basename(current));current=parent}}}

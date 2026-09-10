@@ -490,11 +490,14 @@ test('OpenCode admits pending attention after a tool without replacing its outpu
 
 test('Pi inbox helpers expose stable notification identity and commands', () => {
   const inbox = sampleInbox();
+  const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
-  assert.match(renderPiInbox(inbox), /1 Square notification/);
-  assert.match(renderPiInbox(inbox), /square:\/tmp\/SQUARE\.square#act\/7/);
-  assert.doesNotMatch(renderPiInbox(inbox), /catch --now/);
+  assert.match(context, /^\n<system-reminder source="square">/);
+  assert.match(context, /1 Square notification/);
+  assert.match(context, /square:\/tmp\/SQUARE\.square#act\/7/);
+  assert.match(context, /<\/system-reminder>\n$/);
+  assert.doesNotMatch(context, /catch --now/);
 });
 
 async function piFixture(sessionId, pending = true) {

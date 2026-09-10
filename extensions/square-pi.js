@@ -46,15 +46,35 @@ export default function squarePiExtension(pi) {
   let retryWait;
   const present = (deliver, signal) => sessionId === undefined ? undefined : presentPendingAtBoundary(sessionId, deliver, undefined, undefined, signal);
 
-  const presentAtBoundary = (deliver) => {
+  let boundaryPending;
+  const boundaryControllers = new Set();
+  const presentAtBoundary = async (deliver) => {
+    // One slow Square operation must neither hold Pi's prompt nor accumulate
+    // another unresolved lookup on every prompt while the first unwinds.
+    if (boundaryPending !== undefined || sessionId === undefined) return undefined;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error('Pi boundary presentation timed out')), piBoundaryTimeoutMs());
-    const pending = present(deliver, controller.signal);
-    if (pending === undefined) {
+    boundaryControllers.add(controller);
+    let timer;
+    const expired = new Promise((resolve) => {
+      controller.signal.addEventListener('abort', () => resolve(undefined), { once: true });
+      timer = setTimeout(() => controller.abort(new Error('Pi boundary presentation timed out')), piBoundaryTimeoutMs());
+    });
+    try {
+      const pending = present((context) => {
+        // A lookup may finish after the deadline or after session replacement.
+        // Refuse before rendering so that late work cannot acknowledge anything.
+        controller.signal.throwIfAborted();
+        return deliver(context);
+      }, controller.signal);
+      boundaryPending = pending;
+      void pending?.finally(() => {
+        if (boundaryPending === pending) boundaryPending = undefined;
+      }).catch(() => undefined);
+      return await Promise.race([pending, expired]);
+    } finally {
       clearTimeout(timer);
-      return undefined;
+      boundaryControllers.delete(controller);
     }
-    return pending.finally(() => clearTimeout(timer));
   };
 
   const waitForSettled = (serial, signal) => {
@@ -73,6 +93,7 @@ export default function squarePiExtension(pi) {
   // A transport may keep its promise pending while Pi is shutting down or
   // replacing a session. Never make a lifecycle hook wait for that transport.
   const stopWatcher = () => {
+    for (const controller of boundaryControllers) controller.abort(new Error('Pi session ended'));
     watcherAbort?.abort();
     watcher = undefined;
     watcherAbort = undefined;

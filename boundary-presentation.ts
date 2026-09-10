@@ -49,6 +49,10 @@ interface BoundaryRender {
   complete: CompleteBoundaryMembership[];
 }
 
+function frameBoundary(lines: readonly string[]): string {
+  return `\n${lines.join('\n')}\n`;
+}
+
 function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const count = pendingCount(inbox);
   const noun = count === 1 ? 'notification' : 'notifications';
@@ -74,7 +78,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       }),
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;
-    const prospective = [
+    const prospective = frameBoundary([
       header,
       ...blocks,
       block,
@@ -82,7 +86,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
         ? [`… ${omittedAfter} ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
       ...footer,
-    ].join('\n');
+    ]);
     if (prospective.length > CONTEXT_MAX) {
       omitted += 1;
       continue;
@@ -96,14 +100,14 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   }
 
   return {
-    context: [
+    context: frameBoundary([
       header,
       ...blocks,
       ...(omitted > 0
         ? [`… ${omitted} ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
         : []),
       ...footer,
-    ].join('\n'),
+    ]),
     complete,
   };
 }
