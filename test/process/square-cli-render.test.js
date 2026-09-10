@@ -577,8 +577,11 @@ test('inbox stays read-only while codex admits pending attention once at a bound
     env: testEnv(env),
   });
   assert.equal(stop.status, 0, stop.stderr);
-  assert.match(stop.stdout, /"systemMessage":/);
-  assert.match(stop.stdout, /stop answer @Bob/);
+  assert.equal(stop.stdout, '');
+
+  const afterStop = run(['inbox', '--for-session', 'sid-cli-stop', '--json'], { env });
+  assert.equal(afterStop.status, 0, afterStop.stderr);
+  assert.equal(JSON.parse(afterStop.stdout).total, 1);
 });
 
 test('history power filters and jsonl stay read-only', async () => {

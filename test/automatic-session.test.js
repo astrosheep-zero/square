@@ -440,22 +440,26 @@ test('Codex SessionResume uses the hook process cwd when the payload omits cwd',
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
 });
 
-test('Codex Stop presents pending attention through the stop wire', { concurrency: false }, async () => {
+test('Codex Stop records the stopped boundary without presenting pending attention', { concurrency: false }, async () => {
   const item = await fixture();
   await withEnv(item.env, async (env) => {
+    let inboxReads = 0;
     const result = await codexHookResponse(
       { session_id: 'stop-session', hook_event_name: 'Stop' },
-      () => [{
-        name: 'Bob',
-        squarePath: item.publicPath,
-        ownerId: 'stop-owner',
-        notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: `stop answer ${'x'.repeat(121)}` }],
-      }],
+      () => {
+        inboxReads += 1;
+        return [{
+          name: 'Bob',
+          squarePath: item.publicPath,
+          ownerId: 'stop-owner',
+          notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'stop answer' }],
+        }];
+      },
       env,
     );
-    assert.ok(result);
-    assert.equal(result.hookSpecificOutput, undefined);
-    assert.match(result.systemMessage, /stop answer/);
+    assert.equal(result, undefined);
+    assert.equal(inboxReads, 0);
+    assert.equal(await codexQueueEligible('stop-session', env), true);
   });
 });
 test('Codex hook boundary state follows Stop, non-Stop, and SessionEnd', { concurrency: false }, async () => {

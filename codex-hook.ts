@@ -30,11 +30,13 @@ export async function codexHookResponse(
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
   if (hookEventName === undefined) return undefined;
   await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
+  if (hookEventName === 'Stop') {
+    await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters, sweepDeadline).catch(() => undefined);
+    return undefined;
+  }
   const response = await presentPendingAtBoundary(
     input.session_id,
-    (context) => hookEventName === 'Stop'
-      ? { systemMessage: context }
-      : { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } },
+    (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }),
     lookup,
     env
   );
