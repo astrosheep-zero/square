@@ -1,9 +1,8 @@
 import { homedir } from 'node:os';
 
-import { notificationMessageId } from './delivery.js';
 import type { DirectedNotificationRoute } from './model.js';
-import { participantIdentity } from './presentation.js';
 import { formatActivityId } from './square-core.js';
+import { participantCommandPrefix } from './presentation.js';
 
 export const ATTENTION_BODY_MAX = 200;
 
@@ -14,13 +13,16 @@ export interface AttentionPreview {
   actor: string;
   route: DirectedNotificationRoute;
   body: string;
-  compact?: boolean;
 }
 
 export function previewAttentionBody(body: string): string {
   const compact = body.replace(/\r\n/g, '\n');
   if (compact.length <= ATTENTION_BODY_MAX) return compact;
   return `${compact.slice(0, ATTENTION_BODY_MAX).trimEnd()}…`;
+}
+
+export function attentionBodyIsClipped(body: string): boolean {
+  return body.replace(/\r\n/g, '\n').length > ATTENTION_BODY_MAX;
 }
 
 export function displayAttentionPath(squarePath: string): string {
@@ -31,12 +33,26 @@ export function displayAttentionPath(squarePath: string): string {
 
 export function renderAttentionPreview(attention: AttentionPreview): string {
   const attentionKind = attention.route === 'bell' ? 'bell' : 'attention';
-  const id = attention.compact
-    ? formatActivityId(attention.actIndex)
-    : `${notificationMessageId(attention.squarePath, attention.actIndex)} · ${displayAttentionPath(attention.squarePath)}`;
-  const normalizedBody = attention.body.replace(/\r\n/g, '\n');
+  const attributes = {
+    location: displayAttentionPath(attention.squarePath),
+    id: formatActivityId(attention.actIndex),
+    from: attention.actor,
+    to: attention.recipient,
+    kind: attentionKind,
+  };
   return [
-    `${id}: ${participantIdentity(attention.recipient)} from ${participantIdentity(attention.actor)} (${attentionKind})`,
-    previewAttentionBody(normalizedBody),
+    '<square-activity',
+    ...Object.entries(attributes).map(([key, value]) => `  ${key}="${escapeAttribute(value)}"`),
+    '>',
+    previewAttentionBody(attention.body),
+    '</square-activity>',
+    ...(attentionBodyIsClipped(attention.body)
+      ? [`» ${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
+      : []),
   ].join('\n');
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\r/g, '&#13;').replace(/\n/g, '&#10;').replace(/\t/g, '&#9;');
 }

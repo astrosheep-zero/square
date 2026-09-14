@@ -8,6 +8,9 @@ import { coreActivities, coreHold, coreIgnore, coreListen, coreListening, coreRe
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 import { readCursor } from '../dist/runtime.js';
+import { coreParticipants } from '../dist/decisions.js';
+import { listPresentation, participantsPresentation, statusPresentation, watchPresentation } from '../dist/views.js';
+import { renderPresenceLines } from '../dist/presentation.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -20,6 +23,53 @@ function makeState(overrides = {}) {
     runtime: overrides.runtime ?? { ...emptyRuntimeState(acts.length), nextActIndex: acts.length },
   };
 }
+
+test('participant lists share actual action and receipt times, including a fresh rejoin', async () => {
+  const state = makeState({ acts: [
+    { kind: 'join', actor: 'Reader', at: 1 },
+    { kind: 'join', actor: 'Returning', at: 2 },
+    { kind: 'say', actor: 'Returning', at: 3, body: 'old message', mentions: ['Reader'] },
+    { kind: 'done', actor: 'Returning', at: 4 },
+    { kind: 'join', actor: 'Returning', at: 90000 },
+    { kind: 'join', actor: 'Newcomer', at: 120000 },
+  ] });
+  state.runtime.observations.Reader = { 'act/2': { state: 'seen', at: 60000 } };
+  state.runtime.observations.Returning = { 'act/0': { state: 'seen', at: 2 } };
+  state.runtime.leases.Reader = { leaseId: 'watch', heartbeatAt: 179999, expiresAt: 200000 };
+  const square = { artifact: createMemoryCell(state), clock: () => 180000, location: 'memory' };
+  const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
+  const projections = [
+    await participantsPresentation(square),
+    (await statusPresentation(square)).status.participants,
+    (await watchPresentation(square, 'Reader')).presence.participants,
+  ];
+  for (const participants of projections) {
+    assert.deepEqual(participants.map((p) => [p.name, p.lastActiveAt]), expected);
+    const output = renderPresenceLines(participants, 180000).join('\n');
+    assert.ok(output.indexOf('@Newcomer') < output.indexOf('@Returning'));
+    assert.ok(output.indexOf('@Returning') < output.indexOf('@Reader'));
+    assert.match(output, /@Reader.*catching.*2m/);
+  }
+  assert.deepEqual((await listPresentation(square)).participants, expected.map(([name]) => name));
+});
+
+test('participant activity includes authored actions and never advances from unrelated activity', () => {
+  for (const action of [
+    { kind: 'listen', target: 'Other' },
+    { kind: 'ignore', target: 'Other' },
+    { kind: 'hold' },
+    { kind: 'resume' },
+    { kind: 'read', through: 0 },
+  ]) {
+    const state = makeState({ acts: [
+      { kind: 'join', actor: 'Actor', at: 1 },
+      { kind: 'join', actor: 'Other', at: 2 },
+      { ...action, actor: 'Actor', at: 100 },
+      { kind: 'say', actor: 'Other', at: 200, body: 'bare', mentions: [] },
+    ] });
+    assert.equal(coreParticipants(state, 300).find((p) => p.name === 'Actor').lastActiveAt, 100);
+  }
+});
 
 test('joining contributes one canonical lifecycle activity for an unknown participant', () => {
   const result = decideJoin(makeState(), 'Alice', 100);

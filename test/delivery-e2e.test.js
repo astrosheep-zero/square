@@ -234,9 +234,10 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-    assert.equal(rows.filter((row) => row.outcome === 'presented').length, 1);
+    assert.equal(rows.filter((row) => row.outcome === 'clipped').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
-    assert.ok((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)]);
+    assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
+    assert.ok(payload.includes(`catch --id ${formatActivityId(act.index)}`));
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
     assert.equal(evidence.presented, true);
@@ -247,6 +248,10 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
       dispatchCandidate: () => { throw new Error('clipped presentation must not dispatch'); },
     })), []);
     assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
+    const caught = item.cli('Bob', ['catch', '--id', formatActivityId(act.index)], 40);
+    assert.equal(caught.status, 0, caught.stderr);
+    assert.ok(caught.stdout.includes(body));
+    assert.ok((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)]);
   } finally {
     item.cleanup();
   }

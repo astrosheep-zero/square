@@ -69,7 +69,7 @@ test('status previews ten active participants and links to the complete roster',
   const around = status.stdout.slice(status.stdout.indexOf('around the square'), status.stdout.indexOf('\n\nlatest'));
   const participantRows = around.split('\n').filter((line) => /^  [◎●○] @/.test(line));
   assert.equal(participantRows.length, 10);
-  assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), ['Viewer', ...peers.slice(3).reverse()]);
+  assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), peers.slice(2).reverse());
   assert.match(status.stdout, /^  ○ … 3 more participants$/m);
   assert.ok(status.stdout.includes(`» square --location '${file}' participants --limit 13\n`));
   assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
@@ -91,7 +91,7 @@ test('participants bound the roster without pagination', async () => {
   const defaultPage = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(defaultPage.status, 0, defaultPage.stderr);
   const rows = defaultPage.stdout.split('\n').filter((line) => /^  [◎●○] \S+ ·/.test(line));
-  assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(0, 20));
+  assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(1).reverse());
   assert.doesNotMatch(defaultPage.stdout, /@Peer/);
   assert.match(defaultPage.stdout, /^  ○ 20 of 21 participants shown$/m);
   assert.match(defaultPage.stdout, new RegExp(`» square --location '${file}' participants --limit 21`));

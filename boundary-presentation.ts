@@ -7,9 +7,11 @@ import { withFileLock } from './file-lock.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
-import { sessionInbox } from './inbox.js';
+import { hostLedgerForEnv, sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { renderAttentionPreview } from './attention-presentation.js';
+import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
+import { presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+import { formatActivityId } from './square-core.js';
 
 const CONTEXT_MAX = 1200;
 const presentationLocks = new Map<string, Promise<void>>();
@@ -95,9 +97,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
     complete.push({
       membership,
       actIndexes: [notification.actIndex],
-      // The hook output is itself a user-visible presentation, even when the
-      // preview had to clip the body. Keep clipped items from being replayed.
-      markSeen: true,
+      markSeen: !attentionBodyIsClipped(notification.body),
     });
   }
 
@@ -123,7 +123,17 @@ async function presentPendingAtBoundaryUnlocked<T>(
 ): Promise<T | undefined> {
   const inbox = await lookup(sessionId, env);
   if (signal?.aborted) return undefined;
-  const delivered = renderBoundary(pendingAtBoundary(inbox));
+  const hostLedger = hostLedgerForEnv(env);
+  const pending: InboxMembership[] = [];
+  for (const membership of pendingAtBoundary(inbox)) {
+    const evidence = await projectPresentationEvidence({ hostLedger, location: membership.squarePath, participant: membership.name, sessionId });
+    const notifications = membership.notifications.filter((notification) => !presentationSuppressesWake(
+      evidence.filter((row) => row.activity === formatActivityId(notification.actIndex)),
+    ));
+    if (notifications.length > 0) pending.push({ ...membership, notifications });
+  }
+  if (pending.length === 0 || signal?.aborted) return undefined;
+  const delivered = renderBoundary(pending);
   if (delivered.context === '') return undefined;
   let result: T | undefined;
   let rendered = false;

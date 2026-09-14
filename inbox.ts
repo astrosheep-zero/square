@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectPresentation, projectSessionBindings } from './square-projections.js';
 
-function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
+export function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
   const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
   return createHostLedgerPort({
     userPath: env.SQUARE_HOST_LEDGER_USER ?? root,

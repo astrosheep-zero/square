@@ -246,20 +246,21 @@ function applyActivity(accumulator: FoldAccumulator, act: Act): void {
   const { state, byKey, ordered } = accumulator;
   const actor = actorOf(act);
   const snapshot = actor === undefined ? undefined : touchParticipant(byKey, ordered, actor);
+  if (snapshot !== undefined && act.at !== undefined) {
+    snapshot.lastActiveAt = Math.max(snapshot.lastActiveAt ?? -Infinity, act.at);
+  }
 
   switch (act.kind) {
     case 'join':
       if (snapshot !== undefined) {
         snapshot.joined = true;
         snapshot.done = false;
-        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
       }
       break;
     case 'done':
       if (snapshot !== undefined) {
         snapshot.joined = false;
         snapshot.done = true;
-        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
         state.listening.delete(nameKey(snapshot.name));
       }
       break;
@@ -284,7 +285,6 @@ function applyActivity(accumulator: FoldAccumulator, act: Act): void {
     case 'say':
       if (snapshot !== undefined) {
         snapshot.activityCount += 1;
-        snapshot.lastActiveAt = act.at ?? snapshot.lastActiveAt;
       }
       pushThrottleAt(state, act.at);
       if (act.reach === 'bell') pushBellAt(state, act.actor, act.at);

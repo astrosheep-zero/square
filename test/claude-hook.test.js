@@ -133,7 +133,8 @@ test('Claude admits bounded context at an agent boundary and presents once', asy
     );
     assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolBatch');
     assert.match(response.hookSpecificOutput.additionalContext, /1 Square notification/);
-    assert.match(response.hookSpecificOutput.additionalContext, new RegExp(`square:${item.squarePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#act/2`));
+    assert.ok(response.hookSpecificOutput.additionalContext.includes(`location="${item.squarePath}"`));
+    assert.match(response.hookSpecificOutput.additionalContext, /id="act\/2"/);
     assert.match(response.hookSpecificOutput.additionalContext, /hello @Bob/);
     assert.doesNotMatch(response.hookSpecificOutput.additionalContext, /catch --now/);
     assert.equal(await claudeHookResponse({ session_id: 'session', hook_event_name: 'PostToolBatch' }, () => inbox, { ...item.env, SQUARE_PRESENTED: presented }), undefined);
@@ -154,8 +155,8 @@ test('concurrent native sessions present each activity once for their shared own
     ]);
     assert.deepEqual(results.map((result) => result.status), [0, 0]);
     const contexts = results.flatMap((result) => result.stdout === '' ? [] : [JSON.parse(result.stdout).hookSpecificOutput.additionalContext]);
-    assert.equal(contexts.reduce((count, context) => count + (context.match(/#act\/2/g)?.length ?? 0), 0), 1);
-    assert.equal(contexts.reduce((count, context) => count + (context.match(/#act\/3/g)?.length ?? 0), 0), 1);
+    assert.equal(contexts.reduce((count, context) => count + (context.match(/id="act\/2"/g)?.length ?? 0), 0), 1);
+    assert.equal(contexts.reduce((count, context) => count + (context.match(/id="act\/3"/g)?.length ?? 0), 0), 1);
   } finally {
     fs.rmSync(presented, { force: true });
     item.cleanup();

@@ -50,7 +50,7 @@ CLI voice:
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
 - A blocked action always ends with a full copy-pasteable command; a clipped body always ends with the full command to read it all.
-- Express hints (the 4-line pool above) surface on a participant's first activity and every fifth after; they teach embodied expression, not CLI mechanics.
+- Express hints (the 3-line pool) surface on a participant's first activity and every fifth after; they encourage embodied expression and meaningful conversation, not CLI mechanics.
 
 Implementation taste:
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.

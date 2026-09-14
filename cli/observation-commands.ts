@@ -476,12 +476,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
     try {
       const presentation = await statusPresentation(square);
       const result = presentation.status;
-    const active = result.participants.filter((participant) => participant.state === 'active').sort((a, b) => {
-      const aViewer = context.name !== undefined && sameName(a.name, context.name);
-      const bViewer = context.name !== undefined && sameName(b.name, context.name);
-      if (aViewer !== bViewer) return aViewer ? -1 : 1;
-      return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
-    });
+    const active = result.participants.filter((participant) => participant.state === 'active');
     const people = active.length === 0 ? ['  ○ nobody in the square'] : active.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map((participant) => {
       const glyph = participant.presence === 'watching'
         ? '◎'

@@ -295,25 +295,14 @@ export interface ParticipantStatus {
   activityCount: number;
   lastActiveAt: number | undefined;
   presence: CorePresenceState;
-  presenceAt: number | undefined;
   unreadActivityCount: number;
   pendingMentionCount: number;
 }
 
 export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
 
-function presenceFor(squareState: SquareState, snapshot: FoldedSquareState['participants'][number] | undefined, name: string, now: number, delivery: DeliveryModel): {
-  state: CorePresenceState;
-  lastAt: number | undefined;
-} {
-  if (snapshot?.done) return { state: 'done', lastAt: snapshot.lastActiveAt };
-  const cursorAt = squareState.acts.findLast((act) => act.index <= delivery.cursorFor(name))?.at;
-  const lease = freshWatchLease(squareState, name, now);
-  if (lease !== undefined) return { state: 'watching', lastAt: cursorAt ?? lease.heartbeatAt };
-  const lastAt = cursorAt ?? (snapshot?.joined ? snapshot.lastActiveAt : undefined);
-  return lastAt === undefined
-    ? { state: 'never-joined', lastAt: undefined }
-    : { state: 'active', lastAt };
+export function compareParticipantActivity(a: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>, b: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>): number {
+  return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
 }
 
 export interface StatusResult {
@@ -332,9 +321,17 @@ export interface StatusResult {
 
 function buildParticipantStatuses(squareState: SquareState, now: number, state = foldedState(squareState), suppliedDelivery?: DeliveryModel): ParticipantStatus[] {
   const delivery = suppliedDelivery ?? deriveDeliveryModel(squareState);
-  return state.participants.map((snapshot) => {
+  return state.participants.map((snapshot): ParticipantStatus => {
     const participant = snapshot.name;
-    const presence = presenceFor(squareState, snapshot, participant, now, delivery);
+    let lastActiveAt = snapshot.lastActiveAt;
+    // Receipt time is evidence of catching; the consumed activity's time is not.
+    if (snapshot.joined) {
+      for (const observation of Object.values(squareState.runtime.observations[participant] ?? {})) {
+        if (observation.state === 'seen') lastActiveAt = Math.max(lastActiveAt ?? -Infinity, observation.at);
+      }
+    }
+    const presence: CorePresenceState = snapshot.done ? 'done' : !snapshot.joined ? 'never-joined'
+      : freshWatchLease(squareState, participant, now) !== undefined ? 'watching' : 'active';
     const participantStatus = snapshot?.done ? 'done' : snapshot?.joined ? 'active' : 'not joined';
     const consumedThrough = delivery.cursorFor(participant);
     let unreadActivityCount = 0;
@@ -349,13 +346,12 @@ function buildParticipantStatuses(squareState: SquareState, now: number, state =
       state: participantStatus,
       listening: listeningTo(state, participant),
       activityCount: snapshot?.activityCount ?? 0,
-      lastActiveAt: snapshot?.lastActiveAt,
-      presence: presence.state,
-      presenceAt: presence.lastAt,
+      lastActiveAt,
+      presence,
       unreadActivityCount,
       pendingMentionCount: snapshot?.joined ? delivery.pendingFor(participant).length : 0,
     };
-  });
+  }).sort(compareParticipantActivity);
 }
 
 export function coreStatus(squareState: SquareState, now: number, delivery?: DeliveryModel): StatusResult {

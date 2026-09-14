@@ -8,6 +8,7 @@ import { perceiveActivity } from './delivery.js';
 import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
+import { compareParticipantActivity } from './decisions.js';
 import { grepSnippet } from './search.js';
 
 export type WatchStatus = 'stale' | 'empty-now' | 'quorum' | 'capped';
@@ -108,7 +109,7 @@ const PRESENCE_WINDOW_MS = 8 * 60 * 60 * 1000;
 function presenceGlyph(participant: ParticipantStatus): string {
   if (participant.state === 'done') return '○';
   if (participant.presence === 'watching') return '◎';
-  if (participant.presenceAt !== undefined) return '●';
+  if (participant.lastActiveAt !== undefined) return '●';
   return '○';
 }
 
@@ -117,19 +118,17 @@ function presenceText(participant: ParticipantStatus, now: number): string {
     return participant.lastActiveAt === undefined ? 'stepped out of the square' : `stepped out of the square · ${formatRelativeTime(participant.lastActiveAt, now)}`;
   }
   if (participant.presence === 'watching') {
-    const at = participant.presenceAt ?? participant.lastActiveAt;
+    const at = participant.lastActiveAt;
     return at === undefined ? 'catching' : `catching · ${formatRelativeTime(at, now)}`;
   }
-  if (participant.presenceAt === undefined) return 'quiet';
-  return participant.activityCount > 0 ? `${formatRelativeTime(participant.presenceAt, now)}` : `quiet · ${formatRelativeTime(participant.presenceAt, now)}`;
+  if (participant.lastActiveAt === undefined) return 'quiet';
+  return participant.activityCount > 0 ? `${formatRelativeTime(participant.lastActiveAt, now)}` : `quiet · ${formatRelativeTime(participant.lastActiveAt, now)}`;
 }
 
 export function renderPresenceLines(participants: ParticipantStatus[], now: number, limit = 5): string[] {
   const recent = participants
-    .map((p) => ({ p, at: p.presenceAt ?? p.lastActiveAt ?? -Infinity }))
-    .filter(({ p, at }) => p.state === 'done' || p.presence === 'watching' || (at !== -Infinity && now - at <= PRESENCE_WINDOW_MS))
-    .sort((a, b) => b.at - a.at || a.p.name.localeCompare(b.p.name))
-    .map(({ p }) => p);
+    .filter((p) => p.state === 'done' || p.presence === 'watching' || (p.lastActiveAt !== undefined && now - p.lastActiveAt <= PRESENCE_WINDOW_MS))
+    .sort(compareParticipantActivity);
 
   const shown = recent.slice(0, limit);
   if (shown.length === 0) return ['  ○ nobody nearby'];
@@ -143,8 +142,7 @@ export function renderPresenceLines(participants: ParticipantStatus[], now: numb
 const EXPRESS_HINTS = [
   '*asterisks* are your body — *slams table*, *sketches in the air*, *shrugs*',
   "you're standing in a square — words and gestures both land",
-  'half-shaped is welcome — a sketch, an objection, a joke, a fragment',
-  '@ only who you need — step back with catch --mention',
+  'the square is for conversation — share thoughts and engage with others, beyond status updates and empty acknowledgments',
 ];
 
 export function expressHintLine(ownActivityCount: number): string | undefined {
