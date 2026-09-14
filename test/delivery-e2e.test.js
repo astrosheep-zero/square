@@ -224,8 +224,8 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     ));
 
     assert.equal(first, 'presented');
-    assert.equal(second, 'presented');
-    assert.equal(secondCalls, 1);
+    assert.equal(second, undefined);
+    assert.equal(secondCalls, 0);
     assert.match(payload, /@Bob x{195}…/);
     assert.doesNotMatch(payload, /ignore if you have already seen this\./);
     assert.doesNotMatch(payload, /Read and respond in the square when appropriate/);
@@ -234,9 +234,9 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
     const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-    assert.equal(rows.filter((row) => row.outcome === 'presented').length, 0);
+    assert.equal(rows.filter((row) => row.outcome === 'presented').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
-    assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
+    assert.ok((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)]);
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
     assert.equal(evidence.presented, true);

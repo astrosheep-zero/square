@@ -9,7 +9,7 @@ import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { ATTENTION_BODY_MAX, renderAttentionPreview } from './attention-presentation.js';
+import { renderAttentionPreview } from './attention-presentation.js';
 
 const CONTEXT_MAX = 1200;
 const presentationLocks = new Map<string, Promise<void>>();
@@ -95,7 +95,9 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
     complete.push({
       membership,
       actIndexes: [notification.actIndex],
-      markSeen: notification.body.replace(/\r\n/g, '\n').length <= ATTENTION_BODY_MAX,
+      // The hook output is itself a user-visible presentation, even when the
+      // preview had to clip the body. Keep clipped items from being replayed.
+      markSeen: true,
     });
   }
 
