@@ -56,10 +56,6 @@ function frameBoundary(lines: readonly string[]): string {
 }
 
 function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
-  const count = pendingCount(inbox);
-  const noun = count === 1 ? 'notification' : 'notifications';
-  const header = `<system-reminder source="square">You have ${count} Square ${noun}.`;
-  const footer = ['</system-reminder>'];
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
@@ -80,15 +76,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       }),
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;
-    const prospective = frameBoundary([
-      header,
-      ...blocks,
-      block,
-      ...(omittedAfter > 0
-        ? [`… ${omittedAfter} ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`]
-        : []),
-      ...footer,
-    ]);
+    const prospective = frameBoundary([...blocks, block, ...(omittedAfter > 0 ? [`… ${omittedAfter} ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`] : [])]);
     if (prospective.length > CONTEXT_MAX) {
       omitted += 1;
       continue;
@@ -102,14 +90,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   }
 
   return {
-    context: frameBoundary([
-      header,
-      ...blocks,
-      ...(omitted > 0
-        ? [`… ${omitted} ${omitted === 1 ? 'notification' : 'notifications'} omitted.`]
-        : []),
-      ...footer,
-    ]),
+    context: frameBoundary([...blocks, ...(omitted > 0 ? [`… ${omitted} ${omitted === 1 ? 'notification' : 'notifications'} omitted.`] : [])]),
     complete,
   };
 }
