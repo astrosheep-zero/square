@@ -18,11 +18,13 @@ import {
 import {
   claimSessionParticipant,
   hasAutomaticDeliveryIdentity,
+  localSessionIdentities,
   lookupParticipant,
+  readParticipantOwner,
   recordSessionDone,
 } from '../registry.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
-import { projectLocalParticipantBinding, sessionIdsFromEnvironment } from '../square-projections.js';
+import { sessionIdsFromEnvironment } from '../square-projections.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
@@ -167,13 +169,9 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     const hostLedger = createHostLedgerPort();
     const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
     try {
-      const reconnect = before.joined
-        && await projectLocalParticipantBinding({
-          hostLedger: createHostLedgerPort(),
-          location: squarePath,
-          participant: intent.name,
-          sessionIds: sessionIdsFromEnvironment(),
-        }) !== undefined;
+      const identity = localSessionIdentities()[0];
+      const owner = before.joined ? await readParticipantOwner(squarePath, intent.name) : undefined;
+      const reconnect = before.joined && identity !== undefined && owner?.sessionId === identity.sessionId;
       const isRejoin = before.joined;
       if (isRejoin && !intent.kick && !reconnect) {
         fail(
@@ -185,7 +183,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           ].join('\n')
         );
       }
-      const takeoverNeeded = isRejoin && intent.kick && !reconnect;
+      const takeoverNeeded = isRejoin && intent.kick;
       const oldBindings = takeoverNeeded ? await lookupParticipant(squarePath, intent.name) : [];
       let participant: Participant;
       if (takeoverNeeded) {

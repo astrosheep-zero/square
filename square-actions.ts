@@ -35,6 +35,9 @@ export async function catchUp(square: OperationContext, name: string, options: C
   if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Catch idle duration must be a non-negative number');
   const deadline = Date.now() + idle;
   while (true) {
+    if (!await assertLiveOwner(square, name)) {
+      throw new SquareError('already_joined', `${participantIdentity(name)} is already bound to another session`);
+    }
     const attempt = await square.artifact.transact<{ version: number; decision: CatchDecision }>((state, version) => {
       const decision = decideCatch(state, name, options, square.clock(), project);
       return { ...(decision.changed ? { state } : {}), result: { version, decision } };

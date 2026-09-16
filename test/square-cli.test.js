@@ -383,6 +383,55 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.deepEqual((await readWakeRoutes({ location: file, participant: 'Bob' })).map((route) => route.sessionId), ['codex-other']);
 });
 
+test('a foreign catch cannot take ownership of a standing participant', async () => {
+  const file = tempSquare();
+  const env = { SQUARE_REGISTRY: `${file}.sessions.ndjsonl`, CODEX_THREAD_ID: 'coordinator' };
+  const worker = { ...env, CODEX_THREAD_ID: 'worker' };
+  assert.equal(build(file).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['join']), { env }).status, 0);
+  const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
+  assert.equal(caught.status, 2, caught.stdout);
+  assert.match(caught.stderr, /already bound to another session/);
+  assert.equal((await lookupSessionBindings('worker', Date.now(), env)).length, 0);
+  const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
+  assert.equal(foreign.status, 2, foreign.stdout);
+  const original = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'still mine']), { env });
+  assert.equal(original.status, 0, original.stderr);
+});
+
+test('join --kick reclaims a name when a secondary inherited session matches the standing owner', async () => {
+  const file = tempSquare();
+  const env = { SQUARE_REGISTRY: `${file}.sessions.ndjsonl`, PI_SESSION_ID: 'standing-pi' };
+  assert.equal(build(file).status, 0);
+  const joined = run(withName(file, 'Alice', ['join']), { env });
+  assert.equal(joined.status, 0, joined.stderr);
+  const caller = { ...env, CODEX_THREAD_ID: 'new-codex' };
+  const rejected = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'before']), { env: caller });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /already bound to another session/);
+  const reconnect = run(withName(file, 'Alice', ['join']), { env: caller });
+  assert.equal(reconnect.status, 2);
+  assert.match(reconnect.stderr, /join --kick/);
+  const takeover = run(withName(file, 'Alice', ['join', '--kick', '--last', '1']), { env: caller });
+  assert.equal(takeover.status, 0, takeover.stderr);
+  const expressed = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'after']), { env: caller });
+  assert.equal(expressed.status, 0, expressed.stderr);
+  const bindings = await lookupSessionBindings('standing-pi', Date.now(), env);
+  assert.equal(bindings.length, 0);
+  assert.equal((await lookupSessionBindings('new-codex', Date.now(), env)).length, 1);
+  const selfKick = run(withName(file, 'Alice', ['join', '--kick']), { env: caller });
+  assert.equal(selfKick.status, 0, selfKick.stderr);
+  const square = await Square.at({ path: file });
+  try {
+    const lifecycle = (await square.history({ limit: 100 }))
+      .filter((activity) => activity.kind === 'join' || activity.kind === 'done')
+      .map((activity) => activity.kind);
+    assert.deepEqual(lifecycle, ['join', 'done', 'join', 'done', 'join']);
+  } finally {
+    await square.close();
+  }
+});
+
 test('doctor is a dry validator and rejects Markdown bytes', () => {
   const file = tempSquare();
   fs.writeFileSync(file, '---\nhard_cap: 3\n---\n\n## Warmup\nwarmup\n');
