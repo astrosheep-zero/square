@@ -139,8 +139,7 @@ test('attention metadata is separate from unindented Markdown body', () => {
     '  id="act/12"',
     '  from="Alice"',
     '  to="Bob"',
-    '  kind="bell"',
-    '>',
+    '  kind="bell">',
     body,
     '</square-activity>',
   ].join('\n'));

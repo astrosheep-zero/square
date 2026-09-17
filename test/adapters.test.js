@@ -11,6 +11,7 @@ import squarePiExtension, {
   inboxKeys,
   pendingInbox,
   renderPiInbox,
+  summarizePendingForNotify,
 } from '../extensions/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
@@ -499,8 +500,25 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.match(context, /^\n<square-activity/);
   assert.match(context, /location="\/tmp\/SQUARE\.square"/);
   assert.match(context, /id="act\/7"/);
+  assert.match(context, /kind="attention">/);
+  assert.doesNotMatch(context, /^>$/m);
   assert.match(context, /<\/square-activity>\n$/);
   assert.doesNotMatch(context, /catch --now/);
+});
+
+test('Pi notify summary names actor, route, and recipient without a standalone blockquote line', () => {
+  const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
+  const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
+  assert.equal(
+    summarizePendingForNotify([membership([note()])]),
+    '■ square · Alice walked over to Bob — hello @Bob',
+  );
+  assert.equal(
+    summarizePendingForNotify([membership([note({ route: 'bell' }), note({ actor: 'Cara', body: 'y'.repeat(120) })])]),
+    `■ square · Alice rang the bell for Bob — hello @Bob (+1 more)`,
+  );
+  assert.match(summarizePendingForNotify([membership([note({ body: 'y'.repeat(120) })])]), /…$/);
+  assert.equal(summarizePendingForNotify([membership([])]), undefined);
 });
 
 async function piFixture(sessionId, pending = true) {
@@ -639,7 +657,12 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
     const ancestor = '01a08fbf-ancestor-native-session';
     process.env.PI_SESSION_ID = ancestor;
     const lock = await holdBoundaryLock('pi-boundary-child-session');
-    const context = { sessionManager: { getSessionId: () => 'pi-boundary-child-session' }, cwd: '/tmp/no-public-square' };
+    const notified = [];
+    const context = {
+      sessionManager: { getSessionId: () => 'pi-boundary-child-session' },
+      cwd: '/tmp/no-public-square',
+      ui: { notify: (message, level) => notified.push({ message, level }) },
+    };
     try {
       await handlers.get('session_start')({}, context);
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -649,6 +672,8 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await lock.held();
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
+      assert.equal(sent[0].message.display, false, 'the activity stays out of the TUI stream; the notify carries the human-facing summary');
+      assert.deepEqual(notified, [{ message: '■ square · Alice walked over to Bob — hello @Bob', level: 'info' }]);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),

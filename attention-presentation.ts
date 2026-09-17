@@ -40,10 +40,13 @@ export function renderAttentionPreview(attention: AttentionPreview): string {
     to: attention.recipient,
     kind: attentionKind,
   };
+  const entries = Object.entries(attributes);
+  const [lastKey, lastValue] = entries[entries.length - 1];
   return [
     '<square-activity',
-    ...Object.entries(attributes).map(([key, value]) => `  ${key}="${escapeAttribute(value)}"`),
-    '>',
+    // The opening tag must never emit a standalone `>` line: Markdown renders it as a blockquote.
+    ...entries.slice(0, -1).map(([key, value]) => `  ${key}="${escapeAttribute(value)}"`),
+    `  ${lastKey}="${escapeAttribute(lastValue)}">`,
     previewAttentionBody(attention.body),
     '</square-activity>',
     ...(attentionBodyIsClipped(attention.body)

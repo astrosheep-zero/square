@@ -29,9 +29,23 @@ export function renderPiInbox(inbox) {
   return renderPendingAtBoundary(pendingInbox(inbox));
 }
 
+const NOTIFY_BODY_MAX = 80;
+
+export function summarizePendingForNotify(pending) {
+  const lines = pending.flatMap((membership) => membership.notifications.map((note) => {
+    const verb = note.route === 'bell' ? 'rang the bell for' : note.route === 'mention' ? 'walked over to' : 'paid attention to';
+    const body = note.body.replace(/\s+/g, ' ').trim();
+    const clipped = body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX).trimEnd()}…` : body;
+    return `${note.actor} ${verb} ${membership.name}${clipped ? ` — ${clipped}` : ''}`;
+  }));
+  if (lines.length === 0) return undefined;
+  return lines.length === 1 ? `■ square · ${lines[0]}` : `■ square · ${lines[0]} (+${lines.length - 1} more)`;
+}
+
 export default function squarePiExtension(pi) {
   let sessionId;
   let sessionCwd;
+  let ui;
   let watcher;
   let watcherAbort;
   let generation = 0;
@@ -185,10 +199,14 @@ export default function squarePiExtension(pi) {
           sessionId,
           async (content) => {
             if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
+            // The full activity stays out of the TUI stream (display: false) but still
+            // reaches the model; a brief notify tells the human what just landed.
+            const summary = summarizePendingForNotify(pending);
+            if (summary) ui?.notify?.(summary, 'info');
             const landing = waitForLanding(content, signal, 'steer');
             try {
               Promise.resolve(pi.sendMessage(
-                { customType: 'square', content, display: true },
+                { customType: 'square', content, display: false },
                 { deliverAs: 'steer', triggerTurn: true },
               )).catch((error) => landing.ack.settle(error));
             } catch (error) {
@@ -240,6 +258,7 @@ export default function squarePiExtension(pi) {
     turnIndex = 0;
     activeTurn = undefined;
     currentRunSignal = undefined;
+    ui = ctx?.ui;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     const token = generation;
@@ -327,6 +346,7 @@ export default function squarePiExtension(pi) {
     generation += 1;
     failAcks(new Error('Pi session ended'));
     stopWatcher();
+    ui = undefined;
     if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd, sessionEnv(sessionId)).catch(() => undefined);
     sessionId = undefined;
     sessionCwd = undefined;
