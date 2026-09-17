@@ -18,8 +18,9 @@
     "clean": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc && node --input-type=module -e \"import fs from 'node:fs'; fs.chmodSync('dist/square.js',0o755)\"",
     "verify-release": "node test/release.test.js",
-    "release": "npm version patch && npm publish && git push --follow-tags",
-    "prepublishOnly": "npm run build && npm run verify-release",
+    "sync-manifests": "node scripts/sync-manifests.mjs",
+    "release": "npm version patch && npm run sync-manifests -- --commit && npm publish && git push --follow-tags",
+    "prepublishOnly": "npm run sync-manifests && npm run build && npm run verify-release",
     "test": "npm run build && node --test test/*.test.js",
     "test:cli-process": "npm run build && node --test test/process/square-cli-render.test.js"
   },
