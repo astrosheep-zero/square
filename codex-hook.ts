@@ -13,34 +13,74 @@ export interface CodexHookInput {
   source?: unknown;
 }
 
+export type HookTrace = (line: string) => void;
+
+/** Overall hook budget: Codex kills the hook at its configured 5s timeout, so the hook must
+ * bound every wait/retry itself and exit with a readable stage trace before that. */
+export const CODEX_HOOK_BUDGET_MS = 4500;
+
 const CODEX_HOOK_EVENTS: Readonly<Record<string, 'PostToolUse' | 'Stop'>> = {
   PostToolUse: 'PostToolUse',
   Stop: 'Stop',
 };
 
+const defaultTrace: HookTrace = (line) => { process.stderr.write(`${line}\n`); };
+
+/** Per-stage timings, emitted as each stage completes so a killed hook still leaves a trace. */
+function stageTracer(trace: HookTrace): (stage: string, extra?: string) => void {
+  const startedAt = Date.now();
+  let mark = startedAt;
+  return (stage, extra = '') => {
+    const now = Date.now();
+    const durationMs = now - mark;
+    mark = now;
+    trace(`square-codex-hook: stage=${stage} durationMs=${durationMs} totalMs=${now - startedAt}${extra === '' ? '' : ` ${extra}`}`);
+  };
+}
+
+function hookBudgetMs(env: NodeJS.ProcessEnv): number {
+  const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS;
+}
+
 export async function codexHookResponse(
   input: CodexHookInput,
-  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   deliveryAdapters?: WakeAdapter[],
+  trace: HookTrace = defaultTrace,
 ): Promise<object | undefined> {
-  const sweepDeadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS;
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
   if (typeof input.hook_event_name !== 'string') return undefined;
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
   if (hookEventName === undefined) return undefined;
+  const stage = stageTracer(trace);
+  const signal = AbortSignal.timeout(hookBudgetMs(env));
+  const sweepDeadline = Date.now() + Math.min(PRIVILEGED_HOOK_BUDGET_MS, hookBudgetMs(env));
+  const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
   await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env);
+  stage('boundary-record');
   if (hookEventName === 'Stop') {
-    await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters, sweepDeadline).catch(() => undefined);
+    await sweepPrivilegedPending(cwd, env, deliveryAdapters, sweepDeadline, signal).catch(() => undefined);
+    stage('sweep', signal.aborted ? 'aborted=true' : '');
     return undefined;
   }
-  const response = await presentPendingAtBoundary(
-    input.session_id,
-    (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }),
-    lookup,
-    env
-  );
-  await sweepPrivilegedPending(typeof input.cwd === 'string' ? input.cwd : process.cwd(), env, deliveryAdapters, sweepDeadline).catch(() => undefined);
+  let response: object | undefined;
+  try {
+    response = await presentPendingAtBoundary(
+      input.session_id,
+      (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }),
+      lookup,
+      env,
+      signal,
+    );
+    stage('presentation', signal.aborted ? 'aborted=true' : '');
+  } catch (error) {
+    stage('presentation', `error=${error instanceof Error ? error.name : String(error)}`);
+    response = undefined;
+  }
+  await sweepPrivilegedPending(cwd, env, deliveryAdapters, sweepDeadline, signal).catch(() => undefined);
+  stage('sweep', signal.aborted ? 'aborted=true' : '');
   return response;
 }
 

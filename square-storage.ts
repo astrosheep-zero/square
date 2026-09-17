@@ -98,10 +98,12 @@ export function createMemoryCell(initial: SquareState): StateCell {
   }
 
   return {
-    transact<R>(fn: SquareTransition<R>) {
+    transact<R>(fn: SquareTransition<R>, signal?: AbortSignal) {
       assertCellOpen(closed);
+      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
       const operation = tail.then(() => {
         assertCellOpen(closed);
+        if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
         const current = cloneState(state);
         const outcome = fn(current, version);
         if (isThenable(outcome)) {
@@ -121,10 +123,12 @@ export function createMemoryCell(initial: SquareState): StateCell {
       tail = operation.then(() => undefined, () => undefined);
       return operation;
     },
-    async read() {
+    async read(signal?: AbortSignal) {
       assertCellOpen(closed);
+      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
       await tail;
       assertCellOpen(closed);
+      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
       return { state: cloneState(state), version };
     },
     changed(sinceVersion, timeoutMs) {
@@ -154,7 +158,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
 }
 
 /** SQLite-backed cell. Revisions are read from the authoritative database, not file metadata. */
-export function createFileCell(squarePath: string): StateCell {
+export function createFileCell(squarePath: string, externalSignal?: AbortSignal): StateCell {
   let closed = false;
   let storage: Promise<string> | undefined;
   let tail: Promise<void> = Promise.resolve();
@@ -169,22 +173,29 @@ export function createFileCell(squarePath: string): StateCell {
     return new Error('StateCell is closed');
   }
 
+  /** Close wins over every operation; a per-call deadline bounds busy retries alongside it. */
+  function operationSignal(signal?: AbortSignal): AbortSignal | undefined {
+    if (signal === undefined && externalSignal === undefined) return cancel.signal;
+    return AbortSignal.any([cancel.signal, ...(externalSignal === undefined ? [] : [externalSignal]), ...(signal === undefined ? [] : [signal])]);
+  }
+
   return {
-    transact<R>(fn: SquareTransition<R>) {
+    transact<R>(fn: SquareTransition<R>, signal?: AbortSignal) {
       assertCellOpen(closed);
+      const opSignal = operationSignal(signal);
       const operation = tail.then(async () => {
         assertCellOpen(closed);
-        const result = await transactSquareSnapshot(await storagePath(), fn, cancel.signal);
+        const result = await transactSquareSnapshot(await storagePath(), fn, opSignal);
         return result.result;
       });
       tail = operation.then(() => undefined, () => undefined);
       return operation;
     },
-    async read() {
+    async read(signal?: AbortSignal) {
       assertCellOpen(closed);
       await tail;
       assertCellOpen(closed);
-      const snapshot = await readSquareSnapshot(await storagePath(), cancel.signal);
+      const snapshot = await readSquareSnapshot(await storagePath(), operationSignal(signal));
       return { state: cloneState(snapshot.state), version: snapshot.revision };
     },
     async changed(sinceVersion, timeoutMs) {
@@ -221,6 +232,6 @@ export function createFileCell(squarePath: string): StateCell {
 }
 
 /** Consumer-facing file cell factory; keeps SQLite framing behind this module. */
-export function openSquareCell(squarePath: string): StateCell {
-  return createFileCell(squarePath);
+export function openSquareCell(squarePath: string, signal?: AbortSignal): StateCell {
+  return createFileCell(squarePath, signal);
 }

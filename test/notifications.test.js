@@ -13,6 +13,8 @@ import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
 import { readWakeAttempts } from '../dist/wake-attempts.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
+import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { sessionInbox } from '../dist/inbox.js';
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
@@ -378,4 +380,36 @@ test('wake transport rechecks pending and route ownership before send', async ()
   }));
   assert.equal(calls, 0);
   fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('Codex PostToolUse hook aborts a contended presentation boundary within its budget and traces stages', async () => {
+  const item = await fixture();
+  const traces = [];
+  try {
+    const env = { ...item.env, SQUARE_CODEX_HOOK_BUDGET_MS: '300' };
+    // Hold the per-session presentation boundary lock with a lookup that blocks until released.
+    let releaseLookup;
+    const lookupGate = new Promise((resolve) => { releaseLookup = resolve; });
+    const holder = presentPendingAtBoundary('contended-session', () => ({ held: true }), () => lookupGate, env);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const startedAt = Date.now();
+    const response = await codexHookResponse(
+      { session_id: 'contended-session', hook_event_name: 'PostToolUse', cwd: item.root },
+      sessionInbox,
+      env,
+      undefined,
+      (line) => traces.push(line),
+    );
+    const elapsed = Date.now() - startedAt;
+    assert.equal(response, undefined);
+    assert.ok(elapsed < 2000, `hook should exit near its 300ms budget, took ${elapsed}ms`);
+    const stages = traces.join('\n');
+    assert.match(stages, /stage=boundary-record/);
+    assert.match(stages, /stage=presentation .*(aborted=true|error=)/);
+    assert.match(stages, /stage=sweep/);
+    releaseLookup([]);
+    assert.deepEqual(await holder, undefined);
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
 });

@@ -40,13 +40,13 @@ function withoutExcluded(inbox: InboxMembership[], excludeKeys?: ReadonlySet<str
     .filter((membership) => membership.notifications.length > 0);
 }
 
-export async function sessionInbox(sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<InboxMembership[]> {
+export async function sessionInbox(sessionId: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
   const hostLedger = hostLedgerForEnv(env);
   for (const binding of await projectSessionBindings({ hostLedger, sessionId })) {
     let square;
     try {
-      square = await openSquare(binding.location, { env, hostLedger });
+      square = await openSquare(binding.location, { env, hostLedger, signal });
       const projection = await projectPresentation({ artifact: square.artifact, binding, now: square.clock() });
       if (!projection.joined) continue;
       inbox.push({

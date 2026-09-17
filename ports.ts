@@ -22,8 +22,8 @@ import type { HostLedgerPort } from './host-ledger.js';
 
 /** Atomic artifact access. Never exposes framing, compression, locks, or storage schema. */
 export interface SquareArtifactPort {
-  read(): Promise<{ state: SquareState; version: number }>;
-  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }): Promise<R>;
+  read(signal?: AbortSignal): Promise<{ state: SquareState; version: number }>;
+  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }, signal?: AbortSignal): Promise<R>;
   changed(sinceVersion: number, timeoutMs: number): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -140,6 +140,8 @@ export interface PresentPendingInput {
   readonly session?: string;
   readonly now?: number;
   readonly timeoutMs?: number;
+  /** One hook deadline propagated into artifact reads/transitions so busy retries stay bounded. */
+  readonly signal?: AbortSignal;
   /** Boundary previews that were clipped remain pending for a later full presentation. */
   readonly markSeen?: boolean;
 }

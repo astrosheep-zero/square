@@ -208,9 +208,10 @@ export async function sweepPrivilegedPending(
   env: NodeJS.ProcessEnv = process.env,
   suppliedAdapters?: WakeAdapter[],
   deadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS,
+  signal?: AbortSignal,
 ): Promise<void> {
   const remainingMs = () => Math.max(0, deadline - Date.now());
-  if (remainingMs() === 0) return;
+  if (remainingMs() === 0 || signal?.aborted) return;
   const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
   const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? root, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root, readableScopes: ['user'], writableScope: 'user' });
   let indexed: readonly import('./host-ledger.js').PresenceRecord[] = [];
@@ -221,22 +222,22 @@ export async function sweepPrivilegedPending(
       if (entry.endsWith('.square')) paths.add(path.join(cwd, '.square', entry));
     }
   } catch { /* no local square directory */ }
-  if (remainingMs() === 0) return;
+  if (remainingMs() === 0 || signal?.aborted) return;
   const adapters = suppliedAdapters ?? await defaultWakeAdapters();
   for (const squarePath of paths) {
-    if (remainingMs() === 0) break;
+    if (remainingMs() === 0 || signal?.aborted) break;
     try {
-      const square = await openSquare(squarePath, { hostLedger, env });
+      const square = await openSquare(squarePath, { hostLedger, env, signal });
       try {
         await hostLedger.reconcileBinding({ artifact: square.artifact, scopes: ['user'], now: Date.now() }).catch(() => undefined);
-        if (remainingMs() === 0) break;
+        if (remainingMs() === 0 || signal?.aborted) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
         const selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
         const transport = createWakeTransport(adapters, hostLedger, Date.now);
         for (const actIndex of selected) {
           const remaining = remainingMs();
-          if (remaining === 0) break;
+          if (remaining === 0 || signal?.aborted) break;
           const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
           const timeoutMs = Math.max(1, Math.min(Number.isFinite(configured) && configured > 0 ? configured : 5000, remaining));
           await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);

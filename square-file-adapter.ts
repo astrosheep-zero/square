@@ -43,6 +43,8 @@ export interface SquareBuildOptions {
   hostLedger?: HostLedgerPort;
   wakeTransport?: import('./ports.js').WakeTransportPort;
   env?: NodeJS.ProcessEnv;
+  /** One caller deadline (e.g. a native hook budget) propagated into artifact busy retries. */
+  signal?: AbortSignal;
 }
 
 function validateBuildOptions(options: SquareBuildOptions): void {
@@ -58,14 +60,14 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 
 export async function openSquare(
   squarePath: string,
-  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env'> = {},
+  options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env' | 'signal'> = {},
 ): Promise<OpenSquare> {
   const env = options.env ?? process.env;
   const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
-  const cell = openSquareCell(squarePath);
+  const cell = openSquareCell(squarePath, options.signal);
   try {
     await cell.read();
-    const artifact: SquareArtifactPort = { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
+    const artifact: SquareArtifactPort = { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
     return {
       artifact,
       clock: options.clock ?? Date.now,
@@ -119,7 +121,7 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
 }
 
 function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
-  return { read: () => cell.read(), transact: (fn) => cell.transact(fn), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
+  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
 }
 
 /** Wait for any bound artifact to change; delivery callers re-project after the edge. */

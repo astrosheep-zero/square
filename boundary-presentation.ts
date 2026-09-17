@@ -16,6 +16,24 @@ import { formatActivityId } from './square-core.js';
 const CONTEXT_MAX = 1200;
 const presentationLocks = new Map<string, Promise<void>>();
 
+/** One settled promise loses to an abort so an in-process presentation wait stays bounded too. */
+async function awaitWithSignal(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) return promise;
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        if (signal.aborted) { reject(signal.reason ?? new Error('Presentation aborted')); return; }
+        onAbort = () => reject(signal.reason ?? new Error('Presentation aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 function pendingCount(inbox: InboxMembership[]): number {
   return inbox.reduce((total, membership) => total + membership.notifications.length, 0);
 }
@@ -98,11 +116,11 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
 async function presentPendingAtBoundaryUnlocked<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,
-  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<T | undefined> {
-  const inbox = await lookup(sessionId, env);
+  const inbox = await lookup(sessionId, env, signal);
   if (signal?.aborted) return undefined;
   const hostLedger = hostLedgerForEnv(env);
   const pending: InboxMembership[] = [];
@@ -122,16 +140,16 @@ async function presentPendingAtBoundaryUnlocked<T>(
   for (const entry of delivered.complete) {
     let square;
     try {
-      try { square = await openSquare(entry.membership.squarePath, { env }); } catch { continue; }
+      try { square = await openSquare(entry.membership.squarePath, { env, signal }); } catch { continue; }
       for (const index of entry.actIndexes) {
         const key = `${entry.membership.squarePath}\u0000${entry.membership.name.toLocaleLowerCase()}\u0000${index}`;
         const prior = presentationLocks.get(key);
-        if (prior !== undefined) { await prior; if (!rendered) return undefined; continue; }
-        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, hostLedger: square.hostLedger, session: sessionId, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now() }).then(async (outcome) => {
+        if (prior !== undefined) { await awaitWithSignal(prior, signal); if (signal?.aborted) return undefined; if (!rendered) return undefined; continue; }
+        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, hostLedger: square.hostLedger, session: sessionId, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
           if (!outcome.presented) {
-            const snapshot = await square!.artifact.read().catch(() => undefined);
+            const snapshot = await square!.artifact.read(signal).catch(() => undefined);
             if (snapshot?.state.acts.every((activity: { index: number }) => activity.index !== index)) await renderOnce();
           }
         });
@@ -150,7 +168,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
 export async function presentPendingAtBoundary<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,
-  lookup: (sessionId: string, env?: NodeJS.ProcessEnv) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (sessionId: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {
