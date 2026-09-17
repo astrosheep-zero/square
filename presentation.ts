@@ -94,6 +94,15 @@ export function participantCommandPrefix(squarePath: string, name: string): stri
   return `square --location ${quoteShell(path.resolve(squarePath))} --as ${quoteShell(name)}`;
 }
 
+/** Blocked actions end with a full copy-pasteable recovery command. */
+export function joinRecoveryCommand(squarePath: string, name: string): string {
+  return `» ${participantCommandPrefix(squarePath, name)} join`;
+}
+
+export function participantsRecoveryCommand(squarePath: string): string {
+  return `» ${commandPrefix(squarePath)} participants`;
+}
+
 function formatAge(ms: number | undefined): string {
   if (ms === undefined) return '(none)';
   if (ms < 1000) return `${Math.max(0, ms)}ms`;

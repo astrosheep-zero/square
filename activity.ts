@@ -11,6 +11,7 @@ import {
   renderExpressNoWait,
   renderExpressWaiting,
   renderPendingFeed,
+  joinRecoveryCommand,
   withPathOutput,
 } from './presentation.js';
 import { nowMs, SLEEP_MS } from './runtime.js';
@@ -82,6 +83,7 @@ export async function cmdActivity(
         const draftPath = saveActivityDraft(squarePath, name, rawInput);
         process.stderr.write(err.message + '\n');
         process.stderr.write(`draft kept: ${draftPath}\n`);
+        if (/^Unknown participant/.test(err.message)) process.stderr.write(`${joinRecoveryCommand(squarePath, name)}\n`);
         process.exit(2);
       }
       process.stderr.write(err.message + '\n');

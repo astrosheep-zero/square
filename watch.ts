@@ -24,6 +24,8 @@ import {
   renderWatchReplaced,
   renderWatchStatus,
   participantCommandPrefix,
+  joinRecoveryCommand,
+  participantsRecoveryCommand,
   withPathOutput,
   type WatchStatus,
 } from './presentation.js';
@@ -218,13 +220,26 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   try {
     square = await openSquare(squarePath, { clock: nowMs });
     name = (await resolveParticipant(square, name)).name;
+  } catch (err) {
+    if (isSquareError(err)) {
+      process.stderr.write(err.message + '\n');
+      // The caller's own name has never joined; only a join admits it.
+      if (/^Unknown participant/.test(err.message)) process.stderr.write(`${joinRecoveryCommand(squarePath, name)}\n`);
+      process.exit(err.code === 'not_found' ? 1 : 2);
+    }
+    throw err;
+  }
+  try {
     if (opts.mention !== undefined) opts = { ...opts, mention: (await resolveParticipant(square, opts.mention)).name };
     if (opts.participants !== undefined && opts.participants.length > 0) {
       opts = { ...opts, participants: await Promise.all(opts.participants.map(async (participant) => (await resolveParticipant(square, participant)).name)) };
     }
   } catch (err) {
+    await closeOpenSquare(square).catch(() => undefined);
     if (isSquareError(err)) {
       process.stderr.write(err.message + '\n');
+      // A filter target is unknown, not the caller; the roster is the useful next read.
+      if (/^(Unknown participant|Unknown mention target)/.test(err.message)) process.stderr.write(`${participantsRecoveryCommand(squarePath)}\n`);
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
     throw err;
