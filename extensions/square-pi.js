@@ -31,6 +31,10 @@ export function renderPiInbox(inbox) {
 
 const NOTIFY_BODY_MAX = 80;
 
+function framePiMessage(content) {
+  return `\n${content.replace(/^\n+/, '').replace(/\n+$/, '')}\n`;
+}
+
 export function summarizePendingForNotify(pending) {
   const lines = pending.flatMap((membership) => membership.notifications.map((note) => {
     const verb = note.route === 'bell'
@@ -207,10 +211,11 @@ export default function squarePiExtension(pi) {
             // reaches the model; a brief notify tells the human what just landed.
             const summary = summarizePendingForNotify(pending);
             if (summary) ui?.notify?.(summary, 'info');
-            const landing = waitForLanding(content, signal, 'steer');
+            const messageContent = framePiMessage(content);
+            const landing = waitForLanding(messageContent, signal, 'steer');
             try {
               Promise.resolve(pi.sendMessage(
-                { customType: 'square', content, display: false },
+                { customType: 'square', content: messageContent, display: false },
                 { deliverAs: 'steer', triggerTurn: true },
               )).catch((error) => landing.ack.settle(error));
             } catch (error) {
@@ -270,10 +275,11 @@ export default function squarePiExtension(pi) {
     const signal = watcherAbort.signal;
     void automaticSessionStart('pi', sessionId, sessionCwd, sessionEnv(sessionId)).then((context) => {
       if (context === undefined || sessionId === undefined || token !== generation) return;
-      const landing = waitForLanding(context, signal, 'nextTurn');
+      const messageContent = framePiMessage(context);
+      const landing = waitForLanding(messageContent, signal, 'nextTurn');
       try {
         Promise.resolve(pi.sendMessage(
-          { customType: 'square', content: context, display: true },
+          { customType: 'square', content: messageContent, display: true },
           { deliverAs: 'nextTurn' },
         )).catch((error) => landing.ack.settle(error));
       } catch {
