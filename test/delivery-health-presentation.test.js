@@ -42,6 +42,25 @@ test('delivery health presentation keeps one short detail line stable', () => {
   ]);
 });
 
+test('delivery diagnostics show release reasons even when nothing is pending', () => {
+  const releases = [{
+    at: 0,
+    attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', actIndex: 7 },
+    routeKind: 'paseo',
+    attemptN: 1,
+    signature: 'agent_not_idle',
+    message: 'The registered Paseo agent is not idle.',
+    diagnostic: { phase: 'selection', code: 'not_idle' },
+  }];
+  const lines = renderDeliveryHealth([], releases, 1_000);
+
+  assert.equal(lines[0], '✓ no pending delivery attention');
+  assert.equal(lines[1], '· recent wake releases · 1');
+  assert.match(lines[2], /act\/7 → @Bob · paseo · agent_not_idle · 1s/);
+  assert.match(lines[2], /The registered Paseo agent is not idle/);
+  assert.match(lines[2], /selection/);
+});
+
 test('delivery health presentation ellipsizes recipient, actor, and wake signature fields', () => {
   const recipient = `recipient-${'r'.repeat(160)}`;
   const actor = `actor-${'a'.repeat(160)}`;

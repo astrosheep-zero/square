@@ -7,6 +7,7 @@ import { formatActivityId, parseActivityId } from './square-core.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import type { HostLedgerPort } from './host-ledger.js';
 import { terminalWakeEvidence } from './square-projections.js';
+import { redactDiagnostic } from './diagnostic-redaction.js';
 import type { WakeAttempt as ProjectedWakeAttempt } from './square-projections.js';
 export { hasAttemptableWakeRoute, isWakeRouteAttemptable, terminalWakeEvidence } from './square-projections.js';
 
@@ -16,6 +17,17 @@ export interface WakeAttention {
   squarePath: string;
   actIndex: number;
   recipient: string;
+}
+
+export interface WakeReleaseDiagnostic {
+  readonly at: number;
+  readonly attention: WakeAttention;
+  readonly routeKind?: WakeRouteKind;
+  readonly attemptN?: number;
+  readonly session?: string;
+  readonly signature?: string;
+  readonly message?: string;
+  readonly diagnostic?: unknown;
 }
 
 export type WakeAttempt = ProjectedWakeAttempt;
@@ -98,16 +110,46 @@ export async function readWakeAttempts(
   return scoped.filter((_, index) => keys[index] === expected);
 }
 
-function redact(value: unknown, secret: string | undefined): unknown {
-  if (typeof value === 'string') {
-    const withoutKnownSecret = secret ? value.split(secret).join('[redacted]') : value;
-    return withoutKnownSecret.replace(/([?&]password=)[^&\s]+/gi, '$1[redacted]');
+export function redactWakeDiagnostic(value: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
+  return redactDiagnostic(value, env.PASEO_PASSWORD);
+}
+
+export async function readWakeReleaseDiagnostics(opts: {
+  location?: string;
+  attention?: WakeAttention;
+  sessionId?: string;
+  now?: number;
+  env?: NodeJS.ProcessEnv;
+} = {}): Promise<WakeReleaseDiagnostic[]> {
+  const now = opts.now ?? Date.now();
+  const env = opts.env ?? process.env;
+  const rows = await ledger(env).listEvidence({
+    kind: 'wake',
+    location: opts.location ?? opts.attention?.squarePath,
+    includeReleased: true,
+    now,
+  });
+  const expected = opts.attention === undefined ? undefined : await wakeAttentionKey(opts.attention);
+  const releases: WakeReleaseDiagnostic[] = [];
+  for (const row of rows) {
+    if (row.outcome !== 'released') continue;
+    const actIndex = parseActivityId(row.activity);
+    if (actIndex === undefined || row.at === undefined) continue;
+    if (opts.sessionId !== undefined && row.session !== opts.sessionId) continue;
+    const attention = { squarePath: row.location, recipient: row.participant, actIndex };
+    if (expected !== undefined && JSON.stringify([row.location, formatActivityId(actIndex), nameKey(row.participant)]) !== expected) continue;
+    releases.push({
+      at: row.at,
+      attention,
+      ...(row.routeKind === undefined ? {} : { routeKind: row.routeKind }),
+      ...(row.attemptN === undefined ? {} : { attemptN: row.attemptN }),
+      ...(row.session === undefined ? {} : { session: row.session }),
+      ...(row.signature === undefined ? {} : { signature: row.signature }),
+      ...(row.message === undefined ? {} : { message: redactWakeDiagnostic(row.message, env) as string }),
+      ...(row.diagnostic === undefined ? {} : { diagnostic: redactWakeDiagnostic(row.diagnostic, env) }),
+    });
   }
-  if (Array.isArray(value)) return value.map((item) => redact(item, secret));
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redact(item, secret)]));
-  }
-  return value;
+  return releases.sort((left, right) => right.at - left.at);
 }
 
 export async function recordWakeAttempt(
@@ -119,7 +161,7 @@ export async function recordWakeAttempt(
   if (value.outcome !== 'accepted' && !value.signature) {
     throw new Error(`${value.outcome} wake attempts require a transport signature.`);
   }
-  const safe = redact(value, env.PASEO_PASSWORD) as WakeAttempt;
+  const safe = redactWakeDiagnostic(value, env) as WakeAttempt;
   const session = safe.session ?? safe.signature ?? `route:${safe.routeKind}`;
   const claim = await ledger(env).claimEvidence({ location: safe.attention.squarePath, participant: safe.attention.recipient, session, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', leaseMs: 5000 });
   if (claim.status === 'acquired') await ledger(env).appendWakeAttempt({ location: safe.attention.squarePath, participant: safe.attention.recipient, session, activity: formatActivityId(safe.attention.actIndex), kind: 'wake', outcome: safe.outcome, routeKind: safe.routeKind, signature: safe.signature, attemptN: safe.attemptN, message: safe.message, diagnostic: safe.diagnostic, at: safe.at, claimToken: claim.claimToken });

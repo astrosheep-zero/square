@@ -80,9 +80,9 @@ export interface PresentationEvidenceProjection {
 
 export type WakeOutcome =
   | { readonly outcome: 'accepted'; readonly signature?: string; readonly attemptN?: number }
-  | { readonly outcome: 'failed'; readonly message?: string; readonly attemptN?: number; readonly unavailable?: boolean; readonly retainRoute?: boolean; readonly routeStale?: boolean }
+  | { readonly outcome: 'failed'; readonly message?: string; readonly signature?: string; readonly diagnostic?: unknown; readonly attemptN?: number; readonly unavailable?: boolean; readonly retainRoute?: boolean; readonly routeStale?: boolean }
   | { readonly outcome: 'not-capable'; readonly diagnostic?: string }
-  | { readonly outcome: 'unknown'; readonly diagnostic?: string; readonly attemptN?: number };
+  | { readonly outcome: 'unknown'; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown; readonly attemptN?: number };
 
 export interface SquareObservation {
   readonly location?: string;

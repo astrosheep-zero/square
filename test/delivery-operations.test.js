@@ -20,7 +20,7 @@ test('release preserves token authority and rejects late or tokenless terminal e
     const second = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 11 });
     assert.equal(first.status, 'acquired');
     assert.equal(second.status, 'acquired');
-    await ledger.releaseEvidence({ ...claim, claimToken: second.claimToken, now: 12 });
+    await ledger.releaseEvidence({ ...claim, claimToken: second.claimToken, signature: 'presentation_already_recorded', message: 'suppressed by existing presentation', diagnostic: { outcome: 'presented' }, now: 12 });
     await ledger.appendEvidence({ ...claim, outcome: 'presented', claimToken: second.claimToken, at: 13 });
     await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: first.claimToken, at: 13 });
     await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: 'forged-token', at: 13 });
@@ -28,6 +28,10 @@ test('release preserves token authority and rejects late or tokenless terminal e
     await ledger.appendWakeAttempt({ ...claim, kind: 'wake', outcome: 'failed', routeKind: 'paseo', attemptN: 1, claimToken: 'forged-token', at: 13 });
     assert.deepEqual(await ledger.listEvidence({ ...claim, now: 13 }), []);
     assert.deepEqual(await ledger.listEvidence({ ...claim, kind: 'wake', now: 13 }), []);
+    const released = await ledger.listEvidence({ ...claim, includeReleased: true, now: 13 });
+    assert.deepEqual(released.map(({ outcome, signature, message, diagnostic }) => [outcome, signature, message, diagnostic]), [
+      ['released', 'presentation_already_recorded', 'suppressed by existing presentation', { outcome: 'presented' }],
+    ]);
     const rows = fs.readFileSync(path.join(root, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(rows.map((row) => [row.outcome, row.claimToken]), [['released', second.claimToken]]);
     const replacement = await ledger.claimEvidence({ ...claim, leaseMs: 10, claimToken: 'forged-token', now: 14 });

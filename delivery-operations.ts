@@ -5,6 +5,32 @@ import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, Sq
 import { deriveDeliveryModel } from './delivery.js';
 import { currentSessionBindings, isWakeRouteAttemptable, presentationSuppressesWake, projectPresentationEvidence, type WakeAttempt } from './square-projections.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
+import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
+
+async function releaseWakeClaim(input: {
+  readonly hostLedger: HostLedgerPort;
+  readonly location: string;
+  readonly participant: string;
+  readonly session: string;
+  readonly activity: string;
+  readonly claimToken: string;
+  readonly routeKind?: import('./model.js').WakeRouteKind;
+  readonly attemptN?: number;
+}, details: { readonly signature: string; readonly message: string; readonly diagnostic?: unknown }): Promise<void> {
+  await input.hostLedger.releaseEvidence({
+    location: input.location,
+    participant: input.participant,
+    session: input.session,
+    activity: input.activity,
+    kind: 'wake',
+    claimToken: input.claimToken,
+    ...(input.routeKind === undefined ? {} : { routeKind: input.routeKind }),
+    ...(input.attemptN === undefined ? {} : { attemptN: input.attemptN }),
+    signature: details.signature,
+    message: redactCurrentDiagnostic(details.message) as string,
+    ...(details.diagnostic === undefined ? {} : { diagnostic: redactCurrentDiagnostic(details.diagnostic) }),
+  });
+}
 
 async function attemptWakeWithin(
   transport: WakeTransportPort,
@@ -97,7 +123,10 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (lease.type === 'ambiguous') {
           let recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: lease.lease.leaseId });
           if (recovered.status === 'busy' && recovered.record.claimToken !== undefined) {
-            await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken: recovered.record.claimToken });
+            await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken: recovered.record.claimToken, routeKind: lease.lease.routeKind ?? route.route!.kind, attemptN: lease.lease.attemptN }, {
+              signature: 'stale_dispatch_claim_recovered',
+              message: 'A stale dispatch claim was released so recovery could continue.',
+            });
             recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: lease.lease.leaseId });
           }
           if (recovered.status === 'acquired') {
@@ -132,7 +161,10 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         const claimToken = claim.claimToken;
         const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session });
         if (!dispatching) {
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
+            signature: 'dispatch_claim_transition_failed',
+            message: 'The wake dispatch claim could not enter the dispatching phase.',
+          }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
           continue;
         }
@@ -150,14 +182,22 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           && published.kind === route.route!.kind
           && JSON.stringify(published.address) === JSON.stringify(route.route!.address));
         if (!stillPending || !stillBound || !stillPublished) {
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
+            signature: 'pre_send_revalidation_failed',
+            message: 'Wake was not sent because the activity, session binding, or published route changed before dispatch.',
+            diagnostic: { pending: stillPending, bound: stillBound, publishedRoute: stillPublished },
+          }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined);
           continue;
         }
         let latestPresentations: readonly PresentationEvidenceProjection[] = [];
         try { latestPresentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, sessionId: route.session, activity, now: input.now }); } catch { /* capability is handled by the transport path */ }
         if (presentationSuppressesWake(latestPresentations)) {
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
+            signature: 'presentation_already_recorded',
+            message: 'Wake was suppressed because presentation evidence already exists.',
+            diagnostic: { outcomes: latestPresentations.map((row) => row.outcome) },
+          }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined);
           continue;
         }
@@ -171,25 +211,37 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         try { outcome = await attemptWakeWithin(input.transport, request, leaseMs, beforeSend); }
         catch (error) { outcome = { outcome: 'unknown' as const, diagnostic: error instanceof Error ? error.message : String(error) }; }
         if (suppressedDuringSend) {
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
+            signature: 'presentation_recorded_during_dispatch',
+            message: 'Wake was cancelled because presentation evidence appeared before the final send check.',
+          }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined);
           continue;
         }
         attempted += 1;
         if (outcome.outcome === 'not-capable') {
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken }).catch(() => undefined);
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
+            signature: 'transport_not_capable',
+            message: 'The wake transport reported that it could not deliver this route.',
+            diagnostic: outcome.diagnostic,
+          }).catch(() => undefined);
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session }).catch(() => undefined);
           notCapableForAttention = true;
           continue;
         }
         if (outcome.outcome === 'failed' && outcome.unavailable) {
           if (outcome.routeStale === true) await retireWakeRouteFromArtifact(input.artifact, { location: route.location, participant: route.participant, sessionId: route.session });
-          await input.hostLedger.releaseEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', claimToken });
+          await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN: outcome.attemptN ?? attemptN }, {
+            signature: outcome.signature ?? 'transport_unavailable',
+            message: outcome.message ?? 'The wake transport was unavailable.',
+            diagnostic: outcome.diagnostic,
+          });
           await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
           failedForAttention = true;
           continue;
         }
-        await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: outcome.outcome, routeKind: route.route!.kind, attemptN: outcome.attemptN ?? attemptN, ...(outcome.outcome === 'accepted' && outcome.signature === undefined ? {} : outcome.outcome === 'accepted' ? { signature: outcome.signature } : outcome.outcome === 'failed' ? { message: outcome.message } : { diagnostic: outcome.diagnostic }), claimToken });
+        const safeOutcome = redactCurrentDiagnostic(outcome) as typeof outcome;
+        await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: safeOutcome.outcome, routeKind: route.route!.kind, attemptN: safeOutcome.attemptN ?? attemptN, ...(safeOutcome.signature === undefined ? {} : { signature: safeOutcome.signature }), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.message !== undefined ? { message: safeOutcome.message } : {}), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.diagnostic !== undefined ? { diagnostic: safeOutcome.diagnostic } : {}), claimToken });
         await input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
         if (outcome.outcome === 'accepted') { acceptedForAttention = true; break; }
         if (outcome.outcome === 'failed') failedForAttention = true;

@@ -76,7 +76,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['harness'], usage: 'harness doctor [claude|codex|opencode|pi|delivery]', usesSquare: true, group: 'maintenance', hiddenFromIndex: true,
     summary: 'Diagnose installed agent-host support.',
-    details: ['Targets:', '  claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                      Diagnose delivery for the selected square.'],
+    details: ['Targets:', '  claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                      Diagnose pending delivery and recent wake-release reasons for the selected square.'],
   },
   {
     names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',

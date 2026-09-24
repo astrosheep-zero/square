@@ -9,7 +9,9 @@ import {
   hasAttemptableWakeRoute,
   isWakeRouteAttemptable,
   readWakeAttempts,
+  readWakeReleaseDiagnostics,
   recordWakeAttempt,
+  redactWakeDiagnostic,
   terminalWakeEvidence,
 } from '../dist/wake-attempts.js';
 
@@ -60,6 +62,36 @@ test('wake attempt reads accept only real adapter outcomes inside retention', as
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
+test('wake release diagnostics are readable without entering behavior evidence', async () => {
+  const item = fixture();
+  const ledger = (await import('../dist/host-ledger-file-adapter.js')).createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, readableScopes: ['user'], writableScope: 'user' });
+  const claimInput = {
+    location: item.attention.squarePath,
+    participant: item.attention.recipient,
+    session: 'test-session',
+    activity: formatActivityId(item.attention.actIndex),
+    kind: 'wake',
+  };
+  const claim = await ledger.claimEvidence({ ...claimInput, leaseMs: 5_000, now: 1_000 });
+  assert.equal(claim.status, 'acquired');
+  await ledger.releaseEvidence({
+    ...claimInput,
+    claimToken: claim.claimToken,
+    routeKind: 'paseo',
+    attemptN: 2,
+    signature: 'agent_not_idle',
+    message: 'The agent is not idle.',
+    diagnostic: { phase: 'selection', code: 'not_idle' },
+    now: 1_001,
+  });
+
+  assert.deepEqual(await ledger.listWakeAttempts({ attention: item.attention, now: 1_002 }), []);
+  const [release] = await readWakeReleaseDiagnostics({ attention: item.attention, now: 1_002, env: item.env });
+  assert.deepEqual([release.at, release.routeKind, release.attemptN, release.signature], [1_001, 'paseo', 2, 'agent_not_idle']);
+  assert.deepEqual(release.diagnostic, { phase: 'selection', code: 'not_idle' });
+  fs.rmSync(item.root, { recursive: true, force: true });
+});
+
 test('wake attempt persistence redacts transport credentials recursively', async () => {
   const item = fixture();
   const env = { ...item.env, PASEO_PASSWORD: 'very-secret' };
@@ -77,6 +109,16 @@ test('wake attempt persistence redacts transport credentials recursively', async
   assert.doesNotMatch(raw, /very-secret|query-secret|another-secret/);
   assert.match(raw, /\[redacted\]/);
   fs.rmSync(item.root, { recursive: true, force: true });
+});
+
+test('wake diagnostics redact nested credentials while retaining safe presence flags', () => {
+  assert.deepEqual(redactWakeDiagnostic({
+    passwordPresent: true,
+    nested: { apiKey: 'secret', detail: 'secret and ?password=query-secret' },
+  }, { PASEO_PASSWORD: 'secret' }), {
+    passwordPresent: true,
+    nested: { apiKey: '[redacted]', detail: '[redacted] and ?password=[redacted]' },
+  });
 });
 
 test('a wake attempt write drops expired and malformed ledger rows', async () => {

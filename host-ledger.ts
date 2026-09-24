@@ -11,8 +11,9 @@ export type PresenceClaimResult =
   | { readonly status:'degraded'; readonly record:PresenceRecord; readonly error:unknown };
 export interface EvidenceRecord { readonly location:string; readonly participant:string; readonly session:string; readonly activity:string; readonly kind:'wake'|'presentation'; readonly outcome:string; readonly at?:number; readonly expiresAt?:number; readonly routeKind?:WakeRouteKind; readonly signature?:string; readonly attemptN?:number; readonly message?:string; readonly diagnostic?:unknown; readonly claimToken?:string }
 export interface EvidenceClaim { readonly location:string; readonly participant:string; readonly session:string; readonly activity:string; readonly kind:EvidenceRecord['kind']; readonly leaseMs:number; readonly claimToken?:string; readonly now?:number }
-export type EvidenceRelease = Omit<EvidenceClaim,'leaseMs'> & { readonly claimToken: string };
-export interface EvidenceLookup { readonly location?:string; readonly participant?:string; readonly session?:string; readonly activity?:string; readonly kind?:EvidenceRecord['kind']; readonly now?:number }
+/** Release metadata and includeReleased are diagnostic-only; default evidence reads stay behavior-safe. */
+export interface EvidenceRelease extends Omit<EvidenceClaim,'leaseMs'> { readonly claimToken: string; readonly routeKind?: WakeRouteKind; readonly attemptN?: number; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown }
+export interface EvidenceLookup { readonly location?:string; readonly participant?:string; readonly session?:string; readonly activity?:string; readonly kind?:EvidenceRecord['kind']; readonly now?:number; readonly includeReleased?:boolean }
 export interface EvidenceGc { readonly before:number; readonly pendingWakeActivities?: readonly string[] }
 export interface WakeAttention { readonly squarePath:string; readonly actIndex:number; readonly recipient:string }
 export interface WakeDispatchLease { readonly leaseId:string; readonly expiresAt:number; readonly phase:'claimed'|'dispatching'; readonly routeKind?:WakeRouteKind; readonly attemptN?:number; readonly session?:string }

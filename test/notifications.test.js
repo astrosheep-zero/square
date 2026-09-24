@@ -11,7 +11,8 @@ import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
-import { readWakeAttempts } from '../dist/wake-attempts.js';
+import { readWakeAttempts, readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
+import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
@@ -199,6 +200,38 @@ test('PaseoAdapter does not wake a running agent', async () => {
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 
+test('unavailable Paseo dispatch records its release reason for delivery diagnostics', async () => {
+  const item = await fixture();
+  try {
+    await route(item, { agentId: 'busy-agent' });
+    const result = await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
+      env: item.env,
+      adapters: [new PaseoAdapter({
+        discover: () => ({ agents: [{ id: 'busy-agent', name: 'Bob', status: 'running' }] }),
+      })],
+    }));
+
+    assert.deepEqual(result, { attempted: 1, accepted: 0, failed: 1, unknown: 0, notCapable: 0 });
+    const releases = await readWakeReleaseDiagnostics({
+      attention: { squarePath: item.squarePath, actIndex: 2, recipient: 'Bob' },
+      env: item.env,
+    });
+    assert.equal(releases.length, 1);
+    assert.equal(releases[0].routeKind, 'paseo');
+    assert.equal(releases[0].attemptN, 1);
+    assert.equal(releases[0].signature, 'agent_not_idle');
+    assert.equal(releases[0].diagnostic.phase, 'selection');
+    assert.equal(releases[0].diagnostic.code, 'not_idle');
+
+    const doctor = await doctorDeliveryHealth(item.squarePath, 5000, Date.now(), item.env);
+    assert.match(doctor.join('\n'), /recent wake releases/);
+    assert.match(doctor.join('\n'), /agent_not_idle/);
+    assert.match(doctor.join('\n'), /The registered Paseo agent is not idle/);
+  } finally {
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
 test('the notification worker records an accepted wake through the real Paseo adapter', async () => {
   const item = await fixture();
   await route(item, { agentId: 'integrated-agent' });
@@ -379,6 +412,12 @@ test('wake transport rechecks pending and route ownership before send', async ()
     }],
   }));
   assert.equal(calls, 0);
+  const releases = await readWakeReleaseDiagnostics({
+    attention: { squarePath: item.squarePath, actIndex: 2, recipient: 'Bob' },
+    env: item.env,
+  });
+  assert.equal(releases[0].signature, 'pre_send_revalidation_failed');
+  assert.equal(releases[0].diagnostic.routePublished, false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 

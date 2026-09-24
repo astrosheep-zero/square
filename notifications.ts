@@ -126,30 +126,39 @@ export async function createDefaultWakeTransport(
   );
 }
 
-async function wakeRequestIsCurrent(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<boolean> {
+interface WakeRequestCurrentness {
+  readonly current: boolean;
+  readonly activityPending: boolean;
+  readonly sessionBound: boolean;
+  readonly routePublished: boolean;
+  readonly observationAvailable: boolean;
+}
+
+async function wakeRequestCurrentness(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<WakeRequestCurrentness> {
   const activity = parseActivityId(request.activity as ActivityId);
-  if (activity === undefined) return false;
+  if (activity === undefined) return { current: false, activityPending: false, sessionBound: false, routePublished: false, observationAvailable: true };
   let square: OpenSquare | undefined;
   try {
     square = await openSquare(request.location, { hostLedger });
     const current = await observeSquare({ artifact: square.artifact, hostLedger, location: request.location, now });
-    const pending = current.pending.some((entry) => nameKey(entry.recipient) === nameKey(request.participant)
+    const activityPending = current.pending.some((entry) => nameKey(entry.recipient) === nameKey(request.participant)
       && entry.notifications.some((notification) => notification.item.index === activity));
-    const bound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(request.route.participant)
+    const sessionBound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(request.route.participant)
       && binding.sessionId === request.route.sessionId
       && binding.location === request.route.location);
-    const published = (current.state.routes ?? []).some((route) => route.location === request.route.location
+    const routePublished = (current.state.routes ?? []).some((route) => route.location === request.route.location
       && nameKey(route.participant) === nameKey(request.route.participant)
       && route.sessionId === request.route.sessionId
       && route.kind === request.route.kind
       && JSON.stringify(route.address) === JSON.stringify(request.route.address));
-    return pending && bound && published;
+    return { current: activityPending && sessionBound && routePublished, activityPending, sessionBound, routePublished, observationAvailable: true };
   } catch {
-    return false;
+    return { current: false, activityPending: false, sessionBound: false, routePublished: false, observationAvailable: false };
   } finally {
     if (square !== undefined) await closeOpenSquare(square);
   }
 }
+
 
 export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number): WakeTransportPort {
   return {
@@ -166,12 +175,27 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () =>
-          (await (beforeSend ?? (async () => true))()) && await wakeRequestIsCurrent(request, hostLedger, clock()), timeoutMs);
+        let revalidation: WakeRequestCurrentness | undefined;
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => {
+          if (!(await (beforeSend ?? (async () => true))())) return false;
+          revalidation = await wakeRequestCurrentness(request, hostLedger, clock());
+          return revalidation.current;
+        }, timeoutMs);
         if (result.outcome === 'accepted') return { outcome: 'accepted' };
-        if (result.outcome === 'failed') return { outcome: 'failed', message: result.message };
-        if (result.outcome === 'unavailable') return { outcome: 'failed', message: result.message, unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };
-        if (result.outcome === 'unknown') return { outcome: 'unknown', diagnostic: result.message };
+        if (result.outcome === 'failed') return { outcome: 'failed', ...(result.signature === undefined ? {} : { signature: result.signature }), message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) };
+        if (result.outcome === 'unavailable') return { outcome: 'failed', signature: result.signature, message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }), unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };
+        if (result.outcome === 'unknown') return { outcome: 'unknown', ...(result.signature === undefined ? {} : { signature: result.signature }), ...(result.message === undefined ? {} : { message: result.message }), ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) };
+        if (result.outcome === 'cancelled' && revalidation !== undefined && !revalidation.current) {
+          return {
+            outcome: 'failed',
+            signature: 'pre_send_revalidation_failed',
+            message: revalidation.observationAvailable
+              ? 'Wake was not sent because current attention, session binding, or route no longer matches.'
+              : 'Wake was not sent because current Square delivery state could not be verified.',
+            diagnostic: revalidation,
+            unavailable: true,
+          };
+        }
         return { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' };
       } catch (error) {
         return { outcome: 'unknown', diagnostic: error instanceof Error ? error.message : String(error) };
