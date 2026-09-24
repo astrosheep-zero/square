@@ -662,7 +662,7 @@ test('presence follows active session lifecycle without delivery routes', async 
       env: observerEnv,
     });
     assert.notEqual(expressed.status, 0);
-    assert.match(expressed.stderr, /already bound to another session/);
+    assert.match(expressed.stderr, /already stands here — another session holds the name/);
     assert.deepEqual(await lookupSession('observer-session'), []);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
@@ -673,7 +673,7 @@ test('presence follows active session lifecycle without delivery routes', async 
 
     const foreignDone = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], { env: observerEnv });
     assert.notEqual(foreignDone.status, 0);
-    assert.match(foreignDone.stderr, /already bound to another session/);
+    assert.match(foreignDone.stderr, /already stands here — another session holds the name/);
     assert.deepEqual(await lookupSession('observer-session'), []);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'done').length, 0);

@@ -36,7 +36,7 @@ export async function catchUp(square: OperationContext, name: string, options: C
   const deadline = Date.now() + idle;
   while (true) {
     if (!await assertLiveOwner(square, name)) {
-      throw new SquareError('already_joined', `${participantIdentity(name)} is already bound to another session`);
+      throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
     }
     const attempt = await square.artifact.transact<{ version: number; decision: CatchDecision }>((state, version) => {
       const decision = decideCatch(state, name, options, square.clock(), project);
@@ -194,7 +194,7 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
       await publishIdentityRoute(square, committed.name, claim.epoch);
       return committed;
     });
-    if (outcome.status === 'busy') throw new SquareError('already_joined', `${participantIdentity(name)} is already bound to another session`);
+    if (outcome.status === 'busy') throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
     return { name: outcome.result.name, activities: outcome.result.stored.map(exposeActivity), epoch: outcome.epoch };
   }
   const committed = await commitLifecycle();
@@ -225,7 +225,7 @@ export async function implicitJoin(square: OperationContext, name: string): Prom
 
 export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {
   if (!await assertLiveOwner(square, name)) {
-    throw new SquareError('already_joined', `${participantIdentity(name)} is already bound to another session`);
+    throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
   }
   const now = square.clock();
   const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
@@ -278,7 +278,7 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
   // be completed by a stale done — an old expected epoch refuses instead of appending.
   const commit = async (): Promise<StoredAct> => {
     if (verb === 'done' && !await assertLiveOwner(square, actor, fence.expectedEpoch)) {
-      throw new SquareError('already_done', `${participantIdentity(actor)} is already bound to another session`);
+      throw new SquareError('already_done', `✕ ${participantIdentity(actor)} already stands here — another session holds the name`);
     }
     const now = square.clock();
     return square.artifact.transact((state) => {

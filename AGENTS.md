@@ -45,7 +45,7 @@ CLI voice:
 - Quiet is information, not failure: an empty catch reports how long the square has been quiet (`○`), it does not report a failed query.
 - The square is never the subject of an action verb. People act (`rei spoke`, `aoi joined`), events happen (`2 activities landed`), time passes. The square only holds states — quiet, held, full — because a place has states, but a place does not act.
 - Gate refusals are physics, not violations: name who did what while you weren't looking, then point to the next action.
-- Glyphs and spatial layout are the design language: `·` line, `○` quiet, `▲` changed behind you, `✕` blocked, `✓` release, `»` always the next action.
+- Glyphs and spatial layout are the design language: `·` line, `●` someone speaks or is active, `◎` someone is catching, `○` quiet or stepped out, `▲` changed behind you, `✕` blocked, `✓` release, `→` someone was here. Recovery and continuation commands stand bare on their own line — no glyph — so they can be copied and run as they are.
 - The square is furnished with a closed prop lexicon: the square (join/presence), embodied expression (express), a packed square and its lull (throttle), a raised hand (hold), behind you (unread), walking over to someone (mention/directed presence), a bell (everyone's attention), a shoo and a banish (the name gate), footsteps and dust (quiet), the circle (done). One metaphor per mechanism; new props require amending this list.
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.

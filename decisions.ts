@@ -237,7 +237,7 @@ export function decideAct(
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
-    confirmation: `● heads turn your way — #${ownActCount}`,
+    confirmation: `● your activity lands — #${ownActCount}`,
     ownActCount,
     pendingPublic: unreadPublic,
     pendingRoomChanges: unreadRoomChanges,

@@ -50,7 +50,7 @@ export function renderAttentionPreview(attention: AttentionPreview): string {
     previewAttentionBody(attention.body),
     '</square-activity>',
     ...(attentionBodyIsClipped(attention.body)
-      ? [`» ${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
+      ? [`${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
       : []),
   ].join('\n');
 }

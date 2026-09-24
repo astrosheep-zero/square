@@ -59,19 +59,18 @@ test('blocked activity output bounds unread participant summaries', () => {
   assert.match(output, /2 more participants have unread activity/);
 });
 
-test('active catches explain the existing lease without suggesting replacement', () => {
+test('active catches explain the existing lease and point to replacement', () => {
   const output = renderWatchAlreadyActive({ squarePath: '.square/PUBLIC.square', name: 'codex-155777a843b6' });
   assert.match(output, /you are already catching/);
   assert.match(output, /active catch is already running for @codex-155777a843b6/);
-  assert.match(output, /wait for it to finish/);
-  assert.match(output, /participants$/);
-  assert.doesNotMatch(output, /--replace/);
+  assert.match(output, /--replace lets a new catch take over/);
+  assert.match(output, /catch --idle 30m --replace$/);
 });
 
 test('replace reports when there was no active catch to replace', () => {
   const output = renderWatchReplaceMissing({ squarePath: '.square/PUBLIC.square', name: 'Alice' });
-  assert.match(output, /^⚠ nothing to replace/);
-  assert.match(output, /your catch started normally/);
+  assert.match(output, /^· no catch stood here/);
+  assert.match(output, /yours takes the spot/);
   assert.equal(renderWatchForceTakeover({ squarePath: '.square/PUBLIC.square', name: 'Alice' }), '✓ your new catch takes over');
 });
 

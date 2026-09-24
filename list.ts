@@ -103,13 +103,13 @@ function renderSquareList(items: SquareListItem[], stopped: boolean, depth: numb
   const page = after === undefined ? items : items.filter((item) => item.path.localeCompare(after) > 0);
   const shownItems = page.slice(0, limit);
   if (items.length === 0) {
-    return [`(no squares found)`, ...(stopped ? [`○ discovery stopped after examining ${LIST_DISCOVERY_BUDGET} filesystem entries; results may be incomplete`] : [])].join('\n') + '\n';
+    return [`(no squares found)`, ...(stopped ? [`○ the walk stopped early — deeper squares may still be hiding`] : [])].join('\n') + '\n';
   }
 
   const now = Date.now();
   const lines = ['squares'];
   for (const item of shownItems) {
-    lines.push(`${item.activities > 0 ? '●' : '○'} ${characterPreview(item.path)} · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in square · ${item.activities} activities`);
+    lines.push(`${item.activities > 0 ? '●' : '○'} ${characterPreview(item.path)} · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`);
 
     const shownContext = item.context.slice(0, CONTEXT_PREVIEW_LINES);
     if (shownContext.length === 0) {
@@ -128,9 +128,9 @@ function renderSquareList(items: SquareListItem[], stopped: boolean, depth: numb
   if (hiddenItems > 0) {
     const cursor = shownItems.at(-1)?.path;
     lines.push(stopped ? '  … more squares' : `  … ${hiddenItems} more ${hiddenItems === 1 ? 'square' : 'squares'}`);
-    if (cursor !== undefined) lines.push(`» square list --depth ${depth} --limit ${limit} --after ${quoteShell(cursor)}`);
+    if (cursor !== undefined) lines.push(`square list --depth ${depth} --limit ${limit} --after ${quoteShell(cursor)}`);
   }
-  if (stopped) lines.push(`○ discovery stopped after examining ${LIST_DISCOVERY_BUDGET} filesystem entries; results may be incomplete`);
+  if (stopped) lines.push(`○ the walk stopped early — deeper squares may still be hiding`);
   return lines.join('\n') + '\n';
 }
 

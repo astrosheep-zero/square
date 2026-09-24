@@ -75,10 +75,10 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     await closeOpenSquare(reader);
   }
   if (bindings.some((binding) => binding.session !== sessionId)) {
-    throw new SquareError('already_joined', `${name} is already bound to another session`);
+    throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   }
   if (entry.joined && !bindings.some((binding) => binding.session === sessionId)) {
-    throw new SquareError('already_joined', `${name} is already joined by another session`);
+    throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   }
   const scopedEnv = operationEnv(provider, sessionId, env);
   const claim = await claimSessionParticipant(squarePath, name, scopedEnv);

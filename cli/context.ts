@@ -51,60 +51,60 @@ export function usage(command: string): never {
 
 export function requireValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (value === undefined || value.startsWith('--')) fail(`Missing value for ${flag}.`);
+  if (value === undefined || value.startsWith('--')) fail(`✕ missing value for ${flag}`);
   return value;
 }
 
 export function parseDurationMs(value: string, flag: string): number {
   const match = value.match(/^([1-9]\d*)(ms|s|m|h)$/);
-  if (!match) fail(`Invalid ${flag}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h).`);
+  if (!match) fail(`✕ invalid ${flag}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h)`);
   const amount = Number.parseInt(match[1], 10);
   const multiplier: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000 };
   const milliseconds = amount * multiplier[match[2]];
-  if (!Number.isSafeInteger(milliseconds)) fail(`Invalid ${flag}: duration is too large.`);
+  if (!Number.isSafeInteger(milliseconds)) fail(`✕ invalid ${flag}: duration is too large`);
   return milliseconds;
 }
 
 export function parsePositiveInteger(value: string, flag: string): number {
-  if (!/^[1-9]\d*$/.test(value)) fail(`Invalid ${flag}: expected a positive integer.`);
+  if (!/^[1-9]\d*$/.test(value)) fail(`✕ invalid ${flag}: expected a positive integer`);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) fail(`Invalid ${flag}: value is too large.`);
+  if (!Number.isSafeInteger(parsed)) fail(`✕ invalid ${flag}: value is too large`);
   return parsed;
 }
 
 export function parseBoundedLimit(value: string | undefined, flag: string, max: number, retry: string): number {
   if (value === undefined || value.startsWith('--') || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
-    fail(`✕ ${flag} needs a positive integer\n» ${retry}`);
+    fail(`✕ ${flag} needs a positive integer\n${retry}`);
   }
   const parsed = Number(value);
-  if (parsed > max) fail(`✕ ${flag} is capped at ${max}\n» ${retry}`);
+  if (parsed > max) fail(`✕ ${flag} is capped at ${max}\n${retry}`);
   return parsed;
 }
 
 export function parseNonNegativeInteger(value: string, flag: string): number {
-  if (!/^\d+$/.test(value)) fail(`Invalid ${flag}: expected a non-negative integer.`);
+  if (!/^\d+$/.test(value)) fail(`✕ invalid ${flag}: expected a non-negative integer`);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) fail(`Invalid ${flag}: value is too large.`);
+  if (!Number.isSafeInteger(parsed)) fail(`✕ invalid ${flag}: value is too large`);
   return parsed;
 }
 
 export function parseHardCap(value: string): HardCap {
   if (value === 'unlimited') return null;
-  if (!/^[1-9]\d*$/.test(value)) fail('Invalid build option: --cap must be a positive integer or unlimited.');
+  if (!/^[1-9]\d*$/.test(value)) fail('✕ invalid build option: --cap must be a positive integer or unlimited');
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) fail('Invalid build option: --cap must be a positive integer or unlimited.');
+  if (!Number.isSafeInteger(parsed)) fail('✕ invalid build option: --cap must be a positive integer or unlimited');
   return parsed;
 }
 
 export function parseNameList(value: string, flag: string): string[] {
   const names = parseParticipantList(value);
-  if (names.length === 0) fail(`Invalid ${flag}: expected at least one participant name.`);
+  if (names.length === 0) fail(`✕ invalid ${flag}: expected at least one participant name`);
   for (const name of names) validateName(name);
   return names;
 }
 
 export function requireParticipant(name: string | undefined): string {
-  if (!name) fail('Missing required option: --as <name>.');
+  if (!name) fail('✕ missing required option: --as <name>');
   validateName(name);
   return name;
 }
@@ -178,14 +178,14 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   }
   const command = args[0];
   if (command === 'history' && hasExplicitName) {
-    fail(`✕ history is an archive and does not use --as\n» ${withoutAsCommand(rawArgs)}`);
+    fail(`✕ history is an archive and does not use --as\n${withoutAsCommand(rawArgs)}`);
   }
   if (name === undefined) name = configuredName();
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
   const configured = configuredLocation();
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
-    fail(`✕ ${command} needs a square location\n» square ls`);
+    fail(`✕ ${command} needs a square location\nsquare ls`);
   }
   const squarePath = requestedPath ?? configured;
   if (name === undefined && squarePath !== undefined && command !== undefined && locationIsRequired(command)) {
@@ -210,6 +210,6 @@ export function defaultContext(command: string, squarePath?: string, name?: stri
 }
 
 export function requireSquarePath(context: CommandContext): string {
-  if (context.squarePath === undefined) fail(`✕ ${context.command} needs a square location\n» square ls`);
+  if (context.squarePath === undefined) fail(`✕ ${context.command} needs a square location\nsquare ls`);
   return context.squarePath;
 }

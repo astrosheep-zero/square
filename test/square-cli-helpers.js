@@ -134,6 +134,6 @@ export function assertDraftRecovery(result, file, name, body, command) {
   assert.equal(result.status, 1, result.stderr);
   const draftPath = draftPathFrom(result.stdout + result.stderr);
   assert.equal(fs.readFileSync(draftPath, 'utf8'), body);
-  assert.match(result.stdout + result.stderr, new RegExp(`» square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' --as '${name}' ${command}`));
+  assert.match(result.stdout + result.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' --as '${name}' ${command}`));
   assert.match(result.stdout + result.stderr, new RegExp(`< '${draftPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
 }

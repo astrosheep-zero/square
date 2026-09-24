@@ -3,6 +3,7 @@ import {
   type BuildOptions,
   type HardCap,
   type Reach,
+  type RoomChangeAct,
   formatActivityId,
   formatHardCap,
   parseActivityId,
@@ -11,7 +12,7 @@ import {
   participantCommandPrefix,
   participantIdentity,
   quoteShell,
-  renderEventCli,
+  renderRoomChangeText,
   renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
@@ -25,7 +26,7 @@ import {
 } from '../registry.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
 import { sessionIdsFromEnvironment } from '../square-projections.js';
-import { inSquareCount, nowMs } from '../runtime.js';
+import { actId, inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
 import { openParticipant, Square } from '../square-wiring.js';
@@ -129,7 +130,7 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
     const throttle = intent.options.throttlePerMinute === undefined ? [] : [`  · throttle ${intent.options.throttlePerMinute}/min`];
     return withPathOutput(
       squarePath,
-      ['✓ built', `  · cap ${cap}`, ...throttle, '  · participants (none seeded — first join adds names)'].join('\n'),
+      ['✓ the square is open', `  · cap ${cap}`, ...throttle, '  · nobody here yet — the first join steps in'].join('\n'),
       { participantCount: 0 }
     );
   },
@@ -178,8 +179,8 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           [
             `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
             `  · a same-named participant stands here — the name is taken`,
-            `  · --kick banishes her and the name becomes yours`,
-            `» ${participantCommandPrefix(squarePath, intent.name)} join --kick`,
+            `  · --kick banishes the one standing there — the name becomes yours`,
+            `${participantCommandPrefix(squarePath, intent.name)} join --kick`,
           ].join('\n')
         );
       }
@@ -214,17 +215,17 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const contextText = after.joinContext;
       const fallback = hasAutomaticDeliveryIdentity()
         ? []
-        : ['', `» ${participantCommandPrefix(squarePath, joinedName)} catch --idle 30m`, '  no session delivery detected — keep this catch open for new activity'];
+        : ['', `${participantCommandPrefix(squarePath, joinedName)} catch --idle 30m`, '  the square has no way to call you — keep this catch open and stay within earshot'];
       const scene = after.scene;
       const entryLine = !isRejoin
-        ? '● You stepped into the square'
+        ? '● you stepped into the square'
         : reconnect && !intent.kick
           ? '● you are already in the square'
           : `✓ you banished the original ${participantIdentity(joinedName)} — the name is yours`;
       const output = [
         entryLine,
         '',
-        "Don't treat Square as a public dumping ground. Speak here only when you genuinely think someone else needs to know; otherwise you are needlessly interrupting them.",
+        "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
         ...(reconnect || scene === '' ? [] : ['', scene]),
         ...(isRejoin || contextText === '' ? [] : ['', 'context', contextText]),
         ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
@@ -250,7 +251,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     const argument = argv[index];
     if (argument === '-f' || argument === '--force') force = true;
     else if (argument === '--no-wait') noWait = true;
-    else if (argument === '--beside') fail('✕ express does not know --beside\n» square express --help');
+    else if (argument === '--beside') fail('✕ express does not know --beside\nsquare express --help');
     else if (argument === '--bell') bell = true;
     else if (argument === '--no-mention') noMention = true;
     else if (argument === '--mention') {
@@ -266,9 +267,9 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else bodyArgs.push(argument);
   }
   const reach = bell ? 'bell' : undefined;
-  if (bell && (noMention || mentions.length > 0)) fail('✕ --bell cannot be combined with --mention or --no-mention\n» square express --help');
-  if (noMention && mentions.length > 0) fail('✕ --no-mention cannot be combined with --mention\n» square express --help');
-  if (!bell && !noMention && mentions.length === 0) fail('✕ express needs --mention <name>, --no-mention, or --bell\n» square express --help');
+  if (bell && (noMention || mentions.length > 0)) fail('✕ --bell cannot be combined with --mention or --no-mention\nsquare express --help');
+  if (noMention && mentions.length > 0) fail('✕ --no-mention cannot be combined with --mention\nsquare express --help');
+  if (!bell && !noMention && mentions.length === 0) fail('✕ express needs --mention <name>, --no-mention, or --bell\nsquare express --help');
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
       if (!process.stdin.isTTY) return { name: requireParticipant(context.name), activity: '-', force, noWait, noMention, mentions, reach, reply };
@@ -399,7 +400,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const name = result.activity.actor;
     const presentation = await openSquare(squarePath, { clock: nowMs });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
-    return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · just now`, { participantCount });
+    return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · ${result.activity.id} · just now`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
 };
@@ -421,7 +422,7 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
       const presentationSquare = await openSquare(squarePath, { clock: nowMs });
       const presentation = await eventPresentation(presentationSquare, result.activity.id);
       await closeOpenSquare(presentationSquare);
-      return withPathOutput(squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount, held: true });
+      return withPathOutput(squarePath, `· ${renderRoomChangeText(presentation.activity as RoomChangeAct)} · ${actId(presentation.activity.index)} · just now`, { participantCount: presentation.participantCount, held: true });
     } finally {
       await square.close();
     }
@@ -444,7 +445,7 @@ export const resumeCommand: CommandSpec<{ name: string }, string> = {
       const presentationSquare = await openSquare(squarePath, { clock: nowMs });
       const presentation = await eventPresentation(presentationSquare, result.activity.id);
       await closeOpenSquare(presentationSquare);
-      return withPathOutput(squarePath, renderEventCli(presentation.activity), { participantCount: presentation.participantCount });
+      return withPathOutput(squarePath, `✓ ${renderRoomChangeText(presentation.activity as RoomChangeAct)} · ${actId(presentation.activity.index)} · just now`, { participantCount: presentation.participantCount });
     } finally {
       await square.close();
     }

@@ -33,7 +33,7 @@ test('CLI test runner isolates host delivery identities', () => {
       env: { SQUARE_REGISTRY: TEST_REGISTRY, SQUARE_PRESENTED: TEST_PRESENTED },
     });
     assert.equal(joined.status, 0, joined.stderr);
-    assert.match(joined.stdout, /no session delivery detected/);
+    assert.match(joined.stdout, /the square has no way to call you/);
     const registry = fs.existsSync(TEST_REGISTRY) ? fs.readFileSync(TEST_REGISTRY, 'utf8') : '';
     assert.doesNotMatch(registry, /outer-codex-task/);
   } finally {
@@ -334,7 +334,7 @@ test('join and catch only show fallback catch hints without automatic session de
   const aliceJoin = run(withName(file, 'Alice', ['join']), { env: noDelivery });
   assert.equal(aliceJoin.status, 0, aliceJoin.stderr);
   assert.match(aliceJoin.stdout, /catch --idle 30m/);
-  assert.match(aliceJoin.stdout, /no session delivery detected/);
+  assert.match(aliceJoin.stdout, /the square has no way to call you/);
 
   const bobJoin = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
   assert.equal(bobJoin.status, 0, bobJoin.stderr);
@@ -391,7 +391,7 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   assert.equal(run(withName(file, 'Alice', ['join']), { env }).status, 0);
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
   assert.equal(caught.status, 2, caught.stdout);
-  assert.match(caught.stderr, /already bound to another session/);
+  assert.match(caught.stderr, /already stands here — another session holds the name/);
   assert.equal((await lookupSessionBindings('worker', Date.now(), env)).length, 0);
   const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
   assert.equal(foreign.status, 2, foreign.stdout);
@@ -408,7 +408,7 @@ test('join --kick reclaims a name when a secondary inherited session matches the
   const caller = { ...env, CODEX_THREAD_ID: 'new-codex' };
   const rejected = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'before']), { env: caller });
   assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /already bound to another session/);
+  assert.match(rejected.stderr, /already stands here — another session holds the name/);
   const reconnect = run(withName(file, 'Alice', ['join']), { env: caller });
   assert.equal(reconnect.status, 2);
   assert.match(reconnect.stderr, /join --kick/);
@@ -505,7 +505,7 @@ test('history rejects removed filter aliases', async () => {
     if (args[1] === '--until') assert.match(result.stderr, /history does not know --until/);
     else if (args[1] === '--before') assert.match(result.stderr, /Invalid --before: expected an activity id/);
     else assert.match(result.stderr, new RegExp(`history does not know ${args[1]}`));
-    if (args[1] !== '--before') assert.match(result.stderr, /» square history --help\n$/);
+    if (args[1] !== '--before') assert.match(result.stderr, /square history --help\n$/);
   }
 });
 
@@ -515,7 +515,7 @@ test('history reports unknown options and bounded limits with a next command', a
   const unknown = run(withPath(file, ['history', '--wat']));
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /✕ history does not know --wat/);
-  assert.match(unknown.stderr, /» square history --help\n$/);
+  assert.match(unknown.stderr, /square history --help\n$/);
 
   const limits = ['0', '-1', 'nope'];
   const invalids = await Promise.all(limits.map((value) => runAsync(withPath(file, ['history', '--limit', value]))));
@@ -581,7 +581,7 @@ test('headers shorten absolute square paths inside the working directory', () =>
     input: '## Topic\n\nShort paths\n',
   });
   assert.equal(built.status, 0, built.stderr);
-  assert.match(built.stdout, /the square at \.square\/review\.square/);
+  assert.match(built.stdout, /· \.square\/review\.square/);
   assert.doesNotMatch(built.stdout, new RegExp(file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 

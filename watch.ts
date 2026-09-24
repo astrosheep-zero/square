@@ -77,7 +77,7 @@ function watchOutputResult(
       showCatchHint: !hasAutomaticDeliveryIdentity(),
       perceptions,
     }) + (caught.remaining > 0
-      ? `\n○ ${caught.remaining} matching ${caught.remaining === 1 ? 'activity remains' : 'activities remain'}\n» ${catchContinuationCommand(squarePath, name, opts)}`
+      ? `\n○ ${caught.remaining} matching ${caught.remaining === 1 ? 'activity remains' : 'activities remain'}\n${catchContinuationCommand(squarePath, name, opts)}`
       : ''),
     remaining: caught.remaining,
     ...(opts.status ? { status: opts.status } : {}),
@@ -107,7 +107,7 @@ function writeWatchOutput(squarePath: string, name: string, presentation: WatchP
   }
 
   const fallback = showCatchHint && remaining === 0
-    ? `» ${participantCommandPrefix(squarePath, name)} catch --idle 30m\n  stay available for new activity`
+    ? `${participantCommandPrefix(squarePath, name)} catch --idle 30m\n  stay available for new activity`
     : '';
   process.stdout.write(
     withPathOutput(squarePath, [stdout.trimEnd(), fallback].filter(Boolean).join('\n\n').trimEnd(), headerOpts)
@@ -178,7 +178,7 @@ function installWatchInterruptHandler(square: OpenSquare, squarePath: string, na
   const onInterrupt = () => {
     void (async () => {
       await endWatch(square, name, currentLeaseId());
-      process.stdout.write(withPathOutput(squarePath, '✕ catch stopped'));
+      process.stdout.write(withPathOutput(squarePath, '○ you step back — catch stopped'));
       process.exit(130);
     })().catch((error: unknown) => {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

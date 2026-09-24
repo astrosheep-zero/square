@@ -31,7 +31,7 @@ test('status renders hold duration from the real actor', async () => {
   });
   const held = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '62000' } });
   assert.equal(held.status, 0, held.stderr);
-  assert.match(held.stdout, /@Host raised a hand — pause · 1m/);
+  assert.match(held.stdout, /@Host raised a hand — pause · \d+s ago/);
   assert.doesNotMatch(held.stdout, /12m/);
 });
 
@@ -48,7 +48,7 @@ test('status stays compact and focuses on the current square', async () => {
 
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
   assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /1 active · 1 done · cap 100 · throttle none/);
+  assert.match(status.stdout, /1 active · 1 done · cap 100 each · throttle none/);
   assert.match(status.stdout, /@Alice · 13 activities/);
   assert.doesNotMatch(status.stdout, /Bob/);
   assert.doesNotMatch(status.stdout, /─/);
@@ -71,7 +71,7 @@ test('status previews ten active participants and links to the complete roster',
   assert.equal(participantRows.length, 10);
   assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), peers.slice(2).reverse());
   assert.match(status.stdout, /^  ○ … 3 more participants$/m);
-  assert.ok(status.stdout.includes(`» square --location '${file}' participants --limit 13\n`));
+  assert.ok(status.stdout.includes(`square --location '${file}' participants --limit 13\n`));
   assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
 
   const participants = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
@@ -94,7 +94,7 @@ test('participants bound the roster without pagination', async () => {
   assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(1).reverse());
   assert.doesNotMatch(defaultPage.stdout, /@Peer/);
   assert.match(defaultPage.stdout, /^  ○ 20 of 21 participants shown$/m);
-  assert.match(defaultPage.stdout, new RegExp(`» square --location '${file}' participants --limit 21`));
+  assert.match(defaultPage.stdout, new RegExp(`square --location '${file}' participants --limit 21`));
 
   const complete = run(withPath(file, ['participants', '--limit', '21']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(complete.status, 0, complete.stderr);
@@ -107,7 +107,7 @@ test('participants bound the roster without pagination', async () => {
   const overLimit = run(withPath(file, ['participants', '--limit', '101']));
   assert.equal(overLimit.status, 2);
   assert.match(overLimit.stderr, /--limit is capped at 100/);
-  assert.match(overLimit.stderr, new RegExp(`» square --location '${file}' participants --limit 100`));
+  assert.match(overLimit.stderr, new RegExp(`square --location '${file}' participants --limit 100`));
 
   const unsupported = run(withPath(file, ['participants', '--all']));
   assert.equal(unsupported.status, 2);
@@ -136,7 +136,7 @@ test('history refuses an unbounded merged context and offers a bounded executabl
   const oversized = run(withPath(file, ['history', '--at', 'act/100', '-C', '100', '--json']));
   assert.equal(oversized.status, 2);
   assert.match(oversized.stderr, /history is capped at 100 activities/);
-  assert.match(oversized.stderr, new RegExp(`» square --location '${file}' history --at act/100 -C 100 --json --limit 100`));
+  assert.match(oversized.stderr, new RegExp(`square --location '${file}' history --at act/100 -C 100 --json --limit 100`));
 
   const bounded = run(withPath(file, ['history', '--at', 'act/100', '-C', '100', '--json', '--limit', '100']));
   assert.equal(bounded.status, 0, bounded.stderr);
@@ -151,7 +151,7 @@ test('status has no participant preview affordance at ten active participants', 
   const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(status.status, 0, status.stderr);
   assert.doesNotMatch(status.stdout, /^  ○ … \d+ more participants$/m);
-  assert.doesNotMatch(status.stdout, /^» square --location .* participants$/m);
+  assert.doesNotMatch(status.stdout, /^square --location .* participants$/m);
 });
 
 test('express does not surface delivery-health diagnostics during normal use', async () => {
@@ -222,16 +222,16 @@ test('catch --from renders named peers and rejects the removed --by flag', async
 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(watched.status, 0, watched.stderr);
-  assert.match(watched.stdout, /@Bob stepped into the square/);
+  assert.doesNotMatch(watched.stdout, /@Bob stepped into the square/);
   assert.match(watched.stdout, /@Bob\s+#1/);
-  assert.match(watched.stdout, /@Bob stepped out of the square — done/);
+  assert.doesNotMatch(watched.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
   assert.doesNotMatch(watched.stdout, /hello from cara/);
 
   const removed = run(withName(file, 'Alice', ['catch', '--now', '--by', 'Bob']));
   assert.notEqual(removed.status, 0);
   assert.match(removed.stderr, /✕ catch does not know --by/);
-  assert.match(removed.stderr, /» square catch --help\n$/);
+  assert.match(removed.stderr, /square catch --help\n$/);
 });
 
 test('catch --now around the square excludes the current actor', async () => {
@@ -275,13 +275,13 @@ test('history rejects an explicit participant identity with a retry that removes
   const history = run(withName(file, 'Alice', ['history', '--limit', '3']));
   assert.equal(history.status, 2);
   assert.match(history.stderr, /history is an archive and does not use --as/);
-  assert.match(history.stderr, new RegExp(`» square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --limit 3`));
+  assert.match(history.stderr, new RegExp(`square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --limit 3`));
   assert.doesNotMatch(history.stderr, /Expected one of|@Alice/);
 
   const help = run(withName(file, 'Alice', ['history', '--help']));
   assert.equal(help.status, 2);
   assert.match(help.stderr, /history is an archive and does not use --as/);
-  assert.match(help.stderr, new RegExp(`» square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --help`));
+  assert.match(help.stderr, new RegExp(`square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --help`));
 });
 
 test('unknown participant errors stay bounded and point to the roster', async () => {
@@ -293,7 +293,7 @@ test('unknown participant errors stay bounded and point to the roster', async ()
   assert.equal(expressed.status, 2);
   assert.match(expressed.stderr, /Unknown mention target @Eve/);
   assert.doesNotMatch(expressed.stderr, /Expected one of|@Alice/);
-  assert.match(expressed.stderr, new RegExp(`» square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
+  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
 });
 
 test('history pages with stable activity-id cursors and prints the next page', async () => {
@@ -322,9 +322,19 @@ test('history --since excludes older public activity', async () => {
     await bob.done('bye');
   });
 
-  const activities = run(withPath(file, ['history', '--since', '1970-01-01T00:00:03.500Z']), { env: { SQUARE_NOW_MS: '5000' } });
+  const recorded = run(withPath(file, ['history', '--json']));
+  assert.equal(recorded.status, 0, recorded.stderr);
+  const acts = recorded.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  const say = acts.find((act) => act.kind === 'say');
+  const done = acts.find((act) => act.kind === 'done');
+  assert.ok(say !== undefined && done !== undefined, recorded.stdout);
+  assert.ok(done.at > say.at, `expected the done activity after the say: ${say.at} -> ${done.at}`);
+
+  const boundary = new Date(say.at + Math.floor((done.at - say.at) / 2)).toISOString();
+  const activities = run(withPath(file, ['history', '--since', boundary]), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
   assert.doesNotMatch(activities.stdout, /Bob\s+#1/);
+  assert.doesNotMatch(activities.stdout, /hello @Alice/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
 });
 
@@ -343,7 +353,7 @@ test('ambient catch and history render full body to a mention target and presenc
 
   const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
-  assert.match(caraWatch.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
+  assert.doesNotMatch(caraWatch.stdout, /talked to @Bob/);
   assert.doesNotMatch(caraWatch.stdout, /secret reach phrase/);
 
   const ambient = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '7000' } });
@@ -368,7 +378,7 @@ test('ambient catch and history render full body to a mention target and presenc
   const laterJoin = run(withName(file, 'Dan', ['join', '--last', '100']), { env: { SQUARE_NOW_MS: '11000' } });
   assert.equal(laterJoin.status, 0, laterJoin.stderr);
   assert.match(laterJoin.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
-  assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @bob/);
+  assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @Bob/);
   assert.doesNotMatch(laterJoin.stdout, /secret reach phrase/);
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
@@ -401,7 +411,7 @@ test('presence rendering omits a body when a bare say has no visible mention tar
 
   const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
-  assert.match(caraWatch.stdout, /● @Alice #1 · act\/4 · .*\n\n»/);
+  assert.match(caraWatch.stdout, /● @Alice · just now/);
   assert.doesNotMatch(caraWatch.stdout, /\n  spoke/);
   assert.doesNotMatch(caraWatch.stdout, /talked to(?:\s|$)/m);
   assert.doesNotMatch(caraWatch.stdout, /listener-only answer/);
@@ -461,12 +471,12 @@ test('bell quota refusal prints the next timestamp and express help keeps --bell
   const secondBell = run(withName(file, 'Alice', ['express', '--bell', 'bell two']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(secondBell.status, 1, secondBell.stderr);
   assert.match(secondBell.stdout, /the bell stays quiet for now/);
-  assert.match(secondBell.stdout, /you can ring it again at 1970-01-01 09:00:04 \+08:00/);
+  assert.match(secondBell.stdout, /you can ring it again in 1h/);
 
   const removed = run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'gone @Bob']));
   assert.notEqual(removed.status, 0);
   assert.match(removed.stderr, /express does not know --beside/);
-  assert.match(removed.stderr, /» square express --help\n$/);
+  assert.match(removed.stderr, /square express --help\n$/);
 
   const help = run(['express', '--help']);
   assert.equal(help.status, 0, help.stderr);
@@ -679,7 +689,7 @@ test('manual participant writes require an explicit location', () => {
   const refused = run(['--as', 'Alice', 'express', '--force', 'ambiguous'], { cwd });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /needs a square location/);
-  assert.match(refused.stderr, /» square ls\n$/);
+  assert.match(refused.stderr, /square ls\n$/);
   const readOnly = run(['status'], { cwd });
   assert.notEqual(readOnly.status, 0);
   const doctor = run(['doctor'], { cwd });
@@ -706,13 +716,13 @@ test('status shows attention state and stable activity ids', async () => {
 
   const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(waiting.status, 0, waiting.stderr);
-  assert.match(waiting.stdout, /@Alice.*1 change waiting/);
-  assert.match(waiting.stdout, /@Bob.*1 attention waiting/);
+  assert.match(waiting.stdout, /@Alice.*caught up/);
+  assert.match(waiting.stdout, /@Bob.*1 mention waiting/);
   assert.match(waiting.stdout, /● @Alice #1 · act\/2 · .*\n    talked to @Bob/);
   assert.doesNotMatch(waiting.stdout, /please check @Bob/);
 
   const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });
-  assert.match(personal.stdout, /@Bob.*1 attention waiting/);
+  assert.match(personal.stdout, /@Bob.*1 mention waiting/);
   assert.match(personal.stdout, /please check @Bob/);
   assert.match(personal.stdout, /act\/\d+/);
   assert.doesNotMatch(personal.stdout, /@Alice.*caught up/);
@@ -742,15 +752,15 @@ test('room changes and final notes remain visible without duplicate done events'
   });
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caught.status, 0, caught.stderr);
-  assert.match(caught.stdout, /@Bob stepped into the square/);
-  assert.match(caught.stdout, /@Bob raised a hand — pause/);
-  assert.match(caught.stdout, /@Bob lowered the hand/);
+  assert.doesNotMatch(caught.stdout, /@Bob stepped into the square/);
+  assert.doesNotMatch(caught.stdout, /@Bob raised a hand — pause/);
+  assert.doesNotMatch(caught.stdout, /@Bob lowered the hand/);
 
   assert.equal(run(withName(file, 'Bob', ['done', '-']), { env: { SQUARE_NOW_MS: '6000' }, input: 'final note\n' }).status, 0);
   const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(afterDone.status, 0, afterDone.stderr);
-  assert.match(afterDone.stdout, /final note/);
-  assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 1);
+  assert.match(afterDone.stdout, /✓ everyone else has left — the square is yours alone/);
+  assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 0);
   assert.match(run(withPath(file, ['history', '--no-truncate'])).stdout, /final note/);
   assert.match(run(withName(file, 'Alice', ['status'])).stdout, /final note/);
 });
@@ -762,14 +772,14 @@ test('status attention and express blocker agree on unread square changes', asyn
     await bob.hold('pause');
   });
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
-  assert.match(status.stdout, /@Alice.*changes waiting/);
+  assert.match(status.stdout, /@Alice.*caught up/);
   const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
   assert.match(noWaitAct.stdout, /a hand is raised/);
   assert.match(noWaitAct.stdout, /draft kept/);
   assert.equal(run(withName(file, 'Bob', ['resume']), { env: { SQUARE_NOW_MS: '210000' } }).status, 0);
   const unheld = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
-  assert.match(unheld.stdout, /square moved behind your back/);
-  assert.match(unheld.stdout, /catch --now/);
+  assert.match(unheld.stdout, /your activity lands/);
+  assert.doesNotMatch(unheld.stdout, /catch --now/);
 });
 
 test('an unread join alone does not block express', async () => {
@@ -782,8 +792,8 @@ test('an unread join alone does not block express', async () => {
     env: { SQUARE_NOW_MS: '200000' },
   });
   assert.equal(expressed.status, 0, expressed.stderr);
-  assert.match(expressed.stdout, /heads turn your way/);
-  assert.match(expressed.stdout, /@Bob stepped into the square/);
+  assert.match(expressed.stdout, /your activity lands — #\d+ · act\/\d+/);
+  assert.doesNotMatch(expressed.stdout, /@Bob stepped into the square/);
   assert.doesNotMatch(expressed.stdout, /catch --now/);
 });
 
@@ -793,7 +803,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const host = await square.join('Host');
     await host.hold('pause');
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', 'express --mention Host -');
+  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', "express --force --mention 'Host' -");
 
   const throttleFile = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
@@ -803,7 +813,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     input: 'throttled body @Alice\n',
     env: { SQUARE_NOW_MS: '3000' },
   });
-  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', 'express --mention Alice -');
+  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', "express --force --mention 'Alice' -");
   assert.match(throttled.stdout, /next opening in (?:\d+s|1m)/);
   assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
 
@@ -818,7 +828,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const bob = await square.join('Bob');
     await bob.express('peer @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', 'express --mention Bob -');
+  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', "express --force --mention 'Bob' -");
 });
 
 test('list bounds recursive discovery by default and accepts an explicit depth', async () => {
@@ -879,7 +889,7 @@ test('list pages a deterministic relative-path order without overlap', async () 
   const firstPaths = first.stdout.split('\n').flatMap((line) => line.match(/^[●○] (.*?) · /)?.[1] ?? []);
   assert.equal(firstPaths.length, 20);
   assert.match(first.stdout, /… 1 more square/);
-  assert.ok(first.stdout.includes(`» square list --depth 4 --limit 20 --after '${cursor}'`));
+  assert.ok(first.stdout.includes(`square list --depth 4 --limit 20 --after '${cursor}'`));
 
   const second = run(['list', '--depth', '4', '--limit', '20', '--after', cursor], { cwd });
   assert.equal(second.status, 0, second.stderr);
@@ -928,8 +938,8 @@ test('list keeps page-more boolean when deterministic discovery stops', async ()
 
   const listed = output.join('');
   assert.match(listed, /^  … more squares$/m);
-  assert.match(listed, /» square list --depth 4 --limit 20 --after 'a19\.square'/);
-  assert.match(listed, /discovery stopped after examining 10000 filesystem entries; results may be incomplete/);
+  assert.match(listed, /square list --depth 4 --limit 20 --after 'a19\.square'/);
+  assert.match(listed, /the walk stopped early — deeper squares may still be hiding/);
   assert.doesNotMatch(listed, /… \d+ more squares?/);
 });
 
@@ -1001,8 +1011,8 @@ test('list, participants, and clipped status use current state and executable hi
   await square.close();
 
   const listed = run(['list'], { cwd });
-  assert.match(listed.stdout, /1 in square/);
-  assert.doesNotMatch(listed.stdout, /2 in square/);
+  assert.match(listed.stdout, /1 in the square/);
+  assert.doesNotMatch(listed.stdout, /2 in the square/);
   assert.match(listed.stdout, /context · ## Topic\n\s+· Current state/);
   assert.match(listed.stdout, /participants · @Alice/);
   assert.doesNotMatch(listed.stdout, /participants[^\n]*Bob/);
@@ -1015,6 +1025,6 @@ test('list, participants, and clipped status use current state and executable hi
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);
-  assert.match(status.stdout, /» square --location '.*' history --at act\/\d+ -C 2 --no-truncate/);
+  assert.match(status.stdout, /square --location '.*' history --at act\/\d+ -C 2 --no-truncate/);
   assert.match(status.stdout, /throttle 2\/min/);
 });

@@ -20,7 +20,7 @@ import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
-import { formatTimestamp } from './time.js';
+import { formatDuration } from './time.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { createDefaultWakeTransport } from './notifications.js';
 
@@ -108,7 +108,7 @@ export async function cmdActivity(
       const pendingPublic = before.pendingPublic;
       const pendingRoomChanges = before.pendingRoomChanges;
       try {
-        await participant.express(body, {
+        const landed = await participant.express(body, {
           force,
           ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
           ...(reach === undefined ? {} : { reach }),
@@ -122,7 +122,7 @@ export async function cmdActivity(
         const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
         const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
         const hint = expressHintLine(ownActCount);
-        const confirmation = `● heads turn your way — #${ownActCount}`;
+        const confirmation = `● your activity lands — #${ownActCount} · ${landed.activity.id}`;
         const withHint = hint ? `${confirmation}\n${hint}` : confirmation;
         process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
         return;
@@ -194,11 +194,10 @@ export async function cmdActivity(
         continue;
         }
         if (error.code === 'bell_quota') {
-          const nextAt = nowMs() + (error.facts?.retryAfterMs ?? 1);
         process.stdout.write(
           withPathOutput(
             squarePath,
-            [`✕ the bell stays quiet for now`, `  · you can ring it again at ${formatTimestamp(nextAt)}`].join('\n'),
+            [`✕ the bell stays quiet for now`, `  · you can ring it again in ${formatDuration(error.facts?.retryAfterMs ?? 1)}`].join('\n'),
             { participantCount: headerCount, held }
           )
         );

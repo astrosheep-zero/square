@@ -119,9 +119,9 @@ export const catchCommand: CommandSpec<WatchOptions> = {
     const participants: string[] = [];
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--id') {
-        if (id !== undefined) fail('✕ catch accepts one --id\n» square catch --help');
+        if (id !== undefined) fail('✕ catch accepts one --id\nsquare catch --help');
         const value = requireValue(argv, index, '--id');
-        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\n» square catch --help');
+        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\nsquare catch --help');
         id = value as WatchOptions['id'];
         index += 1;
       } else if (argv[index] === '--from') {
@@ -137,11 +137,11 @@ export const catchCommand: CommandSpec<WatchOptions> = {
         index += 1;
       } else if (argv[index] === '--replace') replace = true;
       else if (argv[index] === '--now') now = true;
-      else fail(`✕ catch does not know ${argv[index]}\n» square catch --help`);
+      else fail(`✕ catch does not know ${argv[index]}\nsquare catch --help`);
     }
     if (id !== undefined) {
       if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--replace'].includes(flag))) {
-        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\n» square catch --help');
+        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\nsquare catch --help');
       }
       return { id, now: true };
     }
@@ -267,7 +267,7 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
       format = requireValue(argv, index, flag).split(',').map((item) => item.trim()).filter(Boolean);
       index += 1;
     } else if (flag === '--json') json = true;
-    else fail(`✕ history does not know ${flag}\n» square history --help`);
+    else fail(`✕ history does not know ${flag}\nsquare history --help`);
   }
   if (grep !== undefined && fixed !== undefined) fail('--grep and --fixed cannot be combined.');
   if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
@@ -358,7 +358,7 @@ function renderHistoryProjection(
   }
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
-    chunks.push(`» ${commandPrefix(squarePath)} history --no-truncate`);
+    chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
   }
   return chunks.join('\n\n');
 }
@@ -374,7 +374,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const projection = await historyPresentation(square, { ...options, order: 'asc' });
       let events = [...projection.activities];
       if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
-        fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n» ${boundedHistoryCommand(options, squarePath)}`);
+        fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${boundedHistoryCommand(options, squarePath)}`);
       }
       const searching = options.grep !== undefined || options.fixed !== undefined;
       const totalMatches = searching ? events.length : 0;
@@ -403,7 +403,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       );
       const cursorDirection = options.afterIndex !== undefined ? '--after' : '--before';
       const cursorIndex = cursorDirection === '--after' ? Math.max(...publicEvents.map((item) => item.index)) : Math.min(...publicEvents.map((item) => item.index));
-      const continuation = hasMore ? `\n\n» ${historyContinuationCommand(options, squarePath, cursorDirection, cursorIndex)}` : '';
+      const continuation = hasMore ? `\n\n${historyContinuationCommand(options, squarePath, cursorDirection, cursorIndex)}` : '';
       return withPathOutput(squarePath, output + continuation, { participantCount: projection.participantCount });
     } finally {
       await closeOpenSquare(square);
@@ -455,7 +455,7 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
         : [
             `  ○ ${lines.length} of ${participants.length} participants shown`,
             ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
-              `» ${participantsLimitCommand(squarePath, participants.length)}`,
+              `${participantsLimitCommand(squarePath, participants.length)}`,
             ] : []),
           ];
       return withPathOutput(squarePath, ['participants', ...lines, ...tail].join('\n'), {
@@ -490,7 +490,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       const attention = !showAttention
         ? ''
         : participant.pendingMentionCount > 0
-          ? `${participant.pendingMentionCount} attention${participant.pendingMentionCount === 1 ? '' : 's'} waiting`
+          ? `${participant.pendingMentionCount} ${participant.pendingMentionCount === 1 ? 'mention' : 'mentions'} waiting`
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
             : 'caught up';
@@ -498,11 +498,11 @@ export const statusCommand: CommandSpec<undefined, string> = {
     });
     if (active.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
       people.push(`  ○ … ${active.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more participants`);
-      people.push(`» ${result.participants.length <= PARTICIPANTS_MAX_LIMIT
+      people.push(`${result.participants.length <= PARTICIPANTS_MAX_LIMIT
         ? participantsLimitCommand(squarePath, result.participants.length)
         : `${commandPrefix(squarePath)} participants`}`);
     }
-    const cap = result.hardCap === null ? 'unlimited' : String(result.hardCap);
+    const cap = result.hardCap === null ? 'unlimited' : `${result.hardCap} each`;
     const hold = result.holdActive
       ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''} · ${result.holdAt === undefined
         ? 'just now'
@@ -519,10 +519,10 @@ export const statusCommand: CommandSpec<undefined, string> = {
     const latest = visible === ''
       ? [result.latestAct === undefined
         ? '  ○ no public activity yet'
-        : '  · latest activity is private to another participant']
+        : '  · the latest words were meant for other ears']
       : [`  ${visible.replace(/\n/g, '\n  ')}`];
     if (visible.includes('more chars') && result.latestAct !== undefined) {
-      latest.push(`» ${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
+      latest.push(`${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }
     const output = [
       `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,
@@ -557,7 +557,7 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
     }
     if (!sessionId) fail('inbox requires --for-session <session-id>.');
     const retry = inboxLimitCommand(sessionId, json);
-    if (duplicateLimit) fail(`✕ inbox accepts one --limit\n» ${retry}`);
+    if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
     const limit = hasLimit
       ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)
       : INBOX_DEFAULT_LIMIT;

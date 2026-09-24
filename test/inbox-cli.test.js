@@ -71,9 +71,9 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
   const overMaximum = run(['inbox', '--limit', '101', '--for-session', 'inbox-snapshot', '--json'], { env });
   assert.equal(overMaximum.status, 2);
   assert.match(overMaximum.stderr, /✕ --limit is capped at 100/);
-  assert.equal(overMaximum.stderr, "✕ --limit is capped at 100\n» square inbox --for-session 'inbox-snapshot' --limit 100 --json\n");
+  assert.equal(overMaximum.stderr, "✕ --limit is capped at 100\nsquare inbox --for-session 'inbox-snapshot' --limit 100 --json\n");
 
   const duplicateLimit = run(['inbox', '--for-session', 'inbox-snapshot', '--limit', '2', '--limit', '3'], { env });
   assert.equal(duplicateLimit.status, 2);
-  assert.equal(duplicateLimit.stderr, "✕ inbox accepts one --limit\n» square inbox --for-session 'inbox-snapshot' --limit 100\n");
+  assert.equal(duplicateLimit.stderr, "✕ inbox accepts one --limit\nsquare inbox --for-session 'inbox-snapshot' --limit 100\n");
 });

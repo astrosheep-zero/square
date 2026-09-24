@@ -61,7 +61,7 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
 function headerLine(squarePath: string, opts: HeaderOptions = {}): string {
   const count = opts.participantCount ?? 0;
   const heldSuffix = opts.held ? ' — a hand is raised' : '';
-  return `· the square at ${displayPath(squarePath)} — ${count} in the square${heldSuffix}`;
+  return `· ${displayPath(squarePath)} — ${count} in the square${heldSuffix}`;
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
@@ -96,11 +96,11 @@ export function participantCommandPrefix(squarePath: string, name: string): stri
 
 /** Blocked actions end with a full copy-pasteable recovery command. */
 export function joinRecoveryCommand(squarePath: string, name: string): string {
-  return `» ${participantCommandPrefix(squarePath, name)} join`;
+  return `${participantCommandPrefix(squarePath, name)} join`;
 }
 
 export function participantsRecoveryCommand(squarePath: string): string {
-  return `» ${commandPrefix(squarePath)} participants`;
+  return `${commandPrefix(squarePath)} participants`;
 }
 
 function formatAge(ms: number | undefined): string {
@@ -144,14 +144,14 @@ export function renderPresenceLines(participants: ParticipantStatus[], now: numb
 
   const lines = shown.map((p) => `  ${presenceGlyph(p)} ${participantIdentity(p.name)} · ${presenceText(p, now)}`);
   const remaining = recent.length - shown.length;
-  if (remaining > 0) lines.push(`  ○ …and ${remaining} more`);
+  if (remaining > 0) lines.push(`  ○ … ${remaining} more nearby`);
   return lines;
 }
 
 const EXPRESS_HINTS = [
   '*asterisks* are your body — *slams table*, *sketches in the air*, *shrugs*',
   "you're standing in a square — words and gestures both land",
-  'the square is for conversation — share thoughts and engage with others, beyond status updates and empty acknowledgments',
+  'the square runs on conversation — say things that move it, not nods that fill it',
 ];
 
 export function expressHintLine(ownActivityCount: number): string | undefined {
@@ -347,9 +347,9 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
       "✕ your activity doesn't land — the square moved behind your back",
       ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, roomChanges: opts.unreadRoomChanges, viewer: opts.name }),
       ...draftSavedLines(opts.draftPath),
-      `» ${readNowCommand}`,
+      `${readNowCommand}`,
       '  take it in, then express again',
-      `» ${withDraftInput(opts.forceCommand, opts.draftPath)}`,
+      `${withDraftInput(opts.forceCommand, opts.draftPath)}`,
       '  only if you truly mean to express over unread activity',
     ].join('\n'),
     { participantCount: opts.participantCount, held: opts.held }
@@ -371,13 +371,13 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
           '✕ the square is packed',
           `  · next opening in ${formatDuration(opts.delayMs)}`,
           ...draftSavedLines(opts.draftPath),
-          `» ${withDraftInput(retryCommand, opts.draftPath)}`,
+          `${withDraftInput(retryCommand, opts.draftPath)}`,
         ]
       : [
           "✕ your activity doesn't land — a hand is raised",
           `  · ${opts.holdReason ?? 'the square holds its breath'}`,
           ...draftSavedLines(opts.draftPath),
-          `» ${withDraftInput(retryCommand, opts.draftPath)}`,
+          `${withDraftInput(retryCommand, opts.draftPath)}`,
         ];
   return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount, held: opts.held });
 }
@@ -450,7 +450,7 @@ export function renderActivitiesView(
     const truncated = shown.some((act) =>
       act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceiveActivity(squareState, act, viewer) === 'full')
     );
-    if (truncated) chunks.push(`» ${commandPrefix(squarePath)} history --no-truncate`);
+    if (truncated) chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
   }
 
   return chunks.join('\n\n');
@@ -507,9 +507,9 @@ export function renderGrepActivitiesView(
   }
 
   if (publicVisible.length === 1) {
-    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
+    chunks.push(`${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
   } else if (truncated && publicVisible.length > 1) {
-    chunks.push(`» ${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2 --no-truncate`);
+    chunks.push(`${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2 --no-truncate`);
   }
   return chunks.join('\n\n');
 }
@@ -520,7 +520,8 @@ function renderActivityLimitBody(opts: ActivityLimitOptions): string {
   return [
     `✕ your activity doesn't land — the cap is reached${countText}`,
     ...draftSavedLines(opts.draftPath),
-    `» ${withDraftInput(doneCommand, opts.draftPath)}`,
+    `${withDraftInput(doneCommand, opts.draftPath)}`,
+    '  your draft becomes your final note',
   ].join('\n');
 }
 
@@ -532,8 +533,8 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
   return [
     '✕ you are already catching',
     `  · an active catch is already running for ${participantIdentity(opts.name)}`,
-    '  · wait for it to finish before starting another catch',
-    `» ${commandPrefix(opts.squarePath)} participants`,
+    '  · --replace lets a new catch take over',
+    `${participantCommandPrefix(opts.squarePath, opts.name)} catch --idle 30m --replace`,
   ].join('\n');
 }
 
@@ -542,7 +543,7 @@ export function renderWatchForceTakeover(_opts: ParticipantOutputOptions): strin
 }
 
 export function renderWatchReplaceMissing(_opts: ParticipantOutputOptions): string {
-  return '⚠ nothing to replace — no active catch was running; your catch started normally';
+  return '· no catch stood here — yours takes the spot';
 }
 
 export function renderWatchReplaced(_opts: ParticipantOutputOptions): string {
@@ -569,14 +570,14 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
         quiet,
         ...(opts.showCatchHint === false
           ? []
-          : [`» ${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
+          : [`${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
         ...presenceLines,
       ].join('\n');
     }
     case 'quorum':
-      return ['✓ everyone else has left — the square is yours alone', `» ${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return ['✓ everyone else has left — the square is yours alone', `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
     case 'capped':
-      return ['✕ nothing left in you — the cap is reached', `» ${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return ['✕ nothing left in you — the cap is reached', `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
   }
 }
 
@@ -610,7 +611,7 @@ export function renderWatchOutput(
         quiet,
         ...(opts.showCatchHint === false
           ? []
-          : [`» ${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
+          : [`${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
       ].join('\n')
     );
   }
