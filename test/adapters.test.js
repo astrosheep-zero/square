@@ -497,12 +497,11 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
-  assert.match(context, /^\n<square-activity/);
-  assert.match(context, /location="\/tmp\/SQUARE\.square"/);
-  assert.match(context, /id="act\/7"/);
-  assert.match(context, /kind="attention">/);
+  assert.match(context, /^\n```square-activity/);
+  assert.match(context, /· \/tmp\/SQUARE\.square · act\/7/);
+  assert.match(context, /● Alice called Bob's name/);
   assert.doesNotMatch(context, /^>$/m);
-  assert.match(context, /<\/square-activity>\n$/);
+  assert.match(context, /```\n$/);
   assert.doesNotMatch(context, /catch --now/);
 });
 
@@ -511,11 +510,11 @@ test('Pi notify summary names actor, route, and recipient without a standalone b
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   assert.equal(
     summarizePendingForNotify([membership([note()])]),
-    '■ square · Alice walked over to Bob — hello @Bob',
+    '■ square · Alice called Bob\'s name — hello @Bob',
   );
   assert.equal(
     summarizePendingForNotify([membership([note({ route: 'bell' }), note({ actor: 'Cara', body: 'y'.repeat(120) })])]),
-    `■ square · Alice rang the bell for Bob — hello @Bob (+1 more)`,
+    `■ square · Alice rang the bell — hello @Bob (+1 more)`,
   );
   assert.match(summarizePendingForNotify([membership([note({ body: 'y'.repeat(120) })])]), /…$/);
   assert.equal(summarizePendingForNotify([membership([])]), undefined);
@@ -673,7 +672,7 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, false, 'the activity stays out of the TUI stream; the notify carries the human-facing summary');
-      assert.deepEqual(notified, [{ message: '■ square · Alice walked over to Bob — hello @Bob', level: 'info' }]);
+      assert.deepEqual(notified, [{ message: '■ square · Alice called Bob\'s name — hello @Bob', level: 'info' }]);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),

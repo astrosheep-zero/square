@@ -32,30 +32,25 @@ export function displayAttentionPath(squarePath: string): string {
 }
 
 export function renderAttentionPreview(attention: AttentionPreview): string {
-  const attentionKind = attention.route === 'bell' ? 'bell' : 'attention';
-  const attributes = {
-    location: displayAttentionPath(attention.squarePath),
-    id: formatActivityId(attention.actIndex),
-    from: attention.actor,
-    to: attention.recipient,
-    kind: attentionKind,
-  };
-  const entries = Object.entries(attributes);
-  const [lastKey, lastValue] = entries[entries.length - 1];
+  const route = attention.route === 'bell'
+    ? `${attention.actor} rang the bell for ${attention.recipient}`
+    : `${attention.actor} called ${attention.recipient}'s name`;
+  // The fence is what keeps the body from being re-rendered by Markdown. It grows past any
+  // backtick run in the body so a body containing a fence cannot break out of this one.
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun(attention.body) + 1));
   return [
-    '<square-activity',
-    // The opening tag must never emit a standalone `>` line: Markdown renders it as a blockquote.
-    ...entries.slice(0, -1).map(([key, value]) => `  ${key}="${escapeAttribute(value)}"`),
-    `  ${lastKey}="${escapeAttribute(lastValue)}">`,
+    `${fence}square-activity`,
+    `· ${displayAttentionPath(attention.squarePath)} · ${formatActivityId(attention.actIndex)}`,
+    `● ${route}`,
+    '',
     previewAttentionBody(attention.body),
-    '</square-activity>',
+    fence,
     ...(attentionBodyIsClipped(attention.body)
       ? [`${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
       : []),
   ].join('\n');
 }
 
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\r/g, '&#13;').replace(/\n/g, '&#10;').replace(/\t/g, '&#9;');
+function longestBacktickRun(value: string): number {
+  return value.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
 }

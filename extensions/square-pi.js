@@ -33,10 +33,14 @@ const NOTIFY_BODY_MAX = 80;
 
 export function summarizePendingForNotify(pending) {
   const lines = pending.flatMap((membership) => membership.notifications.map((note) => {
-    const verb = note.route === 'bell' ? 'rang the bell for' : note.route === 'mention' ? 'walked over to' : 'paid attention to';
+    const verb = note.route === 'bell'
+      ? 'rang the bell'
+      : note.route === 'mention'
+        ? `called ${membership.name}'s name`
+        : `spoke within ${membership.name}'s earshot`;
     const body = note.body.replace(/\s+/g, ' ').trim();
     const clipped = body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX).trimEnd()}…` : body;
-    return `${note.actor} ${verb} ${membership.name}${clipped ? ` — ${clipped}` : ''}`;
+    return `${note.actor} ${verb}${clipped ? ` — ${clipped}` : ''}`;
   }));
   if (lines.length === 0) return undefined;
   return lines.length === 1 ? `■ square · ${lines[0]}` : `■ square · ${lines[0]} (+${lines.length - 1} more)`;

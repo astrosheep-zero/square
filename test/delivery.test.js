@@ -126,22 +126,20 @@ test('listener delivery attention does not claim a listener was mentioned', () =
   const [{ route }] = deriveDeliveryModel(square).plan(square.acts[3]);
   assert.equal(route, 'attention');
   const rendered = renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: 3, recipient: 'Bob', actor: 'Alice', route, body: 'bare thought' });
-  assert.match(rendered, /kind="attention"/);
-  assert.doesNotMatch(rendered, /kind="mention"/);
+  assert.match(rendered, /● Alice called Bob's name/);
+  assert.doesNotMatch(rendered, /rang the bell/);
 });
 
 test('attention metadata is separate from unindented Markdown body', () => {
   const body = '*thought*\n\n- item\n  - nested\n\n```js\n  run();\n```';
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a"&<b>.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body });
   assert.equal(rendered, [
-    '<square-activity',
-    '  location="/tmp/a&quot;&amp;&lt;b&gt;.square"',
-    '  id="act/12"',
-    '  from="Alice"',
-    '  to="Bob"',
-    '  kind="bell">',
+    '````square-activity',
+    '· /tmp/a"&<b>.square · act/12',
+    '● Alice rang the bell for Bob',
+    '',
     body,
-    '</square-activity>',
+    '````',
   ].join('\n'));
 });
 
