@@ -10,12 +10,15 @@ import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
 import { grepSnippet } from './search.js';
+import { style } from './tty-style.js';
 
 export type WatchStatus = 'stale' | 'empty-now' | 'quorum' | 'capped';
 
 interface HeaderOptions {
   participantCount?: number;
   held?: boolean;
+  /** Refusal bodies go to stderr, which stays literal even when it is a TTY. */
+  plain?: boolean;
 }
 
 interface ParticipantOutputOptions {
@@ -61,7 +64,8 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
 function headerLine(squarePath: string, opts: HeaderOptions = {}): string {
   const count = opts.participantCount ?? 0;
   const heldSuffix = opts.held ? ' — a hand is raised' : '';
-  return `· ${displayPath(squarePath)} — ${count} in the square${heldSuffix}`;
+  const line = `· ${displayPath(squarePath)} — ${count} in the square${heldSuffix}`;
+  return opts.plain === true ? line : style('dim', line);
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
@@ -91,7 +95,7 @@ export function formatRefusal(
   const body = bodyLines.join('\n');
   // A refusal with no known count stays bare rather than claiming "0 in the square".
   if (opts.participantCount === undefined) return body === '' ? '' : `${body}\n`;
-  return withPathOutput(squarePath, body, opts);
+  return withPathOutput(squarePath, body, { ...opts, plain: true });
 }
 
 export function quoteShell(value: string): string {
@@ -134,6 +138,11 @@ function presenceGlyph(participant: ParticipantStatus): string {
   return '○';
 }
 
+function styledPresenceGlyph(participant: ParticipantStatus): string {
+  const glyph = presenceGlyph(participant);
+  return glyph === '○' ? style('dim', glyph) : glyph;
+}
+
 function presenceText(participant: ParticipantStatus, now: number): string {
   if (participant.state === 'done') {
     return participant.lastActiveAt === undefined ? 'stepped out of the square' : `stepped out of the square · ${formatRelativeTime(participant.lastActiveAt, now)}`;
@@ -152,11 +161,11 @@ export function renderPresenceLines(participants: ParticipantStatus[], now: numb
     .sort(compareParticipantActivity);
 
   const shown = recent.slice(0, limit);
-  if (shown.length === 0) return ['  ○ nobody nearby'];
+  if (shown.length === 0) return [style('dim', '  ○ nobody nearby')];
 
-  const lines = shown.map((p) => `  ${presenceGlyph(p)} ${participantIdentity(p.name)} · ${presenceText(p, now)}`);
+  const lines = shown.map((p) => `  ${styledPresenceGlyph(p)} ${participantIdentity(p.name)}${style('dim', ` · ${presenceText(p, now)}`)}`);
   const remaining = recent.length - shown.length;
-  if (remaining > 0) lines.push(`  ○ … ${remaining} more nearby`);
+  if (remaining > 0) lines.push(style('dim', `  ○ … ${remaining} more nearby`));
   return lines;
 }
 
@@ -189,7 +198,7 @@ export function truncateExternalDiagnostic(diagnostic: string): string {
 
 function previewBody(body: string, maxLen = BODY_PREVIEW_LENGTH): string {
   const preview = truncateChars(body, maxLen);
-  return preview.remaining === 0 ? preview.text : `${preview.text}\n… ${preview.remaining} more chars`;
+  return preview.remaining === 0 ? preview.text : `${preview.text}\n${style('dim', `… ${preview.remaining} more chars`)}`;
 }
 
 const UNREAD_PREVIEW_CHARS = 120;
@@ -198,7 +207,7 @@ export function previewActivityBody(body: string): string {
   const compact = body.replace(/\s+/g, ' ').trim();
   if (compact === '') return '(empty)';
   const preview = truncateChars(compact, UNREAD_PREVIEW_CHARS);
-  return preview.remaining === 0 ? preview.text : `${preview.text}… (+${preview.remaining} chars)`;
+  return preview.remaining === 0 ? preview.text : `${preview.text}${style('dim', `… (+${preview.remaining} chars)`)}`;
 }
 
 export function renderRoomChangeText(event: RoomChangeAct): string {
@@ -242,7 +251,7 @@ export function renderEventCli(
     case 'hold':
       return `· ${renderRoomChangeText(event)}`;
     case 'resume':
-      return `✓ ${renderRoomChangeText(event)}`;
+      return `${style('release', '✓')} ${renderRoomChangeText(event)}`;
     case 'listen':
     case 'ignore':
       return `· ${renderRoomChangeText(event)}`;
@@ -254,11 +263,12 @@ export function renderEventCli(
           ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
-      return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}${bodySuffix(body)}`;
+      const meta = ` #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
+      return `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body)}`;
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
-      return `○ ${participantIdentity(event.actor)} stepped out of the square — done · ${actId(event)} · ${formatRelativeTime(event.at, now)}${bodySuffix(body)}`;
+      return `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${actId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body)}`;
     }
     case 'read':
       return '';
@@ -271,8 +281,9 @@ function renderPresenceOnlySay(
 ): string {
   const audience = audienceOf(event);
   const targets = audience.kind === 'bell' ? [] : audience.names;
+  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
   if (targets.length === 0) {
-    return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}`;
+    return `● ${participantIdentity(event.actor)}${meta}`;
   }
   const visibleTargets = targets.slice(0, MAX_IDENTITY_SET_SIZE).map((name) => participantIdentity(name));
   const remainingTargets = targets.length - visibleTargets.length;
@@ -280,7 +291,7 @@ function renderPresenceOnlySay(
     ...visibleTargets,
     ...(remainingTargets === 0 ? [] : [`${remainingTargets} ${remainingTargets === 1 ? 'other' : 'others'}`]),
   ].join(' and ')}`;
-  return `● ${participantIdentity(event.actor)} #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}\n  talked to${dest}`;
+  return `● ${participantIdentity(event.actor)}${meta}\n${style('dim', `  talked to${dest}`)}`;
 }
 
 export function renderAmbientEvent(
@@ -302,7 +313,7 @@ export function renderAmbientEvent(
 }
 
 function draftSavedLines(draftPath: string | undefined): string[] {
-  return draftPath === undefined ? [] : [`· draft kept: ${draftPath}`];
+  return draftPath === undefined ? [] : [style('dim', `· draft kept: ${draftPath}`)];
 }
 
 function withDraftInput(command: string, draftPath: string | undefined): string {
@@ -316,15 +327,15 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
     ...visibleSummaries.flatMap((item) => [
       ...item.previews.slice(-1).map((preview) => {
         const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number, perception: preview.perception });
-        if (rendered === '') return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`;
+        if (rendered === '') return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`);
         if (preview.perception === 'presence') {
-          return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`;
+          return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`);
         }
-        return `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`;
+        return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${previewActivityBody(preview.act.body)}"`);
       }),
     ]),
-    ...(remainingSummaries === 0 ? [] : [`  · ${remainingSummaries} more participants have unread activity`]),
-    ...opts.roomChanges.map((act) => `  · ${renderRoomChangeText(act)}`),
+    ...(remainingSummaries === 0 ? [] : [style('dim', `  · ${remainingSummaries} more participants have unread activity`)]),
+    ...opts.roomChanges.map((act) => style('dim', `  · ${renderRoomChangeText(act)}`)),
   ];
 }
 
@@ -356,7 +367,7 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
   return withPathOutput(
     opts.squarePath,
     [
-      "✕ your activity doesn't land — the square moved behind your back",
+      `${style('blocked', '✕')} your activity doesn't land — the square moved behind your back`,
       ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, roomChanges: opts.unreadRoomChanges, viewer: opts.name }),
       ...draftSavedLines(opts.draftPath),
       `${readNowCommand}`,
@@ -380,14 +391,14 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
   const lines =
     opts.reason === 'throttled'
       ? [
-          '✕ the square is packed',
+          `${style('blocked', '✕')} the square is packed`,
           `  · next opening in ${formatDuration(opts.delayMs)}`,
           ...draftSavedLines(opts.draftPath),
           `${withDraftInput(retryCommand, opts.draftPath)}`,
         ]
       : [
-          "✕ your activity doesn't land — a hand is raised",
-          `  · ${opts.holdReason ?? 'the square holds its breath'}`,
+          `${style('blocked', '✕')} your activity doesn't land — a hand is raised`,
+          style('dim', `  · ${opts.holdReason ?? 'the square holds its breath'}`),
           ...draftSavedLines(opts.draftPath),
           `${withDraftInput(retryCommand, opts.draftPath)}`,
         ];
@@ -420,7 +431,7 @@ export function renderPresenceAnchor(names: readonly string[]): string {
   const participants = visibleNames.map((name) => participantIdentity(name)).join(', ');
   const remaining = names.length - visibleNames.length;
   const suffix = remaining === 0 ? '' : ` and ${remaining} more`;
-  return names.length === 1 ? `→ ${participants} was here` : `→ ${participants}${suffix} were here`;
+  return style('dim', names.length === 1 ? `→ ${participants} was here` : `→ ${participants}${suffix} were here`);
 }
 
 export function renderActivitiesView(
@@ -471,8 +482,7 @@ export function renderActivitiesView(
 const GREP_PREVIEW_CHARS = 160;
 
 function highlightGrepMatch(text: string): string {
-  if (!process.stdout.isTTY || process.env.NO_COLOR !== undefined || text === '') return text;
-  return `\x1b[38;5;222m\x1b[1m${text}\x1b[0m`;
+  return style('match', text);
 }
 
 export function renderGrepActivitiesView(
@@ -492,20 +502,21 @@ export function renderGrepActivitiesView(
 
   for (const act of publicVisible) {
     const rawBody = act.body ?? '';
+    const header = `${style('dim', actId(act.index))} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
     if (perception?.(act) === 'presence') {
-      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}`);
+      chunks.push(header);
       continue;
     }
     if (noTruncate === true) {
       const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
-      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}\n${body}`);
+      chunks.push(`${header}\n${body}`);
       continue;
     }
 
     const snippet = grepSnippet(rawBody, pattern, GREP_PREVIEW_CHARS, fixed);
     if (snippet === undefined) {
       const preview = previewBody(rawBody, GREP_PREVIEW_CHARS);
-      chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}${preview === '' ? '' : `\n  ${preview}`}`);
+      chunks.push(`${header}${preview === '' ? '' : `\n  ${preview}`}`);
       continue;
     }
     const clippedBefore = snippet.beforeOmitted > 0;
@@ -513,9 +524,9 @@ export function renderGrepActivitiesView(
     truncated ||= clippedBefore || clippedAfter;
     const text = `${clippedBefore ? '… ' : ''}${snippet.before}${highlightGrepMatch(snippet.match)}${snippet.after}${clippedAfter ? ' …' : ''}`;
     const omitted = clippedBefore || clippedAfter
-      ? `\n  · ${snippet.beforeOmitted} chars before · ${snippet.afterOmitted} chars after`
+      ? `\n${style('dim', `  · ${snippet.beforeOmitted} chars before · ${snippet.afterOmitted} chars after`)}`
       : '';
-    chunks.push(`${actId(act.index)} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${formatTimestamp(act.at)}\n  ${text.trim()}${omitted}`);
+    chunks.push(`${header}\n  ${text.trim()}${omitted}`);
   }
 
   if (publicVisible.length === 1) {
@@ -530,7 +541,7 @@ function renderActivityLimitBody(opts: ActivityLimitOptions): string {
   const countText = opts.count !== undefined && opts.hardCap !== undefined ? ` (${opts.count}/${opts.hardCap})` : '';
   const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done -`;
   return [
-    `✕ your activity doesn't land — the cap is reached${countText}`,
+    `${style('blocked', '✕')} your activity doesn't land — the cap is reached${countText}`,
     ...draftSavedLines(opts.draftPath),
     `${withDraftInput(doneCommand, opts.draftPath)}`,
     '  your draft becomes your final note',
@@ -543,7 +554,7 @@ export function renderActivityLimit(opts: ActivityLimitOptions): string {
 
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
   return [
-    '✕ you are already catching',
+    `${style('blocked', '✕')} you are already catching`,
     `  · an active catch is already running for ${participantIdentity(opts.name)}`,
     '  · --replace lets a new catch take over',
     `${participantCommandPrefix(opts.squarePath, opts.name)} catch --idle 30m --replace`,
@@ -576,8 +587,8 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
     case 'empty-now': {
       const prefix = participantCommandPrefix(opts.squarePath, opts.name);
       const quiet = opts.status === 'stale' && opts.idleMs !== undefined
-        ? `○ ${formatDuration(opts.idleMs)} of quiet — nothing new for you`
-        : '○ only footsteps in the square — nothing new for you';
+        ? style('dim', `○ ${formatDuration(opts.idleMs)} of quiet — nothing new for you`)
+        : style('dim', '○ only footsteps in the square — nothing new for you');
       return [
         quiet,
         ...(opts.showCatchHint === false
@@ -587,15 +598,15 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ].join('\n');
     }
     case 'quorum':
-      return ['✓ everyone else has left — the square is yours alone', `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
     case 'capped':
-      return ['✕ nothing left in you — the cap is reached', `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return [`${style('blocked', '✕')} nothing left in you — the cap is reached`, `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
   }
 }
 
 function renderRoomChanges(changes: RoomChangeAct[]): string {
   if (changes.length === 0) return '';
-  return ['▲ while your back was turned', ...changes.map((act) => `  · ${renderRoomChangeText(act)}`)].join('\n');
+  return [`${style('changed', '▲')} while your back was turned`, ...changes.map((act) => `  · ${renderRoomChangeText(act)}`)].join('\n');
 }
 
 export function renderDoctorClean(): string {

@@ -16,6 +16,7 @@ import {
   quoteShell,
 } from '../presentation.js';
 import { actId, nowMs } from '../runtime.js';
+import { style } from '../tty-style.js';
 import { cmdStream, cmdStreamNdjson, type StreamStart } from '../stream.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { cmdWatch } from '../watch.js';
@@ -445,7 +446,7 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
         const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
         const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
         const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-        return `  ${glyph} ${participant.name} · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`;
+        return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
       });
       const participantCount = participants.filter(
         (participant) => participant.state === 'active'
@@ -453,7 +454,7 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
       const tail = participants.length <= intent.limit
         ? []
         : [
-            `  ○ ${lines.length} of ${participants.length} participants shown`,
+            style('dim', `  ○ ${lines.length} of ${participants.length} participants shown`),
             ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
               `${participantsLimitCommand(squarePath, participants.length)}`,
             ] : []),
@@ -494,7 +495,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
             : 'caught up';
-      return `  ${glyph} ${participantIdentity(participant.name)} · ${summary}${attention === '' ? '' : ` · ${attention}`}`;
+      return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` · ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
     });
     if (active.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
       people.push(`  ○ … ${active.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more participants`);
@@ -503,10 +504,9 @@ export const statusCommand: CommandSpec<undefined, string> = {
         : `${commandPrefix(squarePath)} participants`}`);
     }
     const cap = result.hardCap === null ? 'unlimited' : `${result.hardCap} each`;
+    const holdTime = result.holdAt === undefined ? 'just now' : formatRelativeTime(result.holdAt, result.now);
     const hold = result.holdActive
-      ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''} · ${result.holdAt === undefined
-        ? 'just now'
-        : formatRelativeTime(result.holdAt, result.now)}`
+      ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''}${style('dim', ` · ${holdTime}`)}`
       : undefined;
     const visible = result.latestAct === undefined
       ? ''
@@ -525,8 +525,8 @@ export const statusCommand: CommandSpec<undefined, string> = {
       latest.push(`${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }
     const output = [
-      `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,
-      ...(hold === undefined ? [] : ['', hold]), '', 'around the square', ...people, '', 'latest', ...latest,
+      style('dim', `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`),
+      ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
     ].join('\n');
     return withPathOutput(squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
     } finally {

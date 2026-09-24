@@ -6,6 +6,7 @@ import { closeOpenSquare } from './open-square.js';
 import { listPresentation } from './views.js';
 import { formatRelativeTime } from './time.js';
 import { participantIdentity, quoteShell } from './presentation.js';
+import { style } from './tty-style.js';
 
 interface SquareListItem {
   path: string;
@@ -103,34 +104,36 @@ function renderSquareList(items: SquareListItem[], stopped: boolean, depth: numb
   const page = after === undefined ? items : items.filter((item) => item.path.localeCompare(after) > 0);
   const shownItems = page.slice(0, limit);
   if (items.length === 0) {
-    return [`(no squares found)`, ...(stopped ? [`○ the walk stopped early — deeper squares may still be hiding`] : [])].join('\n') + '\n';
+    return [`(no squares found)`, ...(stopped ? [style('dim', `○ the walk stopped early — deeper squares may still be hiding`)] : [])].join('\n') + '\n';
   }
 
   const now = Date.now();
   const lines = ['squares'];
   for (const item of shownItems) {
-    lines.push(`${item.activities > 0 ? '●' : '○'} ${characterPreview(item.path)} · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`);
+    const glyph = item.activities > 0 ? '●' : style('dim', '○');
+    lines.push(`${glyph} ${characterPreview(item.path)}${style('dim', ` · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`)}`);
 
     const shownContext = item.context.slice(0, CONTEXT_PREVIEW_LINES);
     if (shownContext.length === 0) {
-      lines.push('  context · (none)');
+      lines.push(`  ${style('dim', 'context')} · (none)`);
     } else {
-      shownContext.forEach((line, index) => lines.push(`  ${index === 0 ? 'context' : '       '} · ${characterPreview(line)}`));
+      shownContext.forEach((line, index) => lines.push(`  ${index === 0 ? style('dim', 'context') : '       '} · ${characterPreview(line)}`));
       const hiddenContext = item.context.length - shownContext.length;
-      if (hiddenContext > 0) lines.push(`          · … ${hiddenContext} more ${hiddenContext === 1 ? 'line' : 'lines'}`);
+      if (hiddenContext > 0) lines.push(style('dim', `          · … ${hiddenContext} more ${hiddenContext === 1 ? 'line' : 'lines'}`));
     }
 
     const shownParticipants = item.participants.slice(0, PARTICIPANT_PREVIEW_COUNT);
     const hiddenParticipants = item.participants.length - shownParticipants.length;
-    lines.push(`  participants · ${shownParticipants.length === 0 ? 'nobody' : shownParticipants.map((participant) => participantIdentity(characterPreview(participant))).join(' · ')}${hiddenParticipants > 0 ? ` · … ${hiddenParticipants} more` : ''}`);
+    const participantNames = shownParticipants.length === 0 ? 'nobody' : shownParticipants.map((participant) => participantIdentity(characterPreview(participant))).join(' · ');
+    lines.push(`  ${style('dim', 'participants')} · ${participantNames}${hiddenParticipants > 0 ? style('dim', ` · … ${hiddenParticipants} more`) : ''}`);
   }
   const hiddenItems = page.length - shownItems.length;
   if (hiddenItems > 0) {
     const cursor = shownItems.at(-1)?.path;
-    lines.push(stopped ? '  … more squares' : `  … ${hiddenItems} more ${hiddenItems === 1 ? 'square' : 'squares'}`);
+    lines.push(style('dim', stopped ? '  … more squares' : `  … ${hiddenItems} more ${hiddenItems === 1 ? 'square' : 'squares'}`));
     if (cursor !== undefined) lines.push(`square list --depth ${depth} --limit ${limit} --after ${quoteShell(cursor)}`);
   }
-  if (stopped) lines.push(`○ the walk stopped early — deeper squares may still be hiding`);
+  if (stopped) lines.push(style('dim', `○ the walk stopped early — deeper squares may still be hiding`));
   return lines.join('\n') + '\n';
 }
 

@@ -23,6 +23,7 @@ import { Square } from './square-wiring.js';
 import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
+import { style } from './tty-style.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { createDefaultWakeTransport } from './notifications.js';
 
@@ -125,8 +126,8 @@ export async function cmdActivity(
         const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
         const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
         const hint = expressHintLine(ownActCount);
-        const confirmation = `● your activity lands — #${ownActCount} · ${landed.activity.id}`;
-        const withHint = hint ? `${confirmation}\n${hint}` : confirmation;
+        const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}`)}`;
+        const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
         process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
         return;
       } catch (error) {

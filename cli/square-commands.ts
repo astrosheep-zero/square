@@ -33,6 +33,7 @@ import { closeOpenSquare } from '../open-square.js';
 import { openParticipant, Square } from '../square-wiring.js';
 import { entryPresentation, eventPresentation } from '../views.js';
 import { createDefaultWakeTransport } from '../notifications.js';
+import { style } from '../tty-style.js';
 import type { Participant } from '../square-facade.js';
 
 import {
@@ -233,8 +234,8 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         '',
         "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
         ...(reconnect || scene === '' ? [] : ['', scene]),
-        ...(isRejoin || contextText === '' ? [] : ['', 'context', contextText]),
-        ...(isRejoin || activities === '' ? [] : ['', 'recent activity', activities]),
+        ...(isRejoin || contextText === '' ? [] : ['', style('dim', 'context'), contextText]),
+        ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
         ...fallback,
       ].join('\n');
       return withPathOutput(squarePath, output, { participantCount: after.participantCount });
