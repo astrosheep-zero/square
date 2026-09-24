@@ -8,6 +8,7 @@ import {
   SLEEP_MS,
   STALE_MS,
   WATCH_HEARTBEAT_MS,
+  inSquareCount,
   nowMs,
 } from './runtime.js';
 import { openSquare } from './square-file-adapter.js';
@@ -23,6 +24,7 @@ import {
   renderWatchOutput,
   renderWatchReplaced,
   renderWatchStatus,
+  formatRefusal,
   participantCommandPrefix,
   joinRecoveryCommand,
   participantsRecoveryCommand,
@@ -214,17 +216,28 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions)
   }
 }
 
+async function countParticipants(square: OpenSquare): Promise<number | undefined> {
+  try {
+    return inSquareCount((await square.artifact.read()).state);
+  } catch {
+    return undefined;
+  }
+}
+
 /** `false` is reserved for a quiet --now; idle completion preserves its existing sweep boundary. */
 export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions): Promise<boolean | undefined> {
   let square: OpenSquare;
+  let participantCount: number | undefined;
   try {
     square = await openSquare(squarePath, { clock: nowMs });
+    participantCount = inSquareCount((await square.artifact.read()).state);
     name = (await resolveParticipant(square, name)).name;
   } catch (err) {
     if (isSquareError(err)) {
-      process.stderr.write(err.message + '\n');
+      const bodyLines = [err.message];
       // The caller's own name has never joined; only a join admits it.
-      if (/^Unknown participant/.test(err.message)) process.stderr.write(`${joinRecoveryCommand(squarePath, name)}\n`);
+      if (/^✕ .* has never stepped into/.test(err.message)) bodyLines.push(joinRecoveryCommand(squarePath, name));
+      process.stderr.write(formatRefusal(squarePath, bodyLines, participantCount === undefined ? {} : { participantCount }));
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
     throw err;
@@ -235,11 +248,13 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       opts = { ...opts, participants: await Promise.all(opts.participants.map(async (participant) => (await resolveParticipant(square, participant)).name)) };
     }
   } catch (err) {
+    const participantCount = await countParticipants(square);
     await closeOpenSquare(square).catch(() => undefined);
     if (isSquareError(err)) {
-      process.stderr.write(err.message + '\n');
+      const bodyLines = [err.message];
       // A filter target is unknown, not the caller; the roster is the useful next read.
-      if (/^(Unknown participant|Unknown mention target)/.test(err.message)) process.stderr.write(`${participantsRecoveryCommand(squarePath)}\n`);
+      if (/^✕ .*(has never stepped into|is not standing in this square)/.test(err.message)) bodyLines.push(participantsRecoveryCommand(squarePath));
+      process.stderr.write(formatRefusal(squarePath, bodyLines, participantCount === undefined ? {} : { participantCount }));
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
     throw err;

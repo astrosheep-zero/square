@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError, isSquareError, validateName } from './model.js';
 import {
   expressHintLine,
+  formatRefusal,
   renderActivityBlocked,
   renderActivityLimit,
   renderExpressNoWait,
@@ -14,7 +15,8 @@ import {
   joinRecoveryCommand,
   withPathOutput,
 } from './presentation.js';
-import { nowMs, SLEEP_MS } from './runtime.js';
+import { nowMs, inSquareCount, SLEEP_MS } from './runtime.js';
+import { unreadActivitySummaries } from './decisions.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
@@ -77,13 +79,14 @@ export async function cmdActivity(
   try {
     knownName = (await resolveParticipant(reader, name)).name;
   } catch (err) {
+    const participantCount = inSquareCount((await reader.artifact.read()).state);
     await closeOpenSquare(reader);
     if (isSquareError(err)) {
       if (err.code === 'unknown_participant' || err.code === 'invalid_args') {
         const draftPath = saveActivityDraft(squarePath, name, rawInput);
-        process.stderr.write(err.message + '\n');
-        process.stderr.write(`draft kept: ${draftPath}\n`);
-        if (/^Unknown participant/.test(err.message)) process.stderr.write(`${joinRecoveryCommand(squarePath, name)}\n`);
+        const bodyLines = [err.message, `· draft kept: ${draftPath}`];
+        if (/^✕ .* has never stepped into/.test(err.message)) bodyLines.push(joinRecoveryCommand(squarePath, name));
+        process.stderr.write(formatRefusal(squarePath, bodyLines, { participantCount }));
         process.exit(2);
       }
       process.stderr.write(err.message + '\n');
@@ -140,8 +143,8 @@ export async function cmdActivity(
             squarePath,
             name: knownName,
             forceCommand: opts.forceCommand,
-            activitySummaries: [],
-            unreadRoomChanges: [...pendingRoomChanges],
+            activitySummaries: unreadActivitySummaries(fresh.state, knownName, nowMs()),
+            unreadRoomChanges: [],
             draftPath,
             participantCount: headerCount,
             held,

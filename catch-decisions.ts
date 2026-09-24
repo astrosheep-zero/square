@@ -32,7 +32,7 @@ function resolveCatchName(state: SquareState, requestedName: string): string {
   validateName(requestedName);
   const known = resolveRosterName(state, requestedName);
   if (known === undefined) {
-    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(requestedName)}".`);
+    throw new SquareError('invalid_args', `✕ ${participantIdentity(requestedName)} has never stepped into this square`);
   }
   return known;
 }

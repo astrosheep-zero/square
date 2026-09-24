@@ -9,6 +9,7 @@ import {
   parseActivityId,
 } from '../model.js';
 import {
+  formatRefusal,
   participantCommandPrefix,
   participantIdentity,
   quoteShell,
@@ -175,14 +176,19 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const reconnect = before.joined && identity !== undefined && owner?.sessionId === identity.sessionId;
       const isRejoin = before.joined;
       if (isRejoin && !intent.kick && !reconnect) {
-        fail(
-          [
-            `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
-            `  · a same-named participant stands here — the name is taken`,
-            `  · --kick banishes the one standing there — the name becomes yours`,
-            `${participantCommandPrefix(squarePath, intent.name)} join --kick`,
-          ].join('\n')
+        process.stderr.write(
+          formatRefusal(
+            squarePath,
+            [
+              `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
+              `  · a same-named participant stands here — the name is taken`,
+              `  · --kick banishes the one standing there — the name becomes yours`,
+              `${participantCommandPrefix(squarePath, intent.name)} join --kick`,
+            ],
+            { participantCount: before.participantCount }
+          )
         );
+        process.exit(2);
       }
       const takeoverNeeded = isRejoin && intent.kick;
       const oldBindings = takeoverNeeded ? await lookupParticipant(squarePath, intent.name) : [];

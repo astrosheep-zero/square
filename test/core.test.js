@@ -91,7 +91,7 @@ test('unknown participant errors identify only the requested name', () => {
 
   for (const attempt of cases) {
     assert.throws(attempt, (error) => {
-      assert.match(error.message, /Unknown (?:participant|mention target)/);
+      assert.match(error.message, /✕ @Eve (?:has never stepped into this square|is not standing in this square)/);
       assert.match(error.message, /@Eve/);
       assert.doesNotMatch(error.message, /Expected one of|@Alice/);
       return true;

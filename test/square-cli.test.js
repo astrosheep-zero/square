@@ -439,13 +439,14 @@ test('unknown participant errors end with the join recovery command', () => {
 
   const caught = run(withName(file, 'Stranger', ['catch', '--now']), { env: noDelivery });
   assert.equal(caught.status, 2);
-  assert.match(caught.stderr, /Unknown participant/);
+  assert.match(caught.stderr, /✕ @Stranger has never stepped into this square/);
+  assert.match(caught.stderr, /in the square/);
   assert.match(caught.stderr, /--as 'Stranger' join/);
 
   const expressed = run(withName(file, 'Stranger', ['express', '--no-mention', 'hello']), { env: noDelivery });
   assert.equal(expressed.status, 2);
-  assert.match(expressed.stderr, /Unknown participant/);
-  assert.match(expressed.stderr, /draft kept:/);
+  assert.match(expressed.stderr, /✕ @Stranger has never stepped into this square/);
+  assert.match(expressed.stderr, /· draft kept:/);
   assert.match(expressed.stderr, /--as 'Stranger' join/);
 });
 

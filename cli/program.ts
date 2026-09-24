@@ -1,19 +1,41 @@
 import { helpRequest } from '../help.js';
 import { isSquareError } from '../model.js';
-import { joinRecoveryCommand, participantsRecoveryCommand } from '../presentation.js';
+import { formatRefusal, joinRecoveryCommand, participantsRecoveryCommand } from '../presentation.js';
+import { inSquareCount, nowMs } from '../runtime.js';
+import { openSquare } from '../square-file-adapter.js';
+import { closeOpenSquare } from '../open-square.js';
 
 import { defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
-function handleSquareError(error: unknown, squarePath?: string, name?: string): never {
+async function participantCountFor(squarePath: string): Promise<number | undefined> {
+  try {
+    const square = await openSquare(squarePath, { clock: nowMs });
+    try {
+      return inSquareCount((await square.artifact.read()).state);
+    } finally {
+      await closeOpenSquare(square);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleSquareError(error: unknown, squarePath?: string, name?: string): Promise<never> {
   if (isSquareError(error)) {
-    process.stderr.write(`${error.message}\n`);
-    if (squarePath !== undefined && /^Unknown participant/.test(error.message)) {
+    const existing = [error.message];
+    if (squarePath !== undefined && /^✕ .* has never stepped into/.test(error.message)) {
       // The caller's name has never joined this square; only a join admits it.
-      if (name !== undefined) process.stderr.write(`${joinRecoveryCommand(squarePath, name)}\n`);
-      else process.stderr.write(`${participantsRecoveryCommand(squarePath)}\n`);
-    } else if (squarePath !== undefined && /^Unknown mention target/.test(error.message)) {
-      process.stderr.write(`${participantsRecoveryCommand(squarePath)}\n`);
+      if (name !== undefined) existing.push(joinRecoveryCommand(squarePath, name));
+      else existing.push(participantsRecoveryCommand(squarePath));
+    } else if (squarePath !== undefined && /^✕ .* is not standing in this square/.test(error.message)) {
+      existing.push(participantsRecoveryCommand(squarePath));
+    }
+    if (squarePath === undefined) {
+      process.stderr.write(`${existing.join('\n')}\n`);
+    } else {
+      const participantCount = await participantCountFor(squarePath);
+      process.stderr.write(formatRefusal(squarePath, existing, participantCount === undefined ? {} : { participantCount }));
     }
     process.exit(error.code === 'not_found' ? 1 : 2);
   }
@@ -45,6 +67,6 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
     }
     await executeRegisteredCommand(command, parsed.args.slice(1), defaultContext(command, parsed.squarePath, parsed.name));
   } catch (error) {
-    handleSquareError(error, squarePath, requestedName);
+    await handleSquareError(error, squarePath, requestedName);
   }
 }

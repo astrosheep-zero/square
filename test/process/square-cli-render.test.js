@@ -291,7 +291,8 @@ test('unknown participant errors stay bounded and point to the roster', async ()
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
   assert.equal(expressed.status, 2);
-  assert.match(expressed.stderr, /Unknown mention target @Eve/);
+  assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
+  assert.match(expressed.stderr, /in the square/);
   assert.doesNotMatch(expressed.stderr, /Expected one of|@Alice/);
   assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
 });
@@ -828,7 +829,9 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const bob = await square.join('Bob');
     await bob.express('peer @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' }), blockedFile, 'Alice', 'blocked body @Bob\n', "express --force --mention 'Bob' -");
+  const blocked = run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' });
+  assertDraftRecovery(blocked, blockedFile, 'Alice', 'blocked body @Bob\n', "express --force --mention 'Bob' -");
+  assert.match(blocked.stdout, /@Bob spoke — .*ago · "peer @Alice"/);
 });
 
 test('list bounds recursive discovery by default and accepts an explicit depth', async () => {

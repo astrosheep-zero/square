@@ -44,7 +44,7 @@ export function resolveKnownName(squareState: SquareState, name: string): string
   validateName(name);
   const known = resolveRosterName(squareState, name);
   if (known === undefined) {
-    throw new SquareError('invalid_args', `Unknown participant "${participantIdentity(name)}".`);
+    throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`);
   }
   return known;
 }
@@ -130,6 +130,42 @@ export type ActDecision =
 
 const UNREAD_PREVIEW_LIMIT = 3;
 
+/** The unread activity a viewer has not caught up to, grouped by speaker. */
+export function unreadActivitySummaries(squareState: SquareState, name: string, now: number): UnreadActivitySummary[] {
+  const delivery = deriveDeliveryModel(squareState);
+  const delta = actDelta(squareState.acts, delivery.cursorFor(name));
+  const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
+
+  const sayCountByActor = new Map<string, number>();
+  const unreadByParticipant = new Map<string, { count: number; latestAt: number; previews: UnreadActivityPreview[] }>();
+  for (const item of unreadPublic) {
+    if (item.kind === 'say') {
+      const key = item.actor.toLocaleLowerCase();
+      sayCountByActor.set(key, (sayCountByActor.get(key) ?? 0) + 1);
+    }
+    if (sameName(item.actor, name)) continue;
+    const actorKey = item.actor.toLocaleLowerCase();
+    const currentSummary = unreadByParticipant.get(item.actor);
+    unreadByParticipant.set(item.actor, {
+      count: (currentSummary?.count ?? 0) + 1,
+      latestAt: currentSummary === undefined ? item.at : Math.max(currentSummary.latestAt, item.at),
+      previews: [
+        ...(currentSummary?.previews ?? []),
+        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: delivery.perceive(item, name) },
+      ].slice(-UNREAD_PREVIEW_LIMIT),
+    });
+  }
+
+  return [...unreadByParticipant.entries()]
+    .map(([participant, summary]) => ({
+      name: participant,
+      count: summary.count,
+      latestActivityAgeMs: Math.max(0, now - summary.latestAt),
+      previews: summary.previews,
+    }))
+    .sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
+}
+
 export function decideAct(
   squareState: SquareState,
   input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number }
@@ -147,7 +183,7 @@ export function decideAct(
     validateName(requested);
     const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
     if (resolved === undefined) {
-      throw new SquareError('invalid_args', `Unknown mention target ${participantIdentity(requested)}.`);
+      throw new SquareError('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`);
     }
     if (!mentionNames.some((existing) => sameName(existing, resolved))) {
       if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {
@@ -191,35 +227,7 @@ export function decideAct(
   const delta = actDelta(squareState.acts, delivery.cursorFor(name));
   const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
   const unreadRoomChanges: ReturnType<typeof peerRoomChanges> = [];
-
-  const sayCountByActor = new Map<string, number>();
-  const unreadByParticipant = new Map<string, { count: number; latestAt: number; previews: UnreadActivityPreview[] }>();
-  for (const item of unreadPublic) {
-    if (item.kind === 'say') {
-      const key = item.actor.toLocaleLowerCase();
-      sayCountByActor.set(key, (sayCountByActor.get(key) ?? 0) + 1);
-    }
-    if (sameName(item.actor, name)) continue;
-    const actorKey = item.actor.toLocaleLowerCase();
-    const currentSummary = unreadByParticipant.get(item.actor);
-    unreadByParticipant.set(item.actor, {
-      count: (currentSummary?.count ?? 0) + 1,
-      latestAt: currentSummary === undefined ? item.at : Math.max(currentSummary.latestAt, item.at),
-      previews: [
-        ...(currentSummary?.previews ?? []),
-        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: delivery.perceive(item, name) },
-      ].slice(-UNREAD_PREVIEW_LIMIT),
-    });
-  }
-
-  const activitySummaries = [...unreadByParticipant.entries()]
-    .map(([participant, summary]) => ({
-      name: participant,
-      count: summary.count,
-      latestActivityAgeMs: Math.max(0, now - summary.latestAt),
-      previews: summary.previews,
-    }))
-    .sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
+  const activitySummaries = unreadActivitySummaries(squareState, name, now);
 
   const latestActivityAgeMs = activitySummaries[0]?.latestActivityAgeMs;
   const hasUnread = unreadPublic.length > 0;

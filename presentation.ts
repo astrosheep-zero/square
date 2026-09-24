@@ -82,6 +82,18 @@ export function withPathOutput(squarePath: string, body = '', opts: HeaderOption
   return [headerLine(squarePath, opts), ...(body === '' ? [] : ['', body])].join('\n') + '\n';
 }
 
+/** The same header/blank/body layout as withPathOutput, for refusal bodies written to stderr. */
+export function formatRefusal(
+  squarePath: string,
+  bodyLines: string[],
+  opts: { participantCount?: number; held?: boolean } = {}
+): string {
+  const body = bodyLines.join('\n');
+  // A refusal with no known count stays bare rather than claiming "0 in the square".
+  if (opts.participantCount === undefined) return body === '' ? '' : `${body}\n`;
+  return withPathOutput(squarePath, body, opts);
+}
+
 export function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
