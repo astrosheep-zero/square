@@ -148,7 +148,7 @@ test('attention body is complete up to the preview boundary', () => {
   assert.equal(previewAttentionBody('x'.repeat(201)), `${'x'.repeat(200)}…`);
 });
 
-test('clipped attention carries its read-it-all command on a bare line inside the fence', () => {
+test('clipped attention ends with a labeled caption and a bare read-it-all command', () => {
   const body = 'x'.repeat(250);
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body });
   assert.equal(rendered, [
@@ -157,10 +157,9 @@ test('clipped attention carries its read-it-all command on a bare line inside th
     '● Alice rang the bell for Bob',
     '',
     `${'x'.repeat(200)}…`,
-    '',
+    '```',
     '· clipped — read it all:',
     `square --location '/tmp/a.square' --as 'Bob' catch --id act/12`,
-    '```',
   ].join('\n'));
 });
 
@@ -169,13 +168,14 @@ test('unclipped attention has no continuation command', () => {
   assert.doesNotMatch(rendered, /catch --id/);
 });
 
-test('attention fence grows past a backtick run in the quoted command path', () => {
+test('a backtick run in the command path stays outside the fence', () => {
   const body = 'x'.repeat(201);
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a```b.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body });
   const lines = rendered.split('\n');
-  assert.equal(lines[0], '````square-activity');
-  assert.equal(lines.at(-1), '````');
-  assert.ok(lines.includes(`square --location '/tmp/a\`\`\`b.square' --as 'Bob' catch --id act/12`));
+  assert.equal(lines[0], '```square-activity');
+  assert.equal(lines[5], '```');
+  assert.equal(lines[6], '· clipped — read it all:');
+  assert.equal(lines[7], `square --location '/tmp/a\`\`\`b.square' --as 'Bob' catch --id act/12`);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', () => {
