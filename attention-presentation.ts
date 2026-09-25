@@ -35,20 +35,21 @@ export function renderAttentionPreview(attention: AttentionPreview): string {
   const route = attention.route === 'bell'
     ? `${attention.actor} rang the bell for ${attention.recipient}`
     : `${attention.actor} called ${attention.recipient}'s name`;
-  // The fence is what keeps the body from being re-rendered by Markdown. It grows past any
-  // backtick run in the body so a body containing a fence cannot break out of this one.
-  const fence = '`'.repeat(Math.max(3, longestBacktickRun(attention.body) + 1));
-  return [
-    `${fence}square-activity`,
+  const lines = [
     `· ${displayAttentionPath(attention.squarePath)} · ${formatActivityId(attention.actIndex)}`,
     `● ${route}`,
     '',
     previewAttentionBody(attention.body),
-    fence,
+    // A clipped body ends with the full command to read it all: the command keeps its own
+    // bare line inside the fence so it stays attached to the block it belongs to.
     ...(attentionBodyIsClipped(attention.body)
-      ? [`${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
+      ? ['', '· clipped — read it all:', `${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
       : []),
-  ].join('\n');
+  ];
+  // The fence is what keeps the body from being re-rendered by Markdown. It grows past any
+  // backtick run in the content so a body or quoted path containing a fence cannot break out.
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun(lines.join('\n')) + 1));
+  return [`${fence}square-activity`, ...lines, fence].join('\n');
 }
 
 function longestBacktickRun(value: string): number {
