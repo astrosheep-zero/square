@@ -1,10 +1,10 @@
-import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId, replayLandedAudiences, type ActivityId } from './square-core.js';
 import { deliveryDelta, directedPeerSays } from './activity-feed.js';
 import { coreActivities, coreParticipants, coreStatus, resolveKnownName } from './decisions.js';
 import { deriveDeliveryModel, isActivitySeen, type DeliveryModel, type PlannedNotification } from './delivery.js';
 import { SquareError, nameKey, type ActivitiesOptions, type ActivityObservation, type InboxNotification, type PublicAct, type RoomChangeAct, type SquareState, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
-import { countSays, currentHold, foldedState, freshWatchLease, inSquareCount, isCurrentlyJoined, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
+import { countSays, currentHold, foldedState, freshWatchLease, inSquareCount, isCurrentlyJoined, presenceAnchor, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
 import type { Activity, HistoryQuery, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 
 export interface ActivityPresentation { readonly name: string; readonly roster: readonly string[]; readonly pendingPublic: readonly PublicAct[]; readonly pendingRoomChanges: readonly RoomChangeAct[]; readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly held: boolean; readonly holdReason?: string; readonly ownActivityCount: number; readonly hardCap: number | null; }
@@ -54,9 +54,10 @@ function statuses(square: OpenSquare, state: Parameters<typeof coreStatus>[0]): 
 
 function anchors(state: Parameters<typeof coreStatus>[0], delivery: DeliveryModel): Record<number, string[]> {
   const result: Record<number, string[]> = {};
+  const landed = replayLandedAudiences(state.acts);
   for (const name of delivery.participants()) {
-    const activity = state.acts.findLast((candidate) => candidate.index <= delivery.cursorFor(name) && (candidate.kind === 'say' || candidate.kind === 'done'));
-    if (activity !== undefined) result[activity.index] = [...(result[activity.index] ?? []), name];
+    const anchor = presenceAnchor(state, name, landed);
+    if (anchor >= 0) result[anchor] = [...(result[anchor] ?? []), name];
   }
   return result;
 }

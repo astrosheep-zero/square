@@ -225,6 +225,40 @@ export function latestActIndex(acts: StoredAct[]): number {
   return acts.reduce((max, act) => Math.max(max, act.index), -1);
 }
 
+/**
+ * "Was here" is a claim of presence, so it rides on evidence: the participant's own acts
+ * and seen receipts after their latest join. Anything else — in particular acts merely
+ * not addressed to them — says nothing about where they actually were.
+ */
+export function presenceEvidenceCursor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
+  const recipient = landed.resolveParticipant(name) ?? name;
+  const boundary = landed.lastJoinIndex(recipient) ?? -1;
+  if (boundary < 0) return -1;
+  let evidence = boundary;
+  for (const act of squareState.acts) {
+    if (act.index <= boundary || act.index <= evidence || act.actor === undefined) continue;
+    if (sameName(act.actor, recipient)
+      || squareState.runtime.observations?.[recipient]?.[formatActivityId(act.index)]?.state === 'seen') {
+      evidence = act.index;
+    }
+  }
+  return evidence;
+}
+
+/** The last public act the participant was verifiably present for, or -1 when there is no evidence. */
+export function presenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
+  const recipient = landed.resolveParticipant(name) ?? name;
+  const boundary = landed.lastJoinIndex(recipient) ?? -1;
+  if (boundary < 0) return -1;
+  const evidence = presenceEvidenceCursor(squareState, recipient, landed);
+  for (let i = squareState.acts.length - 1; i >= 0; i--) {
+    const event = squareState.acts[i];
+    if (event.index <= boundary || event.index > evidence) continue;
+    if (event.kind === 'say' || event.kind === 'done') return event.index;
+  }
+  return -1;
+}
+
 export function freshWatchLease(squareState: SquareState, name: string, at = Date.now()) {
   const key = canonicalRuntimeName(squareState, name);
   const lease = watchLease(squareState, key);

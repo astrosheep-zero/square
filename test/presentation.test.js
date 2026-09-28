@@ -95,11 +95,12 @@ test('history footprints preserve singular and separate coordinates while groupi
   };
 
   const output = renderActivitiesView(state, state.acts, null, true, '/tmp/square', '', 'archive');
-  const alice = output.indexOf('→ @Alice was here');
-  const grouped = output.indexOf('→ @Bob, @Cara were here');
+  const grouped = output.indexOf('→ @Alice, @Bob were here');
+  const cara = output.indexOf('→ @Cara was here');
 
-  assert.ok(alice > output.indexOf('first @Bob'));
-  assert.ok(grouped > output.indexOf('second @Alice'));
-  assert.ok(alice < grouped);
-  assert.doesNotMatch(output, /→ @(?:Bob|Cara) was here/);
+  assert.ok(grouped > output.indexOf('first @Bob'));
+  assert.ok(cara > output.indexOf('second @Alice'));
+  assert.ok(grouped < cara);
+  assert.doesNotMatch(output, /→ @(?:Alice|Bob) was here/);
+  assert.doesNotMatch(output, /@Bob, @Cara were here/);
 });

@@ -402,8 +402,9 @@ test('ambient catch and history render full body to a mention target and presenc
   const ambient = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
   assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
-  assert.match(ambient.stdout, /→ @Alice, @Bob, @Cara were here/);
+  assert.match(ambient.stdout, /→ @Alice, @Bob were here/);
   assert.doesNotMatch(ambient.stdout, /→ @(?:Alice|Bob|Cara) was here/);
+  assert.doesNotMatch(ambient.stdout, /Cara were here/);
 
   const archive = run(withPath(file, ['history', '--limit', '100', '--no-truncate']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(archive.status, 0, archive.stderr);
@@ -426,7 +427,7 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
 
-test('history groups every participant footprint at a shared projection anchor', async () => {
+test('history anchors footprints at the last evidence of presence', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
     await square.join('Bob');
@@ -439,8 +440,9 @@ test('history groups every participant footprint at a shared projection anchor',
 
   const history = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(history.status, 0, history.stderr);
-  assert.match(history.stdout, /→ @Alice, @Bob, @Cara were here/);
+  assert.match(history.stdout, /→ @Alice, @Bob were here/);
   assert.doesNotMatch(history.stdout, /→ @(?:Alice|Bob|Cara) was here/);
+  assert.doesNotMatch(history.stdout, /Cara were here/);
 });
 
 test('presence rendering omits a body when a bare say has no visible mention target', async () => {

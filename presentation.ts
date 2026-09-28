@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
+import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, replayLandedAudiences, type LandedAudienceReplay, type Perception } from './square-core.js';
 import { perceiveActivity } from './delivery.js';
-import { actId, publicActs, readCursor, rosterNames, sayNumberFor } from './runtime.js';
+import { actId, presenceAnchor, publicActs, rosterNames, sayNumberFor } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
@@ -415,15 +415,8 @@ export function renderPublicTail(squareState: SquareState, events: StoredAct[], 
     .join('\n\n');
 }
 
-function lastPresenceAnchor(squareState: SquareState, name: string): number {
-  const cursor = readCursor(squareState, name);
-  for (let i = squareState.acts.length - 1; i >= 0; i--) {
-    const event = squareState.acts[i];
-    const index = event.index;
-    if (index > cursor) continue;
-    if (event.kind === 'say' || event.kind === 'done') return index;
-  }
-  return -1;
+function lastPresenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay): number {
+  return presenceAnchor(squareState, name, landed);
 }
 
 export function renderPresenceAnchor(names: readonly string[]): string {
@@ -448,8 +441,9 @@ export function renderActivitiesView(
   const previewLen = noTruncate ? undefined : BODY_PREVIEW_LENGTH;
 
   const markers = new Map<number, string[]>();
+  const landed = replayLandedAudiences(squareState.acts);
   for (const participant of rosterNames(squareState)) {
-    const anchor = lastPresenceAnchor(squareState, participant);
+    const anchor = lastPresenceAnchor(squareState, participant, landed);
     if (anchor >= 0) markers.set(anchor, [...(markers.get(anchor) ?? []), participant]);
   }
 
