@@ -48,8 +48,9 @@ test('status stays compact and focuses on the current square', async () => {
 
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '22000' } });
   assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /1 active · 1 done · cap 100 each · throttle none/);
-  assert.match(status.stdout, /@Alice · 13 activities/);
+  assert.match(status.stdout, /1 here · 1 done · cap 100 each · throttle none/);
+  assert.match(status.stdout, /● @Alice · just now/);
+  assert.doesNotMatch(status.stdout, /13 activities/);
   assert.doesNotMatch(status.stdout, /Bob/);
   assert.doesNotMatch(status.stdout, /─/);
 });
@@ -70,7 +71,7 @@ test('status previews ten active participants and links to the complete roster',
   const participantRows = around.split('\n').filter((line) => /^  [◎●○] @/.test(line));
   assert.equal(participantRows.length, 10);
   assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) ·/)?.[1]), peers.slice(2).reverse());
-  assert.match(status.stdout, /^  ○ … 3 more participants$/m);
+  assert.match(status.stdout, /^  ○ … 3 more here$/m);
   assert.ok(status.stdout.includes(`square --location '${file}' participants --limit 13\n`));
   assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
 
@@ -80,6 +81,47 @@ test('status previews ten active participants and links to the complete roster',
   assert.match(participants.stdout, /Peer01/);
   assert.match(participants.stdout, /Peer12/);
   assert.doesNotMatch(participants.stdout, /@Peer/);
+});
+
+test('status separates here from lingering and keeps the roster honest', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Ghost1');
+    await square.join('Ghost2');
+  }, { hardCap: 100 });
+
+  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: String(40 * 60 * 1000) } });
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /0 here · 2 lingering · 0 done/);
+  assert.match(status.stdout, /^  ○ nobody here right now$/m);
+  assert.match(status.stdout, /^  ○ … 2 lingering$/m);
+  assert.doesNotMatch(status.stdout, /Ghost1 ·/);
+});
+
+test('status shows who stepped in after the latest public act', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.done('leaving');
+    await square.join('Alice');
+    await square.join('Bob');
+  }, { hardCap: 100 });
+
+  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '22000' } });
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /@Alice stepped out of the square — done/);
+  assert.match(status.stdout, /→ @Alice stepped back in · \d+s ago/);
+  assert.match(status.stdout, /→ @Bob stepped in · \d+s ago/);
+});
+
+test('participants stops crediting long-quiet speakers as active', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('old words', { force: true });
+  }, { hardCap: 100 });
+
+  const roster = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: String(40 * 60 * 1000) } });
+  assert.equal(roster.status, 0, roster.stderr);
+  assert.match(roster.stdout, /^  ○ Alice · active · 1 activity · \d+m ago$/m);
+  assert.doesNotMatch(roster.stdout, /● Alice/);
 });
 
 test('participants bound the roster without pagination', async () => {

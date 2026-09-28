@@ -41,6 +41,8 @@ import {
 import { CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT } from '../catch-decisions.js';
 
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
+/** A participant counts as here when their last sign of life sits inside this window. */
+const STATUS_HERE_WINDOW_MS = 30 * 60_000;
 const HISTORY_DEFAULT_LIMIT = 10;
 const HISTORY_MAX_LIMIT = 100;
 const PARTICIPANTS_DEFAULT_LIMIT = 20;
@@ -443,7 +445,8 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
       const now = nowMs();
       const participants = await participantsPresentation(square);
       const lines = participants.slice(0, intent.limit).map((participant) => {
-        const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 ? '●' : '○';
+        const recent = participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= STATUS_HERE_WINDOW_MS;
+        const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && recent ? '●' : '○';
         const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
         const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
         return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
@@ -478,30 +481,48 @@ export const statusCommand: CommandSpec<undefined, string> = {
       const presentation = await statusPresentation(square);
       const result = presentation.status;
     const active = result.participants.filter((participant) => participant.state === 'active');
-    const people = active.length === 0 ? ['  ○ nobody in the square'] : active.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map((participant) => {
-      const glyph = participant.presence === 'watching'
-        ? '◎'
-        : participant.activityCount > 0 ? '●' : '○';
-      const summary = participant.activityCount > 0
-        ? `${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${participant.lastActiveAt === undefined
-          ? 'just now'
-          : formatRelativeTime(participant.lastActiveAt, result.now)}`
-        : `quiet · ${participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, result.now)}`;
-      const showAttention = context.name === undefined || sameName(participant.name, context.name);
-      const attention = !showAttention
-        ? ''
-        : participant.pendingMentionCount > 0
-          ? `${participant.pendingMentionCount} ${participant.pendingMentionCount === 1 ? 'mention' : 'mentions'} waiting`
-          : participant.unreadActivityCount > 0
-            ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
-            : 'caught up';
-      return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` · ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
-    });
-    if (active.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
-      people.push(`  ○ … ${active.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more participants`);
-      people.push(`${result.participants.length <= PARTICIPANTS_MAX_LIMIT
-        ? participantsLimitCommand(squarePath, result.participants.length)
-        : `${commandPrefix(squarePath)} participants`}`);
+    const here = active.filter((participant) =>
+      participant.presence === 'watching'
+      || (participant.lastActiveAt !== undefined && result.now - participant.lastActiveAt <= STATUS_HERE_WINDOW_MS));
+    const lingering = active.length - here.length;
+    const orderedHere = [
+      ...here.filter((participant) => participant.presence === 'watching'),
+      ...here.filter((participant) => participant.presence !== 'watching'),
+    ];
+    const people: string[] = [];
+    if (active.length === 0) {
+      people.push('  ○ nobody in the square');
+    } else {
+      if (orderedHere.length === 0) people.push('  ○ nobody here right now');
+      people.push(...orderedHere.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map((participant) => {
+        const glyph = participant.presence === 'watching'
+          ? '◎'
+          : participant.activityCount > 0 ? '●' : '○';
+        const summary = participant.presence === 'watching'
+          ? 'catching'
+          : participant.activityCount > 0
+            ? formatRelativeTime(participant.lastActiveAt ?? result.now, result.now)
+            : `quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, result.now)}`;
+        const showAttention = context.name === undefined || sameName(participant.name, context.name);
+        const attention = !showAttention
+          ? ''
+          : participant.pendingMentionCount > 0
+            ? `${participant.pendingMentionCount} ${participant.pendingMentionCount === 1 ? 'mention' : 'mentions'} waiting`
+            : participant.unreadActivityCount > 0
+              ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
+              : 'caught up';
+        return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` · ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
+      }));
+      const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
+      if (orderedHere.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
+        people.push(`  ○ … ${orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more here`);
+      }
+      if (lingering > 0) people.push(`  ○ … ${lingering} lingering`);
+      if (unshown > 0) {
+        people.push(`${result.participants.length <= PARTICIPANTS_MAX_LIMIT
+          ? participantsLimitCommand(squarePath, result.participants.length)
+          : `${commandPrefix(squarePath)} participants`}`);
+      }
     }
     const cap = result.hardCap === null ? 'unlimited' : `${result.hardCap} each`;
     const holdTime = result.holdAt === undefined ? 'just now' : formatRelativeTime(result.holdAt, result.now);
@@ -521,11 +542,29 @@ export const statusCommand: CommandSpec<undefined, string> = {
         ? '  ○ no public activity yet'
         : '  · the latest words were meant for other ears']
       : [`  ${visible.replace(/\n/g, '\n  ')}`];
+    // Presence events after the latest public act: otherwise the roster can say someone is
+    // here while the latest line shows them leaving, with nothing to reconcile the two.
+    const latestIndex = result.latestAct?.index ?? -1;
+    const stepsIn = presentation.state.acts.filter((act): act is Extract<StoredAct, { kind: 'join' }> =>
+      act.kind === 'join' && act.index > latestIndex);
+    for (const act of stepsIn.slice(-3)) {
+      const rejoined = presentation.state.acts.some((other) =>
+        other.kind === 'done' && other.actor === act.actor && other.index < act.index);
+      latest.push(style('dim', `  → ${participantIdentity(act.actor)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(act.at, result.now)}`));
+    }
+    if (stepsIn.length > 3) latest.push(style('dim', `  → … ${stepsIn.length - 3} more stepped in`));
     if (visible.includes('more chars') && result.latestAct !== undefined) {
       latest.push(`${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }
+    const counts = [
+      `${here.length} here`,
+      ...(lingering > 0 ? [`${lingering} lingering`] : []),
+      `${result.doneCount} done`,
+      `cap ${cap}`,
+      `throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,
+    ].join(' · ');
     const output = [
-      style('dim', `${result.activeCount} active · ${result.doneCount} done · cap ${cap} · throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`),
+      style('dim', counts),
       ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
     ].join('\n');
     return withPathOutput(squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
