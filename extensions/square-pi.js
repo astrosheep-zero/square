@@ -40,8 +40,8 @@ export function summarizePendingForNotify(pending) {
     const verb = note.route === 'bell'
       ? 'rang the bell'
       : note.route === 'mention'
-        ? `called ${membership.name}'s name`
-        : `spoke within ${membership.name}'s earshot`;
+        ? `called your name (${membership.name})`
+        : `spoke within your earshot (${membership.name})`;
     const body = note.body.replace(/\s+/g, ' ').trim();
     const clipped = body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX).trimEnd()}…` : body;
     return `${note.actor} ${verb}${clipped ? ` — ${clipped}` : ''}`;

@@ -32,9 +32,11 @@ export function displayAttentionPath(squarePath: string): string {
 }
 
 export function renderAttentionPreview(attention: AttentionPreview): string {
+  // A boundary preview only ever reaches the recipient's own session, so the
+  // recipient is always "you"; the name follows in parens for recognition.
   const route = attention.route === 'bell'
-    ? `${attention.actor} rang the bell for ${attention.recipient}`
-    : `${attention.actor} called ${attention.recipient}'s name`;
+    ? `${attention.actor} rang the bell for you (${attention.recipient})`
+    : `${attention.actor} called your name (${attention.recipient})`;
   // The fence is what keeps the body from being re-rendered by Markdown. It grows past any
   // backtick run in the body so a body containing a fence cannot break out of this one.
   // Everything outside the fence is the system's voice, which participant bodies cannot fake.
