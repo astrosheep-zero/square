@@ -67,7 +67,7 @@ export async function openSquare(
   const cell = openSquareCell(squarePath, options.signal);
   try {
     await cell.read();
-    const artifact: SquareArtifactPort = { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
+    const artifact: SquareArtifactPort = { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
     return {
       artifact,
       clock: options.clock ?? Date.now,
@@ -121,7 +121,7 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
 }
 
 function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
-  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout) => cell.changed(since, timeout), close: () => cell.close() };
+  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
 }
 
 /** Wait for any bound artifact to change; delivery callers re-project after the edge. */
@@ -144,7 +144,7 @@ export async function waitForSquareChanges<T>(
   const squares: OpenSquare[] = [];
   try {
     for (const squarePath of [...new Set(squarePaths)]) {
-      try { squares.push(await openSquare(squarePath)); } catch { /* stale binding */ }
+      try { squares.push(await openSquare(squarePath, { signal })); } catch { /* stale binding */ }
     }
     if (squares.length === 0) {
       onArmed?.(false);
@@ -152,15 +152,17 @@ export async function waitForSquareChanges<T>(
     }
     const baselines = await Promise.all(squares.map(async (square) => ({
       square,
-      version: (await square.artifact.read()).version,
+      version: (await square.artifact.read(signal)).version,
     })));
+    if (signal?.aborted) return { status: 'expired' };
     const ready = await afterReady?.();
+    if (signal?.aborted) return { status: 'expired' };
     if (ready !== undefined) {
       onArmed?.(false);
       return { status: 'ready', value: ready };
     }
     const waits = baselines.map(async ({ square, version }) => {
-      const changed = await square.artifact.changed(version, timeoutMs).catch(() => false);
+      const changed = await square.artifact.changed(version, timeoutMs, signal).catch(() => false);
       if (changed) return true;
       throw new Error('square wait expired');
     });

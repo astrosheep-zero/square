@@ -75,6 +75,8 @@ function isBusy(error: unknown): boolean {
 }
 
 interface MemoryWaiter {
+  onAbort?: () => void;
+  signal?: AbortSignal;
   since: number;
   resolve: (changed: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -93,6 +95,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
       if (version <= waiter.since) continue;
       clearTimeout(waiter.timer);
       waiters.delete(waiter);
+      waiter.signal?.removeEventListener("abort", waiter.onAbort as () => void);
       waiter.resolve(true);
     }
   }
@@ -131,17 +134,23 @@ export function createMemoryCell(initial: SquareState): StateCell {
       if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
       return { state: cloneState(state), version };
     },
-    changed(sinceVersion, timeoutMs) {
+    changed(sinceVersion, timeoutMs, signal) {
       assertCellOpen(closed);
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("StateCell operation aborted"));
       if (version > sinceVersion) return Promise.resolve(true);
       if (timeoutMs <= 0) return Promise.resolve(false);
-      return new Promise<boolean>((resolve) => {
+      return new Promise<boolean>((resolve, reject) => {
+        if (signal?.aborted) { reject(signal.reason ?? new Error("StateCell operation aborted")); return; }
+        const abort = () => { waiters.delete(waiter); clearTimeout(waiter.timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("StateCell operation aborted")); };
         const waiter: MemoryWaiter = {
           since: sinceVersion,
           resolve,
-          timer: setTimeout(() => { waiters.delete(waiter); resolve(false); }, timeoutMs),
+          timer: setTimeout(() => { waiters.delete(waiter); signal?.removeEventListener("abort", abort); resolve(false); }, timeoutMs),
+          onAbort: abort,
+          signal,
         };
         waiters.add(waiter);
+        signal?.addEventListener("abort", abort, { once: true });
       });
     },
     async close() {
@@ -151,6 +160,7 @@ export function createMemoryCell(initial: SquareState): StateCell {
       for (const waiter of [...waiters]) {
         clearTimeout(waiter.timer);
         waiters.delete(waiter);
+        waiter.signal?.removeEventListener("abort", waiter.onAbort as () => void);
         waiter.resolve(false);
       }
     },
@@ -198,25 +208,27 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
       const snapshot = await readSquareSnapshot(await storagePath(), operationSignal(signal));
       return { state: cloneState(snapshot.state), version: snapshot.revision };
     },
-    async changed(sinceVersion, timeoutMs) {
+    async changed(sinceVersion, timeoutMs, signal) {
       assertCellOpen(closed);
       const deadline = Date.now() + Math.max(0, timeoutMs);
       while (!closed) {
         const remaining = deadline - Date.now();
         const timeout = AbortSignal.timeout(Math.max(1, remaining));
-        const readSignal = AbortSignal.any([cancel.signal, timeout]);
+        const readSignal = AbortSignal.any([cancel.signal, ...(signal === undefined ? [] : [signal]), timeout]);
         try {
           if ((await readSquareSnapshot(await storagePath(), readSignal)).revision > sinceVersion) return true;
         } catch (error) {
           if (closed || cancel.signal.aborted || timeout.aborted) return false;
+          if (signal?.aborted) throw signal.reason ?? new Error("StateCell operation aborted");
           if (!isBusy(error)) throw error;
         }
         const nextRemaining = deadline - Date.now();
         if (nextRemaining <= 0) return false;
         try {
-          await sleep(Math.min(25, nextRemaining), undefined, { signal: cancel.signal });
+          await sleep(Math.min(25, nextRemaining), undefined, { signal: AbortSignal.any([cancel.signal, ...(signal === undefined ? [] : [signal])]) });
         } catch (error) {
           if (closed || cancel.signal.aborted) return false;
+          if (signal?.aborted) throw signal.reason ?? new Error("StateCell operation aborted");
           throw error;
         }
       }

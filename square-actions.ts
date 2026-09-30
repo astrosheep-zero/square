@@ -4,9 +4,9 @@ import { isSquareError, nameKey, SquareError, validateName, type SquareState, ty
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
-import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
+import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, OperationControl, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
-import { claimSessionParticipant, claimSessionTakeover, readParticipantOwner, withOwnershipClaimLock } from './registry.js';
+import { claimSessionParticipant, claimSessionTakeover, releaseSessionParticipantClaim, readParticipantOwner, withOwnershipClaimLock } from './registry.js';
 import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
 import { applyWakeRouteToState, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, sessionCanEndParticipant } from './routes.js';
 
@@ -15,6 +15,8 @@ export interface OperationContext extends HostContext {
 }
 
 export type { OwnershipFenceOptions };
+
+function throwIfAborted(control?: OperationControl): void { if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted'); }
 
 function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
   if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);
@@ -30,10 +32,11 @@ function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): Per
   return { ...withoutBody, perception };
 }
 
-export async function catchUp(square: OperationContext, name: string, options: CatchOptions = {}, project?: (state: SquareState) => CatchProjection): Promise<CatchResult> {
+export async function catchUp(square: OperationContext, name: string, options: CatchOptions = {}, project?: (state: SquareState) => CatchProjection, control?: OperationControl): Promise<CatchResult> {
   const idle = options.idle ?? 0;
   if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Catch idle duration must be a non-negative number');
   const deadline = Date.now() + idle;
+    if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted');
   while (true) {
     if (!await assertLiveOwner(square, name)) {
       throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
@@ -41,7 +44,7 @@ export async function catchUp(square: OperationContext, name: string, options: C
     const attempt = await square.artifact.transact<{ version: number; decision: CatchDecision }>((state, version) => {
       const decision = decideCatch(state, name, options, square.clock(), project);
       return { ...(decision.changed ? { state } : {}), result: { version, decision } };
-    });
+    }, control?.signal);
     await ensureLocalPresence(square, name);
     await publishIdentityRoute(square, name);
     if (attempt.decision.delivered.length > 0 || idle === 0) {
@@ -60,9 +63,9 @@ export async function catchUp(square: OperationContext, name: string, options: C
     // unexpired, so only a real external change can move the artifact version. Establish the
     // wait baseline after those self-side effects; if the version moved anyway (own refresh or
     // a racing external commit), re-snapshot instead of waiting on a stale baseline.
-    const baseline = (await square.artifact.read()).version;
+    const baseline = (await square.artifact.read(control?.signal)).version;
     if (baseline !== attempt.version) continue;
-    if (!await square.artifact.changed(baseline, remaining)) {
+    if (!await square.artifact.changed(baseline, remaining, control?.signal)) {
       return { activities: [], consumedThrough: attempt.decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: true, remaining: 0 };
     }
   }
@@ -102,10 +105,11 @@ function parseRequiredActivityId(id: import('./square-core.js').ActivityId): num
   return index;
 }
 
-export async function join(square: OperationContext, name: string): Promise<{ readonly name: string; readonly activity: Activity | null }> {
+export async function join(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly activity: Activity | null }> {
   // Rejected validation must not perform an ownership claim.
+  throwIfAborted(control);
   validateName(name);
-  const preview = await square.artifact.read();
+  const preview = await square.artifact.read(control?.signal);
   const previewDecision = decideJoin(preview.state, name, square.clock());
   if (previewDecision.joinAct === undefined) {
     // An active artifact participant is idempotent only for its current session.
@@ -136,13 +140,19 @@ export async function join(square: OperationContext, name: string): Promise<{ re
     }
   }
   let epoch: number | undefined;
+  let ownershipClaim: import('./registry.js').OwnershipClaim;
   if (square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
-    const claim = await claimSessionParticipant(square.location, name, square.env ?? process.env);
+    const claim = await claimSessionParticipant(square.location, name, square.env ?? process.env, control?.signal);
+    ownershipClaim = claim;
+
     epoch = claim?.epoch;
   }
+  let committed: { readonly name: string; readonly stored: StoredAct | null };
+  try {
   const now = square.clock();
   const route = await identityRouteDraft(square, name);
-  const committed = await square.artifact.transact<{ name: string; stored: StoredAct | null }>((state) => {
+  throwIfAborted(control);
+  committed = await square.artifact.transact<{ name: string; stored: StoredAct | null }>((state) => {
     const decision = decideJoin(state, name, now);
     if (decision.joinAct === undefined) {
       return { result: { name: decision.joinedName, stored: null } };
@@ -150,17 +160,24 @@ export async function join(square: OperationContext, name: string): Promise<{ re
     if (square.location !== undefined && square.location !== 'memory') dropParticipantWakeRoutesFromState(state, square.location, decision.joinedName);
     if (route !== undefined) applyWakeRouteToState(state, route, now);
     return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
-  });
+  }, control?.signal);
+  } catch (error) {
+    await releaseSessionParticipantClaim(square.location!, name, square.env ?? process.env, ownershipClaim).catch(() => undefined);
+    throw error;
+  }
   await ensureLocalPresence(square, committed.name, epoch);
   await publishIdentityRoute(square, committed.name, epoch);
   return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
 /** End the standing participant and immediately let the caller reclaim the name. */
-export async function takeover(square: OperationContext, name: string, _oldSessionIds: readonly string[] = []): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly epoch?: number }> {
+export async function takeover(square: OperationContext, name: string, _oldSessionIds: readonly string[] = [], control?: OperationControl): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly epoch?: number }> {
   // Rejected validation must not perform an ownership claim.
+  throwIfAborted(control);
   validateName(name);
   const commitLifecycle = async (): Promise<{ name: string; stored: readonly StoredAct[] }> => {
+
+    throwIfAborted(control);
     const now = square.clock();
     const committed = await square.artifact.transact<{ name: string; stored: readonly StoredAct[] }>((state) => {
       const joinedName = resolveKnownName(state, name);
@@ -171,7 +188,7 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
       const storedJoin = committedActivity(storeActs(state, [decision.joinAct]), 'join');
       state.routes = (state.routes ?? []).filter((route) => nameKey(route.participant) !== nameKey(joinedName));
       return { state, result: { name: joinedName, stored: [storedDone, storedJoin] } };
-    });
+    }, control?.signal);
     return committed;
   };
   if (square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory') {
@@ -179,21 +196,23 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
     // Gate the ownership claim on the artifact's authoritative state: a takeover that cannot
     // commit its lifecycle (a name that never joined, or a standing participant that is no
     // longer joined) must not claim or remove presence. The refusals mirror the transaction.
-    const { state } = await square.artifact.read();
+    const { state } = await square.artifact.read(control?.signal);
     const joinedName = resolveKnownName(state, name); // invalid_args when the name never joined
     coreDone(state, joinedName, '', square.clock()); // already_done/not_joined when not standing
     const owner = await readParticipantOwner(square.location, name, env);
+    throwIfAborted(control);
     // The claim and the artifact lifecycle are one fenced critical section: a losing or refused
     // takeover never mutates the winner, and no second takeover can interleave mid-commit.
     const outcome = await claimSessionTakeover(square.location, name, env, {
       expectedEpoch: owner?.epoch ?? 0,
       expectedSession: owner?.sessionId ?? '',
     }, async (claim) => {
+      throwIfAborted(control);
       const committed = await commitLifecycle();
       await ensureLocalPresence(square, committed.name, claim.epoch);
       await publishIdentityRoute(square, committed.name, claim.epoch);
       return committed;
-    });
+    }, control?.signal);
     if (outcome.status === 'busy') throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
     return { name: outcome.result.name, activities: outcome.result.stored.map(exposeActivity), epoch: outcome.epoch };
   }
@@ -203,9 +222,11 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
   return { name: committed.name, activities: committed.stored.map(exposeActivity) };
 }
 
-export async function implicitJoin(square: OperationContext, name: string): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
+export async function implicitJoin(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
+  throwIfAborted(control);
   const now = square.clock();
   const route = await identityRouteDraft(square, name);
+  throwIfAborted(control);
   const committed = await square.artifact.transact<{ name: string; state: 'joined' | 'active' | 'done'; stored: StoredAct | null }>((state) => {
     const decision = decideImplicitJoin(state, name, now);
     if (decision.state === 'done') {
@@ -216,17 +237,19 @@ export async function implicitJoin(square: OperationContext, name: string): Prom
     if (square.location !== undefined && square.location !== 'memory') dropParticipantWakeRoutesFromState(state, square.location, decision.joinedName);
     if (route !== undefined) applyWakeRouteToState(state, { ...route, participant: decision.joinedName }, now);
     return { state, result: { name: decision.joinedName, state: decision.state, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
-  });
+  }, control?.signal);
   await ensureLocalPresence(square, committed.name);
   if (committed.state === 'done') await retireIdentityRoute(square, committed.name);
   else if (committed.stored !== null) await publishIdentityRoute(square, committed.name);
   return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
-export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}): Promise<ExpressResult> {
+export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}, control?: OperationControl): Promise<ExpressResult> {
+  if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted');
   if (!await assertLiveOwner(square, name)) {
     throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
   }
+  throwIfAborted(control);
   const now = square.clock();
   const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
   const committed = await square.artifact.transact((state) => {
@@ -244,7 +267,7 @@ export async function express(square: OperationContext, name: string, body: stri
     if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
     const stored = committedActivity(storeActs(state, [decision.act]), 'express');
     return { state, result: { stored } };
-  });
+  }, control?.signal);
   await ensureLocalPresence(square, name);
   await publishIdentityRoute(square, name);
   let delivery: import('./ports.js').DeliveryResult;
@@ -258,21 +281,22 @@ export async function express(square: OperationContext, name: string, body: stri
 
 export interface ListenerChangeResult { readonly activity: Activity | null }
 
-async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore', actor: string, target: string): Promise<ListenerChangeResult> {
+async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore', actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> {
+  throwIfAborted(control);
   const now = square.clock();
   const stored = await square.artifact.transact<StoredAct | null>((state) => {
     const act = verb === 'listen' ? coreListen(state, actor, target, now) : coreIgnore(state, actor, target, now);
     if (act === undefined) return { result: null };
     return { state, result: committedActivity(storeActs(state, [act]), verb) };
-  });
+  }, control?.signal);
   return { activity: stored === null ? null : exposeActivity(stored) };
 }
 
-export function listen(square: OperationContext, actor: string, target: string): Promise<ListenerChangeResult> { return landListenerChange(square, 'listen', actor, target); }
-export function ignore(square: OperationContext, actor: string, target: string): Promise<ListenerChangeResult> { return landListenerChange(square, 'ignore', actor, target); }
-export async function listening(square: OperationContext, actor: string): Promise<readonly string[]> { const { state } = await square.artifact.read(); return coreListening(state, actor); }
+export function listen(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> { return landListenerChange(square, 'listen', actor, target, control); }
+export function ignore(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> { return landListenerChange(square, 'ignore', actor, target, control); }
+export async function listening(square: OperationContext, actor: string, control?: OperationControl): Promise<readonly string[]> { const { state } = await square.artifact.read(control?.signal); return coreListening(state, actor); }
 
-async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = '', fence: OwnershipFenceOptions = {}): Promise<ExpressResult> {
+async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> {
   // Done completes ownership: the live-owner validation and the artifact commit share one
   // ownership critical section, so a takeover finalizing between validation and commit can never
   // be completed by a stale done — an old expected epoch refuses instead of appending.
@@ -280,28 +304,28 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
     if (verb === 'done' && !await assertLiveOwner(square, actor, fence.expectedEpoch)) {
       throw new SquareError('already_done', `✕ ${participantIdentity(actor)} already stands here — another session holds the name`);
     }
+
     const now = square.clock();
     return square.artifact.transact((state) => {
       const act = verb === 'done' ? coreDone(state, actor, body, now) : verb === 'hold' ? coreHold(state, actor, body, now) : coreResume(state, actor, now);
       return { state, result: committedActivity(storeActs(state, [act]), verb) };
-    });
+    }, control?.signal);
   };
   const fenced = verb === 'done' && square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory';
   const stored = fenced
-    ? await withOwnershipClaimLock(square.env ?? process.env, commit)
+    ? await withOwnershipClaimLock(square.env ?? process.env, commit, control?.signal)
     : await commit();
   if (verb === 'done') await retireIdentityRoute(square, actor, fence.expectedEpoch);
   return { activity: exposeActivity(stored) };
 }
 
-export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}): Promise<ExpressResult> {
-  return landCore(square, 'done', name, body, fence);
-}
+export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'done', name, body, fence, control); }
 
 /** SessionEnd retires the ended session's routes even when its presence row is gone. */
 export async function endOwnedSession(square: OperationContext, name: string, sessionId: string, expectedEpoch?: number): Promise<ExpressResult | null> {
   const location = square.location;
   const run = async () => {
+
     const now = square.clock();
     let currentSessionId: string | undefined;
     let ownerMatches = expectedEpoch === undefined;
@@ -332,5 +356,5 @@ export async function endOwnedSession(square: OperationContext, name: string, se
     : await run();
   return stored === null ? null : { activity: exposeActivity(stored) };
 }
-export function hold(square: OperationContext, name: string, reason = ''): Promise<ExpressResult> { return landCore(square, 'hold', name, reason); }
-export function resume(square: OperationContext, name: string): Promise<ExpressResult> { return landCore(square, 'resume', name); }
+export function hold(square: OperationContext, name: string, reason = '', control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'hold', name, reason, {}, control); }
+export function resume(square: OperationContext, name: string, control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'resume', name, '', {}, control); }

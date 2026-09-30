@@ -4,6 +4,6 @@ import type { SquareState } from './model.js';
 export interface StateCell {
   transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }, signal?: AbortSignal): Promise<R>;
   read(signal?: AbortSignal): Promise<{ state: SquareState; version: number }>;
-  changed(sinceVersion: number, timeoutMs: number): Promise<boolean>;
+  changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }

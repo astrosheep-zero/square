@@ -5,7 +5,7 @@ import { deriveDeliveryModel, isActivitySeen, type DeliveryModel, type PlannedNo
 import { SquareError, nameKey, type ActivitiesOptions, type ActivityObservation, type InboxNotification, type PublicAct, type RoomChangeAct, type SquareState, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { countSays, currentHold, foldedState, freshWatchLease, inSquareCount, isCurrentlyJoined, presenceAnchor, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
-import type { Activity, HistoryQuery, ParticipantStatus, SquareSnapshot } from './square-facade.js';
+import type { Activity, HistoryQuery, OperationControl, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 
 export interface ActivityPresentation { readonly name: string; readonly roster: readonly string[]; readonly pendingPublic: readonly PublicAct[]; readonly pendingRoomChanges: readonly RoomChangeAct[]; readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly held: boolean; readonly holdReason?: string; readonly ownActivityCount: number; readonly hardCap: number | null; }
 export interface EntryPresentation { readonly joined: boolean; readonly scene: string; readonly context: string; readonly joinContext: string; readonly recentActivities: readonly StoredAct[]; readonly state: SquareState; readonly sayNumbers: Readonly<Record<number, number>>; readonly participantCount: number; }
@@ -68,8 +68,8 @@ function sayNumbers(state: Parameters<typeof coreStatus>[0]): Record<number, num
   return result;
 }
 
-export async function history(square: OpenSquare, query: HistoryQuery = {}): Promise<Activity[]> { const { state } = await square.artifact.read(); return selectHistory(coreActivities(state, historyOptions(query)), query).map(expose); }
-export async function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}): Promise<Activity[]> { const { state } = await square.artifact.read(); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective)), effective).map(expose); }
+export async function history(square: OpenSquare, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); return selectHistory(coreActivities(state, historyOptions(query)), query).map(expose); }
+export async function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective)), effective).map(expose); }
 export async function resolveParticipant(square: OpenSquare, name: string): Promise<{ readonly name: string; readonly roster: readonly string[] }> { const { state } = await square.artifact.read(); return { name: resolveKnownName(state, name), roster: rosterNames(state) }; }
 export async function currentParticipant(square: OpenSquare, name: string): Promise<string | undefined> { const { state } = await square.artifact.read(); const known = resolveRosterName(state, name); return known !== undefined && isCurrentlyJoined(state.acts, known) ? known : undefined; }
 export async function participants(square: OpenSquare): Promise<ParticipantStatus[]> { const { state } = await square.artifact.read(); return statuses(square, state); }

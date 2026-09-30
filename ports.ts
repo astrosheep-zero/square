@@ -24,7 +24,7 @@ import type { HostLedgerPort } from './host-ledger.js';
 export interface SquareArtifactPort {
   read(signal?: AbortSignal): Promise<{ state: SquareState; version: number }>;
   transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }, signal?: AbortSignal): Promise<R>;
-  changed(sinceVersion: number, timeoutMs: number): Promise<boolean>;
+  changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
 

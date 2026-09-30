@@ -16,6 +16,7 @@ export type {
   ExpressOptions,
   ExpressResult,
   HistoryQuery,
+  OperationControl,
   ListenerChangeResult,
   OpenOptions,
   Participant,

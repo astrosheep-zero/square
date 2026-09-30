@@ -56,8 +56,8 @@ function presenceClaimLockPath(env: NodeJS.ProcessEnv): string {
 }
 
 /** Runs `fn` inside the ownership claim critical section, under the same lock as claims and finalize. */
-export async function withOwnershipClaimLock<T>(env: NodeJS.ProcessEnv, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(presenceClaimLockPath(env), PRESENCE_CLAIM_LOCK, fn);
+export async function withOwnershipClaimLock<T>(env: NodeJS.ProcessEnv, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, fn);
 }
 async function activeBindings(now: number, env: NodeJS.ProcessEnv): Promise<RegistryBinding[]> { return (await ledger(env).listPresence({ now, scopes: ['user', 'local'] })).map(toBinding).sort((a, b) => b.updatedAt - a.updatedAt); }
 async function writePresence(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions, done: boolean, scope: HostLedgerScope = 'local'): Promise<void> { if (!sessionId || !name || !squarePath) return; const env = options.env ?? process.env; const channel = options.channel ?? 'unknown'; const port = ledger(env, scope); const location = await canonicalSquarePath(squarePath); if (done) await port.removePresence({ location, participant: name, session: sessionId, channel }); else await port.ensurePresence({ location, participant: name, session: sessionId, channel, updatedAt: options.at ?? Date.now() }); }
@@ -75,7 +75,7 @@ export async function localParticipantName(squarePath: string, env: NodeJS.Proce
 export function squareAssignedParticipantName(env: NodeJS.ProcessEnv = process.env): string | undefined { return computeSquareAssignedParticipantName(env); }
 export type CurrentParticipantBinding = Readonly<{ created: boolean; sessionId: string }>;
 export type OwnershipClaim =
-  | { readonly status: 'acquired' | 'owned'; readonly sessionId: string; readonly epoch: number }
+  | { readonly status: 'acquired' | 'owned'; readonly record: PresenceWithEpoch; readonly sessionId: string; readonly epoch: number }
   | undefined;
 export type TakeoverClaimToken = { readonly sessionId: string; readonly epoch: number };
 export type TakeoverRunResult<T> =
@@ -103,9 +103,17 @@ export async function sessionOwnsParticipant(
   return expectedEpoch === undefined || owner.epoch === expectedEpoch;
 }
 
-export async function claimSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<OwnershipClaim> {
+
+export async function releaseSessionParticipantClaim(squarePath: string, name: string, env: NodeJS.ProcessEnv, claim: OwnershipClaim): Promise<void> {
+  if (claim?.status !== 'acquired') return;
+  const port = ledger(env);
+  await port.removePresenceIfUnchanged(claim.record, 'local');
+}
+
+export async function claimSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<OwnershipClaim> {
   const identity = localSessionIdentities(env)[0];
   if (identity === undefined) return undefined;
+  if (signal?.aborted) throw signal.reason ?? new Error('Operation aborted');
   const location = await canonicalSquarePath(squarePath);
   const result = await ledger(env).claimPresence({
     location,
@@ -114,11 +122,11 @@ export async function claimSessionParticipant(squarePath: string, name: string, 
     channel: identity.channel,
     updatedAt: Date.now(),
     epoch: 1,
-  } as PresenceWithEpoch, 'local');
+  } as PresenceWithEpoch, 'local', signal);
   if (result.status === 'busy') throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   if (result.status === 'degraded') throw result.error;
-  const epoch = presenceEpoch(result.record as PresenceWithEpoch) || (result.status === 'acquired' ? 1 : 0);
-  return { status: result.status, sessionId: identity.sessionId, epoch };
+  const record = result.record as PresenceWithEpoch;
+  return { status: result.status, record, sessionId: record.session, epoch: presenceEpoch(record) };
 }
 
 /**
@@ -136,11 +144,12 @@ export async function claimSessionTakeover<T>(
   env: NodeJS.ProcessEnv = process.env,
   opts: { readonly expectedEpoch?: number; readonly expectedSession?: string } = {},
   lifecycle: (claim: TakeoverClaimToken) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<TakeoverRunResult<T>> {
   const identity = localSessionIdentities(env)[0];
   if (identity === undefined) throw new SquareError('invalid_args', 'No local session identity for takeover');
   const location = await canonicalSquarePath(squarePath);
-  return withFileLock(presenceClaimLockPath(env), PRESENCE_CLAIM_LOCK, async () => {
+  return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, async () => {
     const port = ledger(env);
     const standing: Record<'user' | 'local', readonly PresenceWithEpoch[]> = {
       user: await port.listPresence({ location, participant: name, scopes: ['user'] }) as PresenceWithEpoch[],

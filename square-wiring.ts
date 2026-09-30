@@ -19,47 +19,47 @@ import { markBoundarySeen as recordBoundarySeen } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
-import type { Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import type { Participant, OperationControl, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { projectSessionBindings } from './square-projections.js';
 import { reconcileBinding as reconcileBindingOperation } from './delivery-operations.js';
 
 class ParticipantHandle implements Participant {
   constructor(readonly name: string, private readonly square: OpenSquare, private readonly context: OperationContext) {}
 
-  express(body: string, options?: ExpressOptions): Promise<ExpressResult> {
-    return express(this.context, this.name, body, options);
+  express(body: string, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult> {
+    return express(this.context, this.name, body, options, control);
   }
 
-  listen(target: string): Promise<ListenerChangeResult> {
-    return listen(this.context, this.name, target);
+  listen(target: string, control?: OperationControl): Promise<ListenerChangeResult> {
+    return listen(this.context, this.name, target, control);
   }
 
-  ignore(target: string): Promise<ListenerChangeResult> {
-    return ignore(this.context, this.name, target);
+  ignore(target: string, control?: OperationControl): Promise<ListenerChangeResult> {
+    return ignore(this.context, this.name, target, control);
   }
 
-  listening(): Promise<readonly string[]> {
-    return listening(this.context, this.name);
+  listening(control?: OperationControl): Promise<readonly string[]> {
+    return listening(this.context, this.name, control);
   }
 
-  catch(options?: CatchOptions): Promise<CatchResult> {
-    return catchUp(this.context, this.name, options);
+  catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult> {
+    return catchUp(this.context, this.name, options, undefined, control);
   }
 
-  history(query?: HistoryQuery): Promise<Activity[]> {
-    return participantHistory(this.square, this.name, query);
+  history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> {
+    return participantHistory(this.square, this.name, query, control);
   }
 
-  hold(reason?: string): Promise<ExpressResult> {
-    return hold(this.context, this.name, reason);
+  hold(reason?: string, control?: OperationControl): Promise<ExpressResult> {
+    return hold(this.context, this.name, reason, control);
   }
 
-  resume(): Promise<ExpressResult> {
-    return resume(this.context, this.name);
+  resume(control?: OperationControl): Promise<ExpressResult> {
+    return resume(this.context, this.name, control);
   }
 
-  done(body?: string): Promise<ExpressResult> {
-    return done(this.context, this.name, body);
+  done(body?: string, control?: OperationControl): Promise<ExpressResult> {
+    return done(this.context, this.name, body, {}, control);
   }
 }
 
@@ -81,23 +81,23 @@ export class Square {
     return new Square('memory', buildMemorySquare(input));
   }
 
-  async join(name: string): Promise<Participant> {
-    const joined = await join(this.context, name);
+  async join(name: string, control?: OperationControl): Promise<Participant> {
+    const joined = await join(this.context, name, control);
     return new ParticipantHandle(joined.name, this.square, this.context);
   }
 
-  async joinWithActivity(name: string): Promise<{ readonly participant: Participant; readonly activity: Activity | null }> {
-    const joined = await join(this.context, name);
+  async joinWithActivity(name: string, control?: OperationControl): Promise<{ readonly participant: Participant; readonly activity: Activity | null }> {
+    const joined = await join(this.context, name, control);
     return { participant: new ParticipantHandle(joined.name, this.square, this.context), activity: joined.activity };
   }
 
-  async takeover(name: string): Promise<Participant> {
-    const result = await takeover(this.context, name);
+  async takeover(name: string, control?: OperationControl): Promise<Participant> {
+    const result = await takeover(this.context, name, [], control);
     return new ParticipantHandle(result.name, this.square, this.context);
   }
 
-  async implicitJoin(name: string): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
-    const joined = await implicitJoin(this.context, name);
+  async implicitJoin(name: string, control?: OperationControl): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
+    const joined = await implicitJoin(this.context, name, control);
     return joined.state === 'done'
       ? { state: joined.state }
       : { state: joined.state, participant: new ParticipantHandle(joined.name, this.square, this.context) };
@@ -105,7 +105,7 @@ export class Square {
 
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
   snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
-  history(query?: HistoryQuery): Promise<Activity[]> { return history(this.square, query); }
+  history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return history(this.square, query, control); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
     if (this.square.hostLedger === undefined) return null;
     const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.PI_SESSION_ID, env.PASEO_AGENT_ID]
