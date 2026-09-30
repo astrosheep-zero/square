@@ -13,6 +13,7 @@ import {
   listen,
   listening,
   resume,
+  retireEndedSessionRoutes,
   type OperationContext,
 } from './square-actions.js';
 import { markBoundarySeen as recordBoundarySeen } from './presence.js';
@@ -21,7 +22,6 @@ import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 import type { Participant, OperationControl, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { projectSessionBindings } from './square-projections.js';
-import { reconcileBinding as reconcileBindingOperation } from './delivery-operations.js';
 
 class ParticipantHandle implements Participant {
   constructor(readonly name: string, private readonly square: OpenSquare, private readonly context: OperationContext) {}
@@ -115,15 +115,14 @@ export class Square {
       hostLedger: this.square.hostLedger!,
       location: this.square.location,
       sessionId,
-      scopes: ['user', 'local'],
     })))).flat();
     if (candidates.length !== 1) return null;
     const canonicalName = await currentParticipant(this.square, candidates[0].participant);
     return canonicalName === undefined ? null : new ParticipantHandle(canonicalName, this.square, this.context);
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
-  reconcileBinding() { return reconcileBindingOperation({ artifact: this.square.artifact, hostLedger: this.square.hostLedger!, location: this.location }); }
   endOwnedSession(name: string, sessionId: string, expectedEpoch?: number) { return endOwnedSession(this.context, name, sessionId, expectedEpoch); }
+  retireEndedSessionRoutes(sessionId: string): Promise<void> { return retireEndedSessionRoutes(this.context, sessionId); }
 }
 
 export function markBoundarySeen(squarePath: string, name: string, actIndexes: readonly number[], at?: number): Promise<void> {

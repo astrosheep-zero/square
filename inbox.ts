@@ -1,4 +1,5 @@
 import { type InboxMembership } from './model.js';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { waitForSquareChanges } from './square-file-adapter.js';
@@ -7,10 +8,9 @@ import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectPresentation, projectSessionBindings } from './square-projections.js';
 
 export function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
-  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const root = hostLedgerRoot(env);
   return createHostLedgerPort({
-    userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
-    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
+    rootPath: root,
   });
 }
 

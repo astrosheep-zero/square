@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -101,8 +102,8 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const ledgerRoot = process.env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(process.env.SQUARE_REGISTRY);
-  const hostLedger = createHostLedgerPort({ userPath: process.env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot, localPath: process.env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot });
+  const ledgerRoot = hostLedgerRoot(process.env);
+  const hostLedger = createHostLedgerPort({ rootPath: ledgerRoot });
   const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
   try {
     const participant = await square.join(name);

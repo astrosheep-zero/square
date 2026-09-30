@@ -13,7 +13,7 @@ import { openSquare } from '../dist/square-file-adapter.js';
 
 test('release preserves token authority and rejects late or tokenless terminal evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-fence-'));
-  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root });
+  const ledger = new FileHostLedgerPort({ rootPath: root});
   const claim = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'presentation' };
   try {
     const first = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 1 });
@@ -45,7 +45,7 @@ test('release preserves token authority and rejects late or tokenless terminal e
 test('evidence claims use a fresh lease clock at each acquisition', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-clock-'));
   let now = 100;
-  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root, now: () => now });
+  const ledger = new FileHostLedgerPort({ rootPath: root, now: () => now });
   const claim = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'presentation' };
   try {
     const first = await ledger.claimEvidence({ ...claim, leaseMs: 10 });
@@ -60,7 +60,7 @@ test('evidence claims use a fresh lease clock at each acquisition', async () => 
 });
 test('accepted wake evidence survives retention only while attention is pending', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-retention-'));
-  const ledger = new FileHostLedgerPort({ userPath: root, localPath: root, now: () => 10 * 86400000 });
+  const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 10 * 86400000 });
   const row = { location: path.join(root, 'SQUARE.square'), participant: 'Bob', session: 's', activity: 'act/1', kind: 'wake', outcome: 'accepted', at: 1, attemptN: 1 };
   try {
     const claim = await ledger.claimEvidence({ ...row, leaseMs: 10, claimToken: 'retention-test', now: 1 });
@@ -86,7 +86,7 @@ test('activity-scoped wake results ignore older pending attention without routes
   );
   state.runtime.nextActIndex = 5;
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   const square = await openSquare(location, { hostLedger: ledger });
   try {
     const result = await deliverPending({
@@ -98,44 +98,6 @@ test('activity-scoped wake results ignore older pending attention without routes
       now: 6,
     });
     assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
-  } finally {
-    await square.artifact.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('a failed candidate followed by an accepted candidate is accepted once for its attention', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attention-result-'));
-  const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
-  state.acts.push(
-    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
-  );
-  state.runtime.nextActIndex = 3;
-  await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync.native(location);
-  state.routes = [
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
-  ];
-  await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 }, 'user');
-  const square = await openSquare(location, { hostLedger: ledger });
-  let calls = 0;
-  try {
-    const result = await deliverPending({
-      artifact: square.artifact,
-      hostLedger: ledger,
-      transport: { attempt: async () => (++calls === 1 ? { outcome: 'failed' } : { outcome: 'accepted' }) },
-      location,
-      now: 10,
-    });
-    assert.deepEqual(result, { attempted: 2, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
-    assert.deepEqual((await ledger.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => attempt.outcome), ['failed', 'accepted']);
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -159,9 +121,9 @@ test('all not-capable candidates classify one attention and persist no attempts'
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
   ];
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 }, 'user');
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   try {
     const result = await deliverPending({
@@ -196,9 +158,9 @@ test('concurrent sessions serialize one attention to one transport call', { conc
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'paseo', kind: 'paseo', address: { agentId: 'b' }, updatedAt: 3 },
   ];
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 }, 'user');
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 });
   const left = await openSquare(location, { hostLedger: ledger });
   const right = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
@@ -233,9 +195,9 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
     { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'paseo', kind: 'paseo', address: { agentId: 'b' }, updatedAt: 3 },
   ];
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 20 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 }, 'user');
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   const transport = { attempt: async () => { calls += 1; return { outcome: 'accepted' }; } };
@@ -245,138 +207,6 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
     assert.equal(calls, 1);
     assert.equal(first.accepted, 1);
     assert.equal(second.accepted, 0);
-  } finally {
-    await square.artifact.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('unknown outcome stops fallback across sessions and route kinds', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-unknown-owner-'));
-  const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
-  state.acts.push(
-    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
-  );
-  state.runtime.nextActIndex = 3;
-  await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync.native(location);
-  state.routes = [
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
-  ];
-  await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 }, 'user');
-  const square = await openSquare(location, { hostLedger: ledger });
-  const calls = [];
-  try {
-    const result = await deliverPending({
-      artifact: square.artifact,
-      hostLedger: ledger,
-      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: calls.length === 1 ? 'unknown' : 'accepted', diagnostic: 'transport timeout' }; } },
-      location,
-      now: 10,
-    });
-    assert.deepEqual(calls, ['paseo']);
-    assert.deepEqual(result, { attempted: 1, accepted: 0, failed: 0, unknown: 1, notCapable: 0 });
-    assert.deepEqual((await ledger.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => [attempt.session, attempt.routeKind, attempt.outcome]), [['session-a', 'paseo', 'unknown']]);
-  } finally {
-    await square.artifact.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('route ledger read failure stays attention-local when a later route accepts', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-route-read-failure-'));
-  const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
-  state.acts.push(
-    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
-  );
-  state.runtime.nextActIndex = 3;
-  await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync.native(location);
-  state.routes = [
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
-  ];
-  await writeSquareFile(location, state);
-  const base = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 }, 'user');
-  let reads = 0;
-  const ledger = Object.create(base);
-  ledger.listWakeAttempts = async (input) => {
-    reads += 1;
-    if (reads === 3) throw new Error('wake attempt ledger unavailable');
-    return base.listWakeAttempts(input);
-  };
-  const square = await openSquare(location, { hostLedger: base });
-  const calls = [];
-  try {
-    const result = await deliverPending({
-      artifact: square.artifact,
-      hostLedger: ledger,
-      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: 'accepted' }; } },
-      location,
-      now: 10,
-    });
-    assert.deepEqual(calls, ['codex-queue']);
-    assert.deepEqual(result, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
-  } finally {
-    await square.artifact.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('recovered ambiguous dispatch stops every fallback route', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-ambiguous-owner-'));
-  const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
-  state.acts.push(
-    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
-  );
-  state.runtime.nextActIndex = 3;
-  await writeSquareFile(location, state);
-  const canonicalLocation = fs.realpathSync.native(location);
-  state.routes = [
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
-    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
-  ];
-  await writeSquareFile(location, state);
-  const base = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 }, 'user');
-  let claimCount = 0;
-  const ledger = Object.create(base);
-  ledger.claimWakeDispatch = async (input) => {
-    claimCount += 1;
-    if (claimCount === 1) return { type: 'ambiguous', lease: { leaseId: 'recovered-lease', expiresAt: 0, phase: 'dispatching', routeKind: 'paseo', attemptN: 1, session: 'session-a' } };
-    return base.claimWakeDispatch(input);
-  };
-  const square = await openSquare(location, { hostLedger: base });
-  const calls = [];
-  try {
-    const result = await deliverPending({
-      artifact: square.artifact,
-      hostLedger: ledger,
-      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: 'accepted' }; } },
-      location,
-      now: 10,
-    });
-    assert.deepEqual(calls, []);
-    assert.equal(result.attempted, 0);
-    assert.equal(result.accepted, 0);
-    assert.equal(result.unknown, 0);
-    assert.deepEqual((await base.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => [attempt.session, attempt.outcome, attempt.signature]), [['session-a', 'unknown', 'worker_interrupted_during_dispatch']]);
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -396,8 +226,8 @@ test('a local binding without a route still matches its artifact route', async (
   await writeSquareFile(location, state);
   state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'local-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'local-agent' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'local-agent' } }, updatedAt: 3 }, 'local');
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'local-agent' } }, updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   try {
@@ -423,8 +253,8 @@ test('attention caught after claim is not sent', async () => {
   await writeSquareFile(location, state);
   state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
-  const base = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 }, 'user');
+  const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
   let calls = 0;
   let artifactRef;
   const ledger = Object.create(base);
@@ -448,7 +278,7 @@ test('attention caught after claim is not sent', async () => {
 test('presentation claim is exclusive across concurrent executors', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-claim-'));
   const location = path.join(root, 'SQUARE.square');
-  const userPath = path.join(root, 'user-ledger');
+  const ledgerRoot = path.join(root, 'user-ledger');
   const state = await createSquareState({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -457,7 +287,7 @@ test('presentation claim is exclusive across concurrent executors', async () => 
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath, localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: ledgerRoot });
   const left = await openSquare(location, { hostLedger: ledger });
   const right = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
@@ -479,7 +309,7 @@ test('presentation claim is exclusive across concurrent executors', async () => 
 test('presentation evidence from an older session does not block a new binding', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-session-'));
   const location = path.join(root, 'SQUARE.square');
-  const userPath = path.join(root, 'user-ledger');
+  const ledgerRoot = path.join(root, 'user-ledger');
   const state = await createSquareState({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -488,7 +318,7 @@ test('presentation evidence from an older session does not block a new binding',
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath, localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: ledgerRoot });
   await ledger.appendEvidence({ location, participant: 'Bob', session: 'old-session', activity: 'act/2', kind: 'presentation', outcome: 'presented', at: 4, claimToken: 'old-test' });
   const square = await openSquare(location, { hostLedger: ledger });
   try {
@@ -513,7 +343,7 @@ test('presentation evidence from an older session does not block a new binding',
 test('unknown wake evidence remains retryable in the same session', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-claim-'));
   const location = path.join(root, 'SQUARE.square');
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   try {
     const first = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 1 });
     assert.equal(first.status, 'acquired');
@@ -528,7 +358,7 @@ test('unknown wake evidence remains retryable in the same session', async () => 
 test('expired wake dispatching claim is reclaimed after a crash', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-lease-'));
   const location = path.join(root, 'SQUARE.square');
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   try {
     const first = await ledger.claimEvidence({ location, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', leaseMs: 10, now: 100 });
     assert.equal(first.status, 'acquired');
@@ -548,7 +378,7 @@ test('an old wake lease cannot release a replacement lease', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-dispatch-lease-'));
   const location = path.join(root, 'SQUARE.square');
   const attention = { squarePath: location, recipient: 'Bob', actIndex: 2 };
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   try {
     assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-a', leaseMs: 10, session: 'wake-session', at: 100 }), { type: 'acquired', leaseId: 'lease-a' });
     assert.deepEqual(await ledger.claimWakeDispatch({ attention, leaseId: 'lease-b', leaseMs: 10, session: 'wake-session', at: 111 }), { type: 'acquired', leaseId: 'lease-b' });
@@ -564,7 +394,7 @@ test('an old wake lease cannot release a replacement lease', async () => {
 test('expired presentation dispatching claim is reclaimed while presented is terminal', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-lease-'));
   const location = path.join(root, 'SQUARE.square');
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   try {
     const first = await ledger.claimEvidence({ location, participant: 'Bob', session: 'presentation-session', activity: 'act/2', kind: 'presentation', leaseMs: 10, now: 100 });
     assert.equal(first.status, 'acquired');
@@ -591,7 +421,7 @@ test('clipped presentation stays retryable and never records presented evidence'
   );
   state.runtime.nextActIndex = 3;
   await writeSquareFile(location, state);
-  const ledger = new FileHostLedgerPort({ userPath: path.join(root, 'user-ledger'), localPath: path.join(root, 'local') });
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
   const square = await openSquare(location, { hostLedger: ledger });
   try {
     let calls = 0;
@@ -630,6 +460,179 @@ test('producer commits artifact before a repository presence permission failure'
     assert.equal(result.activity?.kind, 'join');
     assert.equal(committedBeforeEnsure, true);
     assert.equal((await loadSquare(location)).acts.length, 1);
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed candidate followed by an accepted candidate is accepted once for its attention', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attention-result-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
+  );
+  state.runtime.nextActIndex = 3;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync.native(location);
+  state.routes = [
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
+  ];
+  await writeSquareFile(location, state);
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  const square = await openSquare(location, { hostLedger: ledger });
+  let calls = 0;
+  try {
+    const result = await deliverPending({
+      artifact: square.artifact,
+      hostLedger: ledger,
+      transport: { attempt: async () => (++calls === 1 ? { outcome: 'failed' } : { outcome: 'accepted' }) },
+      location,
+      now: 10,
+    });
+    assert.deepEqual(result, { attempted: 2, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
+    assert.deepEqual((await ledger.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => attempt.outcome), ['failed', 'accepted']);
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('unknown outcome stops fallback across sessions and route kinds', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-unknown-owner-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
+  );
+  state.runtime.nextActIndex = 3;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync.native(location);
+  state.routes = [
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
+  ];
+  await writeSquareFile(location, state);
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  const square = await openSquare(location, { hostLedger: ledger });
+  const calls = [];
+  try {
+    const result = await deliverPending({
+      artifact: square.artifact,
+      hostLedger: ledger,
+      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: calls.length === 1 ? 'unknown' : 'accepted', diagnostic: 'transport timeout' }; } },
+      location,
+      now: 10,
+    });
+    assert.deepEqual(calls, ['paseo']);
+    assert.deepEqual(result, { attempted: 1, accepted: 0, failed: 0, unknown: 1, notCapable: 0 });
+    assert.deepEqual((await ledger.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => [attempt.session, attempt.routeKind, attempt.outcome]), [['session-a', 'paseo', 'unknown']]);
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('route ledger read failure stays attention-local when a later route accepts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-route-read-failure-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
+  );
+  state.runtime.nextActIndex = 3;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync.native(location);
+  state.routes = [
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
+  ];
+  await writeSquareFile(location, state);
+  const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  let reads = 0;
+  const ledger = Object.create(base);
+  ledger.listWakeAttempts = async (input) => {
+    reads += 1;
+    if (reads === 3) throw new Error('wake attempt ledger unavailable');
+    return base.listWakeAttempts(input);
+  };
+  const square = await openSquare(location, { hostLedger: base });
+  const calls = [];
+  try {
+    const result = await deliverPending({
+      artifact: square.artifact,
+      hostLedger: ledger,
+      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: 'accepted' }; } },
+      location,
+      now: 10,
+    });
+    assert.deepEqual(calls, ['codex-queue']);
+    assert.deepEqual(result, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('recovered ambiguous dispatch stops every fallback route', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-ambiguous-owner-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 },
+  );
+  state.runtime.nextActIndex = 3;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync.native(location);
+  state.routes = [
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 },
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 3 },
+  ];
+  await writeSquareFile(location, state);
+  const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  let claimCount = 0;
+  const ledger = Object.create(base);
+  ledger.claimWakeDispatch = async (input) => {
+    claimCount += 1;
+    if (claimCount === 1) return { type: 'ambiguous', lease: { leaseId: 'recovered-lease', expiresAt: 0, phase: 'dispatching', routeKind: 'paseo', attemptN: 1, session: 'session-a' } };
+    return base.claimWakeDispatch(input);
+  };
+  const square = await openSquare(location, { hostLedger: base });
+  const calls = [];
+  try {
+    const result = await deliverPending({
+      artifact: square.artifact,
+      hostLedger: ledger,
+      transport: { attempt: async (request) => { calls.push(request.route.kind); return { outcome: 'accepted' }; } },
+      location,
+      now: 10,
+    });
+    assert.deepEqual(calls, []);
+    assert.equal(result.attempted, 0);
+    assert.equal(result.accepted, 0);
+    assert.equal(result.unknown, 0);
+    assert.deepEqual((await base.listWakeAttempts({ attention: { squarePath: location, participant: 'Bob', actIndex: 2 }, now: 10 })).map((attempt) => [attempt.session, attempt.outcome, attempt.signature]), [['session-a', 'unknown', 'worker_interrupted_during_dispatch']]);
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });

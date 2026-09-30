@@ -68,19 +68,19 @@ test("real host-ledger claim lock abort prevents queued ownership", async () => 
   const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-claim-cancel-"));
   const lock = path.join(root, "presence-claim.lock");
-  const port = new FileHostLedgerPort({ userPath: root, localPath: root });
+  const port = new FileHostLedgerPort({ rootPath: root });
   const input = { location: path.join(root, "SQUARE.square"), participant: "Queued", session: "session-queued", channel: "codex", updatedAt: Date.now() };
   const controller = new AbortController();
   const database = new DatabaseSync(lock);
   database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS __square_file_lock (id INTEGER PRIMARY KEY CHECK (id = 1));");
-  const claim = port.claimPresence(input, "local", controller.signal);
+  const claim = port.claimPresence(input, controller.signal);
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort(new Error("cancelled"));
   const result = await claim;
   assert.equal(result.status, "degraded");
   database.exec("ROLLBACK");
   database.close();
-  assert.deepEqual(await port.listPresence({ location: input.location, scopes: ["local"] }), []);
+  assert.deepEqual(await port.listPresence({ location: input.location }), []);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -122,12 +122,12 @@ test("owned claim cleanup never removes rightful ownership", async () => {
   const { claimSessionParticipant, releaseSessionParticipantClaim } = await import("../dist/registry.js");
   const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-owned-claim-"));
-  const env = { ...process.env, CODEX_THREAD_ID: "owned-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_USER: root, SQUARE_HOST_LEDGER_LOCAL: root };
+  const env = { ...process.env, CODEX_THREAD_ID: "owned-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_ROOT: root };
   const location = path.join(root, "SQUARE.square");
   const first = await claimSessionParticipant(location, "Owner", env);
   const second = await claimSessionParticipant(location, "Owner", env);
   await releaseSessionParticipantClaim(location, "Owner", env, second);
-  const rows = await new FileHostLedgerPort({ userPath: root, localPath: root }).listPresence({ location, participant: "Owner", scopes: ["local"] });
+  const rows = await new FileHostLedgerPort({ rootPath: root }).listPresence({ location, participant: "Owner" });
   assert.equal(rows.length, 1);
   assert.equal(first?.status, "acquired");
   assert.equal(second?.status, "owned");
@@ -157,7 +157,7 @@ test("same-session concurrent joins retain one rightful owner", async () => {
   const os = await import("node:os");
   const path = await import("node:path");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-concurrent-join-"));
-  const env = { ...process.env, CODEX_THREAD_ID: "same-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_USER: root, SQUARE_HOST_LEDGER_LOCAL: root };
+  const env = { ...process.env, CODEX_THREAD_ID: "same-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_ROOT: root };
   const square = await Square.build({ path: path.join(root, "SQUARE.square"), markdown: "context", env });
   await Promise.all([square.join("Same"), square.join("Same")]);
   const rows = await square.recognize(env);
@@ -174,15 +174,68 @@ test("conditional claim removal preserves a refreshed row", async () => {
   const path = await import("node:path");
   const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-conditional-remove-"));
-  const port = new FileHostLedgerPort({ userPath: root, localPath: root });
+  const port = new FileHostLedgerPort({ rootPath: root });
   const location = path.join(root, "SQUARE.square");
   const original = { location, participant: "Owner", session: "session", channel: "codex", updatedAt: Date.now(), epoch: 1 };
   const refreshed = { ...original, updatedAt: original.updatedAt + 1, epoch: 2 };
-  await port.ensurePresence(original, "local");
-  assert.equal(await port.removePresenceIfUnchanged(original, "local"), true);
-  await port.ensurePresence(refreshed, "local");
-  assert.equal(await port.removePresenceIfUnchanged(original, "local"), false);
-  assert.deepEqual((await port.listPresence({ location, participant: "Owner", scopes: ["local"] }))[0].updatedAt, refreshed.updatedAt);
-  assert.equal(await port.removePresenceIfUnchanged(refreshed, "local"), true);
+  await port.ensurePresence(original);
+  assert.equal(await port.removePresenceIfUnchanged(original), true);
+  await port.ensurePresence(refreshed);
+  assert.equal(await port.removePresenceIfUnchanged(original), false);
+  assert.deepEqual((await port.listPresence({ location, participant: "Owner" }))[0].updatedAt, refreshed.updatedAt);
+  assert.equal(await port.removePresenceIfUnchanged(refreshed), true);
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test("presence claim holds the file lock across its read so a concurrent ensure write survives", async () => {
+  const fsp = await import("node:fs/promises");
+  const fsSync = (await import("node:fs")).default;
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "square-claim-lost-update-"));
+  const port = new FileHostLedgerPort({ rootPath: root });
+  const location = path.join(root, "SQUARE.square");
+  const now = Date.now();
+  // The presence file must already exist so the claim reads a real snapshot rather than ENOENT.
+  await port.ensurePresence({ location: path.join(root, "OTHER.square"), participant: "Seed", session: "seed-session", channel: "codex", updatedAt: now });
+
+  const realReadFile = fsSync.promises.readFile;
+  let pauseResolve;
+  const paused = new Promise((resolve) => { pauseResolve = resolve; });
+  let capturedResolve;
+  const captured = new Promise((resolve) => { capturedResolve = resolve; });
+  let intercepted = false;
+  fsSync.promises.readFile = async (...args) => {
+    const result = await realReadFile(...args);
+    if (!intercepted && path.basename(String(args[0])) === "presence.ndjsonl") {
+      intercepted = true;
+      capturedResolve();
+      await paused;
+    }
+    return result;
+  };
+  try {
+    const claim = port.claimPresence({ location, participant: "Claimant", session: "claim-session", channel: "codex", updatedAt: now });
+    const reachedSnapshot = await Promise.race([
+      captured.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
+    ]);
+    assert.equal(reachedSnapshot, true, "claimPresence must read the presence snapshot");
+    const concurrent = port.ensurePresence({ location, participant: "Concurrent", session: "other-session", channel: "codex", updatedAt: now });
+    const settledWhileClaimReads = await Promise.race([
+      concurrent.then(() => true, () => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 250)),
+    ]);
+    assert.equal(settledWhileClaimReads, false, "claimPresence must hold the presence file lock across its read");
+    pauseResolve();
+    assert.equal((await claim).status, "acquired");
+    await concurrent;
+  } finally {
+    fsSync.promises.readFile = realReadFile;
+    pauseResolve();
+  }
+  const rows = await port.listPresence({ location });
+  assert.deepEqual(rows.map((row) => row.participant).sort(), ["Claimant", "Concurrent"]);
+  await fsp.rm(root, { recursive: true, force: true });
 });

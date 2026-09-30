@@ -1,51 +1,54 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 
-async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-ledger-ignore-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  execFileSync('git', ['init', '-q', root]);
-  const localPath = path.join(root, '.square', 'host-ledger');
-  const userPath = path.join(root, 'user-ledger');
-  const port = new FileHostLedgerPort({ localPath, userPath });
-  const record = { location: path.join(root, 'test.square'), participant: 'rei', session: 'test', channel: 'pi' };
-  return { root, localPath, userPath, port, record };
-}
-
-test('first presence claim ignores local and user ledger data, including locks', async (t) => {
-  const { root, localPath, userPath, port, record } = await fixture(t);
+test('single-root presence creates its ignore marker and claims atomically', async () => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'square-ledger-ignore-'));
+  const port = new FileHostLedgerPort({ rootPath: path.join(root, 'ledger') });
+  const record = { location: path.join(root, 'test.square'), participant: 'rei', session: 'test', channel: 'pi', updatedAt: Date.now() };
   assert.equal((await port.claimPresence(record)).status, 'acquired');
-  for (const directory of [localPath, userPath]) {
-    assert.equal(await fs.readFile(path.join(directory, '.gitignore'), 'utf8'), '*\n');
-    for (const name of await fs.readdir(directory)) {
-      execFileSync('git', ['check-ignore', '-q', path.join(directory, name)], { cwd: root });
-    }
-  }
-  assert.equal(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root, encoding: 'utf8' }), '');
-  await assert.rejects(fs.stat(path.join(root, '.gitignore')), { code: 'ENOENT' });
+  assert.equal((await port.claimPresence({ ...record, session: 'other' })).status, 'busy');
+  assert.equal(await fs.readFile(path.join(root, 'ledger', '.gitignore'), 'utf8'), '*\n');
 });
 
-test('existing ledger directories gain an ignore file; existing ignore files stay untouched', async (t) => {
-  const { localPath, port, record } = await fixture(t);
-  await fs.mkdir(localPath, { recursive: true });
-  await fs.writeFile(path.join(localPath, 'presence.ndjsonl'), '');
-  assert.equal((await port.ensurePresence(record)).status, 'ensured');
-  const ignore = path.join(localPath, '.gitignore');
-  assert.equal(await fs.readFile(ignore, 'utf8'), '*\n');
-  await fs.writeFile(ignore, '# user-owned\n*.ndjsonl\n');
-  assert.equal((await port.ensurePresence(record)).status, 'ensured');
-  assert.equal(await fs.readFile(ignore, 'utf8'), '# user-owned\n*.ndjsonl\n');
+test('existing single-root ignore files stay untouched', async () => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'square-ledger-ignore-'));
+  const ledgerRoot = path.join(root, 'ledger');
+  await fs.mkdir(ledgerRoot, { recursive: true });
+  await fs.writeFile(path.join(ledgerRoot, '.gitignore'), 'keep\n');
+  const port = new FileHostLedgerPort({ rootPath: ledgerRoot });
+  await port.ensurePresence({ location: path.join(root, 'test.square'), participant: 'rei', session: 'test', channel: 'pi', updatedAt: Date.now() });
+  assert.equal(await fs.readFile(path.join(ledgerRoot, '.gitignore'), 'utf8'), 'keep\n');
 });
 
-test('read-only ledger access does not create directories', async (t) => {
-  const { localPath, userPath, port } = await fixture(t);
+test('listing a missing single-root ledger is read-only', async () => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'square-ledger-ignore-'));
+  const ledgerRoot = path.join(root, 'ledger');
+  const port = new FileHostLedgerPort({ rootPath: ledgerRoot });
   assert.deepEqual(await port.listPresence(), []);
-  for (const directory of [localPath, userPath]) {
-    await assert.rejects(fs.stat(directory), { code: 'ENOENT' });
-  }
+  assert.equal(fsSync.existsSync(ledgerRoot), false);
+});
+
+test('aborting a queued presence claim does not acquire or write an owner', async () => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'square-ledger-abort-'));
+  const ledgerRoot = path.join(root, 'ledger');
+  const port = new FileHostLedgerPort({ rootPath: ledgerRoot });
+  const { withFileLock } = await import('../dist/file-lock.js');
+  const lockPath = path.join(ledgerRoot, 'presence-claim.lock');
+  const controller = new AbortController();
+  const record = { location: path.join(root, 'test.square'), participant: 'rei', session: 'queued', channel: 'pi', updatedAt: Date.now() };
+  const held = withFileLock(lockPath, { retryMs: 10 }, async () => {
+    const pending = port.claimPresence(record, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.status, 'degraded');
+    return result;
+  });
+  await held;
+  assert.equal(fsSync.existsSync(path.join(ledgerRoot, 'presence.ndjsonl')), false);
 });

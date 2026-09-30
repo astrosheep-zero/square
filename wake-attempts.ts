@@ -1,4 +1,5 @@
 import os from 'node:os';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 
 import { isWakeRouteKind, nameKey, type WakeRoute, type WakeRouteKind } from './model.js';
@@ -49,7 +50,7 @@ export type WakeDispatchClaim =
 const VALID_OUTCOMES = new Set<WakeOutcome>(['accepted', 'unknown', 'failed']);
 
 function ledger(env: NodeJS.ProcessEnv): HostLedgerPort {
-  return createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? path.dirname(wakeAttemptsPath(env)), readableScopes: ['user'], writableScope: 'user' });
+  return createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
 }
 
 export function wakeAttemptsPath(env: NodeJS.ProcessEnv = process.env): string {

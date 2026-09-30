@@ -31,10 +31,9 @@ export async function projectSessionBindings(input: {
   readonly hostLedger: HostLedgerPort;
   readonly sessionId: string;
   readonly location?: string;
-  readonly scopes?: readonly import('./host-ledger.js').HostLedgerScope[];
   readonly now?: number;
 }): Promise<readonly SessionBindingProjection[]> {
-  const rows = await input.hostLedger.listPresence({ location: input.location, session: input.sessionId, scopes: input.scopes ?? ['user', 'local'], now: input.now });
+  const rows = await input.hostLedger.listPresence({ location: input.location, session: input.sessionId, now: input.now });
   return rows.map(bindingProjection);
 }
 
@@ -50,7 +49,7 @@ export async function projectLocalParticipantBinding(input: {
   readonly sessionIds: readonly string[];
   readonly now?: number;
 }): Promise<SessionBindingProjection | undefined> {
-  const bindings = (await Promise.all(input.sessionIds.map((sessionId) => projectSessionBindings({ hostLedger: input.hostLedger, location: input.location, sessionId, scopes: ['user', 'local'], now: input.now })))).flat();
+  const bindings = (await Promise.all(input.sessionIds.map((sessionId) => projectSessionBindings({ hostLedger: input.hostLedger, location: input.location, sessionId, now: input.now })))).flat();
   return bindings.find((binding) => binding.participant.toLocaleLowerCase() === input.participant.toLocaleLowerCase());
 }
 

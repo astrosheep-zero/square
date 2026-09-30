@@ -193,7 +193,6 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
       hostLedger: createHostLedgerPort(),
       location: squarePath,
       sessionId,
-      scopes: ['user', 'local'],
     })))).flat();
     const names = new Set(bindings.map((binding) => binding.participant));
     name = names.size === 1 ? [...names][0] : undefined;

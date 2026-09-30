@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
@@ -16,12 +15,11 @@ import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
-
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const env = {
-    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger'),
+    SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger'),
     SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
@@ -43,17 +41,16 @@ async function fixture() {
   await writeSquareFile(squarePath, squareState);
   return { root, squarePath, env };
 }
-
 function withRegistry(env, fn) {
   const previous = process.env.SQUARE_REGISTRY;
-  const previousLedger = process.env.SQUARE_HOST_LEDGER_USER;
+  const previousLedger = process.env.SQUARE_HOST_LEDGER_ROOT;
   process.env.SQUARE_REGISTRY = env.SQUARE_REGISTRY;
-  process.env.SQUARE_HOST_LEDGER_USER = env.SQUARE_HOST_LEDGER_USER;
+  process.env.SQUARE_HOST_LEDGER_ROOT = env.SQUARE_HOST_LEDGER_ROOT;
   const restore = () => {
     if (previous === undefined) delete process.env.SQUARE_REGISTRY;
     else process.env.SQUARE_REGISTRY = previous;
-    if (previousLedger === undefined) delete process.env.SQUARE_HOST_LEDGER_USER;
-    else process.env.SQUARE_HOST_LEDGER_USER = previousLedger;
+    if (previousLedger === undefined) delete process.env.SQUARE_HOST_LEDGER_ROOT;
+    else process.env.SQUARE_HOST_LEDGER_ROOT = previousLedger;
   };
   try {
     const result = fn();
@@ -65,7 +62,6 @@ function withRegistry(env, fn) {
     throw error;
   }
 }
-
 async function route(item, options = {}) {
   const agentId = options.agentId ?? 'bob-agent';
   const sessionId = options.sessionId ?? agentId;
@@ -81,14 +77,12 @@ async function route(item, options = {}) {
     kind: 'paseo',
     address: { agentId },
   }, { env: item.env, at: options.at });
-  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId } }, updatedAt: options.at ?? Date.now() }, 'user');
+  const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId } }, updatedAt: options.at ?? Date.now() });
 }
-
 function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
 }
-
 test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async () => {
   const item = await fixture();
   await route(item, { agentId: 'exact-agent' });
@@ -106,7 +100,6 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
   });
   const payload = '<system-reminder source="square">awareness</system-reminder>';
   const outcome = await adapter.dispatch(registered.address, payload, async () => true, 321);
-
   assert.deepEqual(outcome, { outcome: 'accepted' });
   assert.equal(boundary, true);
   assert.equal(sent.agentId, 'exact-agent');
@@ -119,7 +112,6 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
   assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('privileged sweep stops at its native hook deadline', async () => {
   const item = await fixture();
   try {
@@ -132,8 +124,8 @@ test('privileged sweep stops at its native hook deadline', async () => {
       kind: 'claude-native',
       address: { sessionId: 'deadline-session' },
     }, { env: item.env });
-    const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'deadline-session' } } }, 'user');
+    const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'deadline-session' } } });
     let timeoutMs;
     const hanging = {
       kind: 'claude-native',
@@ -151,7 +143,6 @@ test('privileged sweep stops at its native hook deadline', async () => {
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-
 test('Codex privileged hook sweep still delivers attention from an indexed live square', async () => {
   const item = await fixture();
   try {
@@ -162,7 +153,6 @@ test('Codex privileged hook sweep still delivers attention from an indexed live 
       calls += 1;
       return { outcome: 'accepted' };
     });
-
     await codexHookResponse(
       { session_id: 'observing-session', hook_event_name: 'PostToolUse', cwd: path.join(item.root, 'workspace') },
       () => [],
@@ -175,13 +165,11 @@ test('Codex privileged hook sweep still delivers attention from an indexed live 
       item.env,
       [accepted],
     );
-
     assert.equal(calls, 1);
   } finally {
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-
 test('PaseoAdapter does not wake a running agent', async () => {
   const item = await fixture();
   await route(item, { agentId: 'running-agent' });
@@ -192,14 +180,12 @@ test('PaseoAdapter does not wake a running agent', async () => {
     waitForBoundary: async () => { boundary = true; return true; },
     sendWake: () => { sent = true; },
   }).dispatch({ agentId: 'running-agent' }, '<system-reminder source="square">awareness</system-reminder>', async () => true);
-
   assert.equal(outcome.outcome, 'unavailable');
   assert.equal(outcome.signature, 'agent_not_idle');
   assert.equal(boundary, false);
   assert.equal(sent, false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('unavailable Paseo dispatch records its release reason for delivery diagnostics', async () => {
   const item = await fixture();
   try {
@@ -210,7 +196,6 @@ test('unavailable Paseo dispatch records its release reason for delivery diagnos
         discover: () => ({ agents: [{ id: 'busy-agent', name: 'Bob', status: 'running' }] }),
       })],
     }));
-
     assert.deepEqual(result, { attempted: 1, accepted: 0, failed: 1, unknown: 0, notCapable: 0 });
     const releases = await readWakeReleaseDiagnostics({
       attention: { squarePath: item.squarePath, actIndex: 2, recipient: 'Bob' },
@@ -222,7 +207,6 @@ test('unavailable Paseo dispatch records its release reason for delivery diagnos
     assert.equal(releases[0].signature, 'agent_not_idle');
     assert.equal(releases[0].diagnostic.phase, 'selection');
     assert.equal(releases[0].diagnostic.code, 'not_idle');
-
     const doctor = await doctorDeliveryHealth(item.squarePath, 5000, Date.now(), item.env);
     assert.match(doctor.join('\n'), /recent wake releases/);
     assert.match(doctor.join('\n'), /agent_not_idle/);
@@ -231,7 +215,6 @@ test('unavailable Paseo dispatch records its release reason for delivery diagnos
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-
 test('the notification worker records an accepted wake through the real Paseo adapter', async () => {
   const item = await fixture();
   await route(item, { agentId: 'integrated-agent' });
@@ -243,7 +226,6 @@ test('the notification worker records an accepted wake through the real Paseo ad
       sendWake: (request) => { sent = request; },
     })],
   }));
-
   assert.equal(sent.agentId, 'integrated-agent');
   assert.match(sent.prompt, /<system-reminder source="square" wake="paseo">/);
   assert.doesNotMatch(sent.prompt, /native adapter presented/);
@@ -255,11 +237,9 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('the notification worker uses an artifact Paseo route with a local binding', async () => {
   const item = await fixture();
   try {
-    item.env.SQUARE_HOST_LEDGER_LOCAL = path.join(item.root, 'local-ledger');
     await upsertWakeRoute({
       location: item.squarePath,
       participant: 'Bob',
@@ -269,9 +249,7 @@ test('the notification worker uses an artifact Paseo route with a local binding'
       address: { agentId: 'local-paseo-agent' },
     }, { env: item.env, at: 3 });
     const localLedger = createHostLedgerPort({
-      userPath: item.env.SQUARE_HOST_LEDGER_USER,
-      localPath: item.env.SQUARE_HOST_LEDGER_LOCAL,
-      writableScope: 'local',
+      rootPath: item.env.SQUARE_HOST_LEDGER_ROOT,
     });
     await localLedger.ensurePresence({
       location: item.squarePath,
@@ -281,7 +259,6 @@ test('the notification worker uses an artifact Paseo route with a local binding'
       route: { kind: 'paseo', address: { agentId: 'local-paseo-agent' } },
       updatedAt: Date.now(),
     }, 'local');
-
     let calls = 0;
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
       env: item.env,
@@ -291,14 +268,12 @@ test('the notification worker uses an artifact Paseo route with a local binding'
         return { outcome: 'accepted' };
       })],
     }));
-
     assert.equal(calls, 1);
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   } finally {
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-
 test('PaseoAdapter records transport certainty without leaking retry policy', async () => {
   const item = await fixture();
   await route(item);
@@ -316,14 +291,12 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
     ...base,
     sendWake: () => { throw new PaseoWakeSendError('timeout', 'unknown'); },
   }).dispatch(registered.address, payload, async () => true));
-
   assert.deepEqual(failed.outcome, 'failed');
   assert.deepEqual(failed.signature, 'send_pre_accept_transient');
   assert.equal('retryable' in failed, false);
   assert.equal(unknown.outcome, 'unknown');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('PaseoAdapter treats a closed agent as unavailable instead of a failed send', async () => {
   const item = await fixture();
   await route(item, { agentId: 'closed-agent' });
@@ -335,7 +308,6 @@ test('PaseoAdapter treats a closed agent as unavailable instead of a failed send
   assert.equal(outcome.signature, 'address_not_found');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('a closed Paseo route is retired without consuming pending attention', async () => {
   const item = await fixture();
   await route(item, { agentId: 'gone-agent' });
@@ -349,7 +321,6 @@ test('a closed Paseo route is retired without consuming pending attention', asyn
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('a refreshed Paseo route wakes the old pending notification', async () => {
   const item = await fixture();
   await route(item, { agentId: 'gone-agent' });
@@ -357,7 +328,6 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
     env: item.env,
     adapters: [new PaseoAdapter({ discover: () => ({ agents: [] }) })],
   }));
-
   const refreshedAt = Date.now();
   await upsertWakeRoute({
     location: item.squarePath,
@@ -375,25 +345,21 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
       sendWake: (request) => { sent = request; },
     })],
   }));
-
   assert.equal(sent.agentId, 'gone-agent');
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.['act/2'], undefined);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('a worker with no route writes no synthetic attempt', async () => {
   const item = await fixture();
   await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, 2, {
     env: item.env,
     adapters: [fakeAdapter('paseo', async () => { throw new Error('no route must not dispatch'); })],
   }));
-
   assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('wake transport rechecks pending and route ownership before send', async () => {
   const item = await fixture();
   await route(item, { agentId: 'race-agent' });
@@ -420,7 +386,6 @@ test('wake transport rechecks pending and route ownership before send', async ()
   assert.equal(releases[0].diagnostic.routePublished, false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-
 test('Codex PostToolUse hook aborts a contended presentation boundary within its budget and traces stages', async () => {
   const item = await fixture();
   const traces = [];

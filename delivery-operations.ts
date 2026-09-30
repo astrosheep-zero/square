@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { nameKey, type SquareState } from './model.js';
-import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput, ReconcileBindingInput, SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
+import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput,  SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { currentSessionBindings, isWakeRouteAttemptable, presentationSuppressesWake, projectPresentationEvidence, type WakeAttempt } from './square-projections.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
@@ -53,7 +53,7 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
   const delivery = deriveDeliveryModel(snapshot.state);
   let rows: readonly PresenceRecord[] = [];
   if (input.hostLedger !== undefined) {
-    try { rows = await input.hostLedger.listPresence({ location: input.location, scopes: ['user', 'local'], now: input.now }); } catch { rows = []; }
+    try { rows = await input.hostLedger.listPresence({ location: input.location, now: input.now }); } catch { rows = []; }
   }
   const bindings = rows.map((record) => ({
     location: record.location,
@@ -64,9 +64,6 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
     updatedAt: record.updatedAt ?? 0,
   }));
   return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
-}
-export async function reconcileBinding(input: ReconcileBindingInput) {
-  return input.hostLedger.reconcileBinding({ artifact: input.artifact, scopes: input.scopes, now: input.now });
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
   const observation = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now });

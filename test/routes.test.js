@@ -11,7 +11,7 @@ import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
 import { publishWakeRoute, readWakeRoutes, retireWakeRouteFromArtifact, retireWakeRoutesForSessionFromArtifact, ROUTE_FRESH_MS, selectPrimaryWakeRoute, sessionCanEndParticipant, sessionOwnsParticipantRoutes, upsertWakeRoute } from '../dist/routes.js';
 
-function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_USER: path.join(root, 'user'), SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'local') } }; }
+function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_ROOT: path.join(root, 'user') } }; }
 
 function emptyState() {
   return { hardCap: null, preamble: [], warmup: [], acts: [], routes: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } };
@@ -21,7 +21,7 @@ async function openExpressFixture() {
   const item = fixture();
   const location = path.join(item.root, 'square.square');
   await writeSquareFile(location, emptyState());
-  const ledger = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL });
+  const ledger = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT});
   let now = 100;
   const env = { ...process.env, ...item.env, CODEX_THREAD_ID: 'alice-session', PASEO_AGENT_ID: '' };
   const square = await openSquare(location, { clock: () => now, hostLedger: ledger, env });
@@ -41,7 +41,7 @@ test('callable routes are read from receiver-owned square artifact', async () =>
 test('local presence cannot plant a callable route', async () => {
   const item = fixture();
   try {
-    const local = new FileHostLedgerPort({ ...item.env, writableScope: 'local' });
+    const local = new FileHostLedgerPort({ ...item.env });
     await local.ensurePresence({ location: '/tmp/square-a.square', participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } } });
     assert.deepEqual(await readWakeRoutes({ location: '/tmp/square-a.square', env: item.env, now: Date.now() }), []);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
@@ -54,7 +54,7 @@ test('uncapable native sessions keep ownership in presence without a callable ro
     const item = fixture();
     const location = path.join(item.root, 'square.square');
     await writeSquareFile(location, emptyState());
-    const ledger = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL });
+    const ledger = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT});
     const env = {
       ...process.env,
       ...item.env,
@@ -68,7 +68,7 @@ test('uncapable native sessions keep ownership in presence without a callable ro
     const square = await openSquare(location, { hostLedger: ledger, env });
     try { await join(square, 'Agent'); } finally { await closeOpenSquare(square); }
     assert.deepEqual(await readWakeRoutes({ location }), []);
-    const presence = await ledger.listPresence({ location, session: `${provider}-session`, scopes: ['local', 'user'] });
+    const presence = await ledger.listPresence({ location, session: `${provider}-session` });
     assert.equal(presence.length, 1);
     assert.equal(presence[0].channel, channel);
     assert.equal(presence[0].route, undefined);
@@ -108,8 +108,8 @@ test('distinct parent and child native Pi sessions resolve distinct participants
 test('local registry cannot plant or shadow an artifact route', async () => {
   const item = fixture();
   try {
-    const user = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-    const local = new FileHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'local' });
+    const user = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    const local = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
     const location = path.join(item.root, 'square.square');
     await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [{ location, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 'real' }, updatedAt: 10 }], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
     await local.ensurePresence({ location, participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: 20 });

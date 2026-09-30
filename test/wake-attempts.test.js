@@ -22,7 +22,7 @@ function fixture() {
   return {
     root,
     attention: { squarePath: path.join(root, 'SQUARE.square'), actIndex: 4, recipient: 'Faye' },
-    env: { SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'), SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger') },
+    env: { SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'), SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger') },
   };
 }
 
@@ -46,8 +46,8 @@ function row(item, overrides = {}) {
 test('wake attempt reads accept only real adapter outcomes inside retention', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
-  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_USER, { recursive: true });
-  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), [
+  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), [
     '{bad json',
     JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
     JSON.stringify(row(item, { at: now + 1 })),
@@ -64,7 +64,7 @@ test('wake attempt reads accept only real adapter outcomes inside retention', as
 
 test('wake release diagnostics are readable without entering behavior evidence', async () => {
   const item = fixture();
-  const ledger = (await import('../dist/host-ledger-file-adapter.js')).createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, readableScopes: ['user'], writableScope: 'user' });
+  const ledger = (await import('../dist/host-ledger-file-adapter.js')).createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
   const claimInput = {
     location: item.attention.squarePath,
     participant: item.attention.recipient,
@@ -105,7 +105,7 @@ test('wake attempt persistence redacts transport credentials recursively', async
     diagnostic: { nested: ['very-secret', 'tcp://host?password=another-secret&x=1'] },
   }, env);
 
-  const raw = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8');
+  const raw = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8');
   assert.doesNotMatch(raw, /very-secret|query-secret|another-secret/);
   assert.match(raw, /\[redacted\]/);
   fs.rmSync(item.root, { recursive: true, force: true });
@@ -124,8 +124,8 @@ test('wake diagnostics redact nested credentials while retaining safe presence f
 test('a wake attempt write drops expired and malformed ledger rows', async () => {
   const item = fixture();
   const now = Date.now();
-  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_USER, { recursive: true });
-  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), [
+  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), [
     '{bad json',
     JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
     JSON.stringify(row(item, { at: now - DAY_MS, attemptN: 2 })),
@@ -140,7 +140,7 @@ test('a wake attempt write drops expired and malformed ledger rows', async () =>
     attemptN: 3,
   }, item.env);
 
-  const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(rows.map((entry) => entry.attemptN), [2, 3]);
   fs.rmSync(item.root, { recursive: true, force: true });
 });

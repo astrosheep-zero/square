@@ -66,7 +66,7 @@ export async function ensureLocalPresence(context: HostContext, participant: str
   const now = context.clock();
   // Semantic publish: an unexpired presence row already stands when it carries the same owner epoch.
   try {
-    const existing = await context.hostLedger.listPresence({ location: context.location, participant, session: identity.session, scopes: ['local'], now });
+    const existing = await context.hostLedger.listPresence({ location: context.location, participant, session: identity.session, now });
     if (existing.some((row) => row.channel === identity.channel
       && now - (row.updatedAt ?? 0) < ROUTE_FRESH_MS
       && (ownerEpoch === undefined || (row as PresenceRecord & { epoch?: number }).epoch === ownerEpoch))) return;
@@ -79,7 +79,7 @@ export async function ensureLocalPresence(context: HostContext, participant: str
     // Presence rows are host-ledger wall-time evidence; the square clock belongs to artifact activities.
     updatedAt: Date.now(),
     ...(ownerEpoch === undefined || ownerEpoch <= 0 ? {} : { epoch: ownerEpoch }),
-  } as PresenceRecord & { epoch?: number }, 'local').catch((error) => ({
+  } as PresenceRecord & { epoch?: number }).catch((error) => ({
     status: 'degraded' as const,
     record: { location: context.location!, participant, session: identity.session, channel: identity.channel },
     error,

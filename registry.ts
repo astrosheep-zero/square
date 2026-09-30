@@ -1,14 +1,14 @@
 /** Machine-local participant discovery cache. */
 
 import path from 'node:path';
-import { homedir } from 'node:os';
 
 import { withFileLock } from './file-lock.js';
 import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
-import type { HostLedgerPort, HostLedgerScope, PresenceRecord } from './host-ledger.js';
+import { hostLedgerRoot } from './host-ledger-root.js';
+import type { HostLedgerPort, PresenceRecord } from './host-ledger.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: SessionChannel; child: boolean; route?: PresenceRecord['route']; updatedAt: number; epoch: number; }
@@ -24,18 +24,10 @@ const LOCAL_SESSION_SOURCES: ReadonlyArray<{ variable: 'CLAUDE_CODE_SESSION_ID' 
   { variable: 'PI_SESSION_ID', channel: 'pi' },
 ];
 
-export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(homedir(), '.square', 'sessions.ndjsonl'); }
+export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(hostLedgerRoot(env), '..', 'sessions.ndjsonl'); }
 export async function canonicalSquarePath(squarePath: string): Promise<string> { const absolute = path.resolve(squarePath); try { return await (await import('node:fs/promises')).realpath(absolute); } catch { return absolute; } }
-function ledgerRoot(env: NodeJS.ProcessEnv): { userPath: string; localPath: string } {
-  const root = path.dirname(registryPath(env));
-  return {
-    userPath: env.SQUARE_HOST_LEDGER_USER ?? (env.SQUARE_REGISTRY ? root : path.join(homedir(), '.square', 'host-ledger')),
-    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? (env.SQUARE_REGISTRY ? root : path.join(process.cwd(), '.square', 'host-ledger')),
-  };
-}
-function ledger(env: NodeJS.ProcessEnv, writableScope: HostLedgerScope = 'local'): HostLedgerPort {
-  return createHostLedgerPort({ ...ledgerRoot(env), writableScope });
-}
+function ledgerRoot(env: NodeJS.ProcessEnv): string { return hostLedgerRoot(env); }
+function ledger(env: NodeJS.ProcessEnv): HostLedgerPort { return createHostLedgerPort({ rootPath: ledgerRoot(env) }); }
 export function presenceEpoch(record: PresenceWithEpoch | undefined): number {
   return typeof record?.epoch === 'number' && Number.isSafeInteger(record.epoch) && record.epoch > 0 ? record.epoch : 0;
 }
@@ -52,19 +44,18 @@ function toBinding(record: PresenceWithEpoch): RegistryBinding {
   };
 }
 function presenceClaimLockPath(env: NodeJS.ProcessEnv): string {
-  return path.join(ledgerRoot(env).userPath, 'presence-claim.lock');
+  return path.join(ledgerRoot(env), 'presence-claim.lock');
 }
 
 /** Runs `fn` inside the ownership claim critical section, under the same lock as claims and finalize. */
 export async function withOwnershipClaimLock<T>(env: NodeJS.ProcessEnv, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, fn);
 }
-async function activeBindings(now: number, env: NodeJS.ProcessEnv): Promise<RegistryBinding[]> { return (await ledger(env).listPresence({ now, scopes: ['user', 'local'] })).map(toBinding).sort((a, b) => b.updatedAt - a.updatedAt); }
-async function writePresence(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions, done: boolean, scope: HostLedgerScope = 'local'): Promise<void> { if (!sessionId || !name || !squarePath) return; const env = options.env ?? process.env; const channel = options.channel ?? 'unknown'; const port = ledger(env, scope); const location = await canonicalSquarePath(squarePath); if (done) await port.removePresence({ location, participant: name, session: sessionId, channel }); else await port.ensurePresence({ location, participant: name, session: sessionId, channel, updatedAt: options.at ?? Date.now() }); }
+async function activeBindings(now: number, env: NodeJS.ProcessEnv): Promise<RegistryBinding[]> { return (await ledger(env).listPresence({ now })).map(toBinding).sort((a, b) => b.updatedAt - a.updatedAt); }
+async function writePresence(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions, done: boolean): Promise<void> { if (!sessionId || !name || !squarePath) return; const env = options.env ?? process.env; const channel = options.channel ?? 'unknown'; const port = ledger(env); const location = await canonicalSquarePath(squarePath); if (done) await port.removePresence({ location, participant: name, session: sessionId, channel }); else await port.ensurePresence({ location, participant: name, session: sessionId, channel, updatedAt: options.at ?? Date.now() }); }
 export function recordJoin(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions = {}): Promise<void> { return writePresence(sessionId, name, squarePath, options, false); }
 export async function recordDone(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions = {}): Promise<void> {
   await writePresence(sessionId, name, squarePath, options, true);
-  await writePresence(sessionId, name, squarePath, options, true, 'user');
 }
 export async function readActiveBindings(now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<RegistryBinding[]> { try { return await activeBindings(now, env); } catch { return []; } }
 export async function lookupSessionBindings(sessionId: string, now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<RegistryBinding[]> { return (await readActiveBindings(now, env)).filter((binding) => binding.sessionId === sessionId); }
@@ -107,7 +98,7 @@ export async function sessionOwnsParticipant(
 export async function releaseSessionParticipantClaim(squarePath: string, name: string, env: NodeJS.ProcessEnv, claim: OwnershipClaim): Promise<void> {
   if (claim?.status !== 'acquired') return;
   const port = ledger(env);
-  await port.removePresenceIfUnchanged(claim.record, 'local');
+  await port.removePresenceIfUnchanged(claim.record);
 }
 
 export async function claimSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<OwnershipClaim> {
@@ -122,7 +113,7 @@ export async function claimSessionParticipant(squarePath: string, name: string, 
     channel: identity.channel,
     updatedAt: Date.now(),
     epoch: 1,
-  } as PresenceWithEpoch, 'local', signal);
+  } as PresenceWithEpoch, signal);
   if (result.status === 'busy') throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   if (result.status === 'degraded') throw result.error;
   const record = result.record as PresenceWithEpoch;
@@ -151,11 +142,8 @@ export async function claimSessionTakeover<T>(
   const location = await canonicalSquarePath(squarePath);
   return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, async () => {
     const port = ledger(env);
-    const standing: Record<'user' | 'local', readonly PresenceWithEpoch[]> = {
-      user: await port.listPresence({ location, participant: name, scopes: ['user'] }) as PresenceWithEpoch[],
-      local: await port.listPresence({ location, participant: name, scopes: ['local'] }) as PresenceWithEpoch[],
-    };
-    const owner = [...standing.user, ...standing.local]
+    const standing = await port.listPresence({ location, participant: name }) as PresenceWithEpoch[];
+    const owner = standing
       .map((row) => toBinding(row))
       .sort((left, right) => right.epoch - left.epoch || right.updatedAt - left.updatedAt)[0];
     const currentEpoch = owner?.epoch ?? 0;
@@ -174,49 +162,16 @@ export async function claimSessionTakeover<T>(
       // token (session + channel + epoch) — whatever the lifecycle itself ensured — then restore
       // the captured standing rows so the old owner survives byte-consistently. Foreign rows and
       // later owners are never touched.
-      for (const scope of ['user', 'local'] as const) {
-        const tokenRows = await ledger(env, scope).listPresence({
-          location,
-          participant: name,
-          session: identity.sessionId,
-          scopes: [scope],
-        }) as PresenceWithEpoch[];
-        for (const row of tokenRows) {
-          if (row.channel !== identity.channel || presenceEpoch(row) !== epoch) continue;
-          await ledger(env, scope).removePresence({
-            location: row.location,
-            participant: row.participant,
-            session: row.session,
-            channel: row.channel,
-          });
-        }
-        for (const row of standing[scope]) {
-          await ledger(env, scope).ensurePresence(row as unknown as PresenceRecord, scope);
-        }
-      }
+      const tokenRows = await ledger(env).listPresence({ location, participant: name, session: identity.sessionId }) as PresenceWithEpoch[];
+      for (const row of tokenRows) { if (row.channel === identity.channel && presenceEpoch(row) === epoch) await ledger(env).removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel }); }
+      for (const row of standing) await ledger(env).ensurePresence(row as unknown as PresenceRecord);
       throw error;
     }
     // Finalize: the lifecycle committed. Replace the standing owner with the new owner's row at
-    // the claim epoch in every scope where the owner was visible, so exactly one current owner
+    // the claim epoch where the owner was visible, so exactly one current owner
     // remains — also when the takeover is a self-takeover (same session as the standing owner).
-    for (const scope of ['user', 'local'] as const) {
-      for (const row of standing[scope]) {
-        await ledger(env, scope).removePresence({
-          location: row.location,
-          participant: row.participant,
-          session: row.session,
-          channel: row.channel,
-        });
-      }
-      await ledger(env, scope).ensurePresence({
-        location,
-        participant: name,
-        session: identity.sessionId,
-        channel: identity.channel,
-        updatedAt: Date.now(),
-        epoch,
-      } as PresenceWithEpoch, scope);
-    }
+    for (const row of standing) await ledger(env).removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel });
+    await ledger(env).ensurePresence({ location, participant: name, session: identity.sessionId, channel: identity.channel, updatedAt: Date.now(), epoch } as PresenceWithEpoch);
     return { status: 'acquired', sessionId: identity.sessionId, epoch, result };
   });
 }
@@ -237,5 +192,5 @@ export function localSessionIdentities(env: NodeJS.ProcessEnv = process.env): Lo
 export function hasAutomaticDeliveryIdentity(env: NodeJS.ProcessEnv = process.env): boolean { return localSessionIdentities(env).length > 0; }
 export async function recordLocalJoin(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = localSessionIdentities(env); const current = await lookupParticipant(squarePath, name, at, env); for (const identity of identities) { for (const binding of current.filter((item) => item.sessionId === identity.sessionId)) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await recordJoin(identity.sessionId, name, squarePath, { ...identity, at, env }); } }
 export async function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); }
-export async function recordSessionJoin(sessionId: string, name: string, squarePath: string, channel: SessionChannel, env: NodeJS.ProcessEnv = process.env): Promise<string> { const at = Date.now(); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => binding.sessionId === sessionId); for (const binding of current) { await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await writePresence(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }, true, 'user'); } await recordJoin(sessionId, name, squarePath, { channel, at, env }); await writePresence(sessionId, name, squarePath, { channel, at, env }, false, 'user'); return sessionId; }
-export async function recordSessionDone(sessionId: string, name: string, squarePath: string, channel: SessionChannel, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const canonicalPath = await canonicalSquarePath(squarePath); const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonicalPath && sameName(item.name, name) && item.channel === channel); if (binding === undefined) return false; const options = { channel, at: Date.now(), env }; await recordDone(sessionId, binding.name, binding.squarePath, options); await writePresence(sessionId, binding.name, binding.squarePath, options, true, 'user'); return true; }
+export async function recordSessionJoin(sessionId: string, name: string, squarePath: string, channel: SessionChannel, env: NodeJS.ProcessEnv = process.env): Promise<string> { const at = Date.now(); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => binding.sessionId === sessionId); for (const binding of current) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await recordJoin(sessionId, name, squarePath, { channel, at, env }); return sessionId; }
+export async function recordSessionDone(sessionId: string, name: string, squarePath: string, channel: SessionChannel, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const canonicalPath = await canonicalSquarePath(squarePath); const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonicalPath && sameName(item.name, name) && item.channel === channel); if (binding === undefined) return false; const options = { channel, at: Date.now(), env }; await recordDone(sessionId, binding.name, binding.squarePath, options); return true; }

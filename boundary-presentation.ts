@@ -1,3 +1,4 @@
+import { hostLedgerRoot } from './host-ledger-root.js';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -172,8 +173,7 @@ export async function presentPendingAtBoundary<T>(
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {
-  const ledgerRoot = env.SQUARE_HOST_LEDGER_USER
-    ?? (env.SQUARE_REGISTRY === undefined ? path.join(os.homedir(), '.square', 'host-ledger') : path.dirname(env.SQUARE_REGISTRY));
+  const ledgerRoot = hostLedgerRoot(env);
   const ownerKey = createHash('sha256').update(sessionId).digest('hex');
   return withFileLock(path.join(ledgerRoot, `presentation-boundary-${ownerKey}.lock`), { retryMs: 10, signal }, () =>
     presentPendingAtBoundaryUnlocked(sessionId, present, lookup, env, signal));

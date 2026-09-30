@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 
 import { openSquare } from './square-file-adapter.js';
@@ -11,7 +12,7 @@ import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
 import { claimSessionParticipant, readParticipantOwner, releaseSessionParticipant } from './registry.js';
-import { publishWakeRoute, retireWakeRoutesForSessionFromArtifact, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
+import { publishWakeRoute, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
@@ -36,10 +37,9 @@ function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJ
   };
 }
 function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
-  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const root = hostLedgerRoot(env);
   return createHostLedgerPort({
-    userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
-    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
+    rootPath: root,
   });
 }
 export function publicSquarePath(cwd: string): string {
@@ -69,7 +69,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   let bindings: readonly PresenceRecord[];
   let entry: Awaited<ReturnType<typeof entryPresentation>>;
   try {
-    bindings = await hostLedger.listPresence({ location: squarePath, participant: name, scopes: ['user', 'local'] });
+    bindings = await hostLedger.listPresence({ location: squarePath, participant: name });
     entry = await entryPresentation(reader, name);
   } finally {
     await closeOpenSquare(reader);
@@ -107,8 +107,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
       channel: provider === 'claude' ? 'claude-code' : provider,
       updatedAt: Date.now(),
       ...(claim?.epoch === undefined || claim.epoch <= 0 ? {} : { epoch: claim.epoch }),
-    } as PresenceRecord & { epoch?: number }, 'user');
-    await square.reconcileBinding();
+    } as PresenceRecord & { epoch?: number });
     return undefined;
   } catch (error) {
     if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, scopedEnv).catch(() => undefined);
@@ -128,7 +127,6 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
     hostLedger,
     sessionId,
     location: probe.location,
-    scopes: ['user', 'local'],
   }))[0];
   const expectedEpoch = binding === undefined
     ? undefined
@@ -136,18 +134,12 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   await closeOpenSquare(probe);
   const square = await Square.at({ path: squarePath, hostLedger, env: scopedEnv });
   try {
-    if (binding !== undefined) {
-      const reader = await openSquare(squarePath);
-      const joined = await entryPresentation(reader, binding.participant).finally(() => closeOpenSquare(reader));
-      if (joined.joined) {
-        const ended = await square.endOwnedSession(binding.participant, sessionId, expectedEpoch);
-        if (ended !== null) await square.reconcileBinding();
-      }
-    }
-    const cleanup = await openSquare(squarePath);
-    try {
-      await retireWakeRoutesForSessionFromArtifact(cleanup.artifact, { location: squarePath, sessionId });
-    } finally { await closeOpenSquare(cleanup); }
+    // The ended owner's done, routes, and presence settle inside the ownership claim
+    // lock. A same-session rejoin or takeover that lands afterwards claims only after
+    // that cleanup, so this call never performs post-return ledger or route cleanup that
+    // could remove the replacement owner's fresh rows.
+    if (binding === undefined) await square.retireEndedSessionRoutes(sessionId);
+    else await square.endOwnedSession(binding.participant, sessionId, expectedEpoch);
   } finally {
     await square.close();
   }

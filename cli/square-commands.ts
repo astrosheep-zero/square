@@ -212,7 +212,6 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const afterSquare = await openSquare(squarePath, { clock: nowMs });
       const after = await entryPresentation(afterSquare, joinedName, intent.lastN);
       await closeOpenSquare(afterSquare);
-      await square.reconcileBinding().catch(() => undefined);
       const activities = after.recentActivities.map((event) => renderAmbientEvent(event, joinedName, {
         now: nowMs(),
         preview: intent.lastN === null ? undefined : 200,
@@ -402,7 +401,6 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const square = await Square.at({ path: squarePath, clock: nowMs });
     const participant = await square.join(intent.name);
     const result = await participant.done(body);
-    await square.reconcileBinding();
     await square.close();
     const name = result.activity.actor;
     const presentation = await openSquare(squarePath, { clock: nowMs });

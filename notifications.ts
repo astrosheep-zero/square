@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -73,8 +74,8 @@ export async function hasAttentionNotification(squarePath: string, name: string,
     const recipient = (await resolveParticipant(square, name)).name;
     const index = notificationIndex(ref);
     if (await notificationDelivered(square, recipient, index)) return true;
-    const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
-    const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? root, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root, readableScopes: ['user'], writableScope: 'user' });
+    const root = hostLedgerRoot(env);
+    const hostLedger = createHostLedgerPort({ rootPath: root });
     return (await projectPresentationEvidence({ hostLedger, location: squarePath, participant: recipient, activity: formatActivityId(index), now: Date.now() })).some((row) => row.outcome === 'presented');
   } finally {
     await closeOpenSquare(square);
@@ -207,10 +208,9 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const ledgerRoot = hostLedgerRoot(env);
   const hostLedger = createHostLedgerPort({
-    userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot,
-    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot,
+    rootPath: ledgerRoot,
   });
   const square = await openSquare(squarePath, { clock: now, hostLedger, env });
   try {
@@ -236,10 +236,10 @@ export async function sweepPrivilegedPending(
 ): Promise<void> {
   const remainingMs = () => Math.max(0, deadline - Date.now());
   if (remainingMs() === 0 || signal?.aborted) return;
-  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
-  const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? root, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root, readableScopes: ['user'], writableScope: 'user' });
+  const root = hostLedgerRoot(env);
+  const hostLedger = createHostLedgerPort({ rootPath: root });
   let indexed: readonly import('./host-ledger.js').PresenceRecord[] = [];
-  try { indexed = await hostLedger.listPresence({ scopes: ['user'], now: Date.now() }); } catch { /* capability is best effort */ }
+  try { indexed = await hostLedger.listPresence({ now: Date.now() }); } catch { /* capability is best effort */ }
   const paths = new Set(indexed.map((binding) => binding.location));
   try {
     for (const entry of await fs.promises.readdir(path.join(cwd, '.square'))) {
@@ -253,7 +253,6 @@ export async function sweepPrivilegedPending(
     try {
       const square = await openSquare(squarePath, { hostLedger, env, signal });
       try {
-        await hostLedger.reconcileBinding({ artifact: square.artifact, scopes: ['user'], now: Date.now() }).catch(() => undefined);
         if (remainingMs() === 0 || signal?.aborted) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
@@ -286,7 +285,7 @@ export async function pendingNotificationSweepFromState(
   limit: number,
   deriveDelivery?: (snapshot: import('./model.js').SquareState) => ReturnType<typeof import('./delivery.js').deriveDeliveryModel>,
 ): Promise<number[]> {
-  const ledger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+  const ledger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
   return sweepPendingFromState({ state, hostLedger: ledger, location: squarePath, now, graceMs: wakeGraceMs(env), limit, deriveDelivery });
 }
 
@@ -299,8 +298,7 @@ export async function sweepPendingNotifications(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
-  const hostLedger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot, localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot });
+  const hostLedger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
   const square = await openSquare(squarePath, { clock: () => now, hostLedger, env });
   let selected: number[];
   try {

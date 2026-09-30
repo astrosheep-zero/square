@@ -42,8 +42,7 @@ async function fixture() {
   const env = {
     ...process.env,
     SQUARE_REGISTRY: registryPath,
-    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger-user'),
-    SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'host-ledger-local'),
+    SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger-user'),
   };
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -172,7 +171,7 @@ test('failed presentation remains available to the next guarantee path', async (
     notifications: [{ actIndex: 2, actor: 'Alice', at: 3, route: 'mention', body: 'hello @Bob' }],
   }];
   try {
-    const ledger = new (await import('../dist/host-ledger-file-adapter.js')).FileHostLedgerPort({ userPath: path.dirname(presented), localPath: path.dirname(presented) });
+    const ledger = new (await import('../dist/host-ledger-file-adapter.js')).FileHostLedgerPort({ rootPath: path.dirname(presented)});
     const artifact = (await import('../dist/square-file-adapter.js')).openSquare(item.squarePath, { hostLedger: ledger });
     const square = await artifact;
     await assert.rejects(() => import('../dist/presentation-operations.js').then(({ presentPending }) => presentPending({ artifact: square.artifact, location: item.squarePath, participant: 'Bob', activity: 2, hostLedger: ledger, session: 'session', sink: { present: () => { throw new Error('inject failed'); } } })), /inject failed/);
@@ -213,13 +212,13 @@ test('Claude hook does not adopt a Paseo owner from inherited PASEO_AGENT_ID', a
 test('privileged hook sweep wakes a different recipient after local failure', async () => {
   const item = await fixture();
   try {
-    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_HOST_LEDGER_USER: path.join(path.dirname(item.squarePath), 'ledger'), SQUARE_HOST_LEDGER_LOCAL: path.join(path.dirname(item.squarePath), 'local'), SQUARE_PRESENTED: path.join(path.dirname(item.squarePath), 'presented.ndjsonl') };
+    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, SQUARE_HOST_LEDGER_ROOT: path.join(path.dirname(item.squarePath), 'ledger'), SQUARE_PRESENTED: path.join(path.dirname(item.squarePath), 'presented.ndjsonl') };
     item.runtime.observations.Bob = { [formatActivityId(3)]: { state: 'seen', at: Date.now() } };
     await item.persist();
     await recordSessionJoin('bob-session', 'Bob', item.squarePath, 'claude-code', env);
     await upsertWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'bob-session', channel: 'claude-code', kind: 'claude-native', address: { sessionId: 'bob-session' } });
-    const ledger = createHostLedgerPort({ userPath: env.SQUARE_HOST_LEDGER_USER, localPath: env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'bob-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'bob-session' } } }, 'user');
+    const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'bob-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'bob-session' } } });
     const failed = { kind: 'claude-native', async dispatch() { return { outcome: 'failed', signature: 'temporary', message: 'offline' }; } };
     await processActNotificationsOnce(item.squarePath, 2, { env, adapters: [failed] });
     let calls = 0;

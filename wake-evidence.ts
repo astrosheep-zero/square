@@ -1,3 +1,4 @@
+import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 
 import type { SquareState } from './model.js';
@@ -16,13 +17,7 @@ export type { WakeEvidence, WakeEvidenceProjection };
 export { wakeIsEligible };
 
 function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
-  const root = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
-  return createHostLedgerPort({
-    userPath: env.SQUARE_HOST_LEDGER_USER ?? root,
-    localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? root,
-    readableScopes: ['user'],
-    writableScope: 'user',
-  });
+  return createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
 }
 
 /** Adapter entry: open the artifact, assemble host ports, and project wake evidence. */

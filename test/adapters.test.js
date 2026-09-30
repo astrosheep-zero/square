@@ -606,7 +606,7 @@ function piTurnEnd(handlers, stopReason = 'stop', ctx = {}) {
 }
 
 function presentationBoundaryLockPath(sessionId) {
-  const root = process.env.SQUARE_HOST_LEDGER_USER
+  const root = process.env.SQUARE_HOST_LEDGER_ROOT
     ?? (process.env.SQUARE_REGISTRY === undefined ? path.join(os.homedir(), '.square', 'host-ledger') : path.dirname(process.env.SQUARE_REGISTRY));
   return path.join(root, `presentation-boundary-${crypto.createHash('sha256').update(sessionId).digest('hex')}.lock`);
 }

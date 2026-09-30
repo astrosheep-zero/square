@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 import { nameKey } from './model.js';
 import { WAKE_ROUTE_KINDS, type WakeRoute, type WakeRouteKind } from './model.js';
@@ -21,7 +22,7 @@ export interface WakeRouteCapabilities {
 export async function defaultWakeRouteCapabilities(hostLedger?: import('./host-ledger.js').HostLedgerPort): Promise<WakeRouteCapabilities> {
   let userCapable = hostLedger !== undefined;
   if (hostLedger !== undefined) {
-    try { await hostLedger.listPresence({ scopes: ['user'], now: Date.now() }); } catch { userCapable = false; }
+    try { await hostLedger.listPresence({ now: Date.now() }); } catch { userCapable = false; }
   }
   const available = new Set<WakeRouteKind>();
   try { const { CodexQueueAdapter } = await import('./codex-queue.js'); available.add(new CodexQueueAdapter().kind); } catch { /* optional */ }
@@ -93,9 +94,44 @@ export function applyWakeRouteToState(state: import('./model.js').SquareState, r
     return !(itemLocation === location && routeIdentityKey(item, itemLocation) === routeIdentityKey(route, location));
   }), { ...route, location, updatedAt: at }];
 }
-export function dropSessionWakeRoutesFromState(state: import('./model.js').SquareState, location: string, sessionId: string): void {
+export function dropSessionWakeRoutesFromState(state: import('./model.js').SquareState, location: string, sessionId: string, expectedEpoch?: number): void {
   const canonical = canonicalRouteLocationSync(location);
-  state.routes = (state.routes ?? []).filter((item) => !(item.sessionId === sessionId && canonicalRouteLocationSync(item.location) === canonical));
+  state.routes = (state.routes ?? []).filter((item) => {
+    if (item.sessionId !== sessionId || canonicalRouteLocationSync(item.location) !== canonical) return true;
+    if (expectedEpoch === undefined) return false;
+    return (item as WakeRoute & RouteEpoch).epoch !== expectedEpoch;
+  });
+}
+
+/**
+ * Drop one ended session's routes at a location, atomically with the lifecycle decide.
+ *
+ * A route survives when the ending transaction did not commit `done` and this session
+ * still holds the sole live presence for its participant — an in-flight same-session
+ * rejoin. `liveParticipants === undefined` means the ledger could not be read, so
+ * nothing is dropped on suspicion. An explicit epoch fence additionally keeps routes
+ * published by a later generation.
+ */
+export function dropEndedSessionWakeRoutesFromState(
+  state: import('./model.js').SquareState,
+  location: string,
+  sessionId: string,
+  opts: { readonly expectedEpoch?: number; readonly liveParticipants?: ReadonlySet<string>; readonly force: boolean; readonly participant?: string },
+): void {
+  const canonical = canonicalRouteLocationSync(location);
+  state.routes = (state.routes ?? []).filter((item) => {
+    if (item.sessionId !== sessionId || canonicalRouteLocationSync(item.location) !== canonical) return true;
+    if (opts.participant !== undefined && nameKey(item.participant) !== nameKey(opts.participant)) return true;
+    if (!opts.force) {
+      // Keep only a route whose participant is still joined and whose ended session still
+      // holds the sole live presence — an in-flight same-session rejoin. A no-longer-joined
+      // participant is retired even when a stale presence row survives.
+      if (isCurrentlyJoined(state.acts, item.participant)
+        && (opts.liveParticipants === undefined || opts.liveParticipants.has(nameKey(item.participant)))) return true;
+    }
+    if (opts.expectedEpoch !== undefined && (item as WakeRoute & RouteEpoch).epoch !== opts.expectedEpoch) return true;
+    return false;
+  });
 }
 export function dropParticipantWakeRoutesFromState(state: import('./model.js').SquareState, location: string, participant: string): void {
   const canonical = canonicalRouteLocationSync(location);
@@ -148,8 +184,14 @@ export async function retireWakeRouteFromArtifact(artifact: import('./ports.js')
     return opts.expectedEpoch !== undefined && itemEpoch !== opts.expectedEpoch;
   }) }, result: undefined }));
 }
-export async function retireWakeRoutesForSessionFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'sessionId'>): Promise<void> {
-  await artifact.transact((state) => { dropSessionWakeRoutesFromState(state, route.location, route.sessionId); return { state, result: undefined }; });
+export async function retireWakeRoutesForSessionFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'sessionId'>, opts: { readonly expectedEpoch?: number } = {}): Promise<void> {
+  const location = canonicalRouteLocationSync(route.location);
+  await artifact.transact((state) => ({ state: { ...state, routes: (state.routes ?? []).filter((item) => {
+    if (canonicalRouteLocationSync(item.location) !== location || item.sessionId !== route.sessionId) return true;
+    if (opts.expectedEpoch === undefined) return false;
+    const itemEpoch = (item as WakeRoute & RouteEpoch).epoch;
+    return itemEpoch !== undefined && itemEpoch !== opts.expectedEpoch;
+  }) }, result: undefined }));
 }
 export async function canonicalRouteLocation(location: string): Promise<string> {
   return canonicalRouteLocationSync(location);

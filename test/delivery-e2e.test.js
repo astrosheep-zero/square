@@ -37,7 +37,7 @@ function workshop() {
     PASEO_AGENT_ID: '',
     SQUARE_DISABLE_PASEO_WAKE: '1',
     SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
-    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger'),
+    SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger'),
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
     SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
@@ -70,9 +70,9 @@ function workshop() {
 
 function withRegistry(env, fn) {
   const previous = process.env.SQUARE_REGISTRY;
-  const previousLedger = process.env.SQUARE_HOST_LEDGER_USER;
+  const previousLedger = process.env.SQUARE_HOST_LEDGER_ROOT;
   process.env.SQUARE_REGISTRY = env.SQUARE_REGISTRY;
-  process.env.SQUARE_HOST_LEDGER_USER = env.SQUARE_HOST_LEDGER_USER;
+  process.env.SQUARE_HOST_LEDGER_ROOT = env.SQUARE_HOST_LEDGER_ROOT;
   try {
     const result = fn();
     if (result && typeof result.then === 'function') {
@@ -89,8 +89,8 @@ function withRegistry(env, fn) {
 function restoreRegistry(previous, previousLedger) {
   if (previous === undefined) delete process.env.SQUARE_REGISTRY;
   else process.env.SQUARE_REGISTRY = previous;
-  if (previousLedger === undefined) delete process.env.SQUARE_HOST_LEDGER_USER;
-  else process.env.SQUARE_HOST_LEDGER_USER = previousLedger;
+  if (previousLedger === undefined) delete process.env.SQUARE_HOST_LEDGER_ROOT;
+  else process.env.SQUARE_HOST_LEDGER_ROOT = previousLedger;
 }
 
 async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-session', at = Date.now()) {
@@ -107,8 +107,8 @@ async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-sessi
     kind: 'paseo',
     address: { agentId: sessionId },
   }, { env: item.env, at });
-  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId: sessionId } }, updatedAt: at }, 'user');
+  const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId: sessionId } }, updatedAt: at });
 }
 
 function inboxFor(item, act) {
@@ -120,7 +120,7 @@ function inboxFor(item, act) {
 }
 
 async function markPresentationEvidence(item, session, act, participant = 'Bob', outcome = 'presented') {
-  const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+  const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
   const claim = await ledger.claimEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', leaseMs: 5000, claimToken: `fixture-${session}-${act.index}` });
   assert.equal(claim.status, 'acquired');
   await ledger.appendEvidence({ location: item.squarePath, participant, session, activity: formatActivityId(act.index), kind: 'presentation', outcome, at: Date.now(), claimToken: claim.claimToken });
@@ -233,7 +233,7 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     assert.doesNotMatch(payload, /catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
-    const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.filter((row) => row.outcome === 'clipped').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
     assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
@@ -359,7 +359,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
       item.env,
     ));
     assert.equal(later, 'presented');
-    assert.equal(fs.existsSync(path.join(item.env.SQUARE_HOST_LEDGER_USER, 'evidence.ndjsonl')), true);
+    assert.equal(fs.existsSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl')), true);
   } finally {
     item.cleanup();
   }
@@ -410,7 +410,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
-    const claimsPath = path.join(item.env.SQUARE_HOST_LEDGER_USER, 'wake-claims.ndjsonl');
+    const claimsPath = path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'wake-claims.ndjsonl');
     const claims = fs.existsSync(claimsPath)
       ? fs.readFileSync(claimsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
       : [];
@@ -464,8 +464,8 @@ test('an old route and clipped presentation do not suppress the replacement sess
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env, at: newAt + 1 });
-    const newLedger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, localPath: item.env.SQUARE_HOST_LEDGER_LOCAL, writableScope: 'user' });
-    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: newAt + 1 }, 'user');
+    const newLedger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: newAt + 1 });
     const adapter = acceptedAdapter();
 
     const routes = (await loadSquare(item.squarePath)).routes;
@@ -626,7 +626,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
       [formatActivityId(notified.index)]: { state: 'seen', at: now - 1 },
     };
     await writeSquareFile(item.squarePath, state);
-    const ledger = createHostLedgerPort({ userPath: item.env.SQUARE_HOST_LEDGER_USER, writableScope: 'user', readableScopes: ['user'] });
+    const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
     const claim = await ledger.claimEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', leaseMs: 5000, claimToken: 'fixture-carol-owner' });
     assert.equal(claim.status, 'acquired');
     await ledger.appendEvidence({ location: item.squarePath, participant: 'Carol', session: 'carol-owner', activity: formatActivityId(presented.index), kind: 'presentation', outcome: 'presented', at: now - 1, claimToken: claim.claimToken });

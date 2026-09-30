@@ -463,7 +463,7 @@ test('a takeover cannot append when the old owner completed first', async () => 
       await closeOpenSquare(kickerSquare);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done']);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice'))?.sessionId, 'owner-a');
+    assert.equal(await readParticipantOwner(squarePath, 'Alice'), undefined);
     assert.deepEqual(await lookupSession('kicker-b'), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

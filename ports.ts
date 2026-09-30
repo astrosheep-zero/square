@@ -8,15 +8,12 @@ export type {
   EvidenceLookup,
   EvidenceRecord,
   HostLedgerPort,
-  HostLedgerScope,
   PresenceKey,
   PresenceLookup,
   PresenceRecord,
   PresenceClaimResult,
   PresenceChannel,
   PresenceResult,
-  ReconcileBindingInput as HostLedgerReconcileBindingInput,
-  ReconcileBindingResult,
 } from './host-ledger.js';
 import type { HostLedgerPort } from './host-ledger.js';
 
@@ -99,13 +96,6 @@ export interface ObserveSquareInput {
   readonly now?: number;
 }
 
-export interface ReconcileBindingInput {
-  readonly artifact: SquareArtifactPort;
-  readonly hostLedger: HostLedgerPort;
-  readonly location?: string;
-  readonly scopes?: readonly import('./host-ledger.js').HostLedgerScope[];
-  readonly now?: number;
-}
 
 export interface DeliveryResult {
   readonly attempted: number;

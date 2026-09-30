@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { hostLedgerRoot } from './host-ledger-root.js';
 
 import {
   createSquareState,
@@ -63,7 +64,7 @@ export async function openSquare(
   options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env' | 'signal'> = {},
 ): Promise<OpenSquare> {
   const env = options.env ?? process.env;
-  const ledgerRoot = env.SQUARE_REGISTRY === undefined ? undefined : path.dirname(env.SQUARE_REGISTRY);
+  const ledgerRoot = hostLedgerRoot(env);
   const cell = openSquareCell(squarePath, options.signal);
   try {
     await cell.read();
@@ -74,8 +75,7 @@ export async function openSquare(
       location: squarePath,
       env,
       hostLedger: options.hostLedger ?? createHostLedgerPort({
-        userPath: env.SQUARE_HOST_LEDGER_USER ?? ledgerRoot,
-        localPath: env.SQUARE_HOST_LEDGER_LOCAL ?? ledgerRoot,
+        rootPath: ledgerRoot,
       }),
       wakeTransport: options.wakeTransport,
     };

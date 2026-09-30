@@ -133,8 +133,7 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
     PASEO_AGENT_ID: '',
     SQUARE_DISABLE_PASEO_WAKE: '1',
     SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
-    SQUARE_HOST_LEDGER_USER: path.join(root, 'host-ledger-user'),
-    SQUARE_HOST_LEDGER_LOCAL: path.join(root, 'host-ledger-local'),
+    SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger-user'),
   };
   const square = await Square.build({ path: squarePath, markdown: 'context', env });
   try {
