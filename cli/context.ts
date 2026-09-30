@@ -6,6 +6,8 @@ import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
 import { projectSessionBindings, sessionIdsFromEnvironment } from '../square-projections.js';
 
 export interface CommandContext {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
   squarePath?: string;
   name?: string;
   homeDir: string;
@@ -205,7 +207,7 @@ export function locationIsRequired(command: string): boolean {
 }
 
 export function defaultContext(command: string, squarePath?: string, name?: string): CommandContext {
-  return { command, squarePath, name, homeDir: os.homedir() };
+  return { command, cwd: process.cwd(), env: { ...process.env }, squarePath, name, homeDir: os.homedir() };
 }
 
 export function requireSquarePath(context: CommandContext): string {

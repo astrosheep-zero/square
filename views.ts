@@ -19,7 +19,7 @@ export interface PendingDeliveryProjection { readonly recipient: string; readonl
 
 function expose(stored: StoredAct): Activity {
   if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
-  return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor, ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}), mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}), ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
+  return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor, ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}), ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}), mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}), ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }
 
 function parseRequiredActivityId(id: ActivityId): number {
@@ -32,7 +32,7 @@ function historyOptions(query: HistoryQuery): ActivitiesOptions {
   if (query.before !== undefined && query.after !== undefined) throw new SquareError('invalid_args', 'History cannot combine before and after cursors');
   const afterIndex = query.after === undefined ? undefined : parseRequiredActivityId(query.after);
   const beforeIndex = query.before === undefined ? undefined : parseRequiredActivityId(query.before);
-  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.mention === undefined ? {} : { mention: query.mention }), ...(afterIndex === undefined ? {} : { afterIndex }), ...(beforeIndex === undefined ? {} : { beforeIndex }), order: 'asc' };
+  return { ...(query.from === undefined ? {} : { participants: [...query.from] }), ...(query.grep === undefined ? {} : { grep: query.grep }), ...(query.fixed === undefined ? {} : { fixed: query.fixed }), ...(query.mention === undefined ? {} : { mention: query.mention }), ...(afterIndex === undefined ? {} : { afterIndex }), ...(beforeIndex === undefined ? {} : { beforeIndex }), order: 'asc' };
 }
 
 function selectHistory(stored: StoredAct[], query: HistoryQuery): StoredAct[] {

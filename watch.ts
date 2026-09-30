@@ -14,7 +14,7 @@ import {
 import { openSquare } from './square-file-adapter.js';
 import type { OpenSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
-import { openParticipant } from './square-wiring.js';
+import { createSquareApplication } from './square-application.js';
 import { resolveParticipant, watchPresentation } from './views.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease, type WatchLeaseStart } from './wakes.js';
 import {
@@ -193,11 +193,12 @@ function installWatchInterruptHandler(square: OpenSquare, squarePath: string, na
   };
 }
 
-async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions): Promise<boolean> {
-  const square = await openSquare(squarePath, { clock: nowMs });
-  const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
+interface WatchCallerContext { readonly cwd: string; readonly env: NodeJS.ProcessEnv }
+async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions, caller: WatchCallerContext): Promise<boolean> {
+  const square = await openSquare(squarePath, { clock: nowMs, env: caller.env });
+  const application = createSquareApplication({ cwd: caller.cwd, env: caller.env, squarePath, participant: name, clock: nowMs });
   try {
-    const caught: CatchResult = await facade.participant.catch({
+    const caught: CatchResult = await application.catch({
       ...(opts.id === undefined ? {} : { id: opts.id }),
       ...(opts.participants === undefined ? {} : { from: opts.participants }),
       ...(opts.mention === undefined ? {} : { mention: true }),
@@ -211,7 +212,6 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions)
     await finishWatchResult(square, squarePath, name, result, undefined);
     return caught.activities.length > 0;
   } finally {
-    await facade.close();
     await closeOpenSquare(square);
   }
 }
@@ -225,11 +225,11 @@ async function countParticipants(square: OpenSquare): Promise<number | undefined
 }
 
 /** `false` is reserved for a quiet --now; idle completion preserves its existing sweep boundary. */
-export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions): Promise<boolean | undefined> {
+export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions, caller: WatchCallerContext = { cwd: process.cwd(), env: { ...process.env } }): Promise<boolean | undefined> {
   let square: OpenSquare;
   let participantCount: number | undefined;
   try {
-    square = await openSquare(squarePath, { clock: nowMs });
+    square = await openSquare(squarePath, { clock: nowMs, env: caller.env });
     participantCount = inSquareCount((await square.artifact.read()).state);
     name = (await resolveParticipant(square, name)).name;
   } catch (err) {
@@ -261,7 +261,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   }
   if (opts.now) {
     await closeOpenSquare(square);
-    return cmdWatchNow(squarePath, name, opts);
+    return cmdWatchNow(squarePath, name, opts, caller);
   }
 
   const start = await beginWatch(square, squarePath, name, opts);
@@ -291,7 +291,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   }
   const idleMs = opts.idleMs ?? STALE_MS;
   const removeInterruptHandler = installWatchInterruptHandler(square, squarePath, name, () => currentLeaseId);
-  const facade = await openParticipant({ path: squarePath, clock: nowMs }, name);
+  const application = createSquareApplication({ cwd: caller.cwd, env: caller.env, squarePath, participant: name, clock: nowMs });
 
   try {
     while (true) {
@@ -302,7 +302,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
 
       let result: WatchResult = leaseState;
       if (result.type === 'sleep') {
-        const caught = await facade.participant.catch({
+        const caught = await application.catch({
           ...(opts.participants === undefined ? {} : { from: opts.participants }),
           ...(opts.mention === undefined ? {} : { mention: true }),
           ...(opts.limit === undefined ? {} : { limit: opts.limit }),
@@ -332,7 +332,6 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       await sleep(SLEEP_MS);
     }
   } finally {
-    await facade.close();
     await closeOpenSquare(square);
     removeInterruptHandler();
   }

@@ -22,7 +22,9 @@ import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../tim
 import { cmdWatch } from '../watch.js';
 import { openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
+import { createSquareApplication } from '../square-application.js';
 import { historyPresentation, participantsPresentation, statusPresentation, type HistoryPresentation } from '../views.js';
+import { hostLedgerForEnv } from '../registry.js';
 
 import {
   type CommandContext,
@@ -161,7 +163,7 @@ export const catchCommand: CommandSpec<WatchOptions> = {
   },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const caught = await cmdWatch(squarePath, requireParticipant(context.name), intent);
+    const caught = await cmdWatch(squarePath, requireParticipant(context.name), intent, { cwd: context.cwd, env: context.env });
     if (caught !== false) await sweepPendingNotifications(squarePath);
   },
   present: () => {},
@@ -296,6 +298,30 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   };
 }
 
+function applicationHistoryQuery(options: HistoryCommandOptions): import('../square-facade.js').HistoryQuery {
+  return {
+    ...(options.participants === undefined || options.participants.length === 0 ? {} : { from: options.participants }),
+    ...(options.mention === undefined ? {} : { mention: options.mention }),
+    ...(options.afterIndex === undefined ? {} : { after: actId(options.afterIndex) }),
+    ...(options.beforeIndex === undefined ? {} : { before: actId(options.beforeIndex) }),
+    ...(options.grep === undefined ? {} : { grep: options.grep }), ...(options.fixed === undefined ? {} : { fixed: options.fixed }),
+    order: 'asc',
+  };
+}
+function activityAsStored(activity: import('../square-facade.js').Activity): StoredAct {
+  const index = parseActivityId(activity.id);
+  if (index === undefined) throw new Error('Application returned a non-canonical activity id');
+  switch (activity.kind) {
+    case 'say': return { index, kind: 'say', actor: activity.actor, at: activity.at, body: activity.body ?? '', mentions: activity.mentions, ...(activity.reach === undefined ? {} : { reach: activity.reach }), ...(activity.reply === undefined ? {} : { reply: parseActivityId(activity.reply) ?? undefined }) };
+    case 'done': return { index, kind: 'done', actor: activity.actor, at: activity.at, body: activity.body ?? '' };
+    case 'hold': return { index, kind: 'hold', actor: activity.actor, at: activity.at, ...(activity.body === undefined ? {} : { body: activity.body }) };
+    case 'resume': return { index, kind: 'resume', actor: activity.actor, at: activity.at };
+    case 'join': return { index, kind: 'join', actor: activity.actor, at: activity.at };
+    case 'listen': return { index, kind: 'listen', actor: activity.actor, target: activity.target ?? '', at: activity.at };
+    case 'ignore': return { index, kind: 'ignore', actor: activity.actor, target: activity.target ?? '', at: activity.at };
+  }
+}
+
 function historyContinuationCommand(options: HistoryCommandOptions, squarePath: string, direction: '--before' | '--after', index: number): string {
   const args = [...(options.continuationArgs ?? []), direction, actId(index), '--limit', String(options.lastN ?? HISTORY_DEFAULT_LIMIT)];
   return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
@@ -346,7 +372,7 @@ function renderHistoryProjection(
   noTruncate: boolean,
   squarePath: string,
 ): string {
-  const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done');
+  const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done' || activity.kind === 'hold');
   const preview = noTruncate || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
   for (const activity of shown) {
@@ -370,12 +396,16 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
   async execute(options, context) {
     const squarePath = requireSquarePath(context);
-    const square = await openSquare(squarePath, { clock: nowMs });
+    const square = await openSquare(squarePath, { clock: nowMs, env: context.env, hostLedger: hostLedgerForEnv(context.env) });
     try {
       // Keep the projection chronological; pagination chooses a stable edge,
       // then --order only changes how the selected page is displayed.
       const projection = await historyPresentation(square, { ...options, order: 'asc' });
-      let events = [...projection.activities];
+      const useApplicationHistory = options.atIndexes === undefined && options.beforeContext === undefined && options.afterContext === undefined && options.after === undefined;
+      const applicationHistory = useApplicationHistory
+        ? await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs }).history(applicationHistoryQuery(options))
+        : undefined;
+      let events = applicationHistory === undefined ? [...projection.activities] : applicationHistory.map(activityAsStored);
       if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
         fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${boundedHistoryCommand(options, squarePath)}`);
       }
@@ -395,8 +425,8 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const output = pattern === undefined || pattern === ''
         ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath)
         : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
-      const publicEvents = events.filter((item) => item.kind === 'say' || item.kind === 'done');
-      const allPublic = projection.activities.filter((item) => item.kind === 'say' || item.kind === 'done');
+      const publicEvents = events.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
+      const allPublic = projection.activities.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
       const pageMin = publicEvents.length === 0 ? undefined : Math.min(...publicEvents.map((item) => item.index));
       const pageMax = publicEvents.length === 0 ? undefined : Math.max(...publicEvents.map((item) => item.index));
       const hasMore = options.lastN != null && publicEvents.length > 0 && (
@@ -440,10 +470,10 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
   parse(argv, context) { return parseParticipants(argv, context); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await openSquare(squarePath, { clock: nowMs });
-    try {
+    const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs });
+    {
       const now = nowMs();
-      const participants = await participantsPresentation(square);
+      const participants = await application.participants();
       const lines = participants.slice(0, intent.limit).map((participant) => {
         const recent = participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= STATUS_HERE_WINDOW_MS;
         const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && recent ? '●' : '○';
@@ -465,8 +495,6 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
       return withPathOutput(squarePath, ['participants', ...lines, ...tail].join('\n'), {
         participantCount,
       });
-    } finally {
-      await closeOpenSquare(square);
     }
   },
   present: (result) => process.stdout.write(result),
@@ -476,9 +504,9 @@ export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await openSquare(squarePath, { clock: nowMs });
-    try {
-      const presentation = await statusPresentation(square);
+    const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs });
+    {
+      const presentation = await application.status();
       const result = presentation.status;
     const active = result.participants.filter((participant) => participant.state === 'active');
     const here = active.filter((participant) =>
@@ -568,8 +596,6 @@ export const statusCommand: CommandSpec<undefined, string> = {
       ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
     ].join('\n');
     return withPathOutput(squarePath, output, { participantCount: result.activeCount, held: result.holdActive });
-    } finally {
-      await closeOpenSquare(square);
     }
   },
   present: (result) => process.stdout.write(result),

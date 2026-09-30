@@ -806,7 +806,9 @@ test('room changes and final notes remain visible without duplicate done events'
   assert.equal(afterDone.status, 0, afterDone.stderr);
   assert.match(afterDone.stdout, /✓ everyone else has left — the square is yours alone/);
   assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 0);
-  assert.match(run(withPath(file, ['history', '--no-truncate'])).stdout, /final note/);
+  const history = run(withPath(file, ['history', '--no-truncate']));
+  assert.match(history.stdout, /pause/);
+  assert.match(history.stdout, /final note/);
   assert.match(run(withName(file, 'Alice', ['status'])).stdout, /final note/);
 });
 

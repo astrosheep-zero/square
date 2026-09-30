@@ -23,6 +23,7 @@ function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): Per
   const result = {
     id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor,
     mentions: activity.kind === 'say' ? activity.mentions ?? [] : [],
+    ...(activity.kind === 'say' && activity.reach !== undefined ? { reach: activity.reach } : {}),
     ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}),
     ...('target' in activity ? { target: activity.target } : {}),
     ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}),
@@ -94,6 +95,7 @@ function exposeActivity(stored: StoredAct): Activity {
     id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
     mentions: stored.kind === 'say' ? stored.mentions ?? [] : [],
+    ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
   };

@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
-import { hostLedgerRoot } from './host-ledger-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 
 import { SquareError, isSquareError, validateName } from './model.js';
 import {
@@ -20,15 +18,17 @@ import { nowMs, inSquareCount, SLEEP_MS } from './runtime.js';
 import { unreadActivitySummaries } from './decisions.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { Square } from './square-wiring.js';
+import { createSquareApplication } from './square-application.js';
 import { activityPresentation, resolveParticipant } from './views.js';
 import { formatActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
 import { style } from './tty-style.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { hostLedgerForEnv } from './registry.js';
 import { createDefaultWakeTransport } from './notifications.js';
 
 export interface ActivityOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
   force?: boolean;
   forceCommand: string;
   noWait?: boolean;
@@ -76,7 +76,7 @@ export async function cmdActivity(
   validateName(name);
   const rawInput = String(resolveBody(activity)).replace(/\r\n/g, '\n');
 
-  const reader = await openSquare(squarePath, { clock: nowMs });
+  const reader = await openSquare(squarePath, { clock: nowMs, env: { ...(opts.env ?? process.env) }, hostLedger: hostLedgerForEnv(opts.env ?? process.env) });
   let knownName: string;
   try {
     knownName = (await resolveParticipant(reader, name)).name;
@@ -102,24 +102,31 @@ export async function cmdActivity(
   const noWait = opts.noWait ?? false;
   const reach = opts.reach === 'bell' ? 'bell' : undefined;
   let announcedWait: 'throttled' | 'held' | undefined;
-  const ledgerRoot = hostLedgerRoot(process.env);
-  const hostLedger = createHostLedgerPort({ rootPath: ledgerRoot });
-  const square = await Square.at({ path: squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
-  try {
-    const participant = await square.join(name);
-    while (true) {
-      const beforeSquare = await openSquare(squarePath, { clock: nowMs });
+  const env = { ...(opts.env ?? process.env) };
+  const hostLedger = hostLedgerForEnv(env);
+  const application = createSquareApplication({ cwd: opts.cwd ?? process.cwd(), env, squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs), participant: name });
+  await application.join();
+  {
+      const beforeSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
       const before = await activityPresentation(beforeSquare, knownName).finally(() => closeOpenSquare(beforeSquare));
       const pendingPublic = before.pendingPublic;
       const pendingRoomChanges = before.pendingRoomChanges;
       try {
-        const landed = await participant.express(body, {
+        const landed = await application.express(body, {
           force,
+          noWait,
           ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
           ...(reach === undefined ? {} : { reach }),
           ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
+        }, {
+          onProgress: (progress) => {
+            if (announcedWait === progress.reason) return;
+            const delayMs = progress.delayMs ?? SLEEP_MS;
+            process.stdout.write(renderExpressWaiting({ reason: progress.reason, ...(progress.reason === 'throttled' ? { delayMs } : {}) }) + '\n');
+            announcedWait = progress.reason;
+          },
         });
-        const freshSquare = await openSquare(squarePath, { clock: nowMs });
+        const freshSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
         const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;
         const held = fresh.held;
@@ -133,7 +140,7 @@ export async function cmdActivity(
         return;
       } catch (error) {
         if (!(error instanceof SquareError)) throw error;
-        const freshSquare = await openSquare(squarePath, { clock: nowMs });
+        const freshSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
         const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
         const headerCount = fresh.participantCount;
         const held = fresh.held;
@@ -177,12 +184,7 @@ export async function cmdActivity(
           process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
           process.exit(1);
         }
-        if (announcedWait !== 'throttled') {
-          process.stdout.write(renderExpressWaiting({ reason: 'throttled', delayMs }) + '\n');
-          announcedWait = 'throttled';
-        }
-        await sleep(delayMs);
-        continue;
+        throw error;
         }
         if (error.code === 'held') {
           const holdReason = fresh.holdReason;
@@ -191,12 +193,7 @@ export async function cmdActivity(
           process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
           process.exit(1);
         }
-        if (announcedWait !== 'held') {
-          process.stdout.write(renderExpressWaiting({ reason: 'held' }) + '\n');
-          announcedWait = 'held';
-        }
-        await sleep(SLEEP_MS);
-        continue;
+        throw error;
         }
         if (error.code === 'bell_quota') {
         process.stdout.write(
@@ -212,7 +209,4 @@ export async function cmdActivity(
         throw error;
       }
     }
-  } finally {
-    await square.close();
-  }
 }

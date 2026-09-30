@@ -91,9 +91,17 @@ export class Square {
     return { participant: new ParticipantHandle(joined.name, this.square, this.context), activity: joined.activity };
   }
 
-  async takeover(name: string, control?: OperationControl): Promise<Participant> {
+  async takeoverWithActivity(name: string, control?: OperationControl): Promise<{ readonly participant: Participant; readonly activities: readonly Activity[] }> {
     const result = await takeover(this.context, name, [], control);
-    return new ParticipantHandle(result.name, this.square, this.context);
+    return { participant: new ParticipantHandle(result.name, this.square, this.context), activities: result.activities };
+  }
+
+  async takeover(name: string, control?: OperationControl): Promise<Participant> {
+    return (await this.takeoverWithActivity(name, control)).participant;
+  }
+
+  doneOwnedSession(name: string, body: string, expectedEpoch: number, control?: OperationControl): Promise<ExpressResult> {
+    return done(this.context, name, body, { expectedEpoch }, control);
   }
 
   async implicitJoin(name: string, control?: OperationControl): Promise<{ readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant }> {
