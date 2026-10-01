@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { withFileLock as acquireFileLock, type FileLockOptions } from './file-lock.js';
 import { nameKey } from './model.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
@@ -25,13 +27,33 @@ export interface HostLedgerFileAdapterOptions { rootPath?: string; claimsPath?: 
 async function canon(value:string):Promise<string>{const absolute=path.resolve(value);try{return await fs.realpath(absolute)}catch{return absolute}}
 function canonRoot(value:string):string{let current=path.resolve(value),suffix:string[]=[];for(;;){try{return path.join(fsSync.realpathSync.native(current),...suffix.reverse())}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')return path.resolve(value);const parent=path.dirname(current);if(parent===current)return path.resolve(value);suffix.push(path.basename(current));current=parent}}}
 async function read<T extends {v:1;at?:number;updatedAt?:number;kind?:string;outcome?:string}>(file:string,now:number,includeFuture=false):Promise<T[]>{try{return (await fs.readFile(file,'utf8')).split('\n').flatMap(line=>{try{const row=JSON.parse(line) as T;const at=row.at??row.updatedAt;const durableTerminal=row.kind==='wake'&&row.outcome==='accepted';return row.v===1&&typeof at==='number'&&(durableTerminal||at>=now-RETENTION)&&(includeFuture||at<=now)?[row]:[]}catch{return[]}})}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e}}
-async function write<T>(file:string,rows:readonly T[]):Promise<void>{await fs.mkdir(path.dirname(file),{recursive:true});const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;await fs.writeFile(tmp,rows.length?rows.map(row=>JSON.stringify(row)).join('\n')+'\n':'',{mode:0o600});await fs.rename(tmp,file)}
+/** Keep the old ledger intact while Windows readers briefly deny replacement.
+ * The owning file lock stays held throughout; never unlink the destination. */
+async function write<T>(file: string, rows: readonly T[], signal?: AbortSignal): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    if (signal?.aborted) throw signal.reason ?? new Error('Ledger write aborted');
+    await fs.writeFile(tmp, rows.length ? rows.map((row) => JSON.stringify(row)).join('\n') + '\n' : '', { mode: 0o600, flag: 'wx' });
+    for (let attempt = 0; ; attempt += 1) {
+      if (signal?.aborted) throw signal.reason ?? new Error('Ledger write aborted');
+      try { await fs.rename(tmp, file); return; }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= 5 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw error;
+        await sleep(10 * 2 ** attempt, undefined, { signal });
+      }
+    }
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+  }
+}
 function k(v:{location:string;participant:string;session:string;channel?:string;activity?:string;kind?:string}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.channel,v.activity,v.kind])}
 function evidenceKey(v:{location:string;participant:string;session:string;activity:string;kind:string;attemptN?:number}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.activity,v.kind,v.attemptN??null])}
 interface ClaimRow { readonly v:1; readonly ts:number; readonly attention_key:string; readonly leaseId:string; readonly expiresAt:number; readonly phase:'claimed'|'dispatching'; readonly ownerPid?:number; readonly routeKind?:import('./model.js').WakeRouteKind; readonly attemptN?:number; readonly session?:string }
 async function readClaims(file:string,now:number):Promise<ClaimRow[]>{try{return (await fs.readFile(file,'utf8')).split('\n').flatMap(line=>{try{const row=JSON.parse(line) as ClaimRow;return row.v===1&&typeof row.ts==='number'&&typeof row.attention_key==='string'&&typeof row.leaseId==='string'&&typeof row.expiresAt==='number'&&(row.phase==='claimed'||row.phase==='dispatching')&&row.ts>=now-RETENTION?[row]:[]}catch{return[]}})}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e}}
 function processAlive(pid:number|undefined):boolean|undefined { if (pid===undefined) return undefined; try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' ? false : true; } }
-async function writeClaims(file:string,rows:readonly ClaimRow[]):Promise<void>{await fs.mkdir(path.dirname(file),{recursive:true});const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;await fs.writeFile(tmp,rows.length?rows.map(row=>JSON.stringify(row)).join('\n')+'\n':'',{mode:0o600});await fs.rename(tmp,file)}
+function writeClaims(file: string, rows: readonly ClaimRow[]): Promise<void> { return write(file, rows); }
 export class FileHostLedgerPort implements HostLedgerPort {
   private readonly root: string;
   private readonly claims: string;
@@ -77,7 +99,7 @@ export class FileHostLedgerPort implements HostLedgerPort {
           const rows = await read<any>(file, this.clock(), true);
           const existing = rows.filter((row) => row.location === location && nameKey(row.participant) === nameKey(record.participant)).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
           if (existing !== undefined) return existing.session === record.session ? { status: 'owned', record: existing } : { status: 'busy', record: existing };
-          await write(file, [...rows, record]);
+          await write(file, [...rows, record], signal);
           return { status: 'acquired', record };
         });
       });

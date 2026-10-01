@@ -93,7 +93,7 @@ test('done keeps a same-session rejoin that happens after serialized cleanup', a
   };
   try {
     await app.done('finished');
-    assert.deepEqual(await lookupSession('same-session', Date.now(), env), [{ name: 'rei', squarePath: fs.realpathSync(squarePath) }]);
+    assert.deepEqual(await lookupSession('same-session', Date.now(), env), [{ name: 'rei', squarePath: await fs.promises.realpath(squarePath) }]);
   } finally {
     Square.prototype.doneOwnedSession = originalDone;
   }

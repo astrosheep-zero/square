@@ -777,7 +777,7 @@ test('Pi steers pending activity into a running agent and commits only when it l
   }, false);
 });
 
-test('Pi retries a dropped steer immediately and commits the retry once it lands', async () => {
+test('Pi retries a dropped steer after a transient evidence rename refusal and commits once it lands', async (t) => {
   await withPiFixture('pi-dropped-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -785,6 +785,15 @@ test('Pi retries a dropped steer immediately and commits the retry once it lands
       on(event, handler) { handlers.set(event, handler); },
       sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
+    let refusedRename = false;
+    const rename = fs.promises.rename;
+    t.mock.method(fs.promises, 'rename', async (source, destination) => {
+      if (!refusedRename && sent.length === 1 && path.basename(destination) === 'evidence.ndjsonl') {
+        refusedRename = true;
+        throw Object.assign(new Error('Windows reader temporarily holds the evidence ledger'), { code: 'EPERM' });
+      }
+      return rename(source, destination);
+    });
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
     await handlers.get('session_start')({}, context);
@@ -797,6 +806,7 @@ test('Pi retries a dropped steer immediately and commits the retry once it lands
       await piTurnStart(handlers);
       await piTurnEnd(handlers);
       await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
+      assert.equal(refusedRename, true, 'the dropped-presentation evidence write must encounter the injected refusal');
       assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');
