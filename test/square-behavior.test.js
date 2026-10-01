@@ -109,7 +109,7 @@ test('any self activity advances the actor cursor', async () => {
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/0');
   await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/1');
-  await alice.done('bye');
+  await alice.done();
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/2');
   await closeSquare(square);
 });
@@ -135,7 +135,7 @@ test('catch from a named peer keeps that peer\'s directed says only', async () =
   const cara = await square.join('Cara');
   await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
   await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
-  await bob.done('bye');
+  await bob.done();
   const caught = await alice.catch({ from: ['Bob'] });
   assert.deepEqual(
     caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
@@ -150,7 +150,7 @@ test('catch after a rejoin excludes departure and return presence', async () => 
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
   await alice.catch();
-  await bob.done('bye');
+  await bob.done();
   await square.join('Bob');
   const caught = await alice.catch();
   assert.deepEqual(
@@ -220,14 +220,14 @@ test('history from a named participant keeps that participant\'s activities', as
   const cara = await square.join('Cara');
   await (await square.join('Bob')).express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
   await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
-  await cara.done('later');
+  await cara.done();
   const fromCara = await square.history({ from: ['Cara'], limit: 100 });
   assert.deepEqual(
     fromCara.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
     [
       { kind: 'join', actor: 'Cara', body: undefined },
       { kind: 'say', actor: 'Cara', body: 'hello from cara @Alice' },
-      { kind: 'done', actor: 'Cara', body: 'later' },
+      { kind: 'done', actor: 'Cara', body: undefined },
     ],
   );
   assert.equal(fromCara.some((activity) => activity.body === 'hello from bob @Alice'), false);
@@ -374,7 +374,7 @@ test('snapshot counts only people still in the square and tracks done participan
   for (let index = 0; index < 12; index += 1) {
     await alice.express(`activity ${index} @Bob`, { force: true, mentions: ['Bob'] });
   }
-  await bob.done('leaving');
+  await bob.done();
   await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
   const snapshot = await square.snapshot();
   assert.equal(snapshot.hardCap, 100);
@@ -385,7 +385,7 @@ test('snapshot counts only people still in the square and tracks done participan
   await closeSquare(square);
 });
 
-test('room changes stay in history while a final note remains directed conversation', async () => {
+test('leaving stays in history without sending a message to catch', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
@@ -396,13 +396,16 @@ test('room changes stay in history while a final note remains directed conversat
     first.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
     [],
   );
-  await bob.done('final note');
+  await bob.done();
   const afterDone = await alice.catch();
   assert.deepEqual(
     afterDone.activities.map((activity) => ({ kind: activity.kind, body: activity.body })),
     [],
   );
-  assert.equal((await square.history({ limit: 100 })).filter((activity) => activity.body === 'final note').length, 1);
+  const departures = (await square.history({ limit: 100 })).filter((activity) => activity.kind === 'done');
+  assert.equal(departures.length, 1);
+  assert.equal(departures[0].actor, 'Bob');
+  assert.equal(departures[0].body, undefined);
   await closeSquare(square);
 });
 

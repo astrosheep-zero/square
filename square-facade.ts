@@ -42,5 +42,6 @@ export interface Participant {
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]>;
   hold(reason?: string, control?: OperationControl): Promise<ExpressResult>;
   resume(control?: OperationControl): Promise<ExpressResult>;
+  /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, control?: OperationControl): Promise<ExpressResult>;
 }

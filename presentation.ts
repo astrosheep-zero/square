@@ -35,6 +35,7 @@ interface ActivityLimitOptions extends ParticipantOutputOptions {
 }
 
 interface ActivityBlockedOptions extends ParticipantOutputOptions {
+  retryCommand: string;
   forceCommand: string;
   activitySummaries: UnreadActivitySummary[];
   unreadRoomChanges: RoomChangeAct[];
@@ -48,7 +49,7 @@ interface ExpressWaitingOptions {
 
 interface ExpressNoWaitOptions extends ParticipantOutputOptions {
   reason: 'throttled' | 'held';
-  forceCommand: string;
+  retryCommand: string;
   delayMs?: number;
   holdReason?: string;
   draftPath?: string;
@@ -379,12 +380,26 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
       ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, roomChanges: opts.unreadRoomChanges, viewer: opts.name }),
       ...draftSavedLines(opts.draftPath),
       `${readNowCommand}`,
-      '  take it in, then express again',
-      `${withDraftInput(opts.forceCommand, opts.draftPath)}`,
-      '  only if you truly mean to express over unread activity',
+      '  · take it in, then retry:',
+      withDraftInput(opts.retryCommand, opts.draftPath),
+      '  · optional: express over unread activity with --force:',
+      withDraftInput(opts.forceCommand, opts.draftPath),
     ].join('\n'),
     { participantCount: opts.participantCount, held: opts.held }
   );
+}
+
+/** An indeterminate or already-committed send only points to inspection, never resend. */
+export function renderActivityUncertain(opts: ParticipantOutputOptions & { draftPath: string; landedId?: string; detail?: string }): string {
+  return formatRefusal(opts.squarePath, [
+    opts.landedId === undefined
+      ? '✕ your activity may have landed — check history before sending again'
+      : `✕ your activity landed · ${opts.landedId} — the confirmation could not finish`,
+    ...(opts.detail === undefined ? [] : [`  · ${truncateExternalDiagnostic(opts.detail)}`]),
+    ...draftSavedLines(opts.draftPath),
+    '  · the draft is a saved copy; sending it again could repeat your activity',
+    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --no-truncate`,
+  ], opts);
 }
 
 export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
@@ -395,7 +410,7 @@ export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
 }
 
 export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
-  const retryCommand = opts.forceCommand;
+  const retryCommand = opts.retryCommand;
   const lines =
     opts.reason === 'throttled'
       ? [
@@ -541,12 +556,12 @@ export function renderGrepActivitiesView(
 
 function renderActivityLimitBody(opts: ActivityLimitOptions): string {
   const countText = opts.count !== undefined && opts.hardCap !== undefined ? ` (${opts.count}/${opts.hardCap})` : '';
-  const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done -`;
+  const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done`;
   return [
     `${style('blocked', '✕')} your activity doesn't land — the cap is reached${countText}`,
     ...draftSavedLines(opts.draftPath),
-    `${withDraftInput(doneCommand, opts.draftPath)}`,
-    '  your draft becomes your final note',
+    '  · your draft stays unsent; done only steps out',
+    doneCommand,
   ].join('\n');
 }
 
@@ -600,9 +615,9 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ].join('\n');
     }
     case 'quorum':
-      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
     case 'capped':
-      return [`${style('blocked', '✕')} nothing left in you — the cap is reached`, `${participantCommandPrefix(opts.squarePath, opts.name)} done -`].join('\n');
+      return [`${style('blocked', '✕')} nothing left in you — the cap is reached`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
   }
 }
 
