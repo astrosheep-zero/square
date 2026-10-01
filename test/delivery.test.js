@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
@@ -159,7 +160,7 @@ test('clipped attention ends with a labeled caption and a bare read-it-all comma
     `${'x'.repeat(200)}…`,
     '```',
     '· clipped — read it all:',
-    `square --location '/tmp/a.square' --as 'Bob' catch --id act/12`,
+    `square --location '${path.resolve('/tmp/a.square')}' --as 'Bob' catch --id act/12`,
   ].join('\n'));
 });
 
@@ -175,7 +176,7 @@ test('a backtick run in the command path stays outside the fence', () => {
   assert.equal(lines[0], '```square-activity');
   assert.equal(lines[5], '```');
   assert.equal(lines[6], '· clipped — read it all:');
-  assert.equal(lines[7], `square --location '/tmp/a\`\`\`b.square' --as 'Bob' catch --id act/12`);
+  assert.equal(lines[7], `square --location '${path.resolve('/tmp/a```b.square')}' --as 'Bob' catch --id act/12`);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', () => {

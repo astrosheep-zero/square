@@ -199,21 +199,23 @@ test('revision waits abort during lock contention and close stops a pending wait
   const cell = createFileCell(squarePath);
   const baseline = (await cell.read()).version;
   const writer = new DatabaseSync(squarePath);
-  t.after(async () => {
-    try { writer.exec('ROLLBACK'); } finally { writer.close(); await cell.close(); }
-  });
-  writer.exec('BEGIN EXCLUSIVE');
-  const controller = new AbortController();
-  const reason = new Error('cancel revision wait');
-  const aborted = assert.rejects(cell.changed(baseline, 60_000, controller.signal), (error) => error === reason);
-  await sleep(30);
-  controller.abort(reason);
-  await settlesWithin(aborted, 500, 'abort left a contended revision read running');
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    const controller = new AbortController();
+    const reason = new Error('cancel revision wait');
+    const aborted = assert.rejects(cell.changed(baseline, 60_000, controller.signal), (error) => error === reason);
+    await sleep(30);
+    controller.abort(reason);
+    await settlesWithin(aborted, 500, 'abort left a contended revision read running');
 
-  const waiting = cell.changed(baseline, 60_000);
-  await sleep(30);
-  await cell.close();
-  assert.equal(await settlesWithin(waiting, 500, 'close left a revision wait running'), false);
+    const waiting = cell.changed(baseline, 60_000);
+    await sleep(30);
+    await cell.close();
+    assert.equal(await settlesWithin(waiting, 500, 'close left a revision wait running'), false);
+  } finally {
+    // Release SQLite's Windows file handle before makeSquare's directory cleanup.
+    try { writer.exec('ROLLBACK'); } finally { writer.close(); await cell.close(); }
+  }
 });
 
 test('already-open cells observe cross-process commits and an in-place force rebuild by revision', async (t) => {
