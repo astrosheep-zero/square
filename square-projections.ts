@@ -1,10 +1,21 @@
 import { formatActivityId, parseActivityId } from './square-core.js';
-import { nameKey, type InboxNotification, type SquareState } from './model.js';
+import { nameKey, type InboxMembership, type InboxNotification, type SquareState } from './model.js';
 import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEvidenceProjection, PresentationProjection, SessionBindingProjection } from './ports.js';
-import { deriveDeliveryModel } from './delivery.js';
+import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
 import { freshWatchLease } from './runtime.js';
 import type { WakeRoute, WakeRouteKind } from './model.js';
 import { canonicalRouteLocation } from './routes.js';
+
+/** A fresh blocking catch owns only the notifications admitted by its filter. */
+export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
+  return inbox.map((membership) => {
+    const lease = membership.catchLease;
+    if (lease === undefined) return membership;
+    return { ...membership, notifications: membership.notifications.filter(
+      (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.name }),
+    ) };
+  }).filter((membership) => membership.notifications.length > 0);
+}
 
 function bindingProjection(record: PresenceRecord): SessionBindingProjection {
   return {

@@ -1,11 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
-import { setTimeout as sleep } from 'node:timers/promises';
 
 import { quoteShell } from './presentation.js';
-import { SLEEP_MS } from './runtime.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare, observeSquareChanges } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { streamProjection, streamTailProjection } from './views.js';
 
@@ -26,32 +24,33 @@ export async function cmdStreamNdjson(squarePath: string, recipient?: string, st
   }
   let cursor = start.kind === 'after' ? start.after : -1;
   let initial = start.kind === 'tail' ? start : undefined;
-  while (true) {
-    try {
-      const square = await openSquare(squarePath);
+  const observer = await observeSquareChanges(squarePath);
+  try {
+    while (true) {
+      const generation = observer.generation;
       try {
-        const projection = initial === undefined
-          ? await streamProjection(square, cursor, recipient)
-          : await streamTailProjection(square, initial.last, recipient);
-        for (const item of projection.activities) {
-          await writeNdjson({
-            seq: item.activity.index,
-            square: squarePath,
-            ...item.activity,
-            ...(item.route === undefined ? {} : { route: item.route }),
-          });
-        }
-        cursor = projection.cursor;
-        initial = undefined;
-        if (projection.hasMore) continue;
-      } finally {
-        await closeOpenSquare(square);
+        const baseline = await observer.read();
+        const square = await openSquare(squarePath);
+        let hasMore;
+        try {
+          const projection = initial === undefined
+            ? await streamProjection(square, cursor, recipient)
+            : await streamTailProjection(square, initial.last, recipient);
+          for (const item of projection.activities) {
+            await writeNdjson({ seq: item.activity.index, square: squarePath, ...item.activity,
+              ...(item.route === undefined ? {} : { route: item.route }) });
+          }
+          cursor = projection.cursor;
+          initial = undefined;
+          hasMore = projection.hasMore;
+        } finally { await closeOpenSquare(square); }
+        if (!hasMore) await observer.changed(baseline, Infinity);
+      } catch {
+        // Repair/replacement is a storage hint, not a reason to scan history on a timer.
+        await observer.hinted(generation, Infinity);
       }
-    } catch {
-      // A concurrent artifact replacement is retried on the next poll.
     }
-    await sleep(SLEEP_MS);
-  }
+  } finally { observer.close(); }
 }
 
 export async function cmdStream(squarePath: string): Promise<void> {

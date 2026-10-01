@@ -149,23 +149,10 @@ export interface ParsedGlobalArgs {
   args: string[];
 }
 
-function withoutAsCommand(rawArgs: readonly string[]): string {
-  const args: string[] = [];
-  for (let index = 0; index < rawArgs.length; index++) {
-    if (rawArgs[index] === '--as') {
-      index += 1;
-      continue;
-    }
-    args.push(rawArgs[index]);
-  }
-  return `square ${args.map((arg) => /^[A-Za-z0-9_./:=@+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`).join(' ')}`;
-}
-
 export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalArgs> {
   const args = [...rawArgs];
   let requestedPath: string | undefined;
   let name: string | undefined;
-  let hasExplicitName = false;
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--location') {
       requestedPath = requireValue(args, index, args[index]);
@@ -173,15 +160,11 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
       index -= 1;
     } else if (args[index] === '--as') {
       name = requireValue(args, index, args[index]);
-      hasExplicitName = true;
       args.splice(index, 2);
       index -= 1;
     }
   }
   const command = args[0];
-  if (command === 'history' && hasExplicitName) {
-    fail(`✕ history is an archive and does not use --as\n${withoutAsCommand(rawArgs)}`);
-  }
   if (name === undefined) name = configuredName();
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;

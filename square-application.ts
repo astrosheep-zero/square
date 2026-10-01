@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError } from './model.js';
+import { currentHold } from './runtime.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
 import { Square, openParticipant } from './square-wiring.js';
 import { openSquare } from './square-file-adapter.js';
@@ -125,8 +126,15 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
           if (!(error instanceof SquareError) || options.noWait || (error.code !== 'held' && error.code !== 'throttled')) throw error;
           waited = true;
           control?.onProgress?.({ kind: 'waiting', reason: error.code, ...(error.code === 'throttled' ? { delayMs: error.facts?.retryAfterMs ?? 1 } : {}) });
-          const delay = error.code === 'throttled' ? (error.facts?.retryAfterMs ?? 1) : 50;
-          await sleep(delay, undefined, { signal: control.signal });
+          if (error.code === 'throttled') {
+            await sleep(error.facts?.retryAfterMs ?? 1, undefined, { signal: control.signal });
+          } else {
+            const square = await openSquare(location(), { clock: context.clock, env, hostLedger, signal: control.signal });
+            try {
+              const snapshot = await square.artifact.read(control.signal);
+              if (currentHold(snapshot.state.acts).active) await square.artifact.changed(snapshot.version, Infinity, control.signal);
+            } finally { await closeOpenSquare(square); }
+          }
         }
       }
     },

@@ -12,6 +12,7 @@ import {
   formatRefusal,
   participantCommandPrefix,
   participantIdentity,
+  takeoverRecoveryLines,
   quoteShell,
   renderRoomChangeText,
   renderAmbientEvent,
@@ -183,8 +184,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         process.stderr.write(formatRefusal(squarePath, [
           `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
           '  · a same-named participant stands here — the name is taken',
-          '  · --kick banishes the one standing there — the name becomes yours',
-          `${participantCommandPrefix(squarePath, intent.name)} join --kick`,
+          ...takeoverRecoveryLines(squarePath, intent.name),
         ], { participantCount: before.participantCount }));
         process.exit(2);
       }

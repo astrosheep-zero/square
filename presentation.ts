@@ -115,6 +115,14 @@ export function joinRecoveryCommand(squarePath: string, name: string): string {
   return `${participantCommandPrefix(squarePath, name)} join`;
 }
 
+/** Taking a name is an explicit recovery choice, never an automatic retry. */
+export function takeoverRecoveryLines(squarePath: string, name: string): string[] {
+  return [
+    'If this is your name to reclaim, --kick banishes the one standing here so you can step in:',
+    `${participantCommandPrefix(squarePath, name)} join --kick`,
+  ];
+}
+
 export function participantsRecoveryCommand(squarePath: string): string {
   return `${commandPrefix(squarePath)} participants`;
 }

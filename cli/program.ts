@@ -1,6 +1,6 @@
 import { helpRequest } from '../help.js';
 import { isSquareError } from '../model.js';
-import { formatRefusal, joinRecoveryCommand, participantsRecoveryCommand } from '../presentation.js';
+import { formatRefusal, joinRecoveryCommand, participantsRecoveryCommand, takeoverRecoveryLines } from '../presentation.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
@@ -24,7 +24,9 @@ async function participantCountFor(squarePath: string): Promise<number | undefin
 async function handleSquareError(error: unknown, squarePath?: string, name?: string): Promise<never> {
   if (isSquareError(error)) {
     const existing = [error.message];
-    if (squarePath !== undefined && /^✕ .* has never stepped into/.test(error.message)) {
+    if (squarePath !== undefined && name !== undefined && error.code === 'already_joined') {
+      existing.push(...takeoverRecoveryLines(squarePath, name));
+    } else if (squarePath !== undefined && /^✕ .* has never stepped into/.test(error.message)) {
       // The caller's name has never joined this square; only a join admits it.
       if (name !== undefined) existing.push(joinRecoveryCommand(squarePath, name));
       else existing.push(participantsRecoveryCommand(squarePath));

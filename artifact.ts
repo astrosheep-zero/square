@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
+import { observeFileVersion } from './file-changes.js';
 
 import { InternalSquareError, SquareError, type SquareState } from './model.js';
 import { createSquareState, emptyRuntimeState, validateSquareState } from './square-state.js';
@@ -90,15 +91,24 @@ function isOwnedSnapshotSchema(database: DatabaseSync): boolean {
   });
 }
 
+function validateDatabaseHeader(database: DatabaseSync): void {
+  const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
+  if (identity.application_id !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
+  if (identity.user_version !== USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
+  if (!isOwnedSnapshotSchema(database)) throw invalidArtifact('unsupported snapshot schema.');
+}
+
+function validateSnapshotRevision(rows: readonly { id?: unknown; revision?: unknown }[]): number {
+  if (rows.length !== 1 || rows[0].id !== 1 || !Number.isSafeInteger(rows[0].revision) || (rows[0].revision as number) < 0) throw invalidArtifact('snapshot row is malformed.');
+  return rows[0].revision as number;
+}
+
 function validateDatabase(database: DatabaseSync): SquareSnapshot {
   try {
-    const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
-    if (identity.application_id !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
-    if (identity.user_version !== USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
-    if (!isOwnedSnapshotSchema(database)) throw invalidArtifact('unsupported snapshot schema.');
+    validateDatabaseHeader(database);
     const rows = database.prepare(`SELECT id, revision, state FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown; state?: unknown }[];
-    if (rows.length !== 1 || rows[0].id !== 1 || !Number.isSafeInteger(rows[0].revision) || (rows[0].revision as number) < 0) throw invalidArtifact('snapshot row is malformed.');
-    return { state: parseState(rows[0].state), revision: rows[0].revision as number };
+    const revision = validateSnapshotRevision(rows);
+    return { state: parseState(rows[0].state), revision };
   } catch (error) {
     if (error instanceof SquareError) throw error;
     if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
@@ -111,12 +121,12 @@ function configureDatabase(database: DatabaseSync): void {
 }
 
 /** Opens an existing artifact without permitting SQLite to create a missing path. */
-function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
+function readExistingArtifact<T>(squarePath: string, read: (database: DatabaseSync) => T): T {
   requireSquareExtension(squarePath);
   let database: DatabaseSync | undefined;
   try {
     database = openExistingDatabase(squarePath);
-    return validateDatabase(database);
+    return read(database);
   } catch (error) {
     if (error instanceof SquareError) throw error;
     if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
@@ -125,6 +135,18 @@ function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
   } finally {
     closeQuietly(database);
   }
+}
+
+function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
+  return readExistingArtifact(squarePath, validateDatabase);
+}
+
+function readSquareRevisionOnce(squarePath: string): number {
+  return readExistingArtifact(squarePath, (database) => {
+    validateDatabaseHeader(database);
+    const rows = database.prepare(`SELECT id, revision FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown }[];
+    return validateSnapshotRevision(rows);
+  });
 }
 
 async function createTemporaryArtifact(squarePath: string): Promise<string> {
@@ -224,11 +246,25 @@ async function pauseForBusy(signal?: AbortSignal): Promise<void> {
  * Reads a complete validated snapshot, yielding between transient SQLite lock
  * conflicts. The URI remains create-disabled throughout the retry loop.
  */
-export async function readSquareSnapshot(squarePath: string, signal?: AbortSignal): Promise<SquareSnapshot> {
+export function readSquareSnapshot(squarePath: string, signal?: AbortSignal): Promise<SquareSnapshot> {
+  return readWithBusyRetry(() => readSquareSnapshotOnce(squarePath), signal);
+}
+
+/** Check the artifact revision without loading or parsing the historical state. */
+export function readSquareRevision(squarePath: string, signal?: AbortSignal): Promise<number> {
+  return readWithBusyRetry(() => readSquareRevisionOnce(squarePath), signal);
+}
+
+/** One reference-counted revision detector per canonical artifact in this process. */
+export function observeSquareRevision(squarePath: string): Promise<import('./file-changes.js').VersionObserver<number>> {
+  return observeFileVersion(squarePath, 'square-revision', readSquareRevision);
+}
+
+async function readWithBusyRetry<T>(read: () => T, signal?: AbortSignal): Promise<T> {
   while (true) {
     if (signal?.aborted) throw signal.reason ?? closedError();
     try {
-      return readSquareSnapshotOnce(squarePath);
+      return read();
     } catch (error) {
       if (!isBusy(error)) throw error;
       await pauseForBusy(signal);

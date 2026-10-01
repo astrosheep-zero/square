@@ -4,7 +4,7 @@ import { resolveKnownName } from './decisions.js';
 import { WATCH_STALE_MS, currentHold, freshWatchLease, removeWatchLease, watchTerminalStatus, writeWatchLease } from './runtime.js';
 
 export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active'; readonly lease: WatchLease };
-export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held' } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
+export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held'; readonly heartbeatAt?: number } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
 
 function filter(options: WatchOptions): { participants?: string[]; mention?: string } {
   return { ...(options.participants === undefined ? {} : { participants: [...options.participants] }), ...(options.mention === undefined ? {} : { mention: options.mention }) };
@@ -26,12 +26,13 @@ export async function pulseWatchLease(square: OpenSquare, name: string, leaseId:
   return square.artifact.transact<WatchLeasePulse>((state) => {
     const known = resolveKnownName(state, name); const lease = freshWatchLease(state, known, at);
     if (lease?.leaseId !== leaseId) return { result: { type: 'replaced' as const } };
-    if (currentHold(state.acts).active) return { result: { type: 'held' as const } };
-    const terminal = watchTerminalStatus(state, known);
+    const held = currentHold(state.acts).active;
+    const terminal = held ? undefined : watchTerminalStatus(state, known);
     if (terminal !== undefined) return { result: { type: 'terminal' as const, status: terminal } };
-    if (!heartbeatDue) return { result: { type: 'sleep' as const } };
+    const type = held ? 'held' as const : 'sleep' as const;
+    if (!heartbeatDue) return { result: { type } };
     writeWatchLease(state, known, { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
-    return { state, result: { type: 'sleep' as const, heartbeatAt: at } };
+    return { state, result: { type, heartbeatAt: at } };
   });
 }
 

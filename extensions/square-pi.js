@@ -1,18 +1,12 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
-import { sessionInbox, waitForSessionPending } from '../dist/inbox.js';
-import { projectSessionBindings } from '../dist/square-projections.js';
-import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
 
 class PiDeliveryDroppedError extends Error {
   constructor() {
     super('Pi discarded the queued Square notification');
     this.name = 'PiDeliveryDroppedError';
   }
-}
-
-function sessionBindings(sessionId) {
-  return projectSessionBindings({ hostLedger: createHostLedgerPort(), sessionId });
 }
 
 export function pendingInbox(inbox) {
@@ -133,6 +127,7 @@ export default function squarePiExtension(pi) {
   };
 
   const pause = (signal, delayMs) => new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
     const finish = () => {
       signal.removeEventListener('abort', finish);
       clearTimeout(timer);
@@ -143,115 +138,111 @@ export default function squarePiExtension(pi) {
   });
 
   const wake = async (token, signal) => {
-    const armDeferredRetry = () => {
-      const controller = new AbortController();
-      let resolveArmed;
-      const armed = new Promise((resolve) => { resolveArmed = resolve; });
-      const abort = () => controller.abort();
-      signal.addEventListener('abort', abort, { once: true });
-      const pending = waitForSessionPending(sessionId, 30_000, {
-        signal: controller.signal,
-        excludeKeys: handledPending,
-        skipImmediate: true,
-        onChangeArmed: resolveArmed,
-      }, sessionEnv(sessionId)).catch(() => {
-        resolveArmed(false);
-        return [];
-      }).finally(() => signal.removeEventListener('abort', abort));
-      return { armed, pending, cancel: () => controller.abort() };
-    };
+    const boundSessionId = sessionId;
+    const env = sessionEnv(boundSessionId);
+    const observer = await observeSessionPending(boundSessionId, env);
+    try {
+      if (signal.aborted || token !== generation) return;
+      const armDeferredRetry = () => {
+        const controller = new AbortController();
+        let resolveArmed;
+        const armed = new Promise((resolve) => { resolveArmed = resolve; });
+        const abort = () => controller.abort();
+        signal.addEventListener('abort', abort, { once: true });
+        const pending = observer.wait(Infinity, {
+          signal: controller.signal,
+          excludeKeys: handledPending,
+          skipImmediate: true,
+          onChangeArmed: resolveArmed,
+        }).catch(() => {
+          resolveArmed(false);
+          return [];
+        }).finally(() => signal.removeEventListener('abort', abort));
+        return { armed, pending, cancel: () => controller.abort() };
+      };
 
-    while (sessionId !== undefined && token === generation && !signal.aborted) {
-      try {
-        if ((await sessionBindings(sessionId)).length === 0) {
+      while (sessionId !== undefined && token === generation && !signal.aborted) {
+        const deferredRetry = retryAfterChange;
+        let pending;
+        try {
+          pending = deferredRetry && retryWait !== undefined
+            ? await retryWait
+            : await observer.wait(Infinity, { signal, excludeKeys: handledPending });
+        } catch {
           await pause(signal, 1_000);
           continue;
         }
-      } catch {
-        await pause(signal, 1_000);
-        continue;
-      }
-
-      const deferredRetry = retryAfterChange;
-      let pending;
-      try {
-        pending = deferredRetry && retryWait !== undefined
-          ? await retryWait
-          : await waitForSessionPending(sessionId, 30_000, { signal, excludeKeys: handledPending }, sessionEnv(sessionId));
-      } catch {
-        await pause(signal, 1_000);
-        continue;
-      }
-      if (sessionId === undefined || token !== generation || signal.aborted) return;
-      if (pending.length === 0) {
-        if (deferredRetry) {
-          retryAfterChange = false;
-          retryWait = undefined;
+        if (sessionId === undefined || token !== generation || signal.aborted) return;
+        if (pending.length === 0) {
+          if (deferredRetry) {
+            retryAfterChange = false;
+            retryWait = undefined;
+          }
+          continue;
         }
-        continue;
-      }
-      retryAfterChange = false;
-      retryWait = undefined;
+        retryAfterChange = false;
+        retryWait = undefined;
 
-      const keys = inboxKeys(pending);
-      for (const key of keys) observedPending.add(key);
-      const deferred = armDeferredRetry();
-      const retryArmed = await deferred.armed;
-      if (!retryArmed) {
-        deferred.cancel();
-        continue;
-      }
-      let keepDeferred = false;
-      try {
-        await presentPendingAtBoundary(
-          sessionId,
-          async (content) => {
-            if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
-            // The full activity stays out of the TUI stream (display: false) but still
-            // reaches the model; a brief notify tells the human what just landed.
-            const summary = summarizePendingForNotify(pending);
-            if (summary) ui?.notify?.(summary, 'info');
-            const messageContent = framePiMessage(content);
-            const landing = waitForLanding(messageContent, signal, 'steer');
-            try {
-              Promise.resolve(pi.sendMessage(
-                { customType: 'square', content: messageContent, display: false },
-                { deliverAs: 'steer', triggerTurn: true },
-              )).catch((error) => landing.ack.settle(error));
-            } catch (error) {
-              landing.ack.settle(error);
-            }
-            return landing.promise;
-          },
-          async (id, env) => {
-            const inbox = await sessionInbox(id, env ?? sessionEnv(id));
-            if (signal.aborted || token !== generation) return [];
-            for (const key of inboxKeys(inbox)) observedPending.add(key);
-            return inbox.map((membership) => ({
-              ...membership,
-              notifications: membership.notifications.filter((note) => !handledPending.has(
-                `${membership.squarePath}\u0000${membership.name.toLocaleLowerCase()}\u0000${note.actIndex}`,
-              )),
-            }));
-          },
-          sessionEnv(sessionId),
-          signal,
-        );
-        for (const key of keys) handledPending.add(key);
-      } catch (error) {
-        if (signal.aborted || token !== generation) return;
-        if (error instanceof PiDeliveryDroppedError) {
+        const keys = inboxKeys(pending);
+        for (const key of keys) observedPending.add(key);
+        const deferred = armDeferredRetry();
+        const retryArmed = await deferred.armed;
+        if (!retryArmed) {
           deferred.cancel();
           continue;
         }
-        // The next state edge is already being observed before native injection starts.
-        retryAfterChange = true;
-        retryWait = deferred.pending;
-        keepDeferred = true;
-      } finally {
-        if (!keepDeferred) deferred.cancel();
+        let keepDeferred = false;
+        try {
+          await presentPendingAtBoundary(
+            boundSessionId,
+            async (content) => {
+              if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
+              // The full activity stays out of the TUI stream (display: false) but still
+              // reaches the model; a brief notify tells the human what just landed.
+              const summary = summarizePendingForNotify(pending);
+              if (summary) ui?.notify?.(summary, 'info');
+              const messageContent = framePiMessage(content);
+              const landing = waitForLanding(messageContent, signal, 'steer');
+              try {
+                Promise.resolve(pi.sendMessage(
+                  { customType: 'square', content: messageContent, display: false },
+                  { deliverAs: 'steer', triggerTurn: true },
+                )).catch((error) => landing.ack.settle(error));
+              } catch (error) {
+                landing.ack.settle(error);
+              }
+              return landing.promise;
+            },
+            async (id, env) => {
+              const inbox = await sessionInbox(id, env ?? sessionEnv(id));
+              if (signal.aborted || token !== generation) return [];
+              for (const key of inboxKeys(inbox)) observedPending.add(key);
+              return inbox.map((membership) => ({
+                ...membership,
+                notifications: membership.notifications.filter((note) => !handledPending.has(
+                  `${membership.squarePath}\u0000${membership.name.toLocaleLowerCase()}\u0000${note.actIndex}`,
+                )),
+              }));
+            },
+            env,
+            signal,
+          );
+          for (const key of keys) handledPending.add(key);
+        } catch (error) {
+          if (signal.aborted || token !== generation) return;
+          if (error instanceof PiDeliveryDroppedError) {
+            deferred.cancel();
+            continue;
+          }
+          // The next state edge is already being observed before native injection starts.
+          retryAfterChange = true;
+          retryWait = deferred.pending;
+          keepDeferred = true;
+        } finally {
+          if (!keepDeferred) { deferred.cancel(); await deferred.pending; }
+        }
       }
-    }
+    } finally { observer.close(); }
   };
 
   pi.on('session_start', async (_event, ctx) => {

@@ -11,6 +11,7 @@ import {
   emptyRuntimeState,
   loadSquare,
   probeSquare,
+  readSquareRevision,
   writeSquareFile,
 } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
@@ -120,6 +121,7 @@ test('a written square is the pinned SQLite singleton snapshot with no square lo
   assert.equal(snapshot.journalMode, 'delete');
   assert.equal(snapshot.row.id, 1);
   assert.equal(snapshot.row.revision, 1);
+  assert.equal(await readSquareRevision(squarePath), snapshot.row.revision);
   assert.equal(snapshot.row.state, JSON.stringify(squareState));
   assert.match(snapshot.table, /id\s+INTEGER\s+PRIMARY KEY\s+CHECK\s*\(\s*id\s*=\s*1\s*\)/i);
   assert.match(snapshot.table, /revision\s+INTEGER\s+NOT NULL\s+CHECK\s*\(\s*revision\s*>=\s*0\s*\)/i);
@@ -295,6 +297,7 @@ test('missing probes do not create a database and malformed or unsupported candi
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const missing = path.join(dir, 'missing.square');
   assert.equal(await probeSquare(missing), undefined);
+  await assert.rejects(() => readSquareRevision(missing), (error) => error?.code === 'not_found');
   assert.equal(fs.existsSync(missing), false);
   const invalidInitial = path.join(dir, 'invalid-initial.square');
   const invalidState = makeState();
@@ -312,8 +315,9 @@ test('missing probes do not create a database and malformed or unsupported candi
     { name: 'unrelated database', prepare(file) { createRawDatabase(file, { applicationId: 0x12345678 }); } },
     { name: 'unsupported version', prepare(file) { createRawDatabase(file, { userVersion: 2 }); } },
     { name: 'missing singleton row', prepare(file) { createRawDatabase(file, { row: false }); } },
-    { name: 'malformed state JSON', prepare(file) { createRawDatabase(file, { state: '{not valid JSON' }); } },
-    { name: 'invalid state model', prepare(file) { createRawDatabase(file, { state: JSON.stringify({ ...makeState(), runtime: { nextActIndex: -1, observations: {}, leases: {} } }) }); } },
+    { name: 'fractional revision', prepare(file) { createRawDatabase(file, { revision: 0.5 }); } },
+    { name: 'malformed state JSON', revisionOnlyValid: true, prepare(file) { createRawDatabase(file, { state: '{not valid JSON' }); } },
+    { name: 'invalid state model', revisionOnlyValid: true, prepare(file) { createRawDatabase(file, { state: JSON.stringify({ ...makeState(), runtime: { nextActIndex: -1, observations: {}, leases: {} } }) }); } },
   ];
 
   for (const candidate of candidates) {
@@ -321,6 +325,9 @@ test('missing probes do not create a database and malformed or unsupported candi
     candidate.prepare(squarePath);
     const before = databaseBytes(squarePath);
     assert.equal(await probeSquare(squarePath), undefined, candidate.name);
+    // Revision probes validate storage framing; only snapshot reads validate the payload.
+    if (candidate.revisionOnlyValid) assert.equal(await readSquareRevision(squarePath), 0);
+    else await assert.rejects(() => readSquareRevision(squarePath), /Invalid square artifact|unsupported|not a SQLite|malformed/i, candidate.name);
     await assert.rejects(() => loadSquare(squarePath), /Invalid square artifact|unsupported|not a SQLite|malformed/i, candidate.name);
     await assert.rejects(() => writeSquareFile(squarePath, makeState({ preamble: ['must not replace'] })), /Invalid square artifact|unsupported|not a SQLite|malformed/i, candidate.name);
     assert.deepEqual(databaseBytes(squarePath), before, `${candidate.name} was mutated`);
@@ -374,6 +381,7 @@ test('only the pinned singleton schema is accepted and unsupported shapes are ne
     const before = databaseBytes(squarePath);
     assert.equal(await probeSquare(squarePath), undefined, candidate.name);
     await assert.rejects(() => loadSquare(squarePath), (error) => error?.code === 'invalid_args', candidate.name);
+    await assert.rejects(() => readSquareRevision(squarePath), (error) => error?.code === 'invalid_args', candidate.name);
     await assert.rejects(
       () => writeSquareFile(squarePath, makeState({ preamble: ['must not force-replace unsupported schema'] })),
       (error) => error?.code === 'invalid_args',

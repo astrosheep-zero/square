@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from 'node:timers/promises';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -8,10 +7,10 @@ import {
   type WakeAdapter,
 } from './delivery.js';
 import { SquareError, type SquareState } from './model.js';
-import { SLEEP_MS, matchesMentionTarget } from './runtime.js';
+import { matchesMentionTarget } from './runtime.js';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { displayAttentionPath } from './attention-presentation.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare, observeSquareChanges } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import { notificationDelivered, resolveParticipant } from './views.js';
@@ -82,13 +81,17 @@ export async function hasAttentionNotification(squarePath: string, name: string,
   }
 }
 
-export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {
   const deadline = Date.now() + (opts.timeoutMs ?? 30000);
-  while (Date.now() <= deadline) {
-    if (await hasDeliveredNotification(squarePath, name, ref)) return true;
-    await sleep(Math.min(SLEEP_MS, Math.max(1, deadline - Date.now())));
-  }
-  return false;
+  const observer = await observeSquareChanges(squarePath);
+  try {
+    while (Date.now() <= deadline) {
+      const baseline = await observer.read(opts.signal);
+      if (await hasDeliveredNotification(squarePath, name, ref)) return true;
+      if (!await observer.changed(baseline, Math.max(0, deadline - Date.now()), opts.signal)) return false;
+    }
+    return false;
+  } finally { observer.close(); }
 }
 
 interface ProcessNotificationOptions {

@@ -171,6 +171,51 @@ test('SIGKILL during an uncommitted SQLite write recovers the last committed sna
   assert.deepEqual(await loadSquare(squarePath), committed);
 });
 
+test('idle change waits query only revision metadata, never the historical payload', async (t) => {
+  const state = await createSquareState({ force: true, hardCap: null }, 'Idle wait');
+  state.acts = Array.from({ length: 128 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index, index, body: 'history '.repeat(256) }));
+  state.runtime.nextActIndex = state.acts.length;
+  const squarePath = await makeSquare(t, state);
+  const cell = createFileCell(squarePath);
+  t.after(() => cell.close());
+  const baseline = (await cell.read()).version;
+  const queries = [];
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/\bFROM\s+square_snapshot\b/i.test(sql)) queries.push(sql);
+    return prepare.call(this, sql, ...args);
+  });
+
+  assert.equal(await cell.changed(baseline, 80), false);
+  assert.ok(queries.length > 0, 'the wait must check the authoritative revision');
+  for (const sql of queries) {
+    assert.match(sql, /^SELECT id, revision FROM square_snapshot$/i);
+    assert.doesNotMatch(sql, /\bstate\b/i);
+  }
+});
+
+test('revision waits abort during lock contention and close stops a pending wait', async (t) => {
+  const squarePath = await makeSquare(t);
+  const cell = createFileCell(squarePath);
+  const baseline = (await cell.read()).version;
+  const writer = new DatabaseSync(squarePath);
+  t.after(async () => {
+    try { writer.exec('ROLLBACK'); } finally { writer.close(); await cell.close(); }
+  });
+  writer.exec('BEGIN EXCLUSIVE');
+  const controller = new AbortController();
+  const reason = new Error('cancel revision wait');
+  const aborted = assert.rejects(cell.changed(baseline, 60_000, controller.signal), (error) => error === reason);
+  await sleep(30);
+  controller.abort(reason);
+  await settlesWithin(aborted, 500, 'abort left a contended revision read running');
+
+  const waiting = cell.changed(baseline, 60_000);
+  await sleep(30);
+  await cell.close();
+  assert.equal(await settlesWithin(waiting, 500, 'close left a revision wait running'), false);
+});
+
 test('already-open cells observe cross-process commits and an in-place force rebuild by revision', async (t) => {
   const squarePath = await makeAliceSquare(t);
   const cell = createFileCell(squarePath);

@@ -367,6 +367,7 @@ test('join and catch only show fallback catch hints without automatic session de
   const sameName = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
   assert.equal(sameName.status, 2, sameName.stderr);
   assert.match(sameName.stderr, /@Bob shoos you out of the square/);
+  assert.match(sameName.stderr, /If this is your name to reclaim/);
   assert.match(sameName.stderr, /join --kick/);
 
   const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
@@ -389,9 +390,17 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   const worker = { ...env, CODEX_THREAD_ID: 'worker' };
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env }).status, 0);
+  const before = fs.readFileSync(file);
+  const archive = run(withName(file, 'Alice', ['history', '--limit', '5']), { env: worker });
+  assert.equal(archive.status, 0, archive.stderr);
+  assert.deepEqual(fs.readFileSync(file), before, 'archive reading must not claim or consume');
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
   assert.equal(caught.status, 2, caught.stdout);
   assert.match(caught.stderr, /already stands here — another session holds the name/);
+  assert.match(caught.stderr, /If this is your name to reclaim, --kick banishes the one standing here so you can step in/);
+  assert.doesNotMatch(caught.stderr, /error/i);
+  assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join --kick`));
+  assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
   assert.equal((await lookupSessionBindings('worker', Date.now(), env)).length, 0);
   const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
   assert.equal(foreign.status, 2, foreign.stdout);

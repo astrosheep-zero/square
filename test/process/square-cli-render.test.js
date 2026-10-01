@@ -309,21 +309,26 @@ test('history with an explicit page and no truncation renders the archive', asyn
   assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
 });
 
-test('history rejects an explicit participant identity with a retry that removes it', async () => {
+test('history accepts --as without claiming identity or changing archive semantics', async () => {
   const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
+    const alice = await square.join('Alice');
+    await alice.express('archived body', { force: true });
   });
-
-  const history = run(withName(file, 'Alice', ['history', '--limit', '3']));
-  assert.equal(history.status, 2);
-  assert.match(history.stderr, /history is an archive and does not use --as/);
-  assert.match(history.stderr, new RegExp(`square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --limit 3`));
-  assert.doesNotMatch(history.stderr, /Expected one of|@Alice/);
-
+  const before = fs.readFileSync(file);
+  const plain = run(withPath(file, ['history', '--limit', '3']));
+  assert.equal(plain.status, 0, plain.stderr);
+  for (const name of ['Alice', 'NotJoined']) {
+    const history = run(withName(file, name, ['history', '--limit', '3']), {
+      env: { SQUARE_PARTICIPANT_NAME: 'AlsoNotJoined', CODEX_THREAD_ID: 'archive-reader' },
+    });
+    assert.equal(history.status, 0, history.stderr);
+    assert.equal(history.stdout, plain.stdout);
+    assert.deepEqual(fs.readFileSync(file), before);
+  }
   const help = run(withName(file, 'Alice', ['history', '--help']));
-  assert.equal(help.status, 2);
-  assert.match(help.stderr, /history is an archive and does not use --as/);
-  assert.match(help.stderr, new RegExp(`square --location ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} history --help`));
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Read or search the archive/);
+  assert.match(help.stdout, /Optional --as is accepted/);
 });
 
 test('unknown participant errors stay bounded and point to the roster', async () => {

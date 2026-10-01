@@ -1,11 +1,8 @@
-import { setTimeout as sleep } from 'node:timers/promises';
-
 import {
   type WatchOptions,
   isSquareError,
 } from './model.js';
 import {
-  SLEEP_MS,
   STALE_MS,
   WATCH_HEARTBEAT_MS,
   inSquareCount,
@@ -275,6 +272,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   }
 
   let staleSince = nowMs();
+  let wasHeld = false;
   let currentLeaseId: string | undefined = start.leaseId;
   let nextHeartbeatAt = start.heartbeatAt + WATCH_HEARTBEAT_MS;
   if (opts.replace) {
@@ -295,8 +293,10 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
 
   try {
     while (true) {
+      // Capture before evaluation: changes during catch/lease checks must not be lost.
+      const baseline = (await square.artifact.read()).version;
       const leaseState = await pulseWatchLease(square, name, currentLeaseId!, opts, nowMs() >= nextHeartbeatAt);
-      if (leaseState.type === 'sleep' && leaseState.heartbeatAt !== undefined) {
+      if ((leaseState.type === 'sleep' || leaseState.type === 'held') && leaseState.heartbeatAt !== undefined) {
         nextHeartbeatAt = leaseState.heartbeatAt + WATCH_HEARTBEAT_MS;
       }
 
@@ -316,9 +316,10 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
         currentLeaseId = undefined;
         return;
       }
-      if (result.type === 'held') staleSince = nowMs();
+      if (result.type === 'held' || wasHeld) staleSince = nowMs();
+      wasHeld = result.type === 'held';
 
-      if (nowMs() - staleSince >= idleMs) {
+      if (!wasHeld && nowMs() - staleSince >= idleMs) {
         const result: WatchResult = !await ownsWatchLease(square, name, currentLeaseId!)
           ? { type: 'replaced' }
           : { type: 'terminal', status: 'stale' };
@@ -329,7 +330,8 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
         }
       }
 
-      await sleep(SLEEP_MS);
+      const nextDeadline = Math.min(nextHeartbeatAt, wasHeld ? Infinity : staleSince + idleMs);
+      await square.artifact.changed(baseline, Math.max(0, nextDeadline - nowMs()));
     }
   } finally {
     await closeOpenSquare(square);

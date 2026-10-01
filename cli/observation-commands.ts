@@ -403,7 +403,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const projection = await historyPresentation(square, { ...options, order: 'asc' });
       const useApplicationHistory = options.atIndexes === undefined && options.beforeContext === undefined && options.afterContext === undefined && options.after === undefined;
       const applicationHistory = useApplicationHistory
-        ? await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs }).history(applicationHistoryQuery(options))
+        ? await createSquareApplication({ cwd: context.cwd, env: { ...context.env, SQUARE_PARTICIPANT_NAME: undefined }, squarePath, clock: nowMs }).history(applicationHistoryQuery(options))
         : undefined;
       let events = applicationHistory === undefined ? [...projection.activities] : applicationHistory.map(activityAsStored);
       if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {

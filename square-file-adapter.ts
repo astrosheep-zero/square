@@ -1,4 +1,5 @@
 import path from 'node:path';
+export { observeSquareRevision as observeSquareChanges } from './artifact.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 
 import {
@@ -16,7 +17,7 @@ import {
   type HardCap,
   type SquareState,
 } from './model.js';
-import { closeOpenSquare, type OpenSquare } from './open-square.js';
+import type { OpenSquare } from './open-square.js';
 import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
@@ -65,10 +66,9 @@ export async function openSquare(
 ): Promise<OpenSquare> {
   const env = options.env ?? process.env;
   const ledgerRoot = hostLedgerRoot(env);
-  const cell = openSquareCell(squarePath, options.signal);
+  const artifact = openSquareArtifact(squarePath, options.signal);
   try {
-    await cell.read();
-    const artifact: SquareArtifactPort = { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
+    await artifact.read();
     return {
       artifact,
       clock: options.clock ?? Date.now,
@@ -80,7 +80,7 @@ export async function openSquare(
       wakeTransport: options.wakeTransport,
     };
   } catch (error) {
-    await cell.close();
+    await artifact.close();
     if (error instanceof InternalSquareError && error.code === 'not_found') {
       throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
     }
@@ -120,66 +120,11 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
   return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, wakeTransport: options.wakeTransport };
 }
 
-function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
-  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
+/** A projection reads and validates its snapshot once; no preliminary duplicate read. */
+export function openSquareArtifact(squarePath: string, signal?: AbortSignal): SquareArtifactPort {
+  return memoryArtifact(openSquareCell(squarePath, signal));
 }
 
-/** Wait for any bound artifact to change; delivery callers re-project after the edge. */
-export type SquareChangeWaitResult<T> =
-  | { status: 'ready'; value: T }
-  | { status: 'changed' }
-  | { status: 'expired' };
-
-export async function waitForSquareChanges<T>(
-  squarePaths: readonly string[],
-  timeoutMs: number,
-  signal?: AbortSignal,
-  afterReady?: () => Promise<T | undefined>,
-  onArmed?: (armed: boolean) => void,
-): Promise<SquareChangeWaitResult<T>> {
-  if (timeoutMs <= 0 || signal?.aborted || squarePaths.length === 0) {
-    onArmed?.(false);
-    return { status: 'expired' };
-  }
-  const squares: OpenSquare[] = [];
-  try {
-    for (const squarePath of [...new Set(squarePaths)]) {
-      try { squares.push(await openSquare(squarePath, { signal })); } catch { /* stale binding */ }
-    }
-    if (squares.length === 0) {
-      onArmed?.(false);
-      return { status: 'expired' };
-    }
-    const baselines = await Promise.all(squares.map(async (square) => ({
-      square,
-      version: (await square.artifact.read(signal)).version,
-    })));
-    if (signal?.aborted) return { status: 'expired' };
-    const ready = await afterReady?.();
-    if (signal?.aborted) return { status: 'expired' };
-    if (ready !== undefined) {
-      onArmed?.(false);
-      return { status: 'ready', value: ready };
-    }
-    const waits = baselines.map(async ({ square, version }) => {
-      const changed = await square.artifact.changed(version, timeoutMs, signal).catch(() => false);
-      if (changed) return true;
-      throw new Error('square wait expired');
-    });
-    onArmed?.(true);
-    let abortWait: (() => void) | undefined;
-    const abort = new Promise<boolean>((resolve) => {
-      abortWait = () => resolve(false);
-      if (signal?.aborted) abortWait();
-      else signal?.addEventListener('abort', abortWait, { once: true });
-    });
-    try {
-      const changed = await Promise.race([Promise.any(waits).catch(() => false), abort]);
-      return changed ? { status: 'changed' } : { status: 'expired' };
-    } finally {
-      if (abortWait) signal?.removeEventListener('abort', abortWait);
-    }
-  } finally {
-    await Promise.all(squares.map((square) => closeOpenSquare(square)));
-  }
+function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
+  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
 }

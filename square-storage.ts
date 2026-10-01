@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 
 import {
@@ -9,6 +8,7 @@ import {
   diagnoseSquareFile as diagnoseArtifactFile,
   loadSquare,
   probeSquare,
+  observeSquareRevision,
   readSquareSnapshot,
   transactSquareSnapshot,
   writeSquareFile,
@@ -68,10 +68,6 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 
 function discardThenable(value: PromiseLike<unknown>): void {
   void Promise.resolve(value).catch(() => undefined);
-}
-
-function isBusy(error: unknown): boolean {
-  return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
 
 interface MemoryWaiter {
@@ -211,28 +207,13 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
     async changed(sinceVersion, timeoutMs, signal) {
       assertCellOpen(closed);
       const deadline = Date.now() + Math.max(0, timeoutMs);
-      while (!closed) {
-        const remaining = deadline - Date.now();
-        const timeout = AbortSignal.timeout(Math.max(1, remaining));
-        const readSignal = AbortSignal.any([cancel.signal, ...(signal === undefined ? [] : [signal]), timeout]);
-        try {
-          if ((await readSquareSnapshot(await storagePath(), readSignal)).revision > sinceVersion) return true;
-        } catch (error) {
-          if (closed || cancel.signal.aborted || timeout.aborted) return false;
-          if (signal?.aborted) throw signal.reason ?? new Error("StateCell operation aborted");
-          if (!isBusy(error)) throw error;
-        }
-        const nextRemaining = deadline - Date.now();
-        if (nextRemaining <= 0) return false;
-        try {
-          await sleep(Math.min(25, nextRemaining), undefined, { signal: AbortSignal.any([cancel.signal, ...(signal === undefined ? [] : [signal])]) });
-        } catch (error) {
-          if (closed || cancel.signal.aborted) return false;
-          if (signal?.aborted) throw signal.reason ?? new Error("StateCell operation aborted");
-          throw error;
-        }
-      }
-      return false;
+      const observer = await observeSquareRevision(await storagePath());
+      try {
+        return await observer.changed(sinceVersion, Math.max(0, deadline - Date.now()), operationSignal(signal));
+      } catch (error) {
+        if (closed || cancel.signal.aborted) return false;
+        throw error;
+      } finally { observer.close(); }
     },
     async close() {
       if (closed) return;

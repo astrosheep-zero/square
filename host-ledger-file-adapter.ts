@@ -4,6 +4,7 @@ import path from 'node:path';
 import { withFileLock as acquireFileLock, type FileLockOptions } from './file-lock.js';
 import { nameKey } from './model.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
+import { observeFileMetadata, type VersionObserver } from './file-changes.js';
 import type { HostLedgerPort, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, EvidenceGc, ClaimResult, WakeDispatchClaim, WakeDispatchClaimInput, WakeDispatchReleaseInput, WakeDispatchTransitionInput, WakeAttemptLookup } from './host-ledger.js';
 const LOCK = { retryMs: 10 } as const; const RETENTION = 7 * 86400000;
 
@@ -41,6 +42,28 @@ export class FileHostLedgerPort implements HostLedgerPort {
     this.clock = o.now ?? Date.now;
   }
   private file(kind: 'presence' | 'evidence'): string { return path.join(this.root, `${kind}.ndjsonl`); }
+  /** Invalidation only: callers still use the ledger projections as their authority. */
+  async observeChanges(): Promise<{ presence: VersionObserver<string>; evidence: VersionObserver<string> }> {
+    const presence = await observeFileMetadata(this.file('presence'));
+    try { return { presence, evidence: await observeFileMetadata(this.file('evidence')) }; }
+    catch (error) { presence.close(); throw error; }
+  }
+  /** Time can expire bindings/evidence even when their files do not change. */
+  async nextExpiry(session: string): Promise<number> {
+    const now = this.clock();
+    const rows = [...await read<PresenceRecord & { v: 1 }>(this.file('presence'), now, true),
+      ...await read<EvidenceRecord & { v: 1 }>(this.file('evidence'), now, true)].filter((row) => row.session === session);
+    let next = Infinity;
+    for (const row of rows) {
+      const at = 'updatedAt' in row ? row.updatedAt : 'at' in row ? row.at : undefined;
+      if (typeof at === 'number') {
+        if (at > now) next = Math.min(next, at);
+        if (at + RETENTION + 1 > now && !('kind' in row && row.kind === 'wake' && row.outcome === 'accepted')) next = Math.min(next, at + RETENTION + 1);
+      }
+      if ('expiresAt' in row && typeof row.expiresAt === 'number' && row.expiresAt > now) next = Math.min(next, row.expiresAt);
+    }
+    return next;
+  }
   async claimPresence(i: PresenceRecord, signal?: AbortSignal): Promise<PresenceClaimResult> {
     const location = await canon(i.location);
     const record = { ...i, location, updatedAt: i.updatedAt ?? this.clock(), v: 1 as const };
@@ -102,4 +125,4 @@ async appendEvidence(i:EvidenceRecord & { readonly claimToken: string }){const f
 async listEvidence(i:EvidenceLookup={}):Promise<readonly EvidenceRecord[]>{const loc=i.location===undefined?undefined:await canon(i.location);return(await read<any>(this.file('evidence'),i.now??this.clock())).filter(r=>(i.includeReleased===true||r.outcome!=='released')&&(!loc||r.location===loc)&&(!i.participant||nameKey(r.participant)===nameKey(i.participant))&&(!i.session||r.session===i.session)&&(!i.activity||r.activity===i.activity)&&(!i.kind||r.kind===i.kind))}
 async gcEvidence(i:EvidenceGc){const f=this.file('evidence'),pending=new Set(i.pendingWakeActivities??[]);await withFileLock(f+'.lock',LOCK,async()=>write(f,(await read<any>(f,this.clock(),true)).filter(r=>r.at>=i.before||r.kind==='wake'&&r.outcome==='accepted'&&pending.has(r.activity))))}
 }
-export function createHostLedgerPort(o: HostLedgerFileAdapterOptions = {}): HostLedgerPort { return new FileHostLedgerPort(o); }
+export function createHostLedgerPort(o: HostLedgerFileAdapterOptions = {}): FileHostLedgerPort { return new FileHostLedgerPort(o); }

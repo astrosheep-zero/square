@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-import { leaseOwnsNotification } from './delivery.js';
 import { withFileLock } from './file-lock.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
@@ -11,7 +10,8 @@ import { presentPending } from './presentation-operations.js';
 import { hostLedgerForEnv, sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
-import { presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+import { pendingAtBoundary, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+export { pendingAtBoundary } from './square-projections.js';
 import { formatActivityId } from './square-core.js';
 
 const CONTEXT_MAX = 1200;
@@ -37,22 +37,6 @@ async function awaitWithSignal(promise: Promise<void>, signal?: AbortSignal): Pr
 
 function pendingCount(inbox: InboxMembership[]): number {
   return inbox.reduce((total, membership) => total + membership.notifications.length, 0);
-}
-
-/** A fresh blocking catch owns only the notifications admitted by its filter. */
-export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
-  return inbox
-    .map((membership) => {
-      const lease = membership.catchLease;
-      if (lease === undefined) return membership;
-      return {
-        ...membership,
-        notifications: membership.notifications.filter(
-          (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.name })
-        ),
-      };
-    })
-    .filter((membership) => membership.notifications.length > 0);
 }
 
 export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
