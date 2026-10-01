@@ -552,7 +552,7 @@ test('done retires only its own route in a session that holds several participan
     try {
       const a = await square.join('a');
       await square.join('b');
-      await a.done('finished');
+      await a.done();
     } finally { await square.close(); }
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.participant).sort(), ['b']);
     assert.equal((await readParticipantOwner(item.publicPath, 'b', env))?.sessionId, 'dual-session');

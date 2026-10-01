@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError } from './model.js';
+import { validateDoneBody } from './decisions.js';
 import { currentHold } from './runtime.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
 import { Square, openParticipant } from './square-wiring.js';
@@ -51,6 +52,7 @@ export interface SquareApplication {
   listening(control?: OperationControl): Promise<readonly string[]>;
   hold(reason?: string, control?: OperationControl): Promise<ExpressResult>;
   resume(control?: OperationControl): Promise<ExpressResult>;
+  /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, control?: OperationControl): Promise<ExpressResult>;
   status(): Promise<ApplicationStatusProjection>;
   participants(): Promise<ApplicationParticipants>;
@@ -151,6 +153,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     hold(reason, control) { return joined((participant) => participant.hold(reason, control), control); },
     resume(control) { return joined((participant) => participant.resume(control), control); },
     async done(body, control) {
+      validateDoneBody(body);
       const squarePath = location();
       const participantName = await requireParticipant(context, squarePath, env);
       const identity = localSessionIdentities(env)[0];

@@ -38,7 +38,7 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Catch directed conversation since you last looked.',
     details: ['Modes:', '  --id <activity-id> Catch exactly one activity addressed to you, with its full body; implies --now.', '                    Marks only this activity seen; repeats return it again. No filters, limit, idle or replace.', '                    history stays read-only; catch --id consumes the selected activity.', '  --now             Catch up immediately.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions arrive when you are addressed; bells arrive for everyone; bare says require listen.', '  listen and ignore are future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention         Match direct attention for your current participant (and bells).', '  --limit <count>   Return one page (default 10, maximum 100).', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
   },
-  { names: ['done'], usage: '--as <name> done [final | -]', usesSquare: true, group: 'participant', summary: 'Step out, optionally leaving a final note.' },
+  { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.', details: ['done takes no message. Use express before leaving to send one.'] },
   {
     names: ['stream'], usage: 'stream [--ndjson [--for <name>] [--last <N> | --after <id>]]', usesSquare: true, hiddenFromIndex: true,
     summary: 'Follow activity without consuming participant presence.',

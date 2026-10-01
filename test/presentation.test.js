@@ -49,7 +49,8 @@ test('blocked activity output bounds unread participant summaries', () => {
   const output = renderActivityBlocked({
     squarePath: '/tmp/square',
     name: 'Alice',
-    forceCommand: 'square express -',
+    retryCommand: 'square express -',
+    forceCommand: 'square express --force -',
     activitySummaries: summaries,
     unreadRoomChanges: [],
   });

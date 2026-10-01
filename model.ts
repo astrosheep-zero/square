@@ -45,6 +45,8 @@ export type InternalSquareErrorCode = SquareErrorCode
   | 'pending_peer';
 
 export interface SquareErrorFacts {
+  /** Express admission rejected before any activity was committed. */
+  activityUnsent?: true;
   pending?: number;
   holder?: string;
   retryAfterMs?: number;

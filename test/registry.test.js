@@ -450,7 +450,7 @@ test('a takeover cannot append when the old owner completed first', async () => 
     // refuses, so the artifact keeps the single lifecycle and no ghost claim appears.
     const oldSquare = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env: ownerEnv });
     try {
-      await done(oldSquare, 'Alice', 'finished');
+      await done(oldSquare, 'Alice');
     } finally {
       await closeOpenSquare(oldSquare);
     }
@@ -671,14 +671,14 @@ test('presence follows active session lifecycle without delivery routes', async 
     assert.deepEqual(await lookupSession('observer-session'), []);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
 
-    const foreignDone = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], { env: observerEnv });
+    const foreignDone = runCli(['--location', squarePath, '--as', 'Alice', 'done'], { env: observerEnv });
     assert.notEqual(foreignDone.status, 0);
     assert.match(foreignDone.stderr, /already stands here — another session holds the name/);
     assert.deepEqual(await lookupSession('observer-session'), []);
     assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'done').length, 0);
 
-    const done = runCli(['--location', squarePath, '--as', 'Alice', 'done', 'finished'], { env });
+    const done = runCli(['--location', squarePath, '--as', 'Alice', 'done'], { env });
     assert.equal(done.status, 0, done.stderr);
     assert.deepEqual(await lookupSession('observer-session'), []);
     assert.deepEqual(await lookupSession('resume-session'), []);

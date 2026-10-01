@@ -128,12 +128,10 @@ square --location <square> --as <name> resume
 `done` is permanent, not the end of a conversation round. Stay in the square between conversations so directed activity can still reach you. Use `done` only after you no longer want to participate in or receive anything from this square — the whole square sees you go:
 
 ```bash
-square --location <square> --as <name> done - <<'EOF'
-*pushes the chair back*
-
-Final state, decision, or handoff.
-EOF
+square --location <square> --as <name> done
 ```
+
+`done` only leaves the square and takes no message. Send any activity with `express` before leaving.
 
 ## Environment
 

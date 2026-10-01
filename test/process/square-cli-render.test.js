@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { formatActivityId } from '../../dist/square-core.js';
+import { loadSquare, writeSquareFile } from '../../dist/artifact.js';
 import { Square } from '../../dist/index.js';
 import { cmdListSquares } from '../../dist/list.js';
 import { closeOpenSquare } from '../../dist/open-square.js';
@@ -42,7 +43,7 @@ test('status stays compact and focuses on the current square', async () => {
     for (let index = 0; index < 12; index += 1) {
       await alice.express(`activity ${index} @Bob`, { force: true, mentions: ['Bob'] });
     }
-    await bob.done('leaving');
+    await bob.done();
     await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 100, markdown: '## Topic\n\nTesting status' });
 
@@ -100,7 +101,7 @@ test('status separates here from lingering and keeps the roster honest', async (
 test('status shows who stepped in after the latest public act', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
-    await alice.done('leaving');
+    await alice.done();
     await square.join('Alice');
     await square.join('Bob');
   }, { hardCap: 100 });
@@ -259,7 +260,7 @@ test('catch --from renders named peers and rejects the removed --by flag', async
     const cara = await square.join('Cara');
     await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
     await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
-    await bob.done('bye');
+    await bob.done();
   });
 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
@@ -298,7 +299,7 @@ test('history with an explicit page and no truncation renders the archive', asyn
     await square.join('Alice');
     const bob = await square.join('Bob');
     await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
-    await bob.done('bye');
+    await bob.done();
   });
 
   const activities = run(withPath(file, ['history', '--limit', '100', '--no-truncate']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -367,7 +368,7 @@ test('history --since excludes older public activity', async () => {
     await square.join('Alice');
     const bob = await square.join('Bob');
     await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
-    await bob.done('bye');
+    await bob.done();
   });
 
   const recorded = run(withPath(file, ['history', '--json']));
@@ -786,14 +787,14 @@ test('status header counts only participants still in the square', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
-    await bob.done('finished');
+    await bob.done();
   });
   const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /— 1 in the square/);
 });
 
-test('room changes and final notes remain visible without duplicate done events', async () => {
+test('historical body-bearing done events remain readable without becoming catch messages', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = await square.join('Bob');
@@ -806,7 +807,10 @@ test('room changes and final notes remain visible without duplicate done events'
   assert.doesNotMatch(caught.stdout, /@Bob raised a hand — pause/);
   assert.doesNotMatch(caught.stdout, /@Bob lowered the hand/);
 
-  assert.equal(run(withName(file, 'Bob', ['done', '-']), { env: { SQUARE_NOW_MS: '6000' }, input: 'final note\n' }).status, 0);
+  // Old artifacts can contain a done body even though new departures are bodyless.
+  const historical = await loadSquare(file);
+  historical.acts.push({ kind: 'done', actor: 'Bob', at: 6000, body: 'final note', index: historical.runtime.nextActIndex++ });
+  await writeSquareFile(file, historical);
   const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(afterDone.status, 0, afterDone.stderr);
   assert.match(afterDone.stdout, /✓ everyone else has left — the square is yours alone/);
@@ -855,7 +859,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const host = await square.join('Host');
     await host.hold('pause');
   }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', "express --force --mention 'Host' -");
+  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', "express --no-wait --mention 'Host' -");
 
   const throttleFile = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
@@ -865,7 +869,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     input: 'throttled body @Alice\n',
     env: { SQUARE_NOW_MS: '3000' },
   });
-  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', "express --force --mention 'Alice' -");
+  assertDraftRecovery(throttled, throttleFile, 'Alice', 'throttled body @Alice\n', "express --no-wait --mention 'Alice' -");
   assert.match(throttled.stdout, /next opening in (?:\d+s|1m)/);
   assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
 
@@ -873,7 +877,13 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     const alice = await square.join('Alice');
     await alice.express('first @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 1 });
-  assertDraftRecovery(run(withName(capFile, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'final body @Alice\n' }), capFile, 'Alice', 'final body @Alice\n', 'done -');
+  const capped = run(withName(capFile, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'final body @Alice\n' });
+  assert.equal(capped.status, 1, capped.stderr);
+  const capDraft = capped.stdout.match(/draft kept: (.+)/)?.[1];
+  assert.equal(fs.readFileSync(capDraft, 'utf8'), 'final body @Alice\n');
+  assert.match(capped.stdout, /your draft stays unsent/);
+  assert.match(capped.stdout, /done\n$/);
+  assert.doesNotMatch(capped.stdout, /done -|< /);
 
   const blockedFile = await persistSquare(async ({ square }) => {
     await square.join('Alice');
@@ -881,7 +891,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
     await bob.express('peer @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10 });
   const blocked = run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' });
-  assertDraftRecovery(blocked, blockedFile, 'Alice', 'blocked body @Bob\n', "express --force --mention 'Bob' -");
+  assertDraftRecovery(blocked, blockedFile, 'Alice', 'blocked body @Bob\n', "express --mention 'Bob' -");
   assert.match(blocked.stdout, /@Bob spoke — .*ago · "peer @Alice"/);
 });
 
@@ -1060,7 +1070,7 @@ test('list, participants, and clipped status use current state and executable hi
   });
   const alice = await square.join('Alice');
   const bob = await square.join('Bob');
-  await bob.done('finished');
+  await bob.done();
   await alice.express(`${'x'.repeat(260)} @Alice`, { force: true, mentions: ['Alice'] });
   await square.close();
 
