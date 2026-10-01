@@ -3,6 +3,7 @@ import path from 'node:path';
 import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
+import { truncateExternalDiagnostic } from './presentation.js';
 
 export interface PiCommandResult { status: number; stdout: string; stderr: string; }
 export type PiCommandRunner = (homeDir: string, args: string[]) => PiCommandResult;
@@ -40,8 +41,24 @@ export function uninstallPiPackage(homeDir: string, run: PiCommandRunner = runPi
   return [piPackageRoot(homeDir)];
 }
 
+function doctorPiConfiguration(homeDir: string, run: PiCommandRunner): string {
+  try {
+    const listed = run(homeDir, ['list']);
+    if (listed.status !== 0) {
+      const diagnostic = listed.stderr.trim() || listed.stdout.trim() || `exit ${listed.status}`;
+      return `✕ Pi package list failed: ${truncateExternalDiagnostic(diagnostic)}`;
+    }
+    return listed.stdout.includes(SQUARE_IDENTITY.packageName)
+      ? `✓ Pi package ${SQUARE_IDENTITY.packageName} configured`
+      : `○ Pi package ${SQUARE_IDENTITY.packageName} not configured`;
+  } catch (error) {
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    return `○ Pi runtime unavailable (${truncateExternalDiagnostic(diagnostic)})`;
+  }
+}
+
 export function doctorPiPackage(homeDir: string, run: PiCommandRunner = runPi): string[] {
-  const listed = run(homeDir, ['list']);
+  const configuration = doctorPiConfiguration(homeDir, run);
   const root = piPackageRoot(homeDir);
   const manifestPath = path.join(root, 'package.json');
   let manifest: { version?: unknown; pi?: { extensions?: unknown } } | undefined;
@@ -52,9 +69,7 @@ export function doctorPiPackage(homeDir: string, run: PiCommandRunner = runPi): 
   }
   const extensions = manifest?.pi?.extensions;
   return [
-    listed.status === 0 && listed.stdout.includes(SQUARE_IDENTITY.packageName)
-      ? `✓ Pi package ${SQUARE_IDENTITY.packageName} configured`
-      : `○ Pi package ${SQUARE_IDENTITY.packageName} not configured`,
+    configuration,
     manifest?.version === SQUARE_IDENTITY.packageVersion
       ? `✓ Pi package ${SQUARE_IDENTITY.packageVersion} installed at ${root}`
       : `○ Pi package ${SQUARE_IDENTITY.packageVersion} missing at ${root}`,
