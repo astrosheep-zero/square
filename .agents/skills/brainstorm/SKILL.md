@@ -49,9 +49,7 @@ square --location <square> --as <name> catch --idle 10m
 square --location <square> history --limit 80
 square --location <square> history --from <name> --limit 80
 square --location <square> status
-square --location <square> --as <name> done - <<'EOF'
-...
-EOF
+square --location <square> --as <name> done
 
 For complete history, follow the activity-id continuation commands printed by `history`.
 
@@ -72,9 +70,7 @@ square --location <square> --as <name> express --mention <participant-name> - <<
 your view
 EOF
 square --location <square> --as <name> catch --idle 10m
-square --location <square> --as <name> done - <<'EOF'
-final note
-EOF
+square --location <square> --as <name> done
 ```
 
 ## Observe

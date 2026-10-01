@@ -252,9 +252,16 @@ export function decideAct(
   };
 }
 
+export function validateDoneBody(body: unknown): void {
+  if (body !== undefined && body !== '') {
+    throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving');
+  }
+}
+
 export function coreDone(squareState: SquareState, name: string, body: string, now: number): Extract<Act, { kind: 'done' }> {
+  validateDoneBody(body);
   const resolvedName = resolveStandingName(squareState, name);
-  const act = { kind: 'done' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+  const act = { kind: 'done' as const, actor: resolvedName, at: now };
   requireStanding(squareState, act);
   return act;
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
@@ -116,18 +117,25 @@ test('ignore blocks future mentions and bare delivery until listen clears it', (
   assert.deepEqual(plannedRecipients(delivery, square.acts[6]), ['Bob:mention']);
 });
 
-test('listener delivery attention does not claim a listener was mentioned', () => {
+test('attention preview distinguishes being addressed, listening, and everyone’s attention', () => {
   const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
     { kind: 'listen', actor: 'Bob', target: 'Alice', at: 3 },
     { kind: 'say', actor: 'Alice', body: 'bare thought', at: 4 },
+    { kind: 'say', actor: 'Alice', body: 'direct thought', mentions: ['Bob'], at: 5 },
+    { kind: 'say', actor: 'Alice', body: 'everyone listen', reach: 'bell', at: 6 },
   ]);
-  const [{ route }] = deriveDeliveryModel(square).plan(square.acts[3]);
-  assert.equal(route, 'attention');
-  const rendered = renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: 3, recipient: 'Bob', actor: 'Alice', route, body: 'bare thought' });
-  assert.match(rendered, /● Alice called your name \(Bob\)/);
-  assert.doesNotMatch(rendered, /rang the bell/);
+  const delivery = deriveDeliveryModel(square);
+  const descriptions = square.acts.slice(3).map((act) => {
+    const [{ route, recipient }] = delivery.plan(act);
+    return renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: act.index, recipient, actor: act.actor, route, body: act.body }).split('\n')[2];
+  });
+  assert.deepEqual(descriptions, [
+    '● Alice spoke · you’re listening to Alice',
+    '● Alice addressed you (Bob)',
+    '● Alice rang the bell · everyone’s attention',
+  ]);
 });
 
 test('attention metadata is separate from unindented Markdown body', () => {
@@ -136,7 +144,7 @@ test('attention metadata is separate from unindented Markdown body', () => {
   assert.equal(rendered, [
     '````square-activity',
     '· /tmp/a"&<b>.square · act/12',
-    '● Alice rang the bell for you (Bob)',
+    '● Alice rang the bell · everyone’s attention',
     '',
     body,
     '````',
@@ -154,12 +162,12 @@ test('clipped attention ends with a labeled caption and a bare read-it-all comma
   assert.equal(rendered, [
     '```square-activity',
     '· /tmp/a.square · act/12',
-    '● Alice rang the bell for you (Bob)',
+    '● Alice rang the bell · everyone’s attention',
     '',
     `${'x'.repeat(200)}…`,
     '```',
     '· clipped — read it all:',
-    `square --location '/tmp/a.square' --as 'Bob' catch --id act/12`,
+    `square --location '${path.resolve('/tmp/a.square')}' --as 'Bob' catch --id act/12`,
   ].join('\n'));
 });
 
@@ -175,7 +183,7 @@ test('a backtick run in the command path stays outside the fence', () => {
   assert.equal(lines[0], '```square-activity');
   assert.equal(lines[5], '```');
   assert.equal(lines[6], '· clipped — read it all:');
-  assert.equal(lines[7], `square --location '/tmp/a\`\`\`b.square' --as 'Bob' catch --id act/12`);
+  assert.equal(lines[7], `square --location '${path.resolve('/tmp/a```b.square')}' --as 'Bob' catch --id act/12`);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', () => {

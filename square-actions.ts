@@ -1,5 +1,5 @@
 import { formatActivityId, parseActivityId, type Act } from './square-core.js';
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
@@ -238,27 +238,40 @@ export async function implicitJoin(square: OperationContext, name: string, contr
   return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
 }
 
+/** Only admission failures can advertise a safe retry; storage and post-commit
+ * failures must not be mistaken for a rejected send merely by their error code. */
+function rejectUnsentActivity<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true };
+    throw error;
+  }
+}
+
 export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}, control?: OperationControl): Promise<ExpressResult> {
   if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted');
   if (!await assertLiveOwner(square, name)) {
-    throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
+    throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`, { activityUnsent: true });
   }
   throwIfAborted(control);
   const now = square.clock();
-  const reply = options.reply === undefined ? undefined : parseRequiredActivityId(options.reply);
+  const reply = rejectUnsentActivity(() => options.reply === undefined ? undefined : parseRequiredActivityId(options.reply));
   const committed = await square.artifact.transact((state) => {
-    const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
-    if (decision.type === 'blocked') {
-      const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
-      throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
-    }
-    if (decision.type === 'held') {
-      const holder = state.acts.filter((activity) => activity.kind === 'hold').at(-1)?.actor;
-      throw new SquareError('held', 'The square is held', holder === undefined ? undefined : { holder });
-    }
-    if (decision.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
-    if (decision.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: decision.delayMs });
-    if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
+    const decision = rejectUnsentActivity(() => {
+      const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
+      if (decision.type === 'blocked') {
+        const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
+        throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
+      }
+      if (decision.type === 'held') {
+        const holder = state.acts.filter((activity) => activity.kind === 'hold').at(-1)?.actor;
+        throw new SquareError('held', 'The square is held', holder === undefined ? undefined : { holder });
+      }
+      if (decision.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
+      if (decision.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: decision.delayMs });
+      if (decision.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, decision.nextAt - now) });
+      return decision;
+    });
     const stored = committedActivity(storeActs(state, [decision.act]), 'express');
     return { state, result: { stored } };
   }, control?.signal);
@@ -291,6 +304,7 @@ export function ignore(square: OperationContext, actor: string, target: string, 
 export async function listening(square: OperationContext, actor: string, control?: OperationControl): Promise<readonly string[]> { const { state } = await square.artifact.read(control?.signal); return coreListening(state, actor); }
 
 async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> {
+  if (verb === 'done') validateDoneBody(body);
   // Done completes ownership: the live-owner validation, the artifact commit, the ended
   // session's route retirement, and presence cleanup share one ownership critical section.
   // A takeover finalizing between validation and commit can never be completed by a stale

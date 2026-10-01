@@ -1,12 +1,11 @@
 import { cmdActivity } from '../activity.js';
+import { validateDoneBody } from '../decisions.js';
 import {
   type BuildOptions,
   type HardCap,
   type Reach,
   type RoomChangeAct,
-  formatActivityId,
   formatHardCap,
-  parseActivityId,
 } from '../model.js';
 import {
   formatRefusal,
@@ -72,7 +71,7 @@ interface ActivityIntent {
   noMention: boolean;
   mentions: string[];
   reach?: Reach;
-  reply?: number;
+  reply?: string;
 }
 
 interface BodyIntent {
@@ -231,7 +230,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   let bell = false;
   let noMention = false;
   const mentions: string[] = [];
-  let reply: number | undefined;
+  let reply: string | undefined;
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -241,13 +240,11 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else if (argument === '--bell') bell = true;
     else if (argument === '--no-mention') noMention = true;
     else if (argument === '--mention') {
-      mentions.push(requireParticipant(requireValue(argv, index, argument)));
+      mentions.push(requireValue(argv, index, argument));
       index += 1;
     }
     else if (argument === '--reply') {
-      const replyIndex = parseActivityId(requireValue(argv, index, argument));
-      if (replyIndex === undefined) fail('Invalid --reply: expected an activity id like act/12');
-      reply = replyIndex;
+      reply = requireValue(argv, index, argument);
       index += 1;
     }
     else bodyArgs.push(argument);
@@ -270,7 +267,6 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const body = await resolveBody(intent.activity);
-    const reachArg = intent.reach === 'bell' ? ' --bell' : intent.noMention ? ' --no-mention' : intent.mentions.map((name) => ` --mention ${quoteShell(name)}`).join('');
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
       noWait: intent.noWait,
@@ -279,7 +275,6 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       reply: intent.reply,
       cwd: context.cwd,
       env: context.env,
-      forceCommand: `${participantCommandPrefix(squarePath, intent.name)} express --force${reachArg}${intent.reply === undefined ? '' : ` --reply ${formatActivityId(intent.reply)}`} -`,
     });
   },
   present: () => {},
@@ -362,8 +357,14 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   present: (result) => process.stdout.write(result),
 };
 
+function validateDoneInput(body: string | undefined): void {
+  try { validateDoneBody(body); }
+  catch (error) { fail(`${error instanceof Error ? error.message : String(error)}\nsquare done --help`); }
+}
+
 function parseDone(argv: string[], context: CommandContext): BodyIntent {
   if (argv.length > 1) usage(context.command);
+  if (argv[0] !== '-') validateDoneInput(argv[0]);
   return { name: requireParticipant(context.name), body: argv.length === 1 ? argv[0] : undefined };
 }
 
@@ -371,7 +372,8 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse: parseDone,
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const body = (await resolveBody(intent.body ?? (process.stdin.isTTY ? '' : '-'))).replace(/\r\n/g, '\n').trim();
+    const body = intent.body === '-' || !process.stdin.isTTY ? await readStdin() : '';
+    validateDoneInput(body);
     const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs, participant: intent.name });
     const result = await application.done(body);
     const name = result.activity.actor;

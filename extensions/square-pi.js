@@ -1,6 +1,7 @@
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
+import { renderAttentionDescription } from '../dist/attention-presentation.js';
 
 class PiDeliveryDroppedError extends Error {
   constructor() {
@@ -31,14 +32,10 @@ function framePiMessage(content) {
 
 export function summarizePendingForNotify(pending) {
   const lines = pending.flatMap((membership) => membership.notifications.map((note) => {
-    const verb = note.route === 'bell'
-      ? 'rang the bell'
-      : note.route === 'mention'
-        ? `called your name (${membership.name})`
-        : `spoke within your earshot (${membership.name})`;
+    const description = renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route });
     const body = note.body.replace(/\s+/g, ' ').trim();
     const clipped = body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX).trimEnd()}…` : body;
-    return `${note.actor} ${verb}${clipped ? ` — ${clipped}` : ''}`;
+    return `${description}${clipped ? ` — ${clipped}` : ''}`;
   }));
   if (lines.length === 0) return undefined;
   return lines.length === 1 ? `■ square · ${lines[0]}` : `■ square · ${lines[0]} (+${lines.length - 1} more)`;

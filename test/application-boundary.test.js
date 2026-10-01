@@ -92,8 +92,8 @@ test('done keeps a same-session rejoin that happens after serialized cleanup', a
     return result;
   };
   try {
-    await app.done('finished');
-    assert.deepEqual(await lookupSession('same-session', Date.now(), env), [{ name: 'rei', squarePath: fs.realpathSync(squarePath) }]);
+    await app.done();
+    assert.deepEqual(await lookupSession('same-session', Date.now(), env), [{ name: 'rei', squarePath: await fs.promises.realpath(squarePath) }]);
   } finally {
     Square.prototype.doneOwnedSession = originalDone;
   }
@@ -172,7 +172,7 @@ test('takeover option joins fresh and done names normally', async () => {
   assert.equal((await fresh.join({ takeover: true })).kind, 'joined');
   const owner = createSquareApplication({ cwd: root, env: ownerEnv, squarePath, participant: 'done-name' });
   await owner.join();
-  await owner.done('left');
+  await owner.done();
   const rejoin = createSquareApplication({ cwd: root, env: otherEnv, squarePath, participant: 'done-name' });
   assert.equal((await rejoin.join({ takeover: true })).kind, 'joined');
 });

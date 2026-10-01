@@ -279,7 +279,7 @@ test('package facade participant verbs persist through shared actions', async ()
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
-    await alice.done('complete');
+    await alice.done();
     await square.close();
     const persisted = await loadSquare(squarePath);
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
@@ -499,26 +499,26 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(context, /^\n```square-activity/);
   assert.match(context, /· \/tmp\/SQUARE\.square · act\/7/);
-  assert.match(context, /● Alice called your name \(Bob\)/);
+  assert.match(context, /● Alice addressed you \(Bob\)/);
   assert.doesNotMatch(context, /^>$/m);
   assert.match(context, /```\n$/);
   assert.doesNotMatch(context, /catch --now/);
 });
 
-test('Pi notify summary names actor, route, and recipient without a standalone blockquote line', () => {
+test('Pi notify summary distinguishes being addressed, listening, and everyone’s attention', () => {
   const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   assert.equal(
     summarizePendingForNotify([membership([note()])]),
-    '■ square · Alice called your name (Bob) — hello @Bob',
+    '■ square · Alice addressed you (Bob) — hello @Bob',
   );
   assert.equal(
     summarizePendingForNotify([membership([note({ route: 'attention' })])]),
-    '■ square · Alice spoke within your earshot (Bob) — hello @Bob',
+    '■ square · Alice spoke · you’re listening to Alice — hello @Bob',
   );
   assert.equal(
     summarizePendingForNotify([membership([note({ route: 'bell' }), note({ actor: 'Cara', body: 'y'.repeat(120) })])]),
-    `■ square · Alice rang the bell — hello @Bob (+1 more)`,
+    `■ square · Alice rang the bell · everyone’s attention — hello @Bob (+1 more)`,
   );
   assert.match(summarizePendingForNotify([membership([note({ body: 'y'.repeat(120) })])]), /…$/);
   assert.equal(summarizePendingForNotify([membership([])]), undefined);
@@ -676,7 +676,7 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, false, 'the activity stays out of the TUI stream; the notify carries the human-facing summary');
-      assert.deepEqual(notified, [{ message: '■ square · Alice called your name (Bob) — hello @Bob', level: 'info' }]);
+      assert.deepEqual(notified, [{ message: '■ square · Alice addressed you (Bob) — hello @Bob', level: 'info' }]);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),
@@ -777,7 +777,7 @@ test('Pi steers pending activity into a running agent and commits only when it l
   }, false);
 });
 
-test('Pi retries a dropped steer immediately and commits the retry once it lands', async () => {
+test('Pi retries a dropped steer after a transient evidence rename refusal and commits once it lands', async (t) => {
   await withPiFixture('pi-dropped-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -785,6 +785,15 @@ test('Pi retries a dropped steer immediately and commits the retry once it lands
       on(event, handler) { handlers.set(event, handler); },
       sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
+    let refusedRename = false;
+    const rename = fs.promises.rename;
+    t.mock.method(fs.promises, 'rename', async (source, destination) => {
+      if (!refusedRename && sent.length === 1 && path.basename(destination) === 'evidence.ndjsonl') {
+        refusedRename = true;
+        throw Object.assign(new Error('Windows reader temporarily holds the evidence ledger'), { code: 'EPERM' });
+      }
+      return rename(source, destination);
+    });
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
     await handlers.get('session_start')({}, context);
@@ -797,6 +806,7 @@ test('Pi retries a dropped steer immediately and commits the retry once it lands
       await piTurnStart(handlers);
       await piTurnEnd(handlers);
       await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
+      assert.equal(refusedRename, true, 'the dropped-presentation evidence write must encounter the injected refusal');
       assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');

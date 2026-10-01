@@ -152,7 +152,7 @@ test('landings advance the actor cursor and never reuse an index', async () => {
   const square = { artifact: cell, clock: () => (now += 1), location: 'memory' };
   await join(square, 'Alice');
   await express(square, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
-  await done(square, 'Alice', 'bye');
+  await done(square, 'Alice');
 
   const stored = (await cell.read()).state;
   assert.equal(readCursor(stored, 'Alice'), 2);

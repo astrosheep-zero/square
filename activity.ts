@@ -8,19 +8,25 @@ import {
   formatRefusal,
   renderActivityBlocked,
   renderActivityLimit,
+  renderActivityUncertain,
   renderExpressNoWait,
   renderExpressWaiting,
   renderPendingFeed,
   joinRecoveryCommand,
+  participantsRecoveryCommand,
+  participantCommandPrefix,
+  commandPrefix,
+  quoteShell,
+  takeoverRecoveryLines,
   withPathOutput,
 } from './presentation.js';
-import { nowMs, inSquareCount, SLEEP_MS } from './runtime.js';
+import { nowMs, SLEEP_MS } from './runtime.js';
 import { unreadActivitySummaries } from './decisions.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { createSquareApplication } from './square-application.js';
 import { activityPresentation, resolveParticipant } from './views.js';
-import { formatActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { formatDuration } from './time.js';
 import { style } from './tty-style.js';
 import { hostLedgerForEnv } from './registry.js';
@@ -30,11 +36,10 @@ export interface ActivityOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   force?: boolean;
-  forceCommand: string;
   noWait?: boolean;
   mentions?: readonly string[];
   reach?: import('./model.js').Reach;
-  reply?: number;
+  reply?: string;
 }
 
 function draftDirFor(squarePath: string): string {
@@ -66,6 +71,16 @@ export function saveActivityDraft(squarePath: string, name: string, body: string
   }
 }
 
+/** Retry commands preserve the original reach, reply, wait and force choices. */
+export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions, force = opts.force ?? false): string {
+  const reach = opts.reach === 'bell' ? ' --bell'
+    : opts.mentions?.length ? opts.mentions.map((target) => ` --mention ${quoteShell(target)}`).join('')
+      : ' --no-mention';
+  const replyIndex = opts.reply === undefined ? undefined : parseActivityId(opts.reply);
+  const reply = opts.reply === undefined ? '' : ` --reply ${replyIndex === undefined ? quoteShell(opts.reply) : formatActivityId(replyIndex)}`;
+  return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${reply} -`;
+}
+
 export async function cmdActivity(
   squarePath: string,
   name: string,
@@ -73,140 +88,136 @@ export async function cmdActivity(
   resolveBody: (arg: string) => string,
   opts: ActivityOptions
 ): Promise<void> {
-  validateName(name);
-  const rawInput = String(resolveBody(activity)).replace(/\r\n/g, '\n');
-
-  const reader = await openSquare(squarePath, { clock: nowMs, env: { ...(opts.env ?? process.env) }, hostLedger: hostLedgerForEnv(opts.env ?? process.env) });
-  let knownName: string;
-  try {
-    knownName = (await resolveParticipant(reader, name)).name;
-  } catch (err) {
-    const participantCount = inSquareCount((await reader.artifact.read()).state);
-    await closeOpenSquare(reader);
-    if (isSquareError(err)) {
-      if (err.code === 'unknown_participant' || err.code === 'invalid_args') {
-        const draftPath = saveActivityDraft(squarePath, name, rawInput);
-        const bodyLines = [err.message, `· draft kept: ${draftPath}`];
-        if (/^✕ .* has never stepped into/.test(err.message)) bodyLines.push(joinRecoveryCommand(squarePath, name));
-        process.stderr.write(formatRefusal(squarePath, bodyLines, { participantCount }));
-        process.exit(2);
-      }
-      process.stderr.write(err.message + '\n');
-      process.exit(err.code === 'not_found' ? 1 : 2);
-    }
-    throw err;
-  }
-  await closeOpenSquare(reader);
-  const body = rawInput.trim();
-  const force = opts.force ?? false;
-  const noWait = opts.noWait ?? false;
-  const reach = opts.reach === 'bell' ? 'bell' : undefined;
-  let announcedWait: 'throttled' | 'held' | undefined;
+  const rawInput = String(resolveBody(activity));
   const env = { ...(opts.env ?? process.env) };
   const hostLedger = hostLedgerForEnv(env);
-  const application = createSquareApplication({ cwd: opts.cwd ?? process.cwd(), env, squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs), participant: name });
-  await application.join();
-  {
-      const beforeSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
-      const before = await activityPresentation(beforeSquare, knownName).finally(() => closeOpenSquare(beforeSquare));
-      const pendingPublic = before.pendingPublic;
-      const pendingRoomChanges = before.pendingRoomChanges;
-      try {
-        const landed = await application.express(body, {
-          force,
-          noWait,
-          ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
-          ...(reach === undefined ? {} : { reach }),
-          ...(opts.reply === undefined ? {} : { reply: formatActivityId(opts.reply) }),
-        }, {
-          onProgress: (progress) => {
-            if (announcedWait === progress.reason) return;
-            const delayMs = progress.delayMs ?? SLEEP_MS;
-            process.stdout.write(renderExpressWaiting({ reason: progress.reason, ...(progress.reason === 'throttled' ? { delayMs } : {}) }) + '\n');
-            announcedWait = progress.reason;
-          },
-        });
-        const freshSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
-        const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
-        const headerCount = fresh.participantCount;
-        const held = fresh.held;
-        const ownActCount = fresh.ownActivityCount;
-        const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
-        const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
-        const hint = expressHintLine(ownActCount);
-        const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}`)}`;
-        const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
-        process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
-        return;
-      } catch (error) {
-        if (!(error instanceof SquareError)) throw error;
-        const freshSquare = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
-        const fresh = await activityPresentation(freshSquare, knownName).finally(() => closeOpenSquare(freshSquare));
-        const headerCount = fresh.participantCount;
-        const held = fresh.held;
+  const retryCommand = activityRetryCommand(squarePath, name, opts);
+  const forceCommand = activityRetryCommand(squarePath, name, opts, true);
+  let knownName = name;
+  let callerMissing = false;
+  let expressAttempted = false;
+  let landedId: ActivityId | undefined;
+  let announcedWait: 'throttled' | 'held' | undefined;
 
-        if (error.code === 'behind') {
-        const draftPath = saveActivityDraft(squarePath, name, rawInput);
-        process.stdout.write(
-          renderActivityBlocked({
-            squarePath,
-            name: knownName,
-            forceCommand: opts.forceCommand,
-            activitySummaries: unreadActivitySummaries(fresh.state, knownName, nowMs()),
-            unreadRoomChanges: [],
-            draftPath,
-            participantCount: headerCount,
-            held,
-          })
-        );
+  async function presentation() {
+    const square = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
+    try { return await activityPresentation(square, knownName); }
+    finally { await closeOpenSquare(square); }
+  }
+
+  try {
+    validateName(name);
+    for (const target of opts.mentions ?? []) validateName(target);
+    if (opts.reply !== undefined && parseActivityId(opts.reply) === undefined) {
+      throw new SquareError('invalid_args', 'Invalid --reply: expected an activity id like act/12');
+    }
+    const reader = await openSquare(squarePath, { clock: nowMs, env, hostLedger });
+    try { knownName = (await resolveParticipant(reader, name)).name; }
+    catch (error) {
+      // The caller name was validated above; invalid_args here means it is absent
+      // from the roster. Keep the join recovery distinct from recipient validation.
+      callerMissing = isSquareError(error) && error.code === 'invalid_args';
+      throw error;
+    }
+    finally { await closeOpenSquare(reader); }
+    const application = createSquareApplication({ cwd: opts.cwd ?? process.cwd(), env, squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs), participant: name });
+    await application.join();
+    const before = await presentation();
+    const pendingPublic = before.pendingPublic;
+    const pendingRoomChanges = before.pendingRoomChanges;
+    expressAttempted = true;
+    const landed = await application.express(rawInput.replace(/\r\n/g, '\n').trim(), {
+      force: opts.force ?? false,
+      noWait: opts.noWait ?? false,
+      ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
+      ...(opts.reach === undefined ? {} : { reach: opts.reach }),
+      // The action boundary validates the raw id before attempting a commit.
+      ...(opts.reply === undefined ? {} : { reply: opts.reply as ActivityId }),
+    }, {
+      onProgress: (progress) => {
+        if (announcedWait === progress.reason) return;
+        const delayMs = progress.delayMs ?? SLEEP_MS;
+        process.stdout.write(renderExpressWaiting({ reason: progress.reason, ...(progress.reason === 'throttled' ? { delayMs } : {}) }) + '\n');
+        announcedWait = progress.reason;
+      },
+    });
+    landedId = landed.activity.id;
+    const fresh = await presentation();
+    const headerCount = fresh.participantCount;
+    const held = fresh.held;
+    const ownActCount = fresh.ownActivityCount;
+    const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
+    const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
+    const hint = expressHintLine(ownActCount);
+    const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}`)}`;
+    const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
+    process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
+  } catch (error) {
+    // Save before any recovery read: even a broken artifact must not eat the body.
+    const draftPath = saveActivityDraft(squarePath, name, rawInput);
+    const confirmedUnsent = landedId === undefined && (!expressAttempted || (isSquareError(error) && error.facts?.activityUnsent === true));
+    const fresh = await presentation().catch(() => undefined);
+    const output = { squarePath, name: knownName, draftPath, participantCount: fresh?.participantCount, held: fresh?.held };
+    if (!confirmedUnsent) {
+      process.stderr.write(renderActivityUncertain({ ...output, landedId, detail: error instanceof Error ? error.message : String(error) }));
+      process.exit(1);
+      return;
+    }
+    if (isSquareError(error) && fresh !== undefined) {
+      if (error.code === 'behind') {
+        process.stdout.write(renderActivityBlocked({
+          ...output,
+          retryCommand,
+          forceCommand,
+          activitySummaries: unreadActivitySummaries(fresh.state, knownName, nowMs()),
+          unreadRoomChanges: [],
+        }));
         process.exit(1);
         return;
-        }
-        if (error.code === 'capped') {
-        process.stdout.write(
-          renderActivityLimit({
-            squarePath,
-            name: knownName,
-            count: fresh.ownActivityCount,
-            ...(fresh.hardCap === null ? {} : { hardCap: fresh.hardCap }),
-            draftPath: saveActivityDraft(squarePath, name, rawInput),
-            participantCount: headerCount,
-            held,
-          })
-        );
+      }
+      if (error.code === 'capped') {
+        process.stdout.write(renderActivityLimit({
+          ...output,
+          count: fresh.ownActivityCount,
+          ...(fresh.hardCap === null ? {} : { hardCap: fresh.hardCap }),
+        }));
         process.exit(1);
         return;
-        }
-        if (error.code === 'throttled') {
-          const delayMs = error.facts?.retryAfterMs ?? SLEEP_MS;
-        if (noWait) {
-          const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'throttled', delayMs, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
-          process.exit(1);
-        }
-        throw error;
-        }
-        if (error.code === 'held') {
-          const holdReason = fresh.holdReason;
-        if (noWait) {
-          const draftPath = saveActivityDraft(squarePath, name, rawInput);
-          process.stdout.write(renderExpressNoWait({ squarePath, name: knownName, reason: 'held', holdReason, draftPath, participantCount: headerCount, held, forceCommand: opts.forceCommand }));
-          process.exit(1);
-        }
-        throw error;
-        }
-        if (error.code === 'bell_quota') {
-        process.stdout.write(
-          withPathOutput(
-            squarePath,
-            [`✕ the bell stays quiet for now`, `  · you can ring it again in ${formatDuration(error.facts?.retryAfterMs ?? 1)}`].join('\n'),
-            { participantCount: headerCount, held }
-          )
-        );
+      }
+      if (error.code === 'throttled' || error.code === 'held') {
+        process.stdout.write(renderExpressNoWait({
+          ...output,
+          reason: error.code,
+          delayMs: error.facts?.retryAfterMs ?? SLEEP_MS,
+          holdReason: fresh.holdReason,
+          retryCommand,
+        }));
         process.exit(1);
         return;
-        }
-        throw error;
+      }
+      if (error.code === 'bell_quota') {
+        process.stdout.write(withPathOutput(squarePath, [
+          '✕ the bell stays quiet for now',
+          `  · you can ring it again in ${formatDuration(error.facts?.retryAfterMs ?? 1)}`,
+          `· draft kept: ${draftPath}`,
+          `  · retry when the bell is ready:`,
+          `${retryCommand} < ${quoteShell(draftPath)}`,
+        ].join('\n'), output));
+        process.exit(1);
+        return;
       }
     }
+    const lines = [error instanceof Error ? error.message : String(error), `· draft kept: ${draftPath}`];
+    if (isSquareError(error)) {
+      if (callerMissing || error.code === 'unknown_participant' || error.code === 'not_joined') lines.push(joinRecoveryCommand(squarePath, name));
+      if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name));
+      if (error.code === 'invalid_args' || error.code === 'invalid_name') {
+        if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
+        if (opts.reply !== undefined) lines.push(`${commandPrefix(squarePath)} history --limit 10`);
+      }
+    }
+    lines.push('  · correct the problem above before retrying; keep your intended recipients and reply:', `${retryCommand} < ${quoteShell(draftPath)}`);
+    process.stderr.write(formatRefusal(squarePath, lines, output));
+    process.exit(2);
+  }
 }
