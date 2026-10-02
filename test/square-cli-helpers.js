@@ -72,8 +72,20 @@ export function runAsync(args, opts = {}) {
   });
 }
 
+const tempSquareDirs = new Set();
+let tempSquareCleanupRegistered = false;
+
 export function tempSquare() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-v2-'));
+  tempSquareDirs.add(dir);
+  if (!tempSquareCleanupRegistered) {
+    tempSquareCleanupRegistered = true;
+    process.on('exit', () => {
+      for (const leftover of tempSquareDirs) {
+        try { fs.rmSync(leftover, { recursive: true, force: true }); } catch { /* a still-open handle may resist removal */ }
+      }
+    });
+  }
   return path.join(dir, 'SQUARE.square');
 }
 
