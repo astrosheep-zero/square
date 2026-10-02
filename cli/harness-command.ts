@@ -1,5 +1,6 @@
 import os from 'node:os';
 
+import { truncateExternalDiagnostic } from '../presentation.js';
 import {
   executeHarnessTarget,
   harnessTargets,
@@ -54,7 +55,7 @@ function parseInstall(argv: string[], action: 'install' | 'uninstall'): ParsedIn
 
 export async function executeTargetBatch(
   targets: string[],
-  action: 'install' | 'uninstall',
+  action: HarnessAction,
   context: { homeDir: string; squarePath?: string; force: boolean },
   executeTarget: HarnessTargetExecutor = executeHarnessTarget
 ): Promise<HarnessCommandResult> {
@@ -64,7 +65,8 @@ export async function executeTargetBatch(
     try {
       results.push(await executeTarget(target, action, context));
     } catch (error) {
-      failures.push(`✕ ${target} ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
+      const diagnostic = error instanceof Error ? error.message : String(error);
+      failures.push(`✕ ${target} ${action} failed: ${action === 'doctor' ? truncateExternalDiagnostic(diagnostic) : diagnostic}`);
     }
   }
   return {
@@ -106,25 +108,23 @@ export const harnessCommand: CommandSpec<ParsedHarnessCommand, HarnessCommandRes
     };
   },
   async execute(intent, context) {
-    const targetNames = intent.target === undefined
-      ? harnessTargets().map((target) => target.name)
-      : [intent.target];
-    const results: HarnessTargetResult[] = [];
-    for (const target of targetNames) {
-      results.push(await executeHarnessTarget(target, 'doctor', {
-        homeDir: context.homeDir,
-        squarePath: context.squarePath,
-        force: false,
-      }));
+    const targetContext = {
+      homeDir: context.homeDir,
+      squarePath: context.squarePath,
+      force: false,
+    };
+    if (intent.target === undefined) {
+      return executeTargetBatch(harnessTargets().map((target) => target.name), 'doctor', targetContext);
     }
+    const result = await executeHarnessTarget(intent.target, 'doctor', targetContext);
     return {
-      notes: results.flatMap((result) => result.notes),
-      lines: results.flatMap((result) => result.lines),
+      ...result,
       failures: [],
     };
   },
   present(result) {
     process.stdout.write(formatHarnessResult(result));
+    if (result.failures.length > 0) process.exitCode = 1;
   },
 };
 

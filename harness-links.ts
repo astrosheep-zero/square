@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import crossSpawn from 'cross-spawn';
 
 import { SQUARE_IDENTITY } from './identity.js';
+import { removeOpenCodePluginConfig } from './harness-opencode-config.js';
 import { truncateExternalDiagnostic } from './presentation.js';
 
 export interface HarnessLink {
@@ -114,25 +115,8 @@ export function installOpenCodePlugin(homeDir: string, force = false, run: OpenC
   return [SQUARE_IDENTITY.packageName];
 }
 
-function configPath(homeDir: string): string {
-  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config');
-  return path.join(configHome, 'opencode', 'opencode.jsonc');
-}
-
-function removeConfiguredPlugin(homeDir: string): boolean {
-  const target = configPath(homeDir);
-  let source: string;
-  try { source = fs.readFileSync(target, 'utf8'); } catch { return false; }
-  const escaped = SQUARE_IDENTITY.packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const packageLine = new RegExp(`^\\s*"${escaped}(?:@[^"\\n]+)?"\\s*,?\\s*$`, 'm');
-  const next = source.replace(packageLine, '');
-  if (next === source) return false;
-  fs.writeFileSync(target, next);
-  return true;
-}
-
 export function uninstallOpenCodePlugin(homeDir: string): string[] {
-  return removeConfiguredPlugin(homeDir) ? [SQUARE_IDENTITY.packageName] : [];
+  return removeOpenCodePluginConfig(homeDir) ? [SQUARE_IDENTITY.packageName] : [];
 }
 
 /** Verify that OpenCode accepts its resolved runtime configuration after links are installed. */

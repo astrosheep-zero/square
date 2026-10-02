@@ -366,13 +366,17 @@ function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: StoredAct)
   });
 }
 
+function isRenderedHistoryActivity(activity: StoredAct): boolean {
+  return activity.kind === 'say' || activity.kind === 'done' || activity.kind === 'hold';
+}
+
 function renderHistoryProjection(
   projection: HistoryPresentation,
   visible: HistoryPresentation['activities'],
   noTruncate: boolean,
   squarePath: string,
 ): string {
-  const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done' || activity.kind === 'hold');
+  const shown = visible.filter(isRenderedHistoryActivity);
   const preview = noTruncate || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
   for (const activity of shown) {
@@ -406,11 +410,16 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
         ? await createSquareApplication({ cwd: context.cwd, env: { ...context.env, SQUARE_PARTICIPANT_NAME: undefined }, squarePath, clock: nowMs }).history(applicationHistoryQuery(options))
         : undefined;
       let events = applicationHistory === undefined ? [...projection.activities] : applicationHistory.map(activityAsStored);
+      // Human pages count what history actually renders. Machine output keeps
+      // its complete event contract, including join/listen/resume activity.
+      const machineOutput = options.json || (options.format !== undefined && options.format.length > 0);
+      if (!machineOutput) events = events.filter(isRenderedHistoryActivity);
       if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
         fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${boundedHistoryCommand(options, squarePath)}`);
       }
       const searching = options.grep !== undefined || options.fixed !== undefined;
       const totalMatches = searching ? events.length : 0;
+      const hasMore = options.lastN != null && events.length > options.lastN;
       if (options.lastN != null) {
         events = options.afterIndex !== undefined
           ? events.slice(0, options.lastN)
@@ -425,17 +434,8 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const output = pattern === undefined || pattern === ''
         ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath)
         : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
-      const publicEvents = events.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
-      const allPublic = projection.activities.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
-      const pageMin = publicEvents.length === 0 ? undefined : Math.min(...publicEvents.map((item) => item.index));
-      const pageMax = publicEvents.length === 0 ? undefined : Math.max(...publicEvents.map((item) => item.index));
-      const hasMore = options.lastN != null && publicEvents.length > 0 && (
-        options.afterIndex !== undefined
-          ? allPublic.some((item) => item.index > (pageMax ?? options.afterIndex!))
-          : allPublic.some((item) => item.index < (pageMin ?? Infinity))
-      );
       const cursorDirection = options.afterIndex !== undefined ? '--after' : '--before';
-      const cursorIndex = cursorDirection === '--after' ? Math.max(...publicEvents.map((item) => item.index)) : Math.min(...publicEvents.map((item) => item.index));
+      const cursorIndex = cursorDirection === '--after' ? Math.max(...events.map((item) => item.index)) : Math.min(...events.map((item) => item.index));
       const continuation = hasMore ? `\n\n${historyContinuationCommand(options, squarePath, cursorDirection, cursorIndex)}` : '';
       return withPathOutput(squarePath, output + continuation, { participantCount: projection.participantCount });
     } finally {
