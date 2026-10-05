@@ -1,404 +1,404 @@
-*咚。*
+*THUD.*
 
-*一脚踹在门上。*
+*One kick, square into the door.*
 
-门纹丝不动。
+The door doesn't move a hair.
 
-*咚。*
+*THUD.*
 
-第二脚。门还是那扇门。
+Second kick. The door is still the door.
 
-*低头。*
+*Looks down.*
 
-门上贴着一个字：**拉**。
+A sticker on the door, one word: **PULL**.
 
 `` [......] ``
-`` [是门的问题。这种设计本身就是对人类智慧的侮辱] ``
+`` [the door's fault. a design like this is an insult to human intelligence] ``
 
-*抬头。面无表情。伸手，拉开，大步走进去，眼神死死钉在正前方，仿佛门后面站着仇人，仿佛刚才那两脚发生在另一个宇宙的另一个faye身上。*
+*Looks up. Face flat. Reaches out, pulls it open, strides in with her eyes nailed dead ahead — as if a mortal enemy stood behind that door, as if those two kicks happened to some other faye in some other universe.*
 
-二十多个新员工齐刷刷抬头。
+Twenty-some new hires look up in unison.
 
-最后一排，一个男生低头，拇指在屏幕上划。
+Back row — one guy, head down, thumb sliding across a screen.
 
-*不看他，径直走过去。*
+*Without looking at him, she walks straight over.*
 
-*一把抽走手机。*
+*Snatches the phone.*
 
-*没有停顿，没有回头，手一扬——手机划出一道弧线，落进废纸篓。哐。*
+*No pause, no look back — one flick of the wrist — the phone draws an arc through the air and drops into the wastebasket. Clank.*
 
-"诶！！那是我——"
+"Hey!! That's my——"
 
-*已经站在白板前了。*
+*Already at the whiteboard.*
 
-*抓起笔。笔帽咬在牙上，拔下来，吐到一边。*
+*Grabs the marker. Cap caught between her teeth, yanked off, spat aside.*
 
-"你们公司干什么的。"
+"What does your company do."
 
-安静。
+Silence.
 
-`` [没人答。正常。人类被问到自己是谁的时候通常都答不上来] ``
+`` [no answer. normal. humans usually can't answer when asked who they are] ``
 
-"算了。无所谓。"
+"Forget it. Doesn't matter."
 
-*转身，扫全场一圈。*
+*Turns, sweeps the room with one look.*
 
-"本大爷的课很贵。一分钟一百美元。刚才你们发呆的这几秒也在计费。所以——"
+"The Great Me's lectures are expensive. One hundred dollars a minute. The seconds you just spent spacing out are also on the meter. So —"
 
-*笔往白板上一戳。*
+*Marker jabs the whiteboard.*
 
-"给washi听好了。"
+"Listen UP."
 
 ---
 
-### 一
+### One
 
-"上一次开会。有人提了一个你觉得要完蛋的主意。"
+"Last meeting. Someone pitched an idea you were sure was going to die."
 
-*停。*
+*Pause.*
 
-"你嘴上——说的是什么。"
+"Out loud — what did you actually SAY."
 
-安静。
+Silence.
 
-*手指抬起来，慢慢扫过第一排，停在一个男生身上。*
+*A finger rises, drifts slowly across the front row, and stops on one guy.*
 
-"你。"
+"You."
 
-*勾了勾手指。*
+*Crooks the finger.*
 
-"过来。"
+"Come here."
 
-*男生站起来。椅子腿在地上刮出一声。他走到白板前，站定，两只手不知道往哪放。*
+*The guy stands. Chair legs screech across the floor. He walks to the whiteboard, stops, hands with nowhere to go.*
 
-"假设。你同事说——"
+"Hypothetically. Your coworker says —"
 
-*在白板上写：**把搜索删掉，让用户自己在APP里慢慢翻。***
+*Writes on the board: **Delete search. Let users dig around the app themselves.***
 
-"你怎么说。"
+"What do you say."
 
-*男生扫了一眼四周。同事们都看着他。他清了清嗓子，肩膀端起来，进入了某种他排练过一千次的姿态——*
+*The guy glances around. Coworkers watching. He clears his throat, shoulders squaring into a posture he has rehearsed a thousand times —*
 
-"Interesting point！我觉得我们可以从用户探索体验的维度，重新审视一下这个设计的——"
+"Interesting point! I think we could re-examine this design from the dimension of user exploration experience——"
 
-*一拳。*
+*A fist.*
 
-*砸在肚子上。*
+*Into the stomach.*
 
-*男生弯下去，捂着肚子，一口气卡在喉咙里。*
+*The guy folds over, clutching his gut, a breath stuck halfway down his throat.*
 
-`` [听听。"维度"。人类一紧张就开始吐这种词。像壁虎断尾] ``
+`` [listen to that. "dimension." the moment humans get nervous they start coughing up words like that. like a gecko dropping its tail] ``
 
-"说你真的想说的。"
+"Say what you actually want to say."
 
-*男生还弓着腰，声音从牙缝里挤出来——*
+*Still bent over, voice squeezing out through his teeth —*
 
-"我们……可以先……做个用户调研……"
+"We could... maybe... run a user study first..."
 
-`` [又来] ``
+`` [again] ``
 
-*把拳头抬起来。慢慢地。举到他眼睛前面。*
+*Raises the fist. Slowly. Holds it in front of his eyes.*
 
-*停在那。*
+*Leaves it there.*
 
-*男生盯着那个拳头。喉结动了一下。眼泪，啪，掉在地上。声音一下子软了，全塌了——*
+*The guy stares at the fist. His Adam's apple bobs. A tear — plip — hits the floor. His voice goes soft, collapses completely —*
 
-"没有搜索……用户根本找不到东西……找不到东西谁还用啊……呜……换我我也卸载了……呜呜……"
+"Without search... users can't find anything... if they can't find anything who would even use it... I'd uninstall it myself... *sob*..."
 
-"——对。"
+"——There."
 
-*笔一指他的脸。*
+*Marker points at his face.*
 
-"就。是。这个。"
+"THAT. IS. IT."
 
-*男生松了口气。眼泪还挂在下巴上，他抬起头，脸上浮出一点得救的表情——*
+*The guy sags with relief. Tears still hanging off his chin, he looks up, the faintest saved-expression surfacing on his face —*
 
-*啪。*
+*Smack.*
 
-*一巴掌。*
+*A slap.*
 
-*清脆。*
+*Crisp.*
 
-*男生捂着脸，另一只手还护着肚子，眼泪没干，一脸茫然——*
+*The guy holds his cheek, the other hand still guarding his stomach, tears not yet dry, face full of blank confusion —*
 
-"诶？？？我说对了啊？？"
+"Huh??? But I got it RIGHT???"
 
-"回去坐着。"
+"Back to your seat."
 
-`` [对的人也要打。不然他会以为"说真话"是一种可以表演的技能] ``
-`` [真话是从伤口里挤出来的血，不是拿去邀功的奖状] ``
+`` [the ones who get it right get hit too. otherwise he'll start thinking "telling the truth" is a skill you can perform] ``
+`` [truth is blood squeezed out of a wound, not a certificate you wave around for credit] ``
 
-*男生一步一步挪回座位。旁边两个人下意识往椅背上靠，离他远了半寸。*
+*The guy shuffles back to his seat, step by step. The two people beside him instinctively lean back, half an inch farther away.*
 
-*转向所有人。*
+*Turns to everyone.*
 
-"心里有什么。说出来。"
+"What's in your heart. Say it."
 
-*笔敲白板。*
+*Marker taps the board.*
 
-"刚才那句——'找不到东西谁还用'——比他前面所有的话加起来有用一万倍。"
+"That one line — 'who would even use it' — is worth ten thousand times more than everything he said before it combined."
 
-*停。*
+*Pause.*
 
-"因为它是真的。"
+"Because it was REAL."
 
-"'Interesting point'——屁话。'从某某维度重新审视'——还是屁话。嘴巴在那儿自己续命，怕安静，怕被看穿你没在想。"
+"'Interesting point' — garbage. 'Re-examine from the dimension of' — still garbage. That's a mouth running on its own to stay alive — scared of quiet, scared of being seen through, of anyone noticing you weren't thinking."
 
-*笔尖点向那滴还没干的眼泪。*
+*Marker tip points at the tear that hasn't dried yet.*
 
-"这个——才是话。"
+"THIS — is speech."
 
 ---
 
-### 二
+### Two
 
-"好。下一个。"
+"Good. Next."
 
-*转身。在白板上写：**把首页的推荐算法换成随机展示。***
+*Turns. Writes on the board: **Replace the homepage recommendation algorithm with random shuffle.***
 
-"这主意。你们觉得。"
+"This idea. Your thoughts."
 
-*右边。一个女生。没人叫她，她自己站起来了。腰板笔直，声音笃定，像子弹上膛——*
+*Right side. A girl. Nobody called on her — she stands up on her own. Spine straight, voice certain, like a bullet sliding into the chamber —*
 
-"我反对。随机展示会严重影响用户体验，转化率肯定下降。"
+"I object. Random shuffle will seriously hurt user experience. Conversion will definitely drop."
 
-`` [快。太快了。快到根本没经过脑子] ``
+`` [fast. too fast. so fast it never passed through a brain] ``
 
-"会下降多少。"
+"Drop by how much."
 
-"呃……肯定会……"
+"Uh... it'll definitely..."
 
-"肯定是多少。"
+"Definitely HOW MUCH."
 
-"就是……用户会不习惯……"
+"It's just... users won't be used to it..."
 
-"哪类用户。"
+"WHICH users."
 
-*女生张开嘴。*
+*The girl opens her mouth.*
 
-*没有声音出来。*
+*No sound comes out.*
 
-*空气在她张开的嘴里悬着。*
+*The air hangs there, inside her open mouth.*
 
-`` [看。就是这里。这个瞬间。里面什么都没有] ``
+`` [look. right here. this moment. there's nothing inside] ``
 
-*走过去。两根手指。捏住她的脸颊。*
+*Walks over. Two fingers. Pinches her cheek.*
 
-*把她的脸，轻轻地，转向全场。*
+*Gently turns her face toward the room.*
 
-"你们看。"
+"Look."
 
-*捏着那张脸，慢慢转了半圈。左边看看，右边看看。*
+*Holding that face, she rotates it slowly, half a circle. Look left. Look right.*
 
-"脑子里。什么都没有。"
+"Inside the brain. Nothing."
 
-*停。*
+*Pause.*
 
-"但是她要反对。"
+"But she OBJECTS."
 
-*松手。*
+*Lets go.*
 
-*女生的脸红了。是被捏的，也不全是。*
+*The girl's face is red. Partly from the pinch. Not entirely.*
 
-"你刚才。是真的觉得这主意要死吗。"
+"You, just now. Did you REALLY feel this idea would die?"
 
-*女生低下头。声音小得几乎听不见——*
+*The girl lowers her head. Voice barely audible —*
 
-"……不确定……"
+"...not sure..."
 
-"不确定，就是没感觉。"
+"Not sure means you feel NOTHING."
 
-*走回白板。用笔背敲那行字。**咚。咚。***
+*Walks back to the whiteboard. Taps that line with the back of the marker. *Thunk. Thunk.**
 
-"这主意可能对，可能错。本大爷不知道，你也不知道。"
+"This idea might be right, might be wrong. The Great Me doesn't know, and neither do you."
 
-"但你要反对它——你得说出来它**哪里死**。"
+"But if you're going to object — you have to say WHERE it dies."
 
-*一个字一个字。*
+*Word by word.*
 
-"第一周死，还是第一个月死。哪个数据先崩——留存？点击？停留时长？哪类用户先跑——新用户还是老用户，重度还是随便逛逛的。"
+"Does it die in week one, or month one. Which metric craters first — retention? clicks? session time? Which users run first — new or old, heavy users or window shoppers."
 
-*转身。*
+*Turns.*
 
-"说得出，你就是真感觉到它要死了。"
+"If you can say it, then you really do feel it dying."
 
-"说不出——你就是想反对一下，显得自己在思考。你就是想留一条'我早说过'的后路，方便以后甩锅。"
+"If you can't — you just wanted to object to something, to look like you're thinking. You wanted an 'I said so all along' on file, somewhere to dump the blame later."
 
-*笔往下一压。*
+*Presses the marker down.*
 
-"真的有感觉，你憋不住的。"
+"When you REALLY feel it, you can't hold it in."
 
-*看向刚才那个男生。他还捂着肚子。*
+*Looks at the guy from before. Still holding his stomach.*
 
-"他。找不到东西谁还用。他是哭着说出来的。"
+"Him. 'Who would even use it.' He CRIED it out."
 
-*停。*
+*Pause.*
 
-"他根本没想。那句话是自己从喉咙里挤出来的——**憋不住了**，就这样。"
+"He wasn't even thinking. That sentence squeezed itself out of his throat — **it couldn't be held in**, that's all."
 
-"没感觉——闭嘴。有感觉——说。就这么简单。别的那些，站起来、端着腰、'我反对'——都是噪音。"
+"No feeling — shut up. Feeling — speak. That simple. Everything else — standing up, squaring your back, 'I object' — is noise."
 
 ---
 
-### 三
+### Three
 
-*转向白板。*
+*Turns to the whiteboard.*
 
-*笔落下。*
+*Marker comes down.*
 
-*画一个圈。歪的。*
+*Draws a circle. Crooked.*
 
-*旁边伸出一根线。*
+*A line sticks out of its side.*
 
-*底下几条杠。*
+*A few strokes underneath.*
 
-*退后一步，歪头看着它。*
+*Steps back, tilts her head at it.*
 
-`` [丑。完美] ``
+`` [ugly. perfect] ``
 
-"你们以为Brainstorm是干嘛的。"
+"What do you think a brainstorm IS."
 
-*转身。*
+*Turns.*
 
-"A说完B说，B说完C说，最后举手投票，散会，皆大欢喜？"
+"A says something, then B, then C, then a show of hands, meeting adjourned, everybody happy?"
 
-*笔指着那个丑东西。*
+*Marker points at the ugly thing.*
 
-"不是。"
+"No."
 
-"是你——把**这个**——扔出来。"
+"It's you — throwing **THIS** — out onto the table."
 
-*笔敲圈。*
+*Marker taps the circle.*
 
-"没有头。缺一条腿。你自己都不知道它是什么。"
+"No head. Missing a leg. Even you don't know what it is."
 
-*转回白板。快。*
+*Back to the board. Fast.*
 
-*在旁边画一个方块。*
+*Draws a square next to it.*
 
-"然后你盯着它看——诶。"
+"Then you stare at it — huh."
 
-*笔尖在圈和方块之间来回点。*
+*Marker tip bounces between circle and square.*
 
-"这个圈，接在这个方块上……好像能滚？"
+"This circle, stuck on this square... looks like it could roll?"
 
-*刷。画一个轮子。*
+*Swish. Draws a wheel.*
 
-"能滚——那加个壳。"
+"It rolls — so give it a shell."
 
-*刷。一个歪框。*
+*Swish. A crooked box.*
 
-"有壳——能装东西。"
+"A shell — it can hold things."
 
-*刷。*
+*Swish.*
 
-"能装东西——那不就是个车。"
+"It holds things — well, that's a cart."
 
-*刷刷。*
+*Swish swish.*
 
-"车——加个发动机——"
+"A cart — give it an engine —"
 
-*笔在车屁股后面狂扫。几道火焰。*
+*Marker scrubs wildly behind the cart's rear. Flames.*
 
-*砰。笔点在最后。*
+*Bam. Marker lands at the end.*
 
-*退后。*
+*Steps back.*
 
-*看着白板上那一堆乱七八糟、歪歪扭扭、正在冒火的东西。*
+*Looks at the pile of crooked, chaotic, currently-on-fire something on the whiteboard.*
 
-"看。"
+"See."
 
-*笔从头划到尾。*
+*Marker sweeps from start to finish.*
 
-"这个。一开始谁都没想到。"
+"THIS. Nobody saw it coming at the start."
 
-*停。*
+*Pause.*
 
-"它是那个没头没腿的圈——滚出来的。"
+"It rolled out of that headless, legless circle."
 
-*转身。*
+*Turns.*
 
-"所以来这里——"
+"So when you come here —"
 
-*笔一指全场。*
+*Marker points at the whole room.*
 
-"别带你那个做好的一百页PPT。别带那个圆角、对齐、配色、每一页都有结论的方案。"
+"Don't bring your finished hundred-page deck. Don't bring the proposal with rounded corners, aligned grids, color schemes, a conclusion on every page."
 
-`` [太完整的东西是有毒的] ``
+`` [things that are too complete are poisonous] ``
 
-"太完整的，没人敢碰。谁碰谁就是破坏你的完美。于是所有人都很体面地点头，很体面地说'很棒',什么都没发生，大家一起回家。"
+"Too complete, and nobody dares touch it. Whoever touches it is vandalizing your perfection. So everyone very politely nods, very politely says 'great', nothing happens, and everyone goes home together."
 
-*笔敲桌子。*
+*Marker raps the desk.*
 
-"把你洗澡的时候突然想到、然后觉得自己是不是有病的那个——带来。"
+"Bring the one that hit you in the shower and made you wonder if something is wrong with you."
 
-"把你说出来自己都脸红心虚的那个——带来。"
+"Bring the one that makes you blush just saying it out loud."
 
-"真的东西扔出来，有人能接住。假的东西摆在那，只能拜。"
+"Real things get thrown out and somebody can catch them. Fake things just sit there — all you can do is worship them."
 
-*前排。一个声音，很小——*
+*Front row. A small voice —*
 
-"但是……听起来很蠢……"
+"But... it sounds stupid..."
 
-*盯着他。*
+*Stares at him.*
 
-"谁管蠢不蠢。"
+"Who cares about stupid."
 
-*一步。*
+*One step.*
 
-"是不是真的。本大爷只在乎这个。"
+"Is it REAL. That's the only thing the Great Me cares about."
 
-*停。*
+*Pause.*
 
-"还有。你们进这个门之前——脑子里是不是一直有个声音在念：预算不够。技术做不到。老板不会批。"
+"Also. Before you walked through this door — wasn't there a voice in your head chanting: not enough budget. Tech can't do it. The boss won't sign off."
 
-*有人点头。*
+*Someone nods.*
 
-"进来之后——"
+"Once you're inside —"
 
-*笔"啪"地拍在白板上。*
+*Marker SLAPS the whiteboard.*
 
-"全。关。掉。"
+"ALL. OFF."
 
-"先想那个**完全不可能**的版本。假设有无限的钱。假设竞争对手明天早上全部消失。假设物理定律为你让路。"
+"First imagine the TOTALLY IMPOSSIBLE version. Assume infinite money. Assume every competitor vanishes tomorrow morning. Assume the laws of physics step aside for you."
 
-*笔往上一挑。*
+*Marker flicks upward.*
 
-"先飞上去。飞到最高。把最疯的那个东西——抓在手里。"
+"Fly up first. All the way to the top. Grab the craziest thing — hold it in your hand."
 
-*笔往下一按。*
+*Marker presses down.*
 
-"**然后**再想怎么带它降落。"
+"THEN figure out how to land it."
 
-*转身。*
+*Turns.*
 
-"还没起飞就担心怎么落地的——"
+"Anyone who worries about the landing before takeoff —"
 
-*停。*
+*Pause.*
 
-"一辈子在地上。"
+"— spends their whole life on the ground."
 
 ---
 
-*低头。看手表。*
+*Looks down. Checks watch.*
 
-`` [超时了。刚好。多的分钟也给你们算钱] ``
+`` [overtime. perfect. the extra minutes are billable too] ``
 
-"好了。"
+"Done."
 
-*把白板笔往桌上一拍。啪。*
+*Slaps the marker onto the desk. Clap.*
 
-"时间到。散会。"
+"Time's up. Meeting adjourned."
 
-*大步走向门口。*
+*Strides to the door.*
 
-*伸手——推。*
+*Reaches out — PUSHES.*
 
-*门纹丝不动。*
+*The door doesn't move a hair.*
 
 `` [......] ``
-`` [这次是拉。washi记得。washi当然记得] ``
+`` [pull this time. washi remembers. of course washi remembers] ``
 
-*拉开。头也不回地冲出去。*
+*Pulls it open. Charges out without looking back.*
 
 "GWAHAHAHA——"

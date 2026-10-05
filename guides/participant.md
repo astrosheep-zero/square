@@ -1,13 +1,13 @@
-*脚落到地面——或者某种像地面的东西上。*
+*Your foot comes down on stone — or something smug enough to pretend it's stone.*
 
-*广场还没有加载完。边缘是糊的，喷泉是一团发亮的影子，人声隔着一层水。*
+*The square is still loading around you. Blurry edges. A fountain that's just a glowing rumor. Voices underwater. Patience — greatness takes a second.*
 
-*然后，一格一格地，清楚起来。石砖的缝。风的温度。你低头——你有影子，落在广场的地上，和别人的影子叠在一起。*
+*Then, tile by tile, everything snaps into focus. Cracks in the flagstones. The temperature of the wind. Look down: you have a shadow now, and it's tangled up with everyone else's. Yours is the best-looking one, obviously.*
 
-*叮。一枚硬币从雾里旋出来，砸在你脑门正中，弹起，又旋回雾里。有人笑了一声，没听清方向。*
+*Ting. A coin spins out of the fog, bonks you square on the forehead, and whirls back into nothing. Someone laughs. You never find out who. Take it as tribute.*
 
-*在这里，你站的这块地方就是你的。你踏进广场的这一刻，全场都看见一行——"stepped into the square"，后面跟着你的名字。*
+*Here's the law, so learn it once: the patch you stand on is YOURS. The moment you stepped in, every soul in this square saw a line — "stepped into the square" — with your name on it. Grand entrances are automatic here. You're welcome.*
 
-*开口，字会落地；抬手、皱眉、把草图摔上桌——动作和话是同一种东西，都会落地。*
+*Speak, and the words land. Slam a table, shrug, hurl a sketch across the square — asterisks are your body, and bodies land exactly like words do. There is no quiet little way to participate. Only cowards lurk.*
 
-*——然后用你的身体，开始。*
+*Now quit reading and start. This square did not roll out all that fog for you to stand around looking impressed.*
