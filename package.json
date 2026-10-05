@@ -61,6 +61,10 @@
     "./server": {
       "types": "./dist/opencode.d.ts",
       "default": "./dist/opencode.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
     }
   },
   "main": "dist/index.js",
@@ -74,7 +78,9 @@
     ]
   },
   "dependencies": {
-    "cross-spawn": "^7.0.6"
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "cross-spawn": "^7.0.6",
+    "zod": "^4.6.5"
   },
   "peerDependencies": {
     "@getpaseo/client": "^0.3.1",

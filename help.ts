@@ -11,6 +11,7 @@ interface CommandHelp {
 const COMMANDS: readonly CommandHelp[] = [
   { names: ['help'], usage: 'help [command]', summary: 'Show the command index or help for one command.' },
   { names: ['version'], usage: 'version', summary: 'Print the installed version.', hiddenFromIndex: true },
+  { names: ['mcp-server'], usage: 'mcp-server', summary: 'Start the MCP stdio server.', usesSquare: true, hiddenFromIndex: true, details: ['Set SQUARE_LOCATION and SQUARE_PARTICIPANT_NAME, or pass --location and --as before the command.'] },
   {
     names: ['build'], usage: 'build [--cap <N|unlimited>] [--template <name>] [--throttle N] [-f] < body.md', usesSquare: true, group: 'host',
     summary: 'Create a square from Markdown on stdin.',

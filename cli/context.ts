@@ -126,6 +126,7 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'history',
   'status',
   'participants',
+  'mcp-server',
   'doctor',
 ]);
 

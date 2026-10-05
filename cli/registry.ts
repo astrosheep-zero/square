@@ -3,6 +3,7 @@ import { doctorCommand } from './maintenance-commands.js';
 import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
 import { helpCommand, versionCommand } from './meta-commands.js';
+import { mcpServerCommand } from './mcp-server-command.js';
 import {
   catchCommand,
   claudeHookCommand,
@@ -46,6 +47,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['participants'], spec: participantsCommand },
   { names: ['help'], spec: helpCommand },
   { names: ['version', '--version', '-v'], spec: versionCommand },
+  { names: ['mcp-server'], spec: mcpServerCommand },
 ];
 
 export function findCommand(name: string): RegisteredCommand | undefined {
