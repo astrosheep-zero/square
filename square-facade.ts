@@ -3,12 +3,12 @@ import type { HostLedgerPort, WakeTransportPort, DeliveryResult } from './ports.
 
 export interface Activity { readonly id: ActivityId; readonly at: number; readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore'; readonly actor: string; readonly body?: string; readonly mentions: readonly string[]; readonly reach?: Reach; readonly target?: string; readonly reply?: ActivityId; }
 export interface PerceivedActivity extends Activity { readonly perception: Perception; }
-export interface ExpressOptions { readonly force?: boolean; readonly mentions?: readonly string[]; readonly reach?: Reach; readonly reply?: ActivityId; }
+export interface ExpressOptions { readonly force?: boolean; readonly mentions?: readonly string[]; readonly reach?: Reach; readonly reply?: ActivityId; readonly noMention?: boolean; }
 export interface ExpressResult { readonly activity: Activity; readonly delivery?: DeliveryResult; }
 export interface ListenerChangeResult { readonly activity: Activity | null; }
 export interface CatchOptions { readonly id?: ActivityId; readonly idle?: number; readonly from?: readonly string[]; readonly mention?: boolean; readonly limit?: number; }
 export interface CatchResult { readonly activities: readonly PerceivedActivity[]; readonly consumedThrough: ActivityId | null; readonly idleExpired: boolean; readonly remaining: number; }
-export interface OperationProgress { readonly kind: 'waiting'; readonly reason: 'held' | 'throttled'; readonly delayMs?: number; }
+export interface OperationProgress { readonly kind: 'waiting'; readonly reason: 'held' | 'throttled'; readonly delayMs?: number; readonly holder?: string; readonly holdReason?: string; }
 export interface OperationControl { readonly signal?: AbortSignal; readonly onProgress?: (progress: OperationProgress) => void; }
 export interface HistoryQuery { readonly limit?: number; readonly order?: 'asc' | 'desc'; readonly before?: ActivityId; readonly after?: ActivityId; readonly grep?: string; readonly fixed?: string; readonly from?: readonly string[]; readonly mention?: string; }
 export interface ParticipantStatus { readonly name: string; readonly state: 'joined' | 'done'; readonly consumedThrough: ActivityId | null; readonly watching: boolean; readonly listening: readonly string[]; }

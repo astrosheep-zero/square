@@ -62,6 +62,8 @@ export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', scaledMs(
 export const LOCK_RETRY_MS = parseIntegerEnv('SQUARE_LOCK_RETRY_MS', 25);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
+/** A held express waits for the hand to lower, but not forever: past this budget it gives up exactly like --no-wait (draft saved, retry printed). 0 disables waiting. */
+export const HELD_WAIT_BUDGET_MS = parseIntegerEnv('SQUARE_HELD_WAIT_BUDGET_MS', 10 * 60 * 1000);
 
 export function nowMs(): number {
   const override = process.env.SQUARE_NOW_MS;

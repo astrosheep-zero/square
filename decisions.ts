@@ -26,6 +26,7 @@ import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js'
 import { formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
+import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
 
 export interface UnreadActivitySummary {
   name: string;
@@ -168,7 +169,7 @@ export function unreadActivitySummaries(squareState: SquareState, name: string, 
 
 export function decideAct(
   squareState: SquareState,
-  input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number }
+  input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }
 ): ActDecision {
   const { now, force } = input;
   const name = resolveStandingName(squareState, input.name);
@@ -192,8 +193,42 @@ export function decideAct(
       mentionNames.push(resolved);
     }
   }
+  if (input.noMention !== true) {
+    // Body @name tokens resolve against the standing roster at landing time; the stored
+    // body never changes, only mention metadata is derived. Explicit --no-mention turns
+    // this scan off entirely.
+    const unmatched: MentionCandidate[] = [];
+    for (const candidate of scanMentionCandidates(body)) {
+      const resolved = resolveNameAt(body, candidate, joinedNames);
+      if (resolved === undefined) {
+        unmatched.push(candidate);
+        continue;
+      }
+      if (!mentionNames.some((existing) => sameName(existing, resolved))) {
+        if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {
+          throw new SquareError('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
+        }
+        mentionNames.push(resolved);
+      }
+    }
+    // A bell already reaches everyone: only there does an unmatched @token stay literal text.
+    if (reach !== 'bell' && unmatched.length > 0) {
+      const roster = rosterNames(squareState);
+      const notStanding = unmatched.filter((candidate) => resolveNameAt(body, candidate, roster) !== undefined);
+      const unknown = unmatched.filter((candidate) => !notStanding.includes(candidate));
+      const lines: string[] = [];
+      if (unknown.length > 0) {
+        lines.push(`✕ ${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
+      }
+      if (notStanding.length > 0) {
+        lines.push(`✕ ${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
+      }
+      lines.push('  · wrap literal @text in backticks, or pass --no-mention to land bare');
+      throw new SquareError('invalid_args', lines.join('\n'));
+    }
+  }
   if (reach === 'bell' && mentionNames.length > 0) {
-    throw new SquareError('invalid_args', 'A bell cannot be combined with --mention.');
+    throw new SquareError('invalid_args', 'A bell cannot be combined with a mention — remove --mention or the @name in the body.');
   }
   const reply = input.reply;
   if (reply !== undefined) {

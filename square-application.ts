@@ -2,7 +2,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError } from './model.js';
 import { validateDoneBody } from './decisions.js';
-import { currentHold } from './runtime.js';
+import { currentHold, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
 import { Square, openParticipant } from './square-wiring.js';
 import { openSquare } from './square-file-adapter.js';
@@ -119,6 +119,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     },
     async express(body, options = {}, control = {}) {
       let waited = false;
+      let heldWaitedMs = 0;
       while (true) {
         checkControl(control);
         try {
@@ -126,16 +127,27 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
           return { ...result, waited };
         } catch (error) {
           if (!(error instanceof SquareError) || options.noWait || (error.code !== 'held' && error.code !== 'throttled')) throw error;
+          // A held wait is a convenience, not a trap: past the budget the error
+          // surfaces exactly like --no-wait (the CLI saves a draft and prints a retry).
+          if (error.code === 'held' && heldWaitedMs >= HELD_WAIT_BUDGET_MS) throw error;
           waited = true;
-          control?.onProgress?.({ kind: 'waiting', reason: error.code, ...(error.code === 'throttled' ? { delayMs: error.facts?.retryAfterMs ?? 1 } : {}) });
+          control?.onProgress?.({
+            kind: 'waiting',
+            reason: error.code,
+            ...(error.code === 'throttled' ? { delayMs: error.facts?.retryAfterMs ?? 1 } : {}),
+            ...(error.facts?.holder === undefined ? {} : { holder: error.facts.holder }),
+            ...(error.facts?.holdReason === undefined ? {} : { holdReason: error.facts.holdReason }),
+          });
           if (error.code === 'throttled') {
             await sleep(error.facts?.retryAfterMs ?? 1, undefined, { signal: control.signal });
           } else {
+            const waitStarted = Date.now();
             const square = await openSquare(location(), { clock: context.clock, env, hostLedger, signal: control.signal });
             try {
               const snapshot = await square.artifact.read(control.signal);
-              if (currentHold(snapshot.state.acts).active) await square.artifact.changed(snapshot.version, Infinity, control.signal);
+              if (currentHold(snapshot.state.acts).active) await square.artifact.changed(snapshot.version, Math.max(1, HELD_WAIT_BUDGET_MS - heldWaitedMs), control.signal);
             } finally { await closeOpenSquare(square); }
+            heldWaitedMs += Date.now() - waitStarted;
           }
         }
       }

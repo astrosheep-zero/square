@@ -139,7 +139,7 @@ test('express exposes held progress through control without printing or serializ
   const controller = new AbortController();
   const progress = [];
   await assert.rejects(() => speaker.express('waiting', { mentions: ['owner'] }, { signal: controller.signal, onProgress: (event) => { progress.push(event); controller.abort(); } }));
-  assert.deepEqual(progress, [{ kind: 'waiting', reason: 'held' }]);
+  assert.deepEqual(progress, [{ kind: 'waiting', reason: 'held', holder: 'owner', holdReason: 'pause' }]);
 });
 
 

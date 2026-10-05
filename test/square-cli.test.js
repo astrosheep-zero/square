@@ -62,7 +62,7 @@ test('listen and ignore commands control future bare delivery without gating exp
   });
   const missingReach = run(withName(file, 'Alice', ['express', 'bare thought']));
   assert.equal(missingReach.status, 2);
-  assert.match(missingReach.stderr, /express needs --mention <name>, --no-mention, or --bell/);
+  assert.match(missingReach.stderr, /express needs --mention <name>, --no-mention, --bell, or an @name in the body/);
 
   const bareWithoutListener = run(withName(file, 'Alice', ['express', '--no-mention', 'bare thought']));
   assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);

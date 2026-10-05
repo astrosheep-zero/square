@@ -332,6 +332,11 @@ function boundedHistoryCommand(options: HistoryCommandOptions, squarePath: strin
   return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
 }
 
+/** The archive-visible activity model: content plus the lifecycle moves that keep its story honest — a raised hand pairs with its lowering, and a departure pairs with the return. */
+function isArchiveActivity(item: StoredAct): boolean {
+  return item.kind === 'say' || item.kind === 'done' || item.kind === 'hold' || item.kind === 'resume' || item.kind === 'join';
+}
+
 function renderFields(sayNumbers: Readonly<Record<number, number>>, item: StoredAct, fields: string[]): string {
   return fields.map((field) => {
     switch (field) {
@@ -372,7 +377,7 @@ function renderHistoryProjection(
   noTruncate: boolean,
   squarePath: string,
 ): string {
-  const shown = visible.filter((activity) => activity.kind === 'say' || activity.kind === 'done' || activity.kind === 'hold');
+  const shown = visible.filter(isArchiveActivity);
   const preview = noTruncate || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
   for (const activity of shown) {
@@ -425,8 +430,8 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const output = pattern === undefined || pattern === ''
         ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath)
         : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
-      const publicEvents = events.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
-      const allPublic = projection.activities.filter((item) => item.kind === 'say' || item.kind === 'done' || item.kind === 'hold');
+      const publicEvents = events.filter(isArchiveActivity);
+      const allPublic = projection.activities.filter(isArchiveActivity);
       const pageMin = publicEvents.length === 0 ? undefined : Math.min(...publicEvents.map((item) => item.index));
       const pageMax = publicEvents.length === 0 ? undefined : Math.max(...publicEvents.map((item) => item.index));
       const hasMore = options.lastN != null && publicEvents.length > 0 && (

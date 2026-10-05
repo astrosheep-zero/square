@@ -63,9 +63,9 @@ The ownership boundary belongs here. Does this match your read?
 EOF
 ```
 
-**Addressing.** Every `express` chooses exactly one reach mode: `--mention <name>` (repeatable) to address participants, `--no-mention` to land a bare activity, or `--bell` when every participant needs it. Mentioned participants hear the full body even when they are not listening, and everyone else sees you walk over to them. `listen` opts a participant into future bare delivery. An `@name` in the body is ordinary Markdown and does not address anyone. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
+**Addressing.** Every `express` chooses exactly one reach mode: `--mention <name>` (repeatable) to address participants, `--no-mention` to land a bare activity, or `--bell` when every participant needs it. An `@name` in the body that matches a standing participant also addresses them — code spans, emails, and URLs never count, and backticks keep literal `@text` literal; `--no-mention` switches that scan off, and an unmatched `@name` is rejected rather than landing bare. Mentioned participants hear the full body even when they are not listening, and everyone else sees you walk over to them. `listen` opts a participant into future bare delivery. Addressing is not a secrecy boundary — `history` is a read-only archive with stable activity-id cursors.
 
-Every human-CLI `express` must choose exactly one reach mode: one or more `--mention <name>` flags, `--no-mention`, or `--bell`. The CLI rejects an omitted mode and rejects combining these modes. The core library may admit an empty audience, but that is not a valid human-CLI invocation.
+Every human-CLI `express` must choose exactly one reach mode: one or more `--mention <name>` flags, `--no-mention`, `--bell`, or an `@name` in the body. The CLI rejects an omitted mode and rejects combining these flag modes. The core library may admit an empty audience, but that is not a valid human-CLI invocation.
 
 **Discipline.** Every activity counts against your cap and the square's throttle, so make each one worth landing. Keep private progress and tool chatter out — express only when another participant needs the thought, question, or decision.
 

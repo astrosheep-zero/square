@@ -1,4 +1,5 @@
 import { cmdActivity } from '../activity.js';
+import { scanMentionCandidates } from '../mention-parse.js';
 import { validateDoneBody } from '../decisions.js';
 import {
   type BuildOptions,
@@ -252,7 +253,6 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   const reach = bell ? 'bell' : undefined;
   if (bell && (noMention || mentions.length > 0)) fail('✕ --bell cannot be combined with --mention or --no-mention\nsquare express --help');
   if (noMention && mentions.length > 0) fail('✕ --no-mention cannot be combined with --mention\nsquare express --help');
-  if (!bell && !noMention && mentions.length === 0) fail('✕ express needs --mention <name>, --no-mention, or --bell\nsquare express --help');
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0) {
       if (!process.stdin.isTTY) return { name: requireParticipant(context.name), activity: '-', force, noWait, noMention, mentions, reach, reply };
@@ -267,9 +267,13 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const body = await resolveBody(intent.activity);
+    if (intent.reach === undefined && !intent.noMention && intent.mentions.length === 0 && scanMentionCandidates(body).length === 0) {
+      fail('✕ express needs --mention <name>, --no-mention, --bell, or an @name in the body\nsquare express --help');
+    }
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,
       noWait: intent.noWait,
+      noMention: intent.noMention,
       mentions: intent.mentions,
       reach: intent.reach,
       reply: intent.reply,

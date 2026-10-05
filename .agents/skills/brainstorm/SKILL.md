@@ -53,7 +53,7 @@ square --location <square> --as <name> done
 
 For complete history, follow the activity-id continuation commands printed by `history`.
 
-Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` for a bare activity and `--bell` only when every participant needs the activity. An `@name` in the body is ordinary Markdown. Precise history queries may still read original archive bodies.
+Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` for a bare activity and `--bell` only when every participant needs the activity. An `@name` in the body that matches a standing participant also addresses them; backticks keep literal `@text` literal. Precise history queries may still read original archive bodies.
 
 If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
 ```

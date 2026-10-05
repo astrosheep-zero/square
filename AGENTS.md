@@ -16,7 +16,7 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- If someone is speaking to a specific participant, they must use explicit `--mention name` metadata; an `@name` in the body is ordinary Markdown.
+- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches body scanning off. An unmatched `@name` is rejected rather than silently landing as a bare say.
   The speaker and mentioned participants perceive the full body; everyone else perceives only the
   speaker walking over to those participants.
   A listener may also turn an ear toward a named sender; that standing relation makes the sender's
@@ -59,7 +59,7 @@ Implementation taste:
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - All behavior operates on `SquareState`, never on SQLite schema fields, storage framing, or display text.
-- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers.
+- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; the single derivation is directed attention — a roster-matching `@name` in a body becomes mention metadata when the activity lands, exactly as if `--mention` had been passed.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.
 - Prefer explicit, simple behavior over hidden cleverness.

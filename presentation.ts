@@ -5,7 +5,7 @@ import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
 import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, replayLandedAudiences, type LandedAudienceReplay, type Perception } from './square-core.js';
 import { perceiveActivity } from './delivery.js';
-import { actId, presenceAnchor, publicActs, rosterNames, sayNumberFor } from './runtime.js';
+import { actId, presenceAnchor, publicActs, rosterNames, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
@@ -45,6 +45,8 @@ interface ActivityBlockedOptions extends ParticipantOutputOptions {
 interface ExpressWaitingOptions {
   reason: 'throttled' | 'held';
   delayMs?: number;
+  holder?: string;
+  holdReason?: string;
 }
 
 interface ExpressNoWaitOptions extends ParticipantOutputOptions {
@@ -404,9 +406,19 @@ export function renderActivityUncertain(opts: ParticipantOutputOptions & { draft
 
 export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
   if (opts.reason === 'throttled') {
-    return ['✕ the square is packed', `  · your activity is waiting · next opening in ${formatDuration(opts.delayMs)}`].join('\n');
+    return [
+      '✕ the square is packed',
+      `  · your activity is waiting · next opening in ${formatDuration(opts.delayMs)}`,
+      '  · --no-wait saves a draft and returns now',
+    ].join('\n');
   }
-  return ["✕ your activity doesn't land — a hand is raised", '  · your activity is waiting'].join('\n');
+  const holder = opts.holder === undefined ? 'a hand is raised' : `${participantIdentity(opts.holder)} raised a hand`;
+  return [
+    `✕ your activity doesn't land — ${holder}`,
+    ...(opts.holdReason === undefined ? [] : [`  · ${opts.holdReason}`]),
+    `  · your activity is waiting — after ${formatDuration(HELD_WAIT_BUDGET_MS)} it saves a draft and stops`,
+    '  · --no-wait saves a draft and returns now',
+  ].join('\n');
 }
 
 export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {

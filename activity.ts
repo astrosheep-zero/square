@@ -13,6 +13,7 @@ import {
   renderExpressWaiting,
   renderPendingFeed,
   joinRecoveryCommand,
+  participantIdentity,
   participantsRecoveryCommand,
   participantCommandPrefix,
   commandPrefix,
@@ -37,6 +38,7 @@ export interface ActivityOptions {
   env?: NodeJS.ProcessEnv;
   force?: boolean;
   noWait?: boolean;
+  noMention?: boolean;
   mentions?: readonly string[];
   reach?: import('./model.js').Reach;
   reply?: string;
@@ -75,7 +77,8 @@ export function saveActivityDraft(squarePath: string, name: string, body: string
 export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions, force = opts.force ?? false): string {
   const reach = opts.reach === 'bell' ? ' --bell'
     : opts.mentions?.length ? opts.mentions.map((target) => ` --mention ${quoteShell(target)}`).join('')
-      : ' --no-mention';
+      : opts.noMention === true ? ' --no-mention'
+        : '';
   const replyIndex = opts.reply === undefined ? undefined : parseActivityId(opts.reply);
   const reply = opts.reply === undefined ? '' : ` --reply ${replyIndex === undefined ? quoteShell(opts.reply) : formatActivityId(replyIndex)}`;
   return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${reply} -`;
@@ -121,7 +124,11 @@ export async function cmdActivity(
     }
     finally { await closeOpenSquare(reader); }
     const application = createSquareApplication({ cwd: opts.cwd ?? process.cwd(), env, squarePath, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs), participant: name });
-    await application.join();
+    // The caller is roster-known at this point, so a landed join act is always a
+    // re-entry after done — never a first arrival. Announce it; a silent return
+    // would make `done` a fake exit.
+    const entry = await application.join();
+    const reentered = entry.kind === 'joined' && entry.activity !== null;
     const before = await presentation();
     const pendingPublic = before.pendingPublic;
     const pendingRoomChanges = before.pendingRoomChanges;
@@ -130,6 +137,7 @@ export async function cmdActivity(
       force: opts.force ?? false,
       noWait: opts.noWait ?? false,
       ...(opts.mentions === undefined ? {} : { mentions: opts.mentions }),
+      ...(opts.noMention === undefined ? {} : { noMention: opts.noMention }),
       ...(opts.reach === undefined ? {} : { reach: opts.reach }),
       // The action boundary validates the raw id before attempting a commit.
       ...(opts.reply === undefined ? {} : { reply: opts.reply as ActivityId }),
@@ -137,7 +145,12 @@ export async function cmdActivity(
       onProgress: (progress) => {
         if (announcedWait === progress.reason) return;
         const delayMs = progress.delayMs ?? SLEEP_MS;
-        process.stdout.write(renderExpressWaiting({ reason: progress.reason, ...(progress.reason === 'throttled' ? { delayMs } : {}) }) + '\n');
+        process.stdout.write(renderExpressWaiting({
+          reason: progress.reason,
+          ...(progress.reason === 'throttled' ? { delayMs } : {}),
+          ...(progress.holder === undefined ? {} : { holder: progress.holder }),
+          ...(progress.holdReason === undefined ? {} : { holdReason: progress.holdReason }),
+        }) + '\n');
         announcedWait = progress.reason;
       },
     });
@@ -149,9 +162,15 @@ export async function cmdActivity(
     const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
     const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
     const hint = expressHintLine(ownActCount);
-    const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}`)}`;
+    const reachEcho = landed.activity.reach === 'bell'
+      ? ' · to everyone (bell)'
+      : landed.activity.mentions.length > 0
+        ? ` · to ${landed.activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
+        : '';
+    const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}${reachEcho}`)}`;
     const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
-    process.stdout.write(withPathOutput(squarePath, withHint + pending, { participantCount: headerCount, held }));
+    const reentry = reentered ? '● you stepped back into the square\n' : '';
+    process.stdout.write(withPathOutput(squarePath, reentry + withHint + pending, { participantCount: headerCount, held }));
   } catch (error) {
     // Save before any recovery read: even a broken artifact must not eat the body.
     const draftPath = saveActivityDraft(squarePath, name, rawInput);

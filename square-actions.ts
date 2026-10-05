@@ -258,14 +258,17 @@ export async function express(square: OperationContext, name: string, body: stri
   const reply = rejectUnsentActivity(() => options.reply === undefined ? undefined : parseRequiredActivityId(options.reply));
   const committed = await square.artifact.transact((state) => {
     const decision = rejectUnsentActivity(() => {
-      const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(reply === undefined ? {} : { reply }) });
+      const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
       if (decision.type === 'blocked') {
         const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
         throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
       }
       if (decision.type === 'held') {
         const holder = state.acts.filter((activity) => activity.kind === 'hold').at(-1)?.actor;
-        throw new SquareError('held', 'The square is held', holder === undefined ? undefined : { holder });
+        throw new SquareError('held', 'The square is held', {
+          ...(holder === undefined ? {} : { holder }),
+          ...(decision.reason === undefined ? {} : { holdReason: decision.reason }),
+        });
       }
       if (decision.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
       if (decision.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: decision.delayMs });

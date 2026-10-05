@@ -49,6 +49,7 @@ export interface SquareErrorFacts {
   activityUnsent?: true;
   pending?: number;
   holder?: string;
+  holdReason?: string;
   retryAfterMs?: number;
 }
 
@@ -197,8 +198,13 @@ export function findParticipantName(participants: string[], name: string): strin
   return participants.find((participant) => sameName(participant, name));
 }
 
+/** One name grapheme: Unicode letters, digits, marks, hyphens, or underscores (no isolated variation selectors), or a complete RGI emoji. Shared by name validation and body @mention scanning. */
+export const NAME_GRAPHEME_SOURCE = String.raw`[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]|\p{RGI_Emoji}`;
+
+const NAME_PATTERN = new RegExp(`^(?:${NAME_GRAPHEME_SOURCE})+(?:/(?:${NAME_GRAPHEME_SOURCE})+)*$`, 'v');
+
 export function validateName(name: string): void {
-  if (!name || !/^(?:[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]|\p{RGI_Emoji})+(?:\/(?:[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]|\p{RGI_Emoji})+)*$/v.test(name)) {
+  if (!name || !NAME_PATTERN.test(name)) {
     throw new SquareError('invalid_name', 'Invalid name: names must contain non-empty slash-separated segments using Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes.');
   }
 }
