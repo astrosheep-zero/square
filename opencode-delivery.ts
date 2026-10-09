@@ -1,8 +1,8 @@
 import type { EvidenceRecord, NativeDeliveryEvidence, PresenceRecord } from './host-ledger.js';
 import type { WakeTransportPort } from './ports.js';
 import { nameKey, type SquareState } from './model.js';
-import { hostLedgerForEnv, observeSessionPending, sessionInbox } from './inbox.js';
-import { withOwnershipClaimLock } from './registry.js';
+import { observeSessionPending, sessionInbox } from './inbox.js';
+import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';

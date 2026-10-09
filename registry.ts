@@ -6,9 +6,9 @@ import { withFileLock } from './file-lock.js';
 import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { createHostLedgerPort, type FileHostLedgerPort } from './host-ledger-file-adapter.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
-import type { HostLedgerPort, PresenceRecord } from './host-ledger.js';
+import type { PresenceRecord } from './host-ledger.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: SessionChannel; child: boolean; route?: PresenceRecord['route']; updatedAt: number; epoch: number; }
@@ -27,7 +27,7 @@ const LOCAL_SESSION_SOURCES: ReadonlyArray<{ variable: 'CLAUDE_CODE_SESSION_ID' 
 export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(hostLedgerRoot(env), '..', 'sessions.ndjsonl'); }
 export async function canonicalSquarePath(squarePath: string): Promise<string> { const absolute = path.resolve(squarePath); try { return await (await import('node:fs/promises')).realpath(absolute); } catch { return absolute; } }
 function ledgerRoot(env: NodeJS.ProcessEnv): string { return hostLedgerRoot(env); }
-function ledger(env: NodeJS.ProcessEnv): HostLedgerPort { return createHostLedgerPort({ rootPath: ledgerRoot(env) }); }
+function ledger(env: NodeJS.ProcessEnv): FileHostLedgerPort { return createHostLedgerPort({ rootPath: ledgerRoot(env) }); }
 export function presenceEpoch(record: PresenceWithEpoch | undefined): number {
   return typeof record?.epoch === 'number' && Number.isSafeInteger(record.epoch) && record.epoch > 0 ? record.epoch : 0;
 }
@@ -196,4 +196,4 @@ export async function recordSessionJoin(sessionId: string, name: string, squareP
 export async function recordSessionDone(sessionId: string, name: string, squarePath: string, channel: SessionChannel, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const canonicalPath = await canonicalSquarePath(squarePath); const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonicalPath && sameName(item.name, name) && item.channel === channel); if (binding === undefined) return false; const options = { channel, at: Date.now(), env }; await recordDone(sessionId, binding.name, binding.squarePath, options); return true; }
 
 /** Bind the host ledger to the caller's captured environment. */
-export function hostLedgerForEnv(env: NodeJS.ProcessEnv = process.env): HostLedgerPort { return ledger(env); }
+export function hostLedgerForEnv(env: NodeJS.ProcessEnv = process.env): FileHostLedgerPort { return ledger(env); }

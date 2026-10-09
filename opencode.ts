@@ -1,6 +1,5 @@
 import { automaticSessionStart, operationEnv } from './automatic-session.js';
-import { hostLedgerForEnv } from './inbox.js';
-import { withOwnershipClaimLock } from './registry.js';
+import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
 import { canonicalRouteLocation } from './routes.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';

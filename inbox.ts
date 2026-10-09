@@ -1,15 +1,10 @@
 import { type InboxMembership } from './model.js';
-import { hostLedgerRoot } from './host-ledger-root.js';
 import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
+import { hostLedgerForEnv } from './registry.js';
 import { canonicalFilePath, type VersionObserver } from './file-changes.js';
 import { pendingAtBoundary, presentationSuppressesWake, projectPresentation, projectPresentationEvidence, projectSessionBindings } from './square-projections.js';
 import { formatActivityId } from './square-core.js';
 import { WATCH_STALE_MS } from './runtime.js';
-
-export function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
-  return createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
-}
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;

@@ -6,9 +6,8 @@ import path from 'node:path';
 import { once, EventEmitter } from 'node:events';
 import plugin from '../dist/opencode.js';
 import { Square } from '../dist/square-wiring.js';
-import { hostLedgerForEnv } from '../dist/inbox.js';
 import { loadSquare } from '../dist/artifact.js';
-import { claimSessionTakeover } from '../dist/registry.js';
+import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 4000;

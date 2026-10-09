@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 
 import { openSquare } from './square-file-adapter.js';
@@ -8,10 +7,9 @@ import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
 import { automaticParticipant } from './participant-identity.js';
 import { SquareError } from './model.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
-import { claimSessionParticipant, readParticipantOwner, releaseSessionParticipant } from './registry.js';
+import { claimSessionParticipant, hostLedgerForEnv, readParticipantOwner, releaseSessionParticipant } from './registry.js';
 import { publishWakeRoute, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
 
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
@@ -35,12 +33,6 @@ export function operationEnv(provider: AutomaticProvider, sessionId: string, env
     PI_SESSION_ID: '',
     [providerEnv[provider]]: sessionId,
   };
-}
-function hostLedgerForEnv(env: NodeJS.ProcessEnv) {
-  const root = hostLedgerRoot(env);
-  return createHostLedgerPort({
-    rootPath: root,
-  });
 }
 export function publicSquarePath(cwd: string): string {
   return path.join(cwd, '.square', 'PUBLIC.square');
