@@ -1,0 +1,19 @@
+{
+  "name": "@astrosheep/agent-delivery",
+  "version": "0.1.0",
+  "description": "Existing-only text admission to OpenCode 2.x sessions, independent of Square.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": "^22.16.0 || >=24.0.0" },
+  "files": ["dist", "README.md", "VALIDATION.md", "LICENSE"],
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --import ./test/sandbox-env.js --test test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "@opencode/client": "2.0.20" },
+  "devDependencies": { "@types/node": "^22.16.0", "typescript": "^5.8.0" }
+}

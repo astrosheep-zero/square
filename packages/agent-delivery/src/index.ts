@@ -1,0 +1,5 @@
+export { connectExisting, sendText } from './opencode.js'
+export type { ConnectExistingOptions } from './opencode.js'
+export { ConnectionError } from './errors.js'
+export type { ConnectionErrorCode } from './errors.js'
+export type { OpenCodeTarget, Delivery, DeliveryResult, SendTextOptions } from './types.js'
