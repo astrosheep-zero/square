@@ -387,6 +387,41 @@ test('history --since excludes older public activity', async () => {
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
 });
 
+test('history hides read bookkeeping acts except in time and context windows', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('first public activity', { force: true });
+    await alice.express('second public activity', { force: true });
+  }, { hardCap: 100 });
+
+  // Production never appends `read`; the artifact carries it only when an older
+  // or foreign writer recorded that an activity was consumed. Pin that shape
+  // directly so the archive's read filtering stays observable.
+  const state = await loadSquare(file);
+  const readIndex = (state.acts.at(-1)?.index ?? -1) + 1;
+  const readAt = (state.acts.at(-1)?.at ?? 0) + 1000;
+  await writeSquareFile(file, {
+    ...state,
+    acts: [...state.acts, { kind: 'read', actor: 'Alice', at: readAt, through: readIndex, index: readIndex }],
+    runtime: { ...state.runtime, nextActIndex: readIndex + 1 },
+  });
+
+  const kinds = (result) => {
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim().split('\n').map((line) => JSON.parse(line).kind);
+  };
+
+  const archive = run(withPath(file, ['history', '--limit', '100', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.deepEqual(kinds(archive), ['join', 'say', 'say']);
+  const cursor = run(withPath(file, ['history', '--after', 'act/0', '--limit', '100', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.deepEqual(kinds(cursor), ['say', 'say']);
+
+  const context = run(withPath(file, ['history', '--at', formatActivityId(readIndex), '-C', '0', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.deepEqual(kinds(context), ['read']);
+  const since = run(withPath(file, ['history', '--since', new Date(readAt - 500).toISOString(), '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.deepEqual(kinds(since), ['read']);
+});
+
 test('ambient catch and history render full body to a mention target and presence to others', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = await square.join('Alice');
