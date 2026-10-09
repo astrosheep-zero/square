@@ -4,6 +4,7 @@ export type ConnectionErrorCode =
   | 'timeout'
   | 'service_unavailable'
   | 'unsupported_version'
+  | 'unsupported_platform'
   | 'authentication_failed'
   | 'session_not_found'
   | 'http_rejection'
@@ -15,6 +16,7 @@ const messages: Record<ConnectionErrorCode, string> = {
   timeout: 'Connection deadline expired.',
   service_unavailable: 'No compatible existing service is available.',
   unsupported_version: 'The existing service is not OpenCode 2.x.',
+  unsupported_platform: 'Claude native inbox support is validated only on macOS.',
   authentication_failed: 'The existing service refused authentication.',
   session_not_found: 'The existing service has no such session.',
   http_rejection: 'The existing service rejected the connection request.',

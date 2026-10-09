@@ -1,4 +1,55 @@
-# Delivery validation — OpenCode 2.0.20
+# Delivery validation
+
+## Shared Claude native extraction
+
+The same `src/claude-native.ts` owns tokenless NDJSON framing and bounded socket
+I/O for both this package and Square's root coordinator. Square's compiled root
+imports its emitted `dist/packages/agent-delivery/src/claude-native.js`; it does
+not import this package's generic API, Claude handle adapter, or OpenCode SDK.
+The root duplicate is removed.
+
+Standalone tests use real local UDS sockets to capture UTF-8 frames and fresh
+UUIDs, show known-unsent preabort/deadline/dead-endpoint results, and force
+connected backpressure for unknown timeout/abort. These are transport fixtures,
+not live Claude scheduling. Connection tests prove bounded/cancellable caller
+waiting for filesystem validation with no late continuation. Unsupported queue
+and input IDs reject before writing.
+
+The fresh external packed consumer imports the main API and `./claude-native`,
+typechecks per-harness options, writes through both paths on macOS, and installs
+no Square dependency. A module loader rejects OpenCode SDK resolution during
+Claude use, proving the actual imports do not initialize it.
+
+The accepted migration separately proved idle, busy Read boundary, held approval,
+clear/reload/resume, fork and terminal cancellation on installed macOS Claude Code
+2.1.295 using a dummy-key loopback Anthropic provider. Accepted commit:
+`c6e4eed65f864c64cb853f2b9d999da63d67feac`; protocol/report artifacts:
+`/tmp/claude-inbox-design-validation.md`, `/tmp/claude-native-independent-review.md`,
+`/tmp/square-claude-final-runtime.log`. Extraction repeats idle/busy using the
+repository's opt-in shipped-plugin fixture with a new private evidence root;
+no account, user settings or session is accessed. Extraction rerun passed:
+
+```sh
+SQUARE_CLAUDE_LIVE_TEST=1 SQUARE_CLAUDE_LIVE_MODES=idle,busy \
+  SQUARE_CLAUDE_LIVE_EVIDENCE=/tmp/square-claude-extraction-corner \
+  node --import ./test/sandbox-env.js --test test/claude-runtime.test.js
+```
+
+Both modes captured the audience-correct notification body in actual local model
+requests and Square presentation evidence; busy also captured the Read tool
+result at the next boundary. Output: `/tmp/claude-extraction-runtime.log`;
+private copied fixture and API/bridge/evidence records:
+`/tmp/square-claude-extraction-corner/{idle,busy}`. No original fixture evidence
+was overwritten. Original accepted plugin bytes remain unchanged.
+
+Root release tests also pack/extract Square into a separate temporary consumer,
+verify its coordinator's shared import and shipped mod, and send through the
+packed leaf over a real UDS. Root build emits only the imported Claude transport,
+not the generic/Claude handle adapter or OpenCode graph. Socket written remains
+weaker than native admission; only Square's receiver append evidence confirms
+stored presentation.
+
+## OpenCode 2.0.20 (preserved prerequisite evidence)
 
 ## Package and actual SDK fixtures
 
@@ -79,6 +130,8 @@ replay API.
 - No earliest compatible 2.x feature floor is established. Other 2.x services
   must implement the same native health/session/prompt contract or fail closed.
 - Acceptance is not model consumption, completion or human/TUI display.
-- No automatic retry, cancellation, queue management, history recovery, service
-  startup/replacement/stop, V1 support or Claude implementation is included.
-- Root Square source, scripts, dependencies and configuration are unchanged.
+- The original OpenCode phase included no automatic retry, cancellation, queue
+  management, history recovery, service startup/replacement/stop, V1 support or
+  Claude implementation, and left root Square source/scripts/dependencies/config
+  unchanged. The subsequent Claude extraction described above does not change
+  OpenCode's validated semantics or SDK baseline.

@@ -83,5 +83,9 @@ export async function doctorClaudePlugin(homeDir: string, run: ClaudeCommandRunn
   return [
     fs.existsSync(bundle) ? `✓ Square Claude plugin bundle ${root}` : `○ Square Claude plugin bundle missing ${root}`,
     installed ? `✓ ${CLAUDE_PLUGIN_ID} installed` : `○ ${CLAUDE_PLUGIN_ID} unavailable`,
+    `Claude native inbox: validated on macOS Claude Code 2.1.295 with a trusted, approved interactive mod.`,
+    `Installation or a socket alone does not prove receiver availability; absent/disabled mods, headless unapproved mods, other builds/platforms are unavailable.`,
+    `Queue admission is not model processing. Queued or held native messages cannot be retracted by Square cancellation.`,
+    `Live routes and admission/presentation evidence: square harness doctor delivery. No legacy fallback.`,
   ];
 }

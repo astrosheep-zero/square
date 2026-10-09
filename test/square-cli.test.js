@@ -185,7 +185,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'done',
     'stream',
     'inbox',
-    'claude-hook',
+    'claude-mod',
     'codex-hook',
     'history',
     'status',
@@ -209,7 +209,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
   }
 
   const index = run(['help'], { cwd });
-  for (const internal of ['stream', 'inbox', 'claude-hook', 'codex-hook']) {
+  for (const internal of ['stream', 'inbox', 'claude-mod', 'codex-hook']) {
     assert.doesNotMatch(index.stdout, new RegExp(`^  ${internal}$`, 'm'));
   }
   assert.match(index.stdout, /^In the square:$/m);

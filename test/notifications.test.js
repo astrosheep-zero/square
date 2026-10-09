@@ -121,14 +121,14 @@ test('privileged sweep stops at its native hook deadline', async () => {
       participant: 'Bob',
       sessionId: 'deadline-session',
       channel: 'claude-code',
-      kind: 'claude-native',
-      address: { sessionId: 'deadline-session' },
+      kind: 'paseo',
+      address: { agentId: 'deadline-agent' },
     }, { env: item.env });
     const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'claude-native', address: { sessionId: 'deadline-session' } } });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'deadline-agent' } } });
     let timeoutMs;
     const hanging = {
-      kind: 'claude-native',
+      kind: 'paseo',
       dispatch(_address, _payload, _beforeSend, timeout) {
         timeoutMs = timeout;
         return new Promise(() => {});

@@ -62,6 +62,8 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
     channel: record.channel,
     ...(record.route === undefined ? {} : { route: { location: record.location, participant: record.participant, sessionId: record.session, channel: record.channel, kind: record.route.kind, address: { ...record.route.address }, updatedAt: record.updatedAt ?? 0 } }),
     updatedAt: record.updatedAt ?? 0,
+    ...(record.epoch === undefined ? {} : { epoch: record.epoch }),
+    ...(record.cancelledThrough === undefined ? {} : { cancelledThrough: record.cancelledThrough }),
   }));
   return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
 }
@@ -74,11 +76,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     channel: route.channel as import('./host-ledger.js').PresenceChannel,
     route: { kind: route.kind, address: route.address },
     updatedAt: route.updatedAt,
+    epoch: route.epoch,
   }));
   const liveRoutes = currentSessionBindings(routes.filter((route) => observation.bindings.some((binding) =>
     nameKey(binding.participant) === nameKey(route.participant)
     && binding.sessionId === route.session
     && binding.location === route.location
+    && (route.route.kind !== 'claude-native' || binding.epoch === route.epoch)
   )));
   let presentations: readonly PresentationEvidenceProjection[] = [];
   try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* capability is handled by the route-level wake checks */ }
@@ -89,7 +93,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         const requested = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
         if (requested === undefined || requested !== notification.item.index) continue;
       }
-      const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient));
+      const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient)
+        && (route.route?.kind !== 'claude-native' || observation.bindings.some((binding) => binding.sessionId === route.session && binding.epoch === route.epoch && nameKey(binding.participant) === nameKey(route.participant) && notification.item.index > (binding.cancelledThrough ?? -1))));
       let acceptedForAttention = false;
       let failedForAttention = false;
       let unknownForAttention = false;
@@ -106,7 +111,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (presented.length > 0) continue;
         const attention = { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient };
         const leaseMs = input.timeoutMs ?? 5000;
-        const requestRoute = { location: route.location, participant: route.participant, sessionId: route.session, channel: route.channel, kind: route.route!.kind, address: { ...route.route!.address }, updatedAt: route.updatedAt ?? 0 };
+        const requestRoute = { location: route.location, participant: route.participant, sessionId: route.session, channel: route.channel, kind: route.route!.kind, address: { ...route.route!.address }, updatedAt: route.updatedAt ?? 0, epoch: route.epoch };
         if (input.transport.probe !== undefined) {
           try {
             const probe = await input.transport.probe(requestRoute);
@@ -205,7 +210,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           suppressedDuringSend = presentationSuppressesWake(finalPresentations);
           return !suppressedDuringSend;
         };
-        try { outcome = await attemptWakeWithin(input.transport, request, leaseMs, beforeSend); }
+        try { outcome = await attemptWakeWithin(input.transport, { ...request, claimToken, attemptN }, leaseMs, beforeSend); }
         catch (error) { outcome = { outcome: 'unknown' as const, diagnostic: error instanceof Error ? error.message : String(error) }; }
         if (suppressedDuringSend) {
           await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN }, {
@@ -261,6 +266,7 @@ export function selectPendingWakeActivities(state: SquareState, routes: readonly
       if (attempts.some((attempt) => attempt.attention.actIndex === notification.item.index && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.outcome === 'accepted')) continue;
       const eligible = routes.some((binding) => {
         if (binding.route === undefined || nameKey(binding.participant) !== nameKey(membership)) return false;
+        if (binding.route.kind === 'claude-native' && notification.item.index <= (binding.cancelledThrough ?? -1)) return false;
         const presented = presentations.filter((row) => row.activity === formatActivityId(notification.item.index) && row.participant.toLocaleLowerCase() === membership.toLocaleLowerCase() && row.sessionId === binding.session && presentationSuppressesWake([row]));
         if (presented.length > 0) return false;
         const matching = attempts.filter((attempt) => attempt.session === binding.session && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.attention.actIndex === notification.item.index);
@@ -278,7 +284,13 @@ export async function sweepPending(input: { readonly artifact: SquareArtifactPor
 }
 
 export async function sweepPendingFromState(input: { readonly state: SquareState; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number; readonly deriveDelivery?: (snapshot: SquareState) => ReturnType<typeof deriveDeliveryModel> }): Promise<number[]> {
-  const bindings: PresenceRecord[] = currentSessionBindings((input.state.routes ?? []).map((route) => ({ location: input.location, participant: route.participant, session: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { kind: route.kind, address: route.address }, updatedAt: route.updatedAt })));
+  const owners = input.state.routes?.some((route) => route.kind === 'claude-native')
+    ? await input.hostLedger.listPresence({ location: input.location, now: input.now }) : [];
+  const bindings: PresenceRecord[] = currentSessionBindings((input.state.routes ?? []).flatMap((route) => {
+    const owner = owners.find((row) => row.session === route.sessionId && nameKey(row.participant) === nameKey(route.participant));
+    if (route.kind === 'claude-native' && (!owner || owner.epoch !== route.epoch)) return [];
+    return [{ location: input.location, participant: route.participant, session: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { kind: route.kind, address: route.address }, updatedAt: route.updatedAt, ...(owner?.cancelledThrough === undefined ? {} : { cancelledThrough: owner.cancelledThrough }) }];
+  }));
   let records: readonly import('./host-ledger.js').EvidenceRecord[] = [];
   try { records = await input.hostLedger.listWakeAttempts({ now: input.now }); } catch { records = []; }
   let presentations: readonly PresentationEvidenceProjection[] = [];

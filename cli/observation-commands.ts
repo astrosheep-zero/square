@@ -1,4 +1,4 @@
-import { runClaudeHookAsync } from '../claude-hook.js';
+import { runClaudeMod } from '../claude-mod.js';
 import { runCodexHookAsync } from '../codex-hook.js';
 import { sessionInbox } from '../inbox.js';
 import { sweepPendingNotifications } from '../notifications.js';
@@ -668,5 +668,5 @@ function hookCommand(runHook: (input: string) => string | Promise<string>): Comm
   };
 }
 
-export const claudeHookCommand = hookCommand(runClaudeHookAsync);
+export const claudeModCommand = hookCommand(runClaudeMod);
 export const codexHookCommand = hookCommand(runCodexHookAsync);

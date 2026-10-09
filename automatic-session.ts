@@ -25,7 +25,7 @@ const providerEnv: Record<AutomaticProvider, string> = {
   pi: 'PI_SESSION_ID',
 };
 
-function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...env,
     CLAUDE_CODE_SESSION_ID: '',

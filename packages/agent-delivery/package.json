@@ -1,12 +1,15 @@
 {
   "name": "@astrosheep/agent-delivery",
   "version": "0.1.0",
-  "description": "Existing-only text admission to OpenCode 2.x sessions, independent of Square.",
+  "description": "Existing-only text delivery to OpenCode and Claude sessions, independent of Square.",
   "type": "module",
   "license": "MIT",
   "engines": { "node": "^22.16.0 || >=24.0.0" },
   "files": ["dist", "README.md", "VALIDATION.md", "LICENSE"],
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./claude-native": { "types": "./dist/claude-native.d.ts", "import": "./dist/claude-native.js" }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

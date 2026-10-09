@@ -4,9 +4,9 @@ import { OpenCode } from '@opencode/client'
 import { Service, type Endpoint } from '@opencode/client/service'
 import { deadline, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError } from './errors.js'
-import type { DeliveryResult, OpenCodeTarget, SendTextOptions } from './types.js'
+import type { OpenCodeDeliveryResult, OpenCodeTarget, OpenCodeSendTextOptions } from './types.js'
 
-export interface ConnectExistingOptions {
+export interface OpenCodeConnectExistingOptions {
   readonly harness: 'opencode'
   readonly sessionId: string
   readonly endpoint?: Endpoint
@@ -60,7 +60,7 @@ function connectionFailure(status: number | undefined, phase: 'health' | 'sessio
 }
 
 /** Resolve an existing service and persisted session. Never starts or stops a service. */
-export async function connectExisting(options: ConnectExistingOptions): Promise<OpenCodeTarget> {
+export async function connectExisting(options: OpenCodeConnectExistingOptions): Promise<OpenCodeTarget> {
   if (!isRecord(options) || options.harness !== 'opencode' || !isIdentity(options.sessionId) ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
     (options.endpoint !== undefined && options.registrationFile !== undefined) ||
@@ -118,7 +118,7 @@ function isAdmission(value: unknown, sessionId: string, inputId: string):
 }
 
 /** Submit once. Unknown is not a retry instruction. */
-export async function sendText(target: OpenCodeTarget, text: string, options: SendTextOptions = {}): Promise<DeliveryResult> {
+export async function sendText(target: OpenCodeTarget, text: string, options: OpenCodeSendTextOptions = {}): Promise<OpenCodeDeliveryResult> {
   if (!isRecord(target) || !endpoints.has(target as unknown as OpenCodeTarget) ||
     !isIdentity(target.sessionId) || typeof text !== 'string' || text.length === 0 ||
     !isRecord(options) || !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||

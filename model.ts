@@ -12,6 +12,8 @@ export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
 }
 
 export interface WakeRoute {
+  /** Ownership generation, when the receiver publishes a fenced route. */
+  epoch?: number;
   location: string;
   participant: string;
   sessionId: string;

@@ -388,7 +388,7 @@ export async function endOwnedSession(square: OperationContext, name: string, se
         const bindings = rows.filter((row) => nameKey(row.participant) === nameKey(name));
         currentSessionId = bindings.find((binding) => binding.session !== sessionId)?.session
           ?? bindings.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))[0]?.session;
-        ownerRecords = rows.filter((row) => row.session === sessionId);
+        ownerRecords = rows.filter((row) => row.session === sessionId && nameKey(row.participant) === nameKey(name));
         liveParticipants = liveClaimedParticipants(rows, sessionId);
         if (expectedEpoch !== undefined) {
           const owner = await readParticipantOwner(location, name, square.env ?? process.env);
@@ -403,7 +403,7 @@ export async function endOwnedSession(square: OperationContext, name: string, se
         catch (error) { if (!isSquareError(error) || (error.code !== 'already_done' && error.code !== 'not_joined')) throw error; }
       }
       if (location !== undefined && location !== 'memory') {
-        dropEndedSessionWakeRoutesFromState(state, location, sessionId, { expectedEpoch, liveParticipants, force: committed !== null });
+        dropEndedSessionWakeRoutesFromState(state, location, sessionId, { expectedEpoch, liveParticipants, force: committed !== null, participant: name });
       }
       return { state, result: committed };
     });

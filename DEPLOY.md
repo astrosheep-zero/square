@@ -5,7 +5,8 @@ native harness commands. Pi receives Square as the published npm package.
 
 ## Requirements
 
-- Claude Code installed
+- For Claude native inbox delivery: macOS Claude Code **2.1.295**, with the
+  Square mod actually loaded in a trusted/approved interactive terminal
 - Agents runtime installed
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
@@ -28,8 +29,18 @@ npm install -g @astrosheep/square@latest
 square install --all -f
 ```
 
-No restart is needed. Claude Code and Agents read their installed support on
-demand.
+Claude must load the updated Square mod. Start a new trusted interactive
+conversation (or confirm its mod hot reload); installing the plugin or finding
+an inbox socket alone does not prove it loaded. Approve the mod through Claude's
+normal UI. A disabled/unapproved mod, the ordinary unapproved headless `-p` path,
+other Claude builds, and other platforms are unavailable until validated. There
+is no legacy injection fallback.
+
+Run `square harness doctor claude` for installation/capability guidance and
+`square harness doctor delivery` for current receiver routes and delivery
+evidence. See [Claude native inbox](guides/claude-native.md) for membership,
+admission, cancellation, and native custody limits. Other harnesses retain
+their existing installation and delivery paths.
 
 ## Square persistence
 

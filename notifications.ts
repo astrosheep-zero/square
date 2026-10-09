@@ -127,6 +127,7 @@ export async function createDefaultWakeTransport(
     env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,
     hostLedger,
     clock,
+    env,
   );
 }
 
@@ -164,9 +165,15 @@ async function wakeRequestCurrentness(request: WakeRequest, hostLedger: import('
 }
 
 
-export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number): WakeTransportPort {
+export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
   return {
     probe: async (route) => {
+      if (route.kind === 'claude-native') {
+        const { nativeSupported } = await import('./claude-delivery.js');
+        if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: macOS 2.1.295 loaded mod required.' };
+        try { return (await fs.promises.stat(route.address.endpoint!)).isSocket() || { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint is not a socket.' }; }
+        catch { return { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint unavailable.' }; }
+      }
       const adapter = adapters.find((candidate) => candidate.kind === route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${route.kind}` };
       const probe = (adapter as WakeAdapter & { probe?: (address: Readonly<Record<string, string>>) => Promise<boolean> }).probe;
@@ -176,6 +183,10 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
       }
     },
     attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
+      if (request.route.kind === 'claude-native') {
+        const { dispatchClaude } = await import('./claude-delivery.js');
+        return dispatchClaude(request, hostLedger, timeoutMs, beforeSend, env);
+      }
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
@@ -218,7 +229,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   const square = await openSquare(squarePath, { clock: now, hostLedger, env });
   try {
     const adapters = opts.adapters ?? await defaultWakeAdapters();
-    const transport = createWakeTransport(adapters, hostLedger, now);
+    const transport = createWakeTransport(adapters, hostLedger, now, env);
     try {
       return await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch {
@@ -260,7 +271,7 @@ export async function sweepPrivilegedPending(
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
         const selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
-        const transport = createWakeTransport(adapters, hostLedger, Date.now);
+        const transport = createWakeTransport(adapters, hostLedger, Date.now, env);
         for (const actIndex of selected) {
           const remaining = remainingMs();
           if (remaining === 0 || signal?.aborted) break;

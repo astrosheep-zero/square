@@ -6,7 +6,7 @@ import { helpCommand, versionCommand } from './meta-commands.js';
 import { mcpServerCommand } from './mcp-server-command.js';
 import {
   catchCommand,
-  claudeHookCommand,
+  claudeModCommand,
   codexHookCommand,
   historyCommand,
   inboxCommand,
@@ -28,7 +28,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['join'], spec: joinCommand },
   { names: ['stream'], spec: streamCommand },
   { names: ['inbox'], spec: inboxCommand },
-  { names: ['claude-hook'], spec: claudeHookCommand },
+  { names: ['claude-mod'], spec: claudeModCommand },
   { names: ['codex-hook'], spec: codexHookCommand },
   { names: ['catch'], spec: catchCommand },
   { names: ['express'], spec: expressCommand },

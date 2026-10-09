@@ -1,7 +1,8 @@
 {
   "name": "square",
   "version": "0.3.63",
-  "description": "Native Claude Code turn-boundary delivery for Square participants",
+  "description": "Native Claude Code inbox delivery for Square participants",
+  "types": "./types.d.ts",
   "author": {
     "name": "Square"
   }

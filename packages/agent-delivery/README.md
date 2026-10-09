@@ -1,8 +1,17 @@
 # @astrosheep/agent-delivery
 
-Existing-only text admission to **OpenCode 2.x** sessions. Standalone ESM package,
-version 0.1.0; Node `^22.16.0 || >=24.0.0`. No Square dependency, artifact access,
-plugin, daemon, service startup, V1 bridge, or Claude adapter.
+Existing-only plain-text delivery to **OpenCode 2.x** and explicitly addressed
+**Claude native inboxes**. Standalone ESM package, version 0.1.0;
+Node `^22.16.0 || >=24.0.0`. No Square dependency, artifact access, plugin,
+daemon, service startup, or V1 bridge.
+
+| Harness | Coordinate | Delivery | Strongest receipt |
+| --- | --- | --- | --- |
+| OpenCode | Existing service + persisted session | `steer` (default), `queue` | `accepted`: durable inbox admission only |
+| Claude | Explicit session ID + absolute native socket, macOS baseline 2.1.295 | native `next` (default/`steer`); no `queue` or caller `inputId` | `written`: local bytes only, not admission |
+
+Neither receipt proves model processing, human display, or completion. Unknown
+attempts are never automatically retried.
 
 The official `@opencode/client` is pinned to **2.0.20**, the audited and tested
 baseline. A 2.x health version is necessary, not proof that every earlier/later
@@ -24,12 +33,15 @@ npm install /absolute/path/to/astrosheep-agent-delivery-0.1.0.tgz
 
 The tarball includes runnable JavaScript, declarations, README and MIT license;
 its only direct runtime dependency is the official SDK. It can be installed and
-imported outside this repository, with no Square files. The SDK's schema/protocol
+imported outside this repository, with no Square files. Main API dispatch loads
+only the selected harness; `./claude-native` is a Node-only leaf with no SDK
+imports. Installing the package still installs its OpenCode dependency graph.
+The SDK's schema/protocol
 packages transitively install `effect@4.0.0-rc.112` (about 51 MiB unpacked in the
 observed install), plus its dependencies, even with the Promise entrypoint; this
 is not a dependency-free transport. No Solid runtime is installed.
 
-## Connect and submit
+## OpenCode: connect and submit
 
 ```js
 import { connectExisting, sendText, ConnectionError } from '@astrosheep/agent-delivery'
@@ -94,7 +106,7 @@ handle keeps endpoint details private and cannot be serialized or fabricated.
 An existing persisted session is sufficient; it does **not** prove an attached
 TUI, visibility to a human, or a session's currently running state.
 
-## Admission semantics
+## OpenCode admission semantics
 
 `sendText` calls the public SDK's `session.prompt({sessionID, text, delivery, id,
 resume: true})`, once, on `/api/session/:id/prompt`.
@@ -131,6 +143,77 @@ event replay is available: the tested default 2.0.20 CLI service uses snapshot
 `log.sync`, not persisted historical event replay. A future adapter addition is
 not an implemented promise.
 
+## Claude: explicit native inbox
+
+Validated native baseline: **macOS Claude Code 2.1.295**. Other platforms reject
+with `ConnectionError('unsupported_platform')`; no Windows authentication or
+unvalidated Linux compatibility is promised. The protocol cannot interrogate the
+receiver's version, so an endpoint alone does not validate other Claude builds.
+
+```js
+import { connectExisting, sendText } from '@astrosheep/agent-delivery'
+
+const target = await connectExisting({
+  harness: 'claude',
+  sessionId: 'the-receiver-current-session-id',
+  endpoint: '/absolute/path/from/receiver/native.sock',
+})
+const receipt = await sendText(target, 'Plain text for the next native boundary.', {
+  delivery: 'steer', // optional; native priority is always next
+  // timeoutMs: 5000,
+  // signal: controller.signal,
+})
+```
+
+There is no automatic discovery from a Claude session ID. Obtain the explicit
+socket coordinate from the receiving harness. `connectExisting` validates the
+identity/path and a present socket; it sends no payload. Filesystem waiting is
+bounded and cancellable: an already-issued OS stat can finish later but never
+produces a late handle or initiates a send. This check does **not** authenticate
+which conversation the receiver owns, prove a live listener, or prove that
+native inbound policy will permit your message. The frozen handle keeps its path
+private and carries no credentials.
+
+`sendText` defaults to native `priority:'next'`. `steer` is the same next-boundary
+delivery, **not interruption** of an in-flight request/tool. `delivery:'queue'`
+and any caller `inputId` are unsupported and reject before writing, both in the
+per-harness TypeScript overloads and runtime checks. Native `msg_id` is a fresh
+UUID per call, not an idempotent reconciliation key. Do not replay an unknown
+attempt or reuse an ID automatically.
+
+Claude receipts contain `harness` and `sessionId`:
+
+- `written`: local bytes handed to the socket only. **Not admitted, queued,
+  consumed, or accepted**; native refusal/hold can occur without an acknowledgement.
+- `unknown`: connected I/O lost, timed out or was aborted; remote custody is uncertain.
+- `unavailable`: known not sent, including preabort, expired deadline or unavailable
+  endpoint before connection. Fixed `code` values contain no paths, text or raw errors.
+
+There is no accepted state, acknowledgement parser, absence-of-refusal inference,
+EOF acceptance, receipt daemon or automatic retry for Claude. A plain native
+receiver need not have the Square mod: that mod adds Square-specific lifecycle,
+correlation and stored-context presentation confirmation, above this library.
+OS-user permissions and native policy remain authoritative. The sender supplies
+no child messaging token, `from` identity, plugin tag or claimed authority.
+
+Low-level callers can import the exact transport used by Square:
+
+```js
+import { writeClaudeNative } from '@astrosheep/agent-delivery/claude-native'
+const result = await writeClaudeNative(
+  { sessionId: 'receiver-id', endpoint: '/absolute/native.sock' },
+  'plain text',
+  { deadline: Date.now() + 5000, signal: controller.signal },
+)
+// result.outcome: written | unknown | unavailable
+```
+
+This Node-only leaf owns framing/socket I/O, not capability discovery or policy;
+callers must establish the validated receiver/platform themselves. It validates
+finite deadlines within Node's timer range, rejects preabort without a socket
+attempt, bounds connect/write, settles once and cleans up. Neither the leaf nor
+the package accesses Square participants, artifacts, correlation or evidence.
+
 ## Deadlines and errors
 
 Both operations default to a **5-second total deadline**. `timeoutMs` must be
@@ -147,8 +230,9 @@ replacement service.
 | --- | --- |
 | `invalid_arguments` | Invalid harness/session, endpoint/path combination, signal or timeout |
 | `aborted`, `timeout` | Caller operation stopped |
-| `service_unavailable` | No compatible registered service, or unavailable transport |
-| `unsupported_version` | Explicit endpoint reports a non-2.x version |
+| `service_unavailable` | No compatible registered service, unavailable transport, or absent/non-socket Claude endpoint |
+| `unsupported_version` | Explicit OpenCode endpoint reports a non-2.x version |
+| `unsupported_platform` | Claude connection on a platform other than validated macOS |
 | `authentication_failed` | HTTP 401/403 from explicit health/session checks |
 | `session_not_found` | HTTP 404 during session lookup |
 | `http_rejection` | Other non-200 native HTTP response |
@@ -159,7 +243,7 @@ collapses registration absence, health/auth/version/PID failures to absence; the
 produce `service_unavailable` rather than guessed specific causes.
 
 `sendText` invalid arguments reject with a fixed-message `TypeError`, before
-network work. Text must be a nonempty string; a handle must come from this
+I/O work. Text must be a nonempty string; a handle must come from this
 package instance's `connectExisting`. For valid attempts it resolves one of the
 receipt states above. No public errors/results include auth, endpoint URLs,
 server bodies, input text, or SDK error causes/stacks. The caller's own session
@@ -180,7 +264,11 @@ missing sessions/services, authoritative rejection, 5xx after a recorded
 submission, malformed acceptance,
 pre/post-dispatch abort, ambiguous timeout/loss without retries, concurrent sends,
 and late uncancellable discovery. The pack test installs in an external temp
-consumer, checks declarations/imports and performs real SDK discovery/send.
+consumer, checks declarations/imports and performs real SDK discovery/send plus
+Claude generic/leaf socket writes. A loader forbids OpenCode imports during
+Claude consumption. UDS tests capture exact UTF-8 frames, reject unsupported
+options, and exercise dead endpoints, bounded filesystem waiting, connected
+backpressure timeout/abort and preabort without retries.
 
 These tests demonstrate adapter and package behavior, not live OpenCode execution
 or busy/idle promotion. See `VALIDATION.md` in the source package for separately

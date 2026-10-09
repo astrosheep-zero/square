@@ -39,6 +39,9 @@ export interface WakeRequest {
   readonly participant: string;
   readonly activity: string;
   readonly actor: string;
+  /** Existing dispatch claim, also the opaque native correlation. */
+  readonly claimToken?: string;
+  readonly attemptN?: number;
   readonly route: WakeRoute;
 }
 
@@ -49,6 +52,8 @@ export interface PresentationSinkPort {
 
 /** Stable projection of a host binding; storage rows never cross this boundary. */
 export interface SessionBindingProjection {
+  readonly epoch?: number;
+  readonly cancelledThrough?: number;
   readonly location: string;
   readonly participant: string;
   readonly sessionId: string;
@@ -134,4 +139,6 @@ export interface PresentPendingInput {
   readonly signal?: AbortSignal;
   /** Boundary previews that were clipped remain pending for a later full presentation. */
   readonly markSeen?: boolean;
+  /** Receiver-specific fences checked inside the artifact observation transaction. */
+  readonly current?: (state: SquareState) => boolean;
 }

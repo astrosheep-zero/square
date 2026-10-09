@@ -50,7 +50,8 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Inspect a bounded machine-local notification snapshot for a native session.',
     details: ['Options:', '  --for-session <id>  Required harness session id.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).', '  --json              Emit the bounded snapshot as structured JSON.'],
   },
-  { names: ['claude-hook', 'codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
+  { names: ['codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
+  { names: ['claude-mod'], usage: '{command}', summary: 'Receive a structured operation from the loaded Claude mod.', hiddenFromIndex: true },
   {
     names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search the archive without changing what you have caught.',
