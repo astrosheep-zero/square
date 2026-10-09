@@ -150,7 +150,9 @@ test('decisions and perception stay state-only, outside host and storage operati
 test('product adapters stay behind the facade and close boundary', () => {
   const directClose = filesContaining(/\.cell\.close\s*\(/, ['open-square.ts']);
   assert.deepEqual(directClose, [], `StateCell close escaped its package-private boundary: ${directClose.join(', ')}`);
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-wiring.ts']);
+  // The application layer coordinates the same actions the facade forwards to; product
+  // adapters (CLI, harnesses, mods) must still reach participant mutation through Square.
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-wiring.ts', 'square-application.ts']);
   assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, ['square-wiring.ts']);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);

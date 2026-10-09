@@ -4,10 +4,11 @@ import { SquareError } from './model.js';
 import { validateDoneBody } from './decisions.js';
 import { currentHold, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
-import { Square, openParticipant } from './square-wiring.js';
+import { Square } from './square-wiring.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
-import { statusPresentation, participantsPresentation } from './views.js';
+import { catchUp, express, ignore, listen, listening } from './square-actions.js';
+import { participantHistory, resolveParticipant, statusPresentation, participantsPresentation } from './views.js';
 import { hostLedgerForEnv, localParticipantName, localSessionIdentities, readParticipantOwner } from './registry.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, Participant, ParticipantStatus, PerceivedActivity, OperationControl } from './square-facade.js';
 
@@ -79,13 +80,16 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
   const location = () => requireLocation({ ...context, env });
   const hostLedger = context.hostLedger ?? hostLedgerForEnv(env);
   const open = () => Square.at({ path: location(), clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });
-  async function existing<T>(operation: (participant: Participant) => Promise<T>, control?: OperationControl): Promise<T> {
+  async function existing<T>(operation: (square: OpenSquare, name: string) => Promise<T>, control?: OperationControl): Promise<T> {
     checkControl(control);
     const squarePath = location();
     const participantName = await requireParticipant(context, squarePath, env);
-    const facade = await openParticipant({ path: squarePath, clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport }, participantName);
-    try { checkControl(control); return await operation(facade.participant); }
-    finally { await facade.close(); }
+    const square = await openSquare(squarePath, { clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });
+    try {
+      const { name } = await resolveParticipant(square, participantName);
+      checkControl(control);
+      return await operation(square, name);
+    } finally { await closeOpenSquare(square); }
   }
   async function joined<T>(operation: (participant: Participant) => Promise<T>, control?: OperationControl): Promise<T> {
     checkControl(control);
@@ -123,7 +127,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       while (true) {
         checkControl(control);
         try {
-          const result = await existing((participant) => participant.express(body, options, control), control);
+          const result = await existing((square, name) => express(square, name, body, options, control), control);
           return { ...result, waited };
         } catch (error) {
           if (!(error instanceof SquareError) || options.noWait || (error.code !== 'held' && error.code !== 'throttled')) throw error;
@@ -152,16 +156,16 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         }
       }
     },
-    catch(options, control) { return existing((participant) => participant.catch(options, control), control); },
+    catch(options, control) { return existing((square, name) => catchUp(square, name, options, undefined, control), control); },
     async history(query, control) {
       checkControl(control);
-      if (context.participant !== undefined || env.SQUARE_PARTICIPANT_NAME !== undefined) return existing((participant) => participant.history(query, control), control);
+      if (context.participant !== undefined || env.SQUARE_PARTICIPANT_NAME !== undefined) return existing((square, name) => participantHistory(square, name, query, control), control);
       const square = await open();
       try { checkControl(control); return await square.history(query, control); } finally { await square.close(); }
     },
-    listen(target, control) { return existing((participant) => participant.listen(target, control), control); },
-    ignore(target, control) { return existing((participant) => participant.ignore(target, control), control); },
-    listening(control) { return existing((participant) => participant.listening(control), control); },
+    listen(target, control) { return existing((square, name) => listen(square, name, target, control), control); },
+    ignore(target, control) { return existing((square, name) => ignore(square, name, target, control), control); },
+    listening(control) { return existing((square, name) => listening(square, name, control), control); },
     hold(reason, control) { return joined((participant) => participant.hold(reason, control), control); },
     resume(control) { return joined((participant) => participant.resume(control), control); },
     async done(body, control) {

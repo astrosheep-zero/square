@@ -16,7 +16,7 @@ import {
   retireEndedSessionRoutes,
   type OperationContext,
 } from './square-actions.js';
-import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
+import { history, participantHistory, participants, snapshot } from './views.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 import type { Participant, OperationControl, SquareAtInput, SquareBuildInput } from './square-facade.js';
@@ -132,19 +132,3 @@ export class Square {
   retireEndedSessionRoutes(sessionId: string): Promise<void> { return retireEndedSessionRoutes(this.context, sessionId); }
 }
 
-export async function openParticipant(
-  input: SquareAtInput,
-  name: string,
-): Promise<{ readonly participant: Participant; close(): Promise<void> }> {
-  const square = await openSquare(input.path, input);
-  try {
-    const known = await resolveParticipant(square, name);
-    return {
-      participant: new ParticipantHandle(known.name, square, square),
-      close: () => closeOpenSquare(square),
-    };
-  } catch (error) {
-    await closeOpenSquare(square);
-    throw error;
-  }
-}
