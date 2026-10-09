@@ -48,6 +48,25 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
   } finally { await close(); }
 });
 
+test('MCP tool schemas reject unknown fields and malformed activity ids', async () => {
+  const { server } = await fixture('kite');
+  const { client, close } = await connectedClient(server);
+  try {
+    const unknownField = await client.callTool({ name: 'join', arguments: { takeover: false, bogus: 1 } });
+    assert.equal(unknownField.isError, true);
+
+    const malformed = await client.callTool({ name: 'history', arguments: { after: 'act/01' } });
+    assert.equal(malformed.isError, true);
+
+    const joined = await client.callTool({ name: 'join', arguments: { takeover: false } });
+    assert.equal(joined.isError, undefined);
+    await client.callTool({ name: 'express', arguments: { body: 'schema check' } });
+    const history = await client.callTool({ name: 'history', arguments: { after: joined.structuredContent.activity.id } });
+    assert.equal(history.isError, undefined);
+    assert.deepEqual(history.structuredContent.activities.map((activity) => activity.body), ['schema check']);
+  } finally { await close(); }
+});
+
 test('MCP cancellation reaches an in-progress application operation', async () => {
   const { server } = await fixture('aoi');
   const { client, close } = await connectedClient(server);

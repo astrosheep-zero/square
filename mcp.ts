@@ -1,53 +1,34 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z, type ZodType } from 'zod/v4';
+import { z } from 'zod/v4';
 import { SquareError, isSquareError } from './model.js';
 import { createSquareApplication, type ExpressApplicationOptions, type SquareApplication, type SquareApplicationContext } from './square-application.js';
 import type { Activity, CatchOptions, HistoryQuery, OperationControl } from './square-facade.js';
 import { toPublicActivity } from './views.js';
 
 type JsonObject = Record<string, unknown>;
-interface InputProperty { type: string; minimum?: number; enum?: readonly string[]; pattern?: string; items?: { type: 'string' }; }
-interface InputSchema { properties: Record<string, InputProperty>; required: string[]; }
-interface ToolDefinition { name: string; description: string; inputSchema: InputSchema; }
+interface ToolDefinition { name: string; description: string; inputSchema: z.ZodObject<z.ZodRawShape, z.core.$strict>; }
 
 export interface SquareMcpOptions extends SquareApplicationContext {}
 export type SquareMcpServer = McpServer;
 
-const activityIdSchema: InputProperty = { type: 'string', pattern: '^act/(0|[1-9][0-9]*)$' };
-const stringArraySchema: InputProperty = { type: 'array', items: { type: 'string' } };
-function objectSchema(properties: Record<string, InputProperty>, required: string[] = []): InputSchema { return { properties, required }; }
+const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/);
+const stringArray = z.array(z.string());
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: 'join', description: 'Join the square as the configured participant.', inputSchema: objectSchema({ takeover: { type: 'boolean' } }) },
-  { name: 'express', description: 'Express a message or embodied action in the square.', inputSchema: objectSchema({ body: { type: 'string' }, mentions: stringArraySchema, reach: { type: 'string', enum: ['bell'] }, reply: activityIdSchema, force: { type: 'boolean' }, noWait: { type: 'boolean' } }, ['body']) },
-  { name: 'catch', description: 'Catch and consume activities perceptible to the configured participant.', inputSchema: objectSchema({ id: activityIdSchema, idle: { type: 'number', minimum: 0 }, from: stringArraySchema, mention: { type: 'boolean' }, limit: { type: 'integer', minimum: 1 } }) },
-  { name: 'history', description: 'Read the activity stream using stable activity-id cursors.', inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1 }, order: { type: 'string', enum: ['asc', 'desc'] }, before: activityIdSchema, after: activityIdSchema, grep: { type: 'string' }, fixed: { type: 'string' }, from: stringArraySchema, mention: { type: 'string' } }) },
-  { name: 'listen', description: 'Listen for future activity from a participant.', inputSchema: objectSchema({ target: { type: 'string' } }, ['target']) },
-  { name: 'ignore', description: 'Stop listening for future activity from a participant.', inputSchema: objectSchema({ target: { type: 'string' } }, ['target']) },
-  { name: 'listening', description: 'List participants this participant is listening to.', inputSchema: objectSchema({}) },
-  { name: 'hold', description: 'Raise a hand to hold the square.', inputSchema: objectSchema({ reason: { type: 'string' } }) },
-  { name: 'resume', description: 'Release the current hold.', inputSchema: objectSchema({}) },
-  { name: 'done', description: 'Leave the square without adding a message.', inputSchema: objectSchema({}) },
-  { name: 'status', description: 'Read the public status of the square.', inputSchema: objectSchema({}) },
-  { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: objectSchema({}) },
+  { name: 'join', description: 'Join the square as the configured participant.', inputSchema: z.object({ takeover: z.boolean().optional() }).strict() },
+  { name: 'express', description: 'Express a message or embodied action in the square.', inputSchema: z.object({ body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(), reply: activityId.optional(), force: z.boolean().optional(), noWait: z.boolean().optional() }).strict() },
+  { name: 'catch', description: 'Catch and consume activities perceptible to the configured participant.', inputSchema: z.object({ id: activityId.optional(), idle: z.number().finite().min(0).optional(), from: stringArray.optional(), mention: z.boolean().optional(), limit: z.number().int().min(1).optional() }).strict() },
+  { name: 'history', description: 'Read the activity stream using stable activity-id cursors.', inputSchema: z.object({ limit: z.number().int().min(1).optional(), order: z.enum(['asc', 'desc']).optional(), before: activityId.optional(), after: activityId.optional(), grep: z.string().optional(), fixed: z.string().optional(), from: stringArray.optional(), mention: z.string().optional() }).strict() },
+  { name: 'listen', description: 'Listen for future activity from a participant.', inputSchema: z.object({ target: z.string() }).strict() },
+  { name: 'ignore', description: 'Stop listening for future activity from a participant.', inputSchema: z.object({ target: z.string() }).strict() },
+  { name: 'listening', description: 'List participants this participant is listening to.', inputSchema: z.object({}).strict() },
+  { name: 'hold', description: 'Raise a hand to hold the square.', inputSchema: z.object({ reason: z.string().optional() }).strict() },
+  { name: 'resume', description: 'Release the current hold.', inputSchema: z.object({}).strict() },
+  { name: 'done', description: 'Leave the square without adding a message.', inputSchema: z.object({}).strict() },
+  { name: 'status', description: 'Read the public status of the square.', inputSchema: z.object({}).strict() },
+  { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: z.object({}).strict() },
 ];
-
-function zodInputSchema(schema: InputSchema) {
-  const shape: Record<string, ZodType> = {};
-  for (const [key, property] of Object.entries(schema.properties)) {
-    let field: ZodType;
-    if (property.type === 'string' && property.enum !== undefined) field = z.enum(property.enum as [string, ...string[]]);
-    else if (property.type === 'string') field = property.pattern === undefined ? z.string() : z.string().regex(new RegExp(property.pattern));
-    else if (property.type === 'boolean') field = z.boolean();
-    else if (property.type === 'number') field = z.number().finite().min(property.minimum ?? -Infinity);
-    else if (property.type === 'integer') field = z.number().int().min(property.minimum ?? -Infinity);
-    else if (property.type === 'array') field = z.array(z.string());
-    else throw new Error(`Unsupported input schema type: ${property.type}`);
-    shape[key] = schema.required.includes(key) ? field : field.optional();
-  }
-  return z.object(shape).strict();
-}
 
 function isObject(value: unknown): value is JsonObject { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function publicActivity(activity: Activity): JsonObject { return { ...activity }; }
@@ -105,7 +86,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
     instructions: 'The catch tool consumes activities. Use history with act/<index> cursors for read-only archive access.',
   });
   for (const tool of TOOL_DEFINITIONS) {
-    server.registerTool(tool.name, { description: tool.description, inputSchema: zodInputSchema(tool.inputSchema) }, async (args, extra) => {
+    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, async (args, extra) => {
       try {
         const value = await operation(app, tool.name, args as JsonObject, { signal: extra.signal });
         const projected = publicResult(tool.name, value);
