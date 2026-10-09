@@ -6,7 +6,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { withFileLock as acquireFileLock, type FileLockOptions } from './file-lock.js';
 import { nameKey } from './model.js';
 import { formatActivityId } from './square-core.js';
-import { changeWakeAttempt, claimWakeAttempt, durableWake, wakeAttempt, type WakeChange } from './wake-attempt-state.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
 import type { HostLedgerPort, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, EvidenceGc, ClaimResult, WakeAttemptClaim, WakeAttemptClaimInput, WakeAttemptTransitionInput, WakeAttemptLookup } from './host-ledger.js';
@@ -28,7 +27,7 @@ async function withFileLock<T>(file: string, options: FileLockOptions, fn: () =>
 export interface HostLedgerFileAdapterOptions { rootPath?: string; now?: () => number }
 async function canon(value:string):Promise<string>{const absolute=path.resolve(value);try{return await fs.realpath(absolute)}catch{return absolute}}
 function canonRoot(value:string):string{let current=path.resolve(value),suffix:string[]=[];for(;;){try{return path.join(fsSync.realpathSync.native(current),...suffix.reverse())}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')return path.resolve(value);const parent=path.dirname(current);if(parent===current)return path.resolve(value);suffix.push(path.basename(current));current=parent}}}
-async function read<T extends {v:1;at?:number;updatedAt?:number;kind?:string;outcome?:string;nativeDelivery?:unknown}>(file:string,now:number,includeFuture=false):Promise<T[]>{try{return (await fs.readFile(file,'utf8')).split('\n').flatMap(line=>{try{const row=JSON.parse(line) as T;const at=row.at??row.updatedAt;return row.v===1&&typeof at==='number'&&(durableWake(row)||at>=now-RETENTION)&&(includeFuture||at<=now)?[row]:[]}catch{return[]}})}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e}}
+async function read<T extends {v:1;at?:number;updatedAt?:number;kind?:string;outcome?:string;nativeDelivery?:unknown}>(file:string,now:number,includeFuture=false):Promise<T[]>{try{return (await fs.readFile(file,'utf8')).split('\n').flatMap(line=>{try{const parsed=JSON.parse(line) as T;const row=decodeWakeRecord(parsed as T & EvidenceRecord);const at=row.at??row.updatedAt;return row.v===1&&typeof at==='number'&&(durableWake(row)||at>=now-RETENTION)&&(includeFuture||at<=now)?[row]:[]}catch{return[]}})}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e}}
 /** Keep the old ledger intact while Windows readers briefly deny replacement.
  * The owning file lock stays held throughout; never unlink the destination. */
 async function write<T>(file: string, rows: readonly T[], signal?: AbortSignal): Promise<void> {
@@ -53,6 +52,21 @@ async function write<T>(file: string, rows: readonly T[], signal?: AbortSignal):
 function k(v:{location:string;participant:string;session:string;channel?:string;activity?:string;kind?:string}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.channel,v.activity,v.kind])}
 function evidenceKey(v:{location:string;participant:string;session:string;activity:string;kind:string;attemptN?:number}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.activity,v.kind,v.attemptN??null])}
 type WakeRow = EvidenceRecord & { v: 1 };
+function durableWake(record: object): boolean {
+  const row = record as { kind?: string; outcome?: string };
+  return row.kind === 'wake' && (row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'dispatching');
+}
+/** Old persisted unknowns lacked an explicit recovery source. */
+function decodeWakeRecord<T extends EvidenceRecord>(row: T): T {
+  return row.kind === 'wake' && row.outcome === 'unknown' && row.unknownSource === undefined
+    ? { ...row, unknownSource: row.signature === 'worker_interrupted_during_dispatch' ? 'interrupted' : 'transport' } : row;
+}
+/** Keep identity and native receipt, never a completed attempt's lease. */
+function finishWake(current: EvidenceRecord, outcome: 'accepted' | 'failed' | 'released' | 'unknown', details: Partial<EvidenceRecord> = {}): EvidenceRecord {
+  const { expiresAt: _expiresAt, ownerPid: _ownerPid, unknownSource: _unknownSource, ...rest } = current;
+  return { ...rest, ...details, kind: 'wake', outcome,
+    ...(outcome === 'unknown' ? { unknownSource: details.unknownSource ?? 'transport' } : {}) };
+}
 function processAlive(pid:number|undefined):boolean|undefined { if (pid===undefined) return undefined; try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' ? false : true; } }
 export class FileHostLedgerPort implements HostLedgerPort {
   private readonly root: string;
@@ -161,13 +175,28 @@ export class FileHostLedgerPort implements HostLedgerPort {
     try {
       return await withFileLock(file + '.lock', LOCK, async () => {
         const all = await read<WakeRow>(file, at, true);
-        const decision = claimWakeAttempt(all, {
-          at, location, participant: i.attention.recipient, session: i.session, activity,
-          kind: 'wake', outcome: 'claimed', routeKind: i.routeKind,
-          claimToken: `${process.pid}-${at}-${randomUUID()}`, ownerPid: process.pid, expiresAt: at + i.leaseMs,
-        }, processAlive);
-        if (decision.rows) await write(file, decision.rows.map((row) => ({ ...row, v: 1 as const })));
-        return decision.result;
+        const attention = all.filter((row) => row.kind === 'wake' && row.location === location && nameKey(row.participant) === nameKey(i.attention.recipient) && row.activity === activity);
+        const terminal = attention.findLast((row) => row.outcome === 'accepted') ?? attention.findLast((row) => row.outcome === 'unknown');
+        if (terminal) return { status: 'terminal', record: terminal };
+        const active = attention.filter((row) => row.outcome === 'claimed' || row.outcome === 'dispatching');
+        const busy = active.find((row) => (row.expiresAt ?? 0) > at && processAlive(row.ownerPid) !== false);
+        if (busy) return { status: 'busy', record: busy };
+        const nextNumber = (session: string) => attention.filter((row) => row.session === session).reduce((highest, row) => Math.max(highest, row.attemptN ?? 0), 0) + 1;
+        // A possibly-sent attempt blocks every route; only an unsent claim can be replaced.
+        const interrupted = active.filter((row) => row.outcome === 'dispatching');
+        if (interrupted.length) {
+          const recovered = interrupted.map((row) => ({ ...finishWake(row, 'unknown', {
+            unknownSource: 'interrupted', signature: 'worker_interrupted_during_dispatch',
+            message: 'The notification worker ended after dispatch began; transport acceptance is unknown.',
+          }), routeKind: row.routeKind ?? i.routeKind, attemptN: row.attemptN ?? nextNumber(row.session), v: 1 as const }));
+          const replacements = new Map(interrupted.map((row, index) => [row, recovered[index]]));
+          await write(file, all.map((row) => replacements.get(row) ?? row));
+          return { status: 'terminal', record: recovered[0] };
+        }
+        const attemptN = nextNumber(i.session), claimToken = `${process.pid}-${at}-${randomUUID()}`;
+        await write(file, [...all.filter((row) => !active.includes(row)), { v: 1, at, location, participant: i.attention.recipient, session: i.session, activity,
+          kind: 'wake', outcome: 'claimed', routeKind: i.routeKind, attemptN, claimToken, ownerPid: process.pid, expiresAt: at + i.leaseMs }]);
+        return { status: 'acquired', claimToken, attemptN };
       });
     } catch (error) { return { status: 'degraded', error }; }
   }
@@ -176,19 +205,20 @@ export class FileHostLedgerPort implements HostLedgerPort {
     const location = await canon(i.attention.squarePath);
     const activity = formatActivityId(i.attention.actIndex);
     const at = i.now ?? this.clock();
-    return this.changeWake({ location, participant: i.attention.recipient, activity, session: i.session, kind: 'wake', outcome: 'claimed', claimToken: i.claimToken }, { type: 'dispatch', expiresAt: at + i.leaseMs }, at);
+    return this.updateWake({ location, participant: i.attention.recipient, activity, session: i.session, claimToken: i.claimToken }, (current) =>
+      current.outcome === 'claimed' ? { ...current, outcome: 'dispatching', expiresAt: at + i.leaseMs } : undefined, at);
   }
 
-  /** The lock covers lookup, the model's decision and replacement of that exact attempt. */
-  private async changeWake(input: EvidenceRecord & { claimToken: string }, change: WakeChange, at = this.clock()): Promise<boolean> {
+  /** One locked, token-fenced replacement; each operation owns its state condition. */
+  private async updateWake(input: Pick<EvidenceRecord, 'location' | 'participant' | 'activity' | 'session'> & { claimToken: string }, update: (current: EvidenceRecord) => EvidenceRecord | undefined, at = this.clock()): Promise<boolean> {
+    if (!input.claimToken) return false;
     const location = await canon(input.location), file = this.file('evidence');
     return withFileLock(file + '.lock', LOCK, async () => {
       const all = await read<WakeRow>(file, at, true);
       const current = all.findLast((row) => row.kind === 'wake' && row.location === location && nameKey(row.participant) === nameKey(input.participant) && row.activity === input.activity && row.session === input.session && row.claimToken === input.claimToken);
-      const attempt = current && wakeAttempt(current);
-      const next = attempt && changeWakeAttempt(attempt, input.claimToken, change);
+      const next = current && update(current);
       if (!next) return false;
-      if (next !== attempt) await write(file, all.map((row) => row === current ? { ...next, v: 1 as const } : row));
+      if (next !== current) await write(file, all.map((row) => row === current ? { ...next, v: 1 as const } : row));
       return true;
     });
   }
@@ -198,10 +228,14 @@ export class FileHostLedgerPort implements HostLedgerPort {
     return this.listEvidence({ kind: 'wake', ...(attention === undefined ? {} : { location: await canon(attention.squarePath), participant: attention.recipient, activity: formatActivityId(attention.actIndex) }), session: i.session, now: i.now });
   }
   async prepareNativeWake(i: EvidenceRecord & { readonly claimToken: string; readonly routeKind: import('./model.js').WakeRouteKind; readonly nativeDelivery: import('./host-ledger.js').NativeDeliveryEvidence }): Promise<boolean> {
-    return this.changeWake(i, { type: 'prepare', nativeDelivery: i.nativeDelivery, routeKind: i.routeKind, attemptN: i.attemptN });
+    return this.updateWake(i, (current) => current.outcome === 'dispatching'
+      ? { ...current, nativeDelivery: i.nativeDelivery, routeKind: i.routeKind, attemptN: i.attemptN } : undefined);
   }
   async confirmWakeAdmission(i: EvidenceRecord & { readonly claimToken: string }): Promise<boolean> {
-    return this.changeWake(i, { type: 'admit' });
+    return this.updateWake(i, (current) => {
+      if (!current.nativeDelivery || !['dispatching', 'unknown', 'accepted'].includes(current.outcome)) return undefined;
+      return current.outcome === 'accepted' ? current : finishWake(current, 'accepted', { signature: 'native_queue_confirmed', message: undefined, diagnostic: undefined });
+    });
   }
 
 async claimEvidence(i:EvidenceClaim):Promise<ClaimResult>{if((i.kind as string)==='wake')return{status:'degraded',error:new Error('wake attempts are claimed with claimWakeAttempt')};const f=this.file('evidence'),at=i.now??this.clock(),{leaseMs,...claim}=i,r={...claim,location:await canon(i.location),outcome:'dispatching',at,expiresAt:at+leaseMs,v:1 as const};try{return await withFileLock(f+'.lock',LOCK,async()=>{const all=await read<any>(f,at,true),matching=all.filter(x=>x.kind===r.kind&&x.location===r.location&&nameKey(x.participant)===nameKey(r.participant)&&x.activity===r.activity&&x.session===r.session),old=matching.findLast(x=>x.outcome==='dispatching');if(old!==undefined&&typeof old.expiresAt==='number'&&old.expiresAt>at)return{status:'busy',record:old} as ClaimResult;if(r.kind==='presentation'&&matching.some(x=>x.outcome==='presented'))return{status:'delivered',record:matching.findLast(x=>x.outcome==='presented')} as ClaimResult;const claimToken=`${process.pid}-${at}-${Math.random().toString(36).slice(2)}`,row={...r,claimToken};await write(f,[...all.filter(x=>!(x.kind===r.kind&&x.location===r.location&&nameKey(x.participant)===nameKey(r.participant)&&x.activity===r.activity&&x.session===r.session&&(x.outcome==='dispatching'||x.outcome==='released'))),row]);return{status:'acquired',claimToken}})}catch(error){return{status:'degraded',error}}}
@@ -209,7 +243,8 @@ async claimEvidence(i:EvidenceClaim):Promise<ClaimResult>{if((i.kind as string)=
     if (i.kind === 'wake') {
       const { signature, message, diagnostic, routeKind, attemptN } = i;
       const details = Object.fromEntries(Object.entries({ signature, message, diagnostic, routeKind, attemptN }).filter(([, value]) => value !== undefined));
-      await this.changeWake({ ...i, outcome: 'released' }, { type: 'release', details: { ...details, at: i.now ?? this.clock() } }, i.now);
+      await this.updateWake(i, (current) => current.outcome === 'claimed' || current.outcome === 'dispatching'
+        ? finishWake(current, 'released', { ...details, at: i.now ?? this.clock() }) : undefined, i.now);
       return;
     }
     const f=this.file('evidence'),location=await canon(i.location),at=i.now??this.clock();await withFileLock(f+'.lock',LOCK,async()=>{const all=await read<any>(f,at,true),same=(x:any)=>x.kind===i.kind&&x.location===location&&nameKey(x.participant)===nameKey(i.participant)&&x.activity===i.activity&&x.session===i.session,current=all.findLast(x=>same(x)&&(x.outcome==='dispatching'||x.outcome==='claimed'));if(current===undefined||current.claimToken!==i.claimToken)return;const tombstone={...current,outcome:'released',at,...(i.routeKind===undefined?{}:{routeKind:i.routeKind}),...(i.attemptN===undefined?{}:{attemptN:i.attemptN}),...(i.signature===undefined?{}:{signature:i.signature}),...(i.message===undefined?{}:{message:i.message}),...(i.diagnostic===undefined?{}:{diagnostic:i.diagnostic}),expiresAt:undefined};delete (tombstone as any).expiresAt;delete (tombstone as any).ownerPid;await write(f,[...all.filter(x=>x!==current),tombstone])})}
@@ -218,7 +253,15 @@ async claimEvidence(i:EvidenceClaim):Promise<ClaimResult>{if((i.kind as string)=
     const f = this.file('evidence'), r = { ...i, location: await canon(i.location), at: i.at ?? this.clock(), v: 1 as const };
     const token = i.claimToken;
     if (typeof token !== 'string' || token.length === 0) return;
-    if (i.kind === 'wake') { await this.changeWake(r, { type: 'finish', result: r }, r.at); return; }
+    if (i.kind === 'wake') {
+      if (r.outcome !== 'accepted' && r.outcome !== 'failed' && r.outcome !== 'unknown') return;
+      const outcome = r.outcome;
+      await this.updateWake(r, (current) => {
+        if (current.outcome !== 'dispatching' && !(current.outcome === 'unknown' && current.unknownSource === 'interrupted' && outcome === 'accepted')) return undefined;
+        return finishWake(current, outcome, { at: r.at, routeKind: r.routeKind, attemptN: r.attemptN, signature: r.signature, message: r.message, diagnostic: r.diagnostic });
+      }, r.at);
+      return;
+    }
     await withFileLock(f + '.lock', LOCK, async () => {
       const all = await read<any>(f, r.at, true);
       const same = (x: any) => x.kind === r.kind && x.location === r.location && nameKey(x.participant) === nameKey(r.participant) && x.activity === r.activity && x.session === r.session;
