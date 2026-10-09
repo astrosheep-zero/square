@@ -591,6 +591,53 @@ test('route ledger read failure stays attention-local when a later route accepts
 });
 
 
+test('evidence release failures keep the per-exit policy: best-effort exits free the lease, bare exits propagate', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-release-failure-'));
+  const location = path.join(root, 'SQUARE.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts.push(
+    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+    { kind: 'join', actor: 'Carol', at: 3, index: 2 },
+    { kind: 'say', actor: 'Alice', at: 4, body: 'hello @Bob and @Carol', mentions: ['Bob', 'Carol'], index: 3 },
+  );
+  state.runtime.nextActIndex = 4;
+  await writeSquareFile(location, state);
+  const canonicalLocation = fs.realpathSync.native(location);
+  state.routes = [
+    { location: canonicalLocation, participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 4 },
+    { location: canonicalLocation, participant: 'Carol', sessionId: 'session-b', channel: 'codex', kind: 'codex-queue', address: { threadId: 'b' }, updatedAt: 4 },
+  ];
+  await writeSquareFile(location, state);
+  const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 4 });
+  await base.ensurePresence({ location, participant: 'Carol', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 4 });
+  const ledger = Object.create(base);
+  ledger.releaseEvidence = async () => { throw new Error('wake evidence ledger unavailable'); };
+  const square = await openSquare(location, { hostLedger: base });
+  const attention = (recipient) => ({ squarePath: location, actIndex: 3, recipient });
+  try {
+    await assert.rejects(
+      deliverPending({
+        artifact: square.artifact,
+        hostLedger: ledger,
+        transport: { attempt: async (request) => (request.participant === 'Bob' ? { outcome: 'not-capable' } : { outcome: 'failed', unavailable: true }) },
+        location,
+        now: 10,
+      }),
+      /wake evidence ledger unavailable/,
+    );
+    // Bob's not-capable exit is best-effort: the failed evidence release is swallowed and the lease is still freed.
+    assert.equal((await base.claimWakeDispatch({ attention: attention('Bob'), leaseId: 'after-best-effort', leaseMs: 1000, session: 'session-a' })).type, 'acquired');
+    // Carol's unavailable exit is bare: the original release error propagates before the lease release.
+    assert.equal((await base.claimWakeDispatch({ attention: attention('Carol'), leaseId: 'after-bare', leaseMs: 1000, session: 'session-b' })).type, 'busy');
+  } finally {
+    await square.artifact.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
 test('recovered ambiguous dispatch stops every fallback route', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-ambiguous-owner-'));
   const location = path.join(root, 'SQUARE.square');
