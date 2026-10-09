@@ -6,8 +6,6 @@ import crossSpawn from 'cross-spawn';
 import { SQUARE_IDENTITY } from './identity.js';
 import { stageReplacement } from './harness-stage.js';
 
-export const CODEX_HOOK_COMMAND = SQUARE_IDENTITY.hookCommand;
-export const SQUARE_CODEX_MARKER = SQUARE_IDENTITY.hookMarker;
 export const CODEX_PLUGIN_ID = SQUARE_IDENTITY.pluginId;
 export const CODEX_MARKETPLACE_NAME = SQUARE_IDENTITY.marketplaceName;
 const LEGACY_MARKETPLACES = ['astrosheep-square'];

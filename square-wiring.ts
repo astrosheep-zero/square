@@ -16,7 +16,6 @@ import {
   retireEndedSessionRoutes,
   type OperationContext,
 } from './square-actions.js';
-import { markBoundarySeen as recordBoundarySeen } from './presence.js';
 import { history, participantHistory, participants, resolveParticipant, snapshot } from './views.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
@@ -132,11 +131,6 @@ export class Square {
   endOwnedSession(name: string, sessionId: string, expectedEpoch?: number) { return endOwnedSession(this.context, name, sessionId, expectedEpoch); }
   retireEndedSessionRoutes(sessionId: string): Promise<void> { return retireEndedSessionRoutes(this.context, sessionId); }
 }
-
-export function markBoundarySeen(squarePath: string, name: string, actIndexes: readonly number[], at?: number): Promise<void> {
-  return recordBoundarySeen(squarePath, name, actIndexes, at);
-}
-
 
 export async function openParticipant(
   input: SquareAtInput,

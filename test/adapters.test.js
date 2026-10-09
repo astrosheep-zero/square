@@ -36,7 +36,7 @@ import {
 } from '../dist/harness-pi.js';
 import { recordJoin } from '../dist/registry.js';
 import { withFileLock } from '../dist/file-lock.js';
-import { hasPresentedForOwner } from '../dist/presented.js';
+import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/index.js';
 import { executeHarnessTarget } from '../dist/harness.js';
@@ -495,7 +495,6 @@ async function piFixture(sessionId, pending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const registry = path.join(root, 'sessions.ndjsonl');
-  const presented = path.join(root, 'presented.ndjsonl');
   const runtime = { ...emptyRuntimeState(pending ? 3 : 2), nextActIndex: pending ? 3 : 2 };
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
@@ -503,18 +502,16 @@ async function piFixture(sessionId, pending = true) {
     ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 }] : []),
   ];
   await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
-  return { root, squarePath, registry, presented, sessionId };
+  return { root, squarePath, registry, sessionId };
 }
 
 async function withPiFixture(sessionId, fn, pending = true) {
   const item = await piFixture(sessionId, pending);
   const previous = {
     registry: process.env.SQUARE_REGISTRY,
-    presented: process.env.SQUARE_PRESENTED,
     piSession: process.env.PI_SESSION_ID,
   };
   process.env.SQUARE_REGISTRY = item.registry;
-  process.env.SQUARE_PRESENTED = item.presented;
   delete process.env.PI_SESSION_ID;
   await recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
   try {
@@ -522,8 +519,6 @@ async function withPiFixture(sessionId, fn, pending = true) {
   } finally {
     if (previous.registry === undefined) delete process.env.SQUARE_REGISTRY;
     else process.env.SQUARE_REGISTRY = previous.registry;
-    if (previous.presented === undefined) delete process.env.SQUARE_PRESENTED;
-    else process.env.SQUARE_PRESENTED = previous.presented;
     if (previous.piSession === undefined) delete process.env.PI_SESSION_ID;
     else process.env.PI_SESSION_ID = previous.piSession;
     // Yield while an aborted presentation releases its file handles on Windows.

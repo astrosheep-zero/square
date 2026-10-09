@@ -18,7 +18,6 @@ type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PRESENCE_CLAIM_LOCK = { retryMs: 10 } as const;
 
-export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(hostLedgerRoot(env), '..', 'sessions.ndjsonl'); }
 export async function canonicalSquarePath(squarePath: string): Promise<string> { const absolute = path.resolve(squarePath); try { return await (await import('node:fs/promises')).realpath(absolute); } catch { return absolute; } }
 function ledgerRoot(env: NodeJS.ProcessEnv): string { return hostLedgerRoot(env); }
 function ledger(env: NodeJS.ProcessEnv): FileHostLedgerPort { return createHostLedgerPort({ rootPath: ledgerRoot(env) }); }

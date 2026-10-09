@@ -5,7 +5,7 @@ import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
 import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, replayLandedAudiences, type LandedAudienceReplay, type Perception } from './square-core.js';
 import { perceiveActivity } from './delivery.js';
-import { actId, presenceAnchor, publicActs, rosterNames, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
+import { actId, presenceAnchor, rosterNames, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
@@ -438,16 +438,6 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
           `${withDraftInput(retryCommand, opts.draftPath)}`,
         ];
   return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount, held: opts.held });
-}
-
-export function renderPublicTail(squareState: SquareState, events: StoredAct[], lastN: number | null | undefined, now?: number, viewer = ''): string {
-  const publicItems = publicActs(events);
-  const selected = lastN == null ? publicItems : publicItems.slice(-lastN);
-  const preview = lastN == null ? undefined : BODY_PREVIEW_LENGTH;
-  return selected
-    .map((event) => renderAmbientEvent(event, viewer, { now, preview, actNumber: event.kind === 'say' ? sayNumberFor(events, event) : undefined, squareState }))
-    .filter(Boolean)
-    .join('\n\n');
 }
 
 function lastPresenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay): number {

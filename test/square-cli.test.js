@@ -12,7 +12,6 @@ import { readWakeRoutes } from '../dist/routes.js';
 import {
   ROOT,
   TEST_REGISTRY,
-  TEST_PRESENTED,
   run,
   runAsync,
   tempSquare,
@@ -30,7 +29,7 @@ test('CLI test runner isolates host delivery identities', () => {
   try {
     assert.equal(build(file).status, 0);
     const joined = run(withName(file, 'Alice', ['join']), {
-      env: { SQUARE_REGISTRY: TEST_REGISTRY, SQUARE_PRESENTED: TEST_PRESENTED },
+      env: { SQUARE_REGISTRY: TEST_REGISTRY },
     });
     assert.equal(joined.status, 0, joined.stderr);
     assert.match(joined.stdout, /the square has no way to call you/);
@@ -46,7 +45,7 @@ test('participants renders roster names without mention syntax', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   const joined = run(withName(file, 'Alice', ['join']), {
-    env: { SQUARE_REGISTRY: TEST_REGISTRY, SQUARE_PRESENTED: TEST_PRESENTED },
+    env: { SQUARE_REGISTRY: TEST_REGISTRY },
   });
   assert.equal(joined.status, 0, joined.stderr);
   const roster = run(withPath(file, ['participants']));
@@ -444,7 +443,7 @@ test('join --kick reclaims a name when a secondary inherited session matches the
 test('unknown participant errors end with the join recovery command', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const noDelivery = { SQUARE_REGISTRY: TEST_REGISTRY, SQUARE_PRESENTED: TEST_PRESENTED };
+  const noDelivery = { SQUARE_REGISTRY: TEST_REGISTRY };
 
   const caught = run(withName(file, 'Stranger', ['catch', '--now']), { env: noDelivery });
   assert.equal(caught.status, 2);

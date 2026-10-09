@@ -2,9 +2,9 @@ import { formatActivityId, parseActivityId, replayLandedAudiences, type Activity
 import { deliveryDelta, directedPeerSays } from './activity-feed.js';
 import { coreActivities, coreParticipants, coreStatus, resolveKnownName } from './decisions.js';
 import { deriveDeliveryModel, isActivitySeen, type DeliveryModel, type PlannedNotification } from './delivery.js';
-import { SquareError, nameKey, type ActivitiesOptions, type ActivityObservation, type InboxNotification, type PublicAct, type RoomChangeAct, type SquareState, type StoredAct } from './model.js';
+import { SquareError, nameKey, type ActivitiesOptions, type PublicAct, type RoomChangeAct, type SquareState, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
-import { countSays, currentHold, foldedState, freshWatchLease, inSquareCount, isCurrentlyJoined, presenceAnchor, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
+import { countSays, currentHold, foldedState, inSquareCount, isCurrentlyJoined, presenceAnchor, resolveRosterName, rosterNames, watchTerminalStatus } from './runtime.js';
 import type { Activity, HistoryQuery, OperationControl, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 
 export interface ActivityPresentation { readonly name: string; readonly roster: readonly string[]; readonly pendingPublic: readonly PublicAct[]; readonly pendingRoomChanges: readonly RoomChangeAct[]; readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly held: boolean; readonly holdReason?: string; readonly ownActivityCount: number; readonly hardCap: number | null; }
@@ -13,7 +13,6 @@ export interface HistoryPresentation { readonly activities: readonly StoredAct[]
 export interface ListPresentation { readonly context: readonly string[]; readonly participants: readonly string[]; readonly activities: number; }
 export interface StatusPresentation { readonly state: SquareState; readonly status: ReturnType<typeof coreStatus>; readonly latestActNumber?: number; }
 export interface WatchPresentation { readonly activities: readonly StoredAct[]; readonly state: SquareState; readonly participantCount: number; readonly presence: { readonly participants: ReturnType<typeof coreParticipants>; readonly now: number }; readonly terminalStatus?: 'capped' | 'quorum'; }
-export interface InboxProjection { readonly name: string; readonly joined: boolean; readonly notifications: readonly InboxNotification[]; readonly catchLease?: import('./model.js').WatchLease; }
 export interface StreamProjection { readonly activities: readonly { readonly activity: StoredAct; readonly route?: string }[]; readonly cursor: number; readonly hasMore: boolean; }
 export interface PendingDeliveryProjection { readonly recipient: string; readonly notifications: readonly PlannedNotification[]; }
 
@@ -83,7 +82,6 @@ export async function listPresentation(square: OpenSquare): Promise<ListPresenta
 export async function statusPresentation(square: OpenSquare): Promise<StatusPresentation> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); const status = coreStatus(state, square.clock(), delivery); return { state, status, ...(status.latestAct?.kind === 'say' ? { latestActNumber: countSays(state.acts, status.latestAct.actor) } : {}) }; }
 export async function eventPresentation(square: OpenSquare, id: ActivityId): Promise<{ readonly activity: StoredAct; readonly participantCount: number; readonly held: boolean }> { const { state } = await square.artifact.read(); const activity = state.acts.find((candidate) => candidate.index === parseRequiredActivityId(id)); if (activity === undefined) throw new SquareError('invalid_args', `Unknown activity id: ${id}`); return { activity, participantCount: inSquareCount(state), held: currentHold(state.acts).active }; }
 export async function watchPresentation(square: OpenSquare, name: string): Promise<WatchPresentation> { const { state } = await square.artifact.read(); const known = resolveKnownName(state, name); const now = square.clock(); const terminal = watchTerminalStatus(state, known); const delivery = deriveDeliveryModel(state); return { activities: state.acts, state, participantCount: inSquareCount(state), presence: { participants: coreParticipants(state, now, delivery), now }, ...(terminal === undefined ? {} : { terminalStatus: terminal }) }; }
-export async function inboxProjection(square: OpenSquare, name: string, _sessionId?: string): Promise<InboxProjection> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); const known = delivery.knownParticipant(name); if (known === undefined || !delivery.joinedRecipients().some((recipient) => nameKey(recipient) === nameKey(known))) return { name, joined: false, notifications: [] }; const lease = freshWatchLease(state, known, square.clock()); return { name: known, joined: true, notifications: delivery.pendingFor(known).map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, route, body: item.body })), ...(lease === undefined ? {} : { catchLease: lease }) }; }
 const STREAM_BATCH_MAX = 100;
 
 type StreamItem = { readonly activity: StoredAct; readonly route?: string };
@@ -125,8 +123,5 @@ export async function streamTailProjection(square: OpenSquare | { readonly cell:
     hasMore: false,
   };
 }
-export async function notificationForAct(square: OpenSquare, actIndex: number): Promise<readonly PlannedNotification[]> { const { state } = await square.artifact.read(); const activity = state.acts.find((candidate) => candidate.index === actIndex); return activity === undefined ? [] : deriveDeliveryModel(state).plan(activity); }
 export function pendingDeliveriesFromState(state: SquareState, delivery = deriveDeliveryModel(state)): readonly PendingDeliveryProjection[] { return delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })); }
 export async function pendingDeliveries(square: OpenSquare): Promise<readonly PendingDeliveryProjection[]> { const { state } = await square.artifact.read(); return pendingDeliveriesFromState(state); }
-export async function notificationEvidence(square: OpenSquare, recipient: string, actIndex: number): Promise<{ readonly delivered: boolean; readonly observation: ActivityObservation | undefined }> { const { state } = await square.artifact.read(); const delivery = deriveDeliveryModel(state); const known = delivery.knownParticipant(recipient) ?? recipient; return { delivered: delivery.isSeen(known, actIndex), observation: state.runtime.observations?.[known]?.[formatActivityId(actIndex)] }; }
-export async function notificationDelivered(square: OpenSquare, recipient: string, actIndex: number): Promise<boolean> { const { state } = await square.artifact.read(); return deriveDeliveryModel(state).isSeen(recipient, actIndex); }

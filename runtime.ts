@@ -59,7 +59,6 @@ export const STALE_MS = parseIntegerEnvAlias(
   scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_QUIET_SCALE', 5))
 );
 export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_STALE_SCALE', 3)));
-export const LOCK_RETRY_MS = parseIntegerEnv('SQUARE_LOCK_RETRY_MS', 25);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
 /** A held express waits for the hand to lower, but not forever: past this budget it gives up exactly like --no-wait (draft saved, retry printed). 0 disables waiting. */
@@ -161,11 +160,6 @@ function observationRecipient(squareState: SquareState, name: string): string {
   return resolveRosterName(squareState, name) ?? name;
 }
 
-function observationMap(squareState: SquareState, name: string): Record<string, ActivityObservation> {
-  const key = observationRecipient(squareState, name);
-  return squareState.runtime.observations?.[key] ?? {};
-}
-
 export function currentHold(acts: StoredAct[]): HoldState {
   const hold = fold(acts).hold;
   return hold.active ? { active: true, at: hold.at, reason: hold.reason } : { active: false };
@@ -177,10 +171,6 @@ export function publicActs(acts: StoredAct[]): Array<Extract<StoredAct, { kind: 
 
 function canonicalRuntimeName(squareState: SquareState, name: string): string {
   return resolveRosterName(squareState, name) ?? name;
-}
-
-export function observationFor(squareState: SquareState, name: string, index: number): ActivityObservation | undefined {
-  return observationMap(squareState, name)[formatActivityId(index)];
 }
 
 export function recordObservation(
@@ -221,10 +211,6 @@ export function readCursor(squareState: SquareState, name: string, landed: Lande
     cursor = act.index;
   }
   return cursor;
-}
-
-export function latestActIndex(acts: StoredAct[]): number {
-  return acts.reduce((max, act) => Math.max(max, act.index), -1);
 }
 
 /**

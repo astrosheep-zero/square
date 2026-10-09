@@ -11,7 +11,6 @@ export const ROOT = path.resolve(import.meta.dirname, '..');
 export const CLI = path.join(ROOT, 'dist', 'square.js');
 export const TEST_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-state-'));
 export const TEST_REGISTRY = path.join(TEST_STATE, 'sessions.ndjsonl');
-export const TEST_PRESENTED = path.join(TEST_STATE, 'presented.ndjsonl');
 
 test.after(() => fs.rmSync(TEST_STATE, { recursive: true, force: true }));
 
@@ -31,7 +30,6 @@ export function testEnv(overrides = {}) {
     SQUARE_REGISTRY: path.join(TEST_STATE, `sessions-${id}.ndjsonl`),
     SQUARE_ROUTES: path.join(TEST_STATE, `routes-${id}.ndjsonl`),
     SQUARE_CODEX_BOUNDARIES: path.join(TEST_STATE, `codex-boundaries-${id}.json`),
-    SQUARE_PRESENTED: path.join(TEST_STATE, `presented-${id}.ndjsonl`),
     SQUARE_SLEEP_MS: '1',
     SQUARE_STALE_MS: '2',
     SQUARE_WATCH_HEARTBEAT_MS: '60000',

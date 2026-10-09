@@ -8,7 +8,7 @@ import test from 'node:test';
 import squarePiExtension from '../extensions/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { recordJoin } from '../dist/registry.js';
-import { hasPresentedForOwner } from '../dist/presented.js';
+import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
 
 async function waitUntil(predicate, message) {

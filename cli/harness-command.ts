@@ -1,5 +1,3 @@
-import os from 'node:os';
-
 import {
   executeHarnessTarget,
   harnessTargets,
@@ -130,10 +128,4 @@ export const harnessCommand: CommandSpec<ParsedHarnessCommand, HarnessCommandRes
 
 export function formatHarnessResult(result: HarnessCommandResult): string {
   return `${[...result.notes, ...result.lines, ...result.failures].join('\n')}\n`;
-}
-
-export function runHarnessCommand(argv: string[], squarePath?: string): Promise<string> {
-  const context = { cwd: process.cwd(), env: { ...process.env }, homeDir: os.homedir(), ...(squarePath === undefined ? {} : { squarePath }), command: 'harness' };
-  const intent = harnessCommand.parse(argv, context);
-  return Promise.resolve(harnessCommand.execute(intent, context)).then(formatHarnessResult);
 }

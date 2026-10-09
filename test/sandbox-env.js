@@ -16,6 +16,5 @@ process.env.CODEX_THREAD_ID = '';
 process.env.OPENCODE_SESSION_ID = '';
 process.env.PASEO_AGENT_ID = '';
 process.env.SQUARE_REGISTRY = path.join(state, 'sessions.ndjsonl');
-process.env.SQUARE_PRESENTED = path.join(state, 'presented.ndjsonl');
 
 process.on('exit', () => fs.rmSync(state, { recursive: true, force: true }));

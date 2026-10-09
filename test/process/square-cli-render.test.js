@@ -615,8 +615,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   });
   const root = path.dirname(file);
   const registry = path.join(root, 'sessions.ndjsonl');
-  const presented = path.join(root, 'presented.ndjsonl');
-  const env = { SQUARE_REGISTRY: registry, SQUARE_PRESENTED: presented };
+  const env = { SQUARE_REGISTRY: registry };
 
   const register = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { recordJoin } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};

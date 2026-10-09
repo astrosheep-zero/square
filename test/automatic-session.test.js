@@ -30,7 +30,6 @@ async function fixture() {
     PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
     SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
-    SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
     SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake.ndjsonl'),
     SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
     SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'),

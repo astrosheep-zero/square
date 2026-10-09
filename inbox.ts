@@ -146,10 +146,3 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
     },
   };
 }
-
-/** Finite one-shot consumers retain their API; Pi owns a long-lived observer instead. */
-export async function waitForSessionPending(sessionId: string, timeoutMs: number, options: PendingWaitOptions = {}, env: NodeJS.ProcessEnv = process.env): Promise<InboxMembership[]> {
-  const observer = await observeSessionPending(sessionId, env);
-  try { return await observer.wait(timeoutMs, options); }
-  finally { observer.close(); }
-}

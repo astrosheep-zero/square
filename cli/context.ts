@@ -35,12 +35,6 @@ export async function resolveBody(arg: string): Promise<string> {
   return arg === '-' ? readStdin() : arg;
 }
 
-export async function readPipedBodyFallback(): Promise<string | undefined> {
-  if (process.stdin.isTTY) return undefined;
-  const content = await readStdin();
-  return content.trim() === '' ? undefined : content;
-}
-
 export function fail(message: string, exitCode = 2): never {
   process.stderr.write(`${message}\n`);
   process.exit(exitCode);

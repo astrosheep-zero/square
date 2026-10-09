@@ -73,17 +73,6 @@ export async function projectSessionBindings(input: {
   return rows.map(bindingProjection);
 }
 
-export async function projectLocalParticipantBinding(input: {
-  readonly hostLedger: HostLedgerPort;
-  readonly location: string;
-  readonly participant: string;
-  readonly sessionIds: readonly string[];
-  readonly now?: number;
-}): Promise<SessionBindingProjection | undefined> {
-  const bindings = (await Promise.all(input.sessionIds.map((sessionId) => projectSessionBindings({ hostLedger: input.hostLedger, location: input.location, sessionId, now: input.now })))).flat();
-  return bindings.find((binding) => binding.participant.toLocaleLowerCase() === input.participant.toLocaleLowerCase());
-}
-
 export async function projectPresentation(input: {
   readonly artifact: SquareArtifactPort;
   readonly binding: SessionBindingProjection;
