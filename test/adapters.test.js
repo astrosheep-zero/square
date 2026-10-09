@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import squareOpenCodePlugin from '../dist/opencode.js';
-import squarePiExtension, {
+import installedSquarePiExtension, {
   inboxKeys,
   pendingInbox,
   renderPiInbox,
@@ -49,6 +49,23 @@ import {
   skillLinks,
   verifyOpenCodeRuntime,
 } from '../dist/harness-links.js';
+
+// Pi allows several handlers per event, including the optional generic receiver.
+function squarePiExtension(pi) {
+  const on = pi.on.bind(pi);
+  const registrations = new Map();
+  return installedSquarePiExtension({
+    ...pi,
+    registerFlag() {},
+    getFlag() { return undefined; },
+    on(event, handler) {
+      const handlers = registrations.get(event) ?? [];
+      handlers.push(handler);
+      registrations.set(event, handlers);
+      on(event, async (...args) => { for (const callback of handlers) await callback(...args); });
+    },
+  });
+}
 
 function sampleInbox() {
   return [{
@@ -713,7 +730,7 @@ test('Pi aborts a contended boundary wait on TUI cancellation without touching t
 
       const lock = await holdBoundaryLock('pi-boundary-cancel-session');
       const run = new AbortController();
-      await piAgentStart(handlers, { mode: 'tui', getSignal: () => run.signal });
+      await piAgentStart(handlers, { mode: 'tui', signal: run.signal });
       const cancelledIndex = await expressToPi(item, 'cancelled while the boundary lock is held @Bob');
       await new Promise((resolve) => setTimeout(resolve, 150));
       assert.equal(sent.length, 1, 'the cancelled batch must not reach Pi while the boundary lock is held');
@@ -831,7 +848,7 @@ test('Pi cancels the entire TUI pending batch without resurrecting it on later a
     await handlers.get('session_start')({}, context);
     try {
       const run = new AbortController();
-      await piAgentStart(handlers, { mode: 'tui', getSignal: () => run.signal });
+      await piAgentStart(handlers, { mode: 'tui', signal: run.signal });
       const actIndex = await expressToPi(item, 'retry after the TUI clears the queue @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
       const queuedIndex = await expressToPi(item, 'cancel the unsent backlog too @Bob');
@@ -879,7 +896,7 @@ test('Pi cancels notifications during TUI abort instead of deferring a wake', as
     await handlers.get('session_start')({}, context);
     try {
       const abortedRun = new AbortController();
-      await piAgentStart(handlers, { mode: 'tui', getSignal: () => abortedRun.signal });
+      await piAgentStart(handlers, { mode: 'tui', signal: abortedRun.signal });
       await piTurnStart(handlers);
       abortedRun.abort();
       const actIndex = await expressToPi(item, 'defer until the TUI abort settles @Bob');
@@ -1012,7 +1029,7 @@ test('Pi releases a settled landing acknowledgment from its watcher signal', asy
   }
 });
 
-test('Pi lifecycle hooks do not wait for a stuck native injection', async () => {
+test('Pi lifecycle hooks do not wait for an unobserved native injection', async () => {
   await withPiFixture('pi-stuck-session', async () => {
     const handlers = new Map();
     let calls = 0;
@@ -1020,7 +1037,7 @@ test('Pi lifecycle hooks do not wait for a stuck native injection', async () => 
       on(event, handler) { handlers.set(event, handler); },
       sendMessage() {
         calls += 1;
-        return new Promise(() => {});
+        // Native Pi is void; the message event may never arrive.
       },
     };
     const context = {
@@ -1049,8 +1066,7 @@ test('Pi defers a rejected native injection until the next Square change', async
       sendMessage(message, options) {
         calls += 1;
         sent.push({ message, options });
-        if (calls === 1) return Promise.reject(new Error('native injection failed'));
-        return Promise.resolve();
+        if (calls === 1) throw new Error('native injection failed');
       },
     };
     const context = {

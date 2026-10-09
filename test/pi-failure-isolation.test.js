@@ -52,8 +52,13 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
   const handlers = new Map();
   const sent = [];
   const pi = {
-    on(event, handler) { handlers.set(event, handler); },
-    sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    registerFlag() {},
+    getFlag() { return undefined; },
+    on(event, handler) {
+      const previous = handlers.get(event);
+      handlers.set(event, async (...args) => { await previous?.(...args); await handler(...args); });
+    },
+    sendMessage(message, options) { sent.push({ message, options }); },
   };
   squarePiExtension(pi);
   const context = { sessionManager: { getSessionId: () => sessionId }, cwd: '/tmp/no-public-square' };

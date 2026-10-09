@@ -132,6 +132,53 @@ replay API.
 - Acceptance is not model consumption, completion or human/TUI display.
 - The original OpenCode phase included no automatic retry, cancellation, queue
   management, history recovery, service startup/replacement/stop, V1 support or
-  Claude implementation, and left root Square source/scripts/dependencies/config
-  unchanged. The subsequent Claude extraction described above does not change
-  OpenCode's validated semantics or SDK baseline.
+  other harness implementation, and left root Square unchanged. Subsequent
+  extractions do not change OpenCode's validated semantics or SDK baseline.
+
+## Pi shared native implementation
+
+Actual installed runtime: **Pi 1.1.0**, macOS arm64, Node v26.10.0. Explicit
+reproducer `test/pi-runtime.mjs <absolute-Pi-package-root>` packs both the final
+standalone package and root Square, installs fresh tarballs outside the repo, then
+loads one extension that invokes the actual packed Square extension and adds only
+a local dummy provider + observation logging. No second delivery extension or
+stand-in direct Square sender. All HOME/XDG, Pi agent/session, registry, cache and
+working paths are temporary; environment is allowlisted without credentials.
+The provider is loopback-only with a dummy key; installed Pi is read/executed only.
+
+Recorded focused proof: `/tmp/pi-shared-final-3h3k4g/checks.json`, runtime model/RPC
+log, external process receipt and isolated session files. **8 checks, 14 actual
+HTTP model requests** cover exact idle steer text (leading slash, whitespace,
+newlines, multibyte Unicode, U+2028/U+2029), idle queue wake, busy steer vs queue
+placement around a controlled read tool, actual Square directed-activity injection,
+preabort and postdispatch abort/timeout, real `new_session` replacement with a
+waiting send, stale identity rejection, and orderly endpoint removal. The external
+receipt is `observed` / `message_end`; model inclusion is separately witnessed by
+HTTP payloads, never inferred from that receipt. Attempt metadata is absent from
+model requests.
+
+Unit invariants additionally prove lazy factory/flag behavior, identical starts,
+exact event/session/type/metadata/text correlation, fresh concurrent attempt IDs,
+invalid/caller-ID/preabort no dispatch, lifecycle cleanup, occupied endpoint
+collision, private-parent enforcement without parent chmod, malformed/oversize/
+invalid UTF-8 frames and bounded partial connections. Cleanup preserves a replacement
+file at the caller endpoint using inode identity; the private sibling bind path is
+removed by Node. Root pack consumer loads the existing extension and shared graph
+without the standalone package or OpenCode SDK installed.
+
+Pi is structural/SDK-free at the leaf; no `sendMessage` Promise is observed because
+its actual extension API returns void. `ctx.signal` is the actual 1.1.0 run signal.
+`message_end` is pre-final-append: no durable/final-append/processed claim, branch
+polling, event rewrite compatibility or permanent watcher exists in this package.
+Square's own prior presentation/content-keyed acknowledgment semantics are retained.
+Cancellation only stops this attempt's wait, never aborts or clears the user's run.
+
+Bounds: 64 connections, 256 KiB LF JSON frame, 128 KiB UTF-8 text, 5-second frame /
+response-flush deadline, 30-second maximum event/client deadline (5-second default).
+A 0600 socket in a private caller-owned directory is atomically published at an
+explicit absolute path. Any occupied endpoint fails closed. No stale cleanup,
+registry, daemon, global installation, account use or publication occurred.
+
+Limits: Pi 1.1.0 on this macOS build only. No live terminal rendering/keystrokes,
+other platforms/builds, real providers, cross-extension message rewriting,
+finalized append/durability/processing, automatic retry or native retraction promise.

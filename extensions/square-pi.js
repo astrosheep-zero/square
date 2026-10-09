@@ -2,6 +2,7 @@ import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/bound
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
 import { renderAttentionDescription } from '../dist/attention-presentation.js';
+import { createPiReceiver, sendPiMessage } from '../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
   constructor() {
@@ -42,6 +43,10 @@ export function summarizePendingForNotify(pending) {
 }
 
 export default function squarePiExtension(pi) {
+  pi.registerFlag('agent-delivery-socket', { type: 'string', description: 'Explicit private local delivery socket' });
+  createPiReceiver(pi, {
+    get endpoint() { return pi.getFlag('agent-delivery-socket'); },
+  });
   let sessionId;
   let sessionCwd;
   let ui;
@@ -201,10 +206,10 @@ export default function squarePiExtension(pi) {
               const messageContent = framePiMessage(content);
               const landing = waitForLanding(messageContent, signal, 'steer');
               try {
-                Promise.resolve(pi.sendMessage(
+                sendPiMessage(pi,
                   { customType: 'square', content: messageContent, display: false },
                   { deliverAs: 'steer', triggerTurn: true },
-                )).catch((error) => landing.ack.settle(error));
+                );
               } catch (error) {
                 landing.ack.settle(error);
               }
@@ -266,10 +271,10 @@ export default function squarePiExtension(pi) {
       const messageContent = framePiMessage(context);
       const landing = waitForLanding(messageContent, signal, 'nextTurn');
       try {
-        Promise.resolve(pi.sendMessage(
+        sendPiMessage(pi,
           { customType: 'square', content: messageContent, display: true },
           { deliverAs: 'nextTurn' },
-        )).catch((error) => landing.ack.settle(error));
+        );
       } catch {
         // Joining context is advisory; an unavailable Pi transport does not block startup.
         landing.ack.settle(new Error('Pi joining-context injection failed'));
@@ -281,7 +286,7 @@ export default function squarePiExtension(pi) {
 
   pi.on('agent_start', async (_event, ctx) => {
     detachRunAbort?.();
-    currentRunSignal = ctx?.getSignal?.();
+    currentRunSignal = ctx?.signal;
     if (ctx?.mode !== 'tui' || currentRunSignal === undefined) return;
     const runSignal = currentRunSignal;
     detachRunAbort = () => runSignal.removeEventListener('abort', cancelRunDelivery);

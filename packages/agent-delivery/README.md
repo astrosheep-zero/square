@@ -1,8 +1,8 @@
 # @astrosheep/agent-delivery
 
-Existing-only plain-text delivery to **OpenCode 2.x** and explicitly addressed
-**Claude native inboxes**. Standalone ESM package, version 0.1.0;
-Node `^22.16.0 || >=24.0.0`. No Square dependency, artifact access, plugin,
+Existing-only plain-text delivery to **OpenCode 2.x**, explicitly addressed
+**Claude native inboxes**, and **Pi 1.1.0** sessions. Standalone ESM package,
+version 0.1.0; Node `^22.16.0 || >=24.0.0`. No Square dependency, artifact access,
 daemon, service startup, or V1 bridge.
 
 | Harness | Coordinate | Delivery | Strongest receipt |
@@ -10,7 +10,9 @@ daemon, service startup, or V1 bridge.
 | OpenCode | Existing service + persisted session | `steer` (default), `queue` | `accepted`: durable inbox admission only |
 | Claude | Explicit session ID + absolute native socket, macOS baseline 2.1.295 | native `next` (default/`steer`); no `queue` or caller `inputId` | `written`: local bytes only, not admission |
 
-Neither receipt proves model processing, human display, or completion. Unknown
+| Pi | Explicit session ID + absolute optional extension socket, macOS 1.1.0 | `steer` (default), `queue`; no caller `inputId` | `observed`: correlated `message_end` only |
+
+No receipt proves model processing, human display, or completion. Unknown
 attempts are never automatically retried.
 
 The official `@opencode/client` is pinned to **2.0.20**, the audited and tested
@@ -34,7 +36,7 @@ npm install /absolute/path/to/astrosheep-agent-delivery-0.1.0.tgz
 The tarball includes runnable JavaScript, declarations, README and MIT license;
 its only direct runtime dependency is the official SDK. It can be installed and
 imported outside this repository, with no Square files. Main API dispatch loads
-only the selected harness; `./claude-native` is a Node-only leaf with no SDK
+only the selected harness; `./claude-native` and `./pi` are Node-only leaves with no SDK
 imports. Installing the package still installs its OpenCode dependency graph.
 The SDK's schema/protocol
 packages transitively install `effect@4.0.0-rc.112` (about 51 MiB unpacked in the
@@ -143,6 +145,88 @@ event replay is available: the tested default 2.0.20 CLI service uses snapshot
 `log.sync`, not persisted historical event replay. A future adapter addition is
 not an implemented promise.
 
+## Pi: explicit local delivery to a live session
+
+Register the receiver **inside your existing Pi extension** (not a second extension):
+
+```js
+import { createPiReceiver, sendPiMessage } from '@astrosheep/agent-delivery/pi'
+
+export default function extension(pi) {
+  pi.registerFlag('agent-delivery-socket', { type: 'string', description: 'Explicit private local socket' })
+  const receiver = createPiReceiver(pi, {
+    get endpoint() { return pi.getFlag('agent-delivery-socket') },
+  })
+  // Your existing in-process calls may use sendPiMessage(pi, message, nativeOptions).
+}
+```
+
+The factory opens no resources. The getter is evaluated at `session_start`, after
+Pi applies CLI flags. An absent endpoint leaves the receiver inert. It binds the
+actual `ctx.sessionManager.getSessionId()`; orderly `session_shutdown` retires all
+waits/connections. `close(): Promise<void>` is idempotent. SDK hosts that call raw
+`session.dispose()` without emitting shutdown **must explicitly close** the
+receiver. Repeated identical starts are idempotent, and replacement sessions can
+reuse the endpoint but not an old target. Do not invent/overwrite session env vars.
+
+On **macOS only**, create a private caller-owned parent directory (`0700`) and pass
+an absolute Unix socket path (at most 103 UTF-8 bytes; room for a short sibling bind
+name is also needed). The socket is `0600`. No parent chmod, TCP, tokens, registry,
+discovery, daemon, or stale-file reclamation. Any occupied endpoint fails closed.
+The listener binds a temporary sibling socket then atomically publishes its hard
+link at the explicit endpoint; cleanup checks the published inode and never deletes
+a replacement endpoint. This avoids Node's unconditional unlink of its bind path.
+
+An independent process uses the normal main API:
+
+```js
+const target = await connectExisting({
+  harness: 'pi', sessionId: 'actual-existing-id', endpoint: '/private/delivery/p.sock',
+})
+const result = await sendText(target, '/literal text\n  unchanged 🦈', { delivery: 'queue' })
+if (result.state === 'observed') console.log(result.evidence) // 'message_end'
+```
+
+No trim, text wrapper, command expansion, or arbitrary external custom metadata.
+External messages use fixed `customType: 'agent-delivery'`, `display: true`, and
+fresh attempt UUID metadata `details.agentDelivery.deliveryId`. `inputId` is a
+returned diagnostic coordinate, **not idempotency**; caller `inputId` is unsupported
+and rejected before write. Byte-identical concurrent text has independent IDs.
+`steer` (default) maps to native `steer`; `queue` to `followUp`; both use
+`triggerTurn: true`, waking idle Pi. The stateless `sendPiMessage` preserves the
+caller's custom message and native options unchanged and invokes Pi only once.
+
+Pi receipt states:
+
+- **observed**, `evidence: 'message_end'`: receiver saw the matching custom type,
+  exact text and attempt metadata in the active session. The extension event is
+  **pre-final-append**: this is not finalized append, fsync, durable admission,
+  model processing, completion, or human display. Another extension rewriting
+  that event is outside this receipt's compatibility promise.
+- **unknown**: write/native dispatch may have occurred, but matching observation
+  is missing. Abort, deadline, loss, retirement and unobservable async native
+  errors do not retract custody. It may still arrive later. No automatic retry.
+- **rejected**: explicit pre-injection refusal (`wrong_session`, `invalid_request`,
+  `duplicate_inflight_id`). Every send checks session identity again.
+- **unavailable**: known stopped before socket write. Preabort sends nothing.
+
+Pi defaults to a 5-second **total client deadline**, including connection and
+response; timeout must be finite, positive, and at most **30 seconds**. Receiver
+limits: 64 connections, 256 KiB LF-only JSON frame (including escaping), 128 KiB
+UTF-8 text, 5 seconds to complete a frame/flush a response, at most 30 seconds
+waiting for an event. Split multibyte UTF-8 and U+2028/U+2029 are handled as text,
+not framing. Malformed/oversized frames close without injection. Disconnect
+retires its waiter. Neither client abort nor receiver cleanup calls `ctx.abort`
+or `clearQueue`, and Pi's `void` send return never yields an optimistic receipt.
+There is no append tracker, polling, global message cache, durable inbox or replay.
+
+The `./pi` graph is Node-only and loads neither the Pi SDK nor OpenCode SDK. Main
+API dispatch imports only the chosen adapter. Package installation still carries
+its OpenCode dependency. Square ships this same source graph in its root `dist`
+and registers this optional receiver in its **one existing Square Pi extension**;
+its two in-process native sends use the same stateless leaf without an IPC hop.
+Square retains its own presentation and content-keyed acknowledgment behavior.
+
 ## Claude: explicit native inbox
 
 Validated native baseline: **macOS Claude Code 2.1.295**. Other platforms reject
@@ -216,8 +300,9 @@ the package accesses Square participants, artifacts, correlation or evidence.
 
 ## Deadlines and errors
 
-Both operations default to a **5-second total deadline**. `timeoutMs` must be
-finite, positive and at most `2_147_483_647` (Node's maximum timer delay).
+All operations default to a **5-second total deadline**. `timeoutMs` must be
+finite and positive: Pi accepts at most 30 seconds; OpenCode/Claude at most
+`2_147_483_647` (Node's maximum timer delay).
 `signal` must be an AbortSignal. A caller deadline bounds waiting, including
 response bodies. The SDK discovery probe has its own bounded timeout and cannot
 accept our signal: it can finish after callers stop waiting, but we never
@@ -232,11 +317,11 @@ replacement service.
 | `aborted`, `timeout` | Caller operation stopped |
 | `service_unavailable` | No compatible registered service, unavailable transport, or absent/non-socket Claude endpoint |
 | `unsupported_version` | Explicit OpenCode endpoint reports a non-2.x version |
-| `unsupported_platform` | Claude connection on a platform other than validated macOS |
+| `unsupported_platform` | Claude or Pi connection outside validated macOS |
 | `authentication_failed` | HTTP 401/403 from explicit health/session checks |
 | `session_not_found` | HTTP 404 during session lookup |
 | `http_rejection` | Other non-200 native HTTP response |
-| `invalid_response` | Malformed health/session response or mismatched session identity |
+| `invalid_response` | Malformed response or mismatched identity |
 
 An observed HTTP error may also include `status`. Official discovery deliberately
 collapses registration absence, health/auth/version/PID failures to absence; these

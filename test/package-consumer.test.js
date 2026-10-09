@@ -52,6 +52,17 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const alice = await square.join('Alice');
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
+    // Root packs the same Node-only Pi leaf graph; no unpublished package or OpenCode SDK.
+    const { default: extension } = await import('./node_modules/@astrosheep/square/extensions/square-pi.js');
+    const flags = [], handlers = new Map();
+    extension({
+      on(event, handler) { handlers.set(event, handler); },
+      registerFlag(name) { flags.push(name); },
+      getFlag() { return undefined; },
+      sendMessage() { throw new Error('factory must not send'); },
+    });
+    if (flags.join() !== 'agent-delivery-socket') process.exit(3);
+    if (!handlers.has('session_start') || !handlers.has('session_shutdown')) process.exit(4);
   `], { cwd: fixture, encoding: 'utf8' });
   assert.equal(runtime.status, 0, runtime.stderr);
 

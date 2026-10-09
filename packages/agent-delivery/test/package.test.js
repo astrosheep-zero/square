@@ -22,6 +22,7 @@ test('packed package installs, typechecks, discovers and sends from a consumer o
   })).stdout)[0]
   assert.ok(packed.files.some((file) => file.path === 'dist/index.js'))
   assert.ok(packed.files.some((file) => file.path === 'dist/index.d.ts'))
+  assert.ok(packed.files.some((file) => file.path === 'dist/pi.js'))
   assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.js'))
   assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.d.ts'))
   assert.ok(packed.files.some((file) => file.path === 'README.md'))
@@ -50,6 +51,15 @@ console.log(JSON.stringify(result));`
 const target = await connectExisting({ harness: 'opencode', sessionId: 'ses_example' });
 const result: DeliveryResult = await sendText(target, 'text');
 if (result.state === 'accepted') { const id: string = result.inboxId; console.log(id); }
+import { createPiReceiver, sendPiMessage, type PiReceiverAPI } from '@astrosheep/agent-delivery/pi';
+const pi = {} as PiReceiverAPI;
+createPiReceiver(pi, { endpoint: '/private/p.sock' });
+sendPiMessage(pi, { customType: 'caller', content: 'exact', display: false }, { deliverAs: 'nextTurn' });
+const piTarget = await connectExisting({ harness: 'pi', sessionId: 'native-id', endpoint: '/private/p.sock' });
+const piResult = await sendText(piTarget, 'exact', { delivery: 'queue' });
+if (piResult.state === 'observed') { const evidence: 'message_end' = piResult.evidence; console.log(evidence); }
+// @ts-expect-error Pi does not support caller input IDs
+await sendText(piTarget, 'text', { inputId: 'caller' });
 const claude = await connectExisting({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock' });
 const written = await sendText(claude, 'text', { delivery: 'steer' });
 if (written.state === 'written') { const h: 'claude' = written.harness; }

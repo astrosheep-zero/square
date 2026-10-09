@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["*.ts", "cmd/*.ts", "cli/*.ts"]
+  "include": ["*.ts", "cmd/*.ts", "cli/*.ts", "packages/agent-delivery/src/pi.ts"]
 }
