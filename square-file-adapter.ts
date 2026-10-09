@@ -7,7 +7,7 @@ import {
   createSquareSnapshot,
   probeSquareFile,
   writeSquareSnapshot,
-  openSquareCell,
+  createFileCell,
   createMemoryCell,
 } from './square-storage.js';
 import {
@@ -90,7 +90,7 @@ export async function openSquare(
 
 export async function probeSquare(squarePath: string): Promise<OpenSquare | undefined> {
   const state = await probeSquareFile(squarePath);
-  return state === undefined ? undefined : { artifact: memoryArtifact(createMemoryCell(state)), clock: Date.now, location: squarePath };
+  return state === undefined ? undefined : { artifact: createMemoryCell(state), clock: Date.now, location: squarePath };
 }
 
 export async function buildSquare(squarePath: string, options: SquareBuildOptions): Promise<OpenSquare> {
@@ -117,14 +117,10 @@ export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
     hardCap: options.hardCap ?? null,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
   }, options.markdown);
-  return { artifact: memoryArtifact(createMemoryCell(squareState)), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, wakeTransport: options.wakeTransport };
+  return { artifact: createMemoryCell(squareState), clock: options.clock ?? Date.now, location: 'memory', hostLedger: options.hostLedger, wakeTransport: options.wakeTransport };
 }
 
 /** A projection reads and validates its snapshot once; no preliminary duplicate read. */
 export function openSquareArtifact(squarePath: string, signal?: AbortSignal): SquareArtifactPort {
-  return memoryArtifact(openSquareCell(squarePath, signal));
-}
-
-function memoryArtifact(cell: ReturnType<typeof createMemoryCell>): SquareArtifactPort {
-  return { read: (signal) => cell.read(signal), transact: (fn, signal) => cell.transact(fn, signal), changed: (since, timeout, signal) => cell.changed(since, timeout, signal), close: () => cell.close() };
+  return createFileCell(squarePath, signal);
 }

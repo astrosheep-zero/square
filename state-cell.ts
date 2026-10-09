@@ -1,9 +1,0 @@
-import type { SquareState } from './model.js';
-
-/** Synchronous state transition seam shared by memory and file storage. */
-export interface StateCell {
-  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }, signal?: AbortSignal): Promise<R>;
-  read(signal?: AbortSignal): Promise<{ state: SquareState; version: number }>;
-  changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
-  close(): Promise<void>;
-}

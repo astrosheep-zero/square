@@ -15,7 +15,7 @@ import {
   type SquareTransition,
 } from './artifact.js';
 import type { SquareState } from './model.js';
-import type { StateCell } from './state-cell.js';
+import type { SquareArtifactPort } from './ports.js';
 
 export { createSquareState };
 
@@ -58,7 +58,7 @@ function cloneState(squareState: SquareState): SquareState {
 }
 
 function assertCellOpen(closed: boolean): void {
-  if (closed) throw new Error('StateCell is closed');
+  if (closed) throw new Error('Square artifact is closed');
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -78,8 +78,8 @@ interface MemoryWaiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
-/** In-process cell for fast behavior tests and embedded consumers. */
-export function createMemoryCell(initial: SquareState): StateCell {
+/** In-process artifact for fast behavior tests and embedded consumers. */
+export function createMemoryCell(initial: SquareState): SquareArtifactPort {
   let state = cloneState(initial);
   let version = 0;
   let closed = false;
@@ -99,10 +99,10 @@ export function createMemoryCell(initial: SquareState): StateCell {
   return {
     transact<R>(fn: SquareTransition<R>, signal?: AbortSignal) {
       assertCellOpen(closed);
-      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
+      if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
       const operation = tail.then(() => {
         assertCellOpen(closed);
-        if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
+        if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
         const current = cloneState(state);
         const outcome = fn(current, version);
         if (isThenable(outcome)) {
@@ -124,20 +124,20 @@ export function createMemoryCell(initial: SquareState): StateCell {
     },
     async read(signal?: AbortSignal) {
       assertCellOpen(closed);
-      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
+      if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
       await tail;
       assertCellOpen(closed);
-      if (signal?.aborted) throw signal.reason ?? new Error('StateCell operation aborted');
+      if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
       return { state: cloneState(state), version };
     },
     changed(sinceVersion, timeoutMs, signal) {
       assertCellOpen(closed);
-      if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("StateCell operation aborted"));
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("Square artifact operation aborted"));
       if (version > sinceVersion) return Promise.resolve(true);
       if (timeoutMs <= 0) return Promise.resolve(false);
       return new Promise<boolean>((resolve, reject) => {
-        if (signal?.aborted) { reject(signal.reason ?? new Error("StateCell operation aborted")); return; }
-        const abort = () => { waiters.delete(waiter); clearTimeout(waiter.timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("StateCell operation aborted")); };
+        if (signal?.aborted) { reject(signal.reason ?? new Error("Square artifact operation aborted")); return; }
+        const abort = () => { waiters.delete(waiter); clearTimeout(waiter.timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("Square artifact operation aborted")); };
         const waiter: MemoryWaiter = {
           since: sinceVersion,
           resolve,
@@ -163,8 +163,8 @@ export function createMemoryCell(initial: SquareState): StateCell {
   };
 }
 
-/** SQLite-backed cell. Revisions are read from the authoritative database, not file metadata. */
-export function createFileCell(squarePath: string, externalSignal?: AbortSignal): StateCell {
+/** SQLite-backed artifact. Revisions are read from the authoritative database, not file metadata. */
+export function createFileCell(squarePath: string, externalSignal?: AbortSignal): SquareArtifactPort {
   let closed = false;
   let storage: Promise<string> | undefined;
   let tail: Promise<void> = Promise.resolve();
@@ -176,7 +176,7 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
   }
 
   function abortError(): Error {
-    return new Error('StateCell is closed');
+    return new Error('Square artifact is closed');
   }
 
   /** Close wins over every operation; a per-call deadline bounds busy retries alongside it. */
@@ -222,9 +222,4 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
       await tail;
     },
   };
-}
-
-/** Consumer-facing file cell factory; keeps SQLite framing behind this module. */
-export function openSquareCell(squarePath: string, signal?: AbortSignal): StateCell {
-  return createFileCell(squarePath, signal);
 }

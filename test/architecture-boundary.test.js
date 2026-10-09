@@ -70,10 +70,10 @@ test('SQLite snapshot ownership stays at the artifact boundary', () => {
 });
 
 test('artifact port transactions accept synchronous state transitions only', () => {
-  for (const file of ['ports.ts', 'state-cell.ts']) {
+  for (const file of ['ports.ts']) {
     const source = productionSources.get(file) ?? '';
     const signature = source.match(/transact<R>\(fn:[\s\S]*?\): Promise<R>;/)?.[0];
-    assert.ok(signature, `${file} must declare StateCell transaction access`);
+    assert.ok(signature, `${file} must declare the artifact transaction seam`);
     const callback = signature.slice(0, signature.lastIndexOf('): Promise<R>;'));
     assert.doesNotMatch(callback, /\bPromise(?:Like)?\b/, `${file} lets an asynchronous transition cross the port`);
   }
@@ -84,32 +84,27 @@ test('raw file state APIs stay inside storage and the file artifact adapter', ()
   const leaks = [
     ...ownershipLeaks('readSquareFile', storageAndFileAdapter),
     ...ownershipLeaks('probeSquareFile', storageAndFileAdapter),
-    ...ownershipLeaks('openSquareCell', storageAndFileAdapter),
     ...ownershipLeaks('createMemoryCell', storageAndFileAdapter),
-    ...ownershipLeaks('createFileCell', ['square-storage.ts']),
+    ...ownershipLeaks('createFileCell', storageAndFileAdapter),
   ];
   assert.deepEqual(leaks, [], `raw file state API escaped its owner boundary:\n${leaks.join('\n')}`);
 });
 
-test('StateCell stays below the artifact adapter', () => {
-  const owners = ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts'];
-  const directTransactions = filesContaining(
-    /\b(?:this\.)?cell\s*\.\s*transact\s*(?:<[^()]*>)?\s*\(/,
-    owners,
+test('the artifact contract comes from ports.ts alone', () => {
+  const storage = productionSources.get('square-storage.ts') ?? '';
+  assert.match(
+    storage,
+    /import type \{[^}]*\bSquareArtifactPort\b[^}]*\} from '\.\/ports\.js';/,
+    'square-storage.ts must implement the declared SquareArtifactPort',
   );
-  const directReads = filesContaining(
-    /\b(?:this\.)?cell\s*\.\s*read\s*(?:<[^()]*>)?\s*\(/,
-    [...owners, 'views.ts'],
+  const duplicateContracts = filesContaining(
+    /(?:interface|type)\s+\w*(?:Cell|ArtifactPort)\b/,
+    ['ports.ts'],
   );
-  const leaks = [
-    ...ownershipLeaks('StateCell', ['state-cell.ts', 'square-storage.ts', 'square-file-adapter.ts', 'open-square.ts']),
-    ...directTransactions.map((file) => `direct transact: ${file}`),
-    ...directReads.map((file) => `direct read: ${file}`),
-  ];
   assert.deepEqual(
-    leaks,
+    duplicateContracts,
     [],
-    `raw StateCell access escaped its concern boundary:\n${leaks.join('\n')}`,
+    `storage machinery re-declares the artifact contract:\n${duplicateContracts.join('\n')}`,
   );
 });
 
@@ -128,7 +123,7 @@ test('CLI observation consumes concern projections, not state or domain law', ()
 
   const observation = productionSources.get(path.join('cli', 'observation-commands.ts'));
   assert.ok(observation, 'cli/observation-commands.ts must be part of the production sources');
-  for (const identifier of ['SquareState', 'StateCell', 'readSquareFile', 'probeSquareFile', 'openSquareCell']) {
+  for (const identifier of ['SquareState', 'readSquareFile', 'probeSquareFile', 'createMemoryCell', 'createFileCell']) {
     if (new RegExp(`\\b${identifier}\\b`).test(observation)) {
       leaks.push(`${identifier}: cli/observation-commands.ts`);
     }
@@ -148,8 +143,8 @@ test('decisions and perception stay state-only, outside host and storage operati
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\.cell\.close\s*\(/, ['open-square.ts']);
-  assert.deepEqual(directClose, [], `StateCell close escaped its package-private boundary: ${directClose.join(', ')}`);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'square-file-adapter.ts', 'inbox.ts']);
+  assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The application layer coordinates the same actions the facade forwards to; product
   // adapters (CLI, harnesses, mods) must still reach participant mutation through Square.
   const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-wiring.ts', 'square-application.ts']);
