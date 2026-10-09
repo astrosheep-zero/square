@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { loadSquare, writeSquareFile } from '../dist/artifact.js';
-import { localParticipantOwner, recordSessionJoin, squareAssignedParticipantName } from '../dist/registry.js';
+import { hostLedgerForEnv, readParticipantOwner, sessionOwnsParticipant, squareAssignedParticipantName } from '../dist/registry.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
@@ -102,11 +102,12 @@ test('distinct parent and child native Pi sessions resolve distinct participants
   const parentName = squareAssignedParticipantName(parentEnv);
   const childName = squareAssignedParticipantName(childEnv);
   assert.notEqual(parentName, childName, 'distinct native Pi sessions must not share one participant');
-  await recordSessionJoin('pi-parent-session', parentName, location, 'pi', parentEnv);
-  await recordSessionJoin('pi-child-session', childName, location, 'pi', childEnv);
-  assert.equal(await localParticipantOwner(location, parentName, parentEnv), 'pi-parent-session');
-  assert.equal(await localParticipantOwner(location, childName, childEnv), 'pi-child-session');
-  assert.equal(await localParticipantOwner(location, childName, parentEnv), undefined, 'the parent session must not be attributed to the child participant');
+  const ledger = hostLedgerForEnv(parentEnv);
+  await ledger.ensurePresence({ location, participant: parentName, session: 'pi-parent-session', channel: 'pi' });
+  await ledger.ensurePresence({ location, participant: childName, session: 'pi-child-session', channel: 'pi' });
+  assert.equal((await readParticipantOwner(location, parentName, ledger))?.sessionId, 'pi-parent-session');
+  assert.equal((await readParticipantOwner(location, childName, ledger))?.sessionId, 'pi-child-session');
+  assert.equal(await sessionOwnsParticipant(location, childName, 'pi-parent-session', ledger), false, 'the parent session must not be attributed to the child participant');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('local registry cannot plant or shadow an artifact route', async () => {

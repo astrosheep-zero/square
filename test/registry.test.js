@@ -7,22 +7,12 @@ import test from 'node:test';
 
 import { loadSquare } from '../dist/artifact.js';
 import {
-  bindCurrentParticipant,
   claimSessionParticipant,
   claimSessionTakeover,
-  squareAssignedParticipantName,
-  unbindCurrentParticipant,
   hasAutomaticDeliveryIdentity,
   localSessionIdentities,
-  lookupParticipant,
-  lookupSession,
-  pruneRegistry,
   readParticipantOwner,
-  recordDone,
-  recordJoin,
-  recordLocalDone,
-  recordLocalJoin,
-  recordSessionDone,
+  squareAssignedParticipantName,
 } from '../dist/registry.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { canonicalPath } from '../dist/canonical-path.js';
@@ -83,7 +73,7 @@ test('participant name claims are exclusive across concurrent sessions', async (
     assert.equal(acquired.length, 1);
     assert.equal(refused.length, 1);
     assert.equal(refused[0].reason?.code, 'already_joined');
-    assert.equal((await lookupParticipant(squarePath, 'ALICE')).length, 1);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'ALICE' })).length, 1);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 1);
   } finally {
     cleanup();
@@ -135,13 +125,13 @@ test('concurrent kick losers claim no ownership and mutate no artifact lifecycle
     assert.equal(won.length, 1, `expected one winner, got ${JSON.stringify([left, right])}`);
     assert.equal(lost.length, 1);
     assert.equal(lost[0].reason?.code, 'already_joined');
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, beforeEpoch + 1);
     // The losing kicker claims nothing and never disturbs the winner's rows.
-    const winner = (await lookupParticipant(squarePath, 'Alice'))[0];
-    assert.equal(winner.sessionId === 'kicker-a' || winner.sessionId === 'kicker-b', true);
-    assert.deepEqual(await lookupSession(winner.sessionId === 'kicker-a' ? 'kicker-b' : 'kicker-a'), []);
+    const winner = (await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' }))[0];
+    assert.equal(winner.session === 'kicker-a' || winner.session === 'kicker-b', true);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: winner.session === 'kicker-a' ? 'kicker-b' : 'kicker-a' }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -182,10 +172,10 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
       ),
       /lifecycle refused/,
     );
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-0');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 1);
-    assert.deepEqual(await lookupSession('kicker-x'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
 
     // The refused session binds nothing and may retry cleanly over the untouched standing rows.
@@ -195,7 +185,7 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
     } finally {
       await closeOpenSquare(kicker);
     }
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-x');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
@@ -250,8 +240,8 @@ test('a stale takeover observation cannot append a lifecycle after a newer takeo
     );
     assert.equal(stale.status, 'busy');
     assert.equal(stale.status === 'busy' ? stale.epoch : undefined, 2);
-    assert.deepEqual(await lookupSession('kicker-old'), []);
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-old' }), []);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-a');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
@@ -292,13 +282,13 @@ test('self-takeover success leaves exactly one current owner', async () => {
       await closeOpenSquare(self);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
-    const rows = await lookupParticipant(squarePath, 'Alice');
+    const rows = await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' });
     assert.equal(rows.length, 1, `expected exactly one owner row, got ${JSON.stringify(rows)}`);
-    assert.equal(rows[0].sessionId, 'owner-s');
+    assert.equal(rows[0].session, 'owner-s');
     const ownerAfter = await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort());
     assert.equal(ownerAfter?.sessionId, 'owner-s');
     assert.equal(ownerAfter?.epoch, 2);
-    assert.equal((await lookupSession('owner-s')).filter((binding) => binding.name === 'Alice').length, 1);
+    assert.equal((await createHostLedgerPort().listPresence({ session: 'owner-s', participant: 'Alice' })).length, 1);
 
     // Exactly one live owner remains: a foreign session cannot wrongly claim the name.
     const foreign = await openSquare(squarePath, { hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'foreign' } });
@@ -308,7 +298,7 @@ test('self-takeover success leaves exactly one current owner', async () => {
       await closeOpenSquare(foreign);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
-    assert.deepEqual(await lookupSession('foreign'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'foreign' }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -349,9 +339,9 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
       ),
       /self lifecycle refused/,
     );
-    const rows = await lookupParticipant(squarePath, 'Alice');
+    const rows = await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' });
     assert.equal(rows.length, 1, `expected exactly one owner row, got ${JSON.stringify(rows)}`);
-    assert.equal(rows[0].sessionId, 'owner-s');
+    assert.equal(rows[0].session, 'owner-s');
     const ownerAfter = await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort());
     assert.equal(ownerAfter?.sessionId, 'owner-s');
     assert.equal(ownerAfter?.epoch, 1);
@@ -365,7 +355,7 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
       await closeOpenSquare(foreign);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
-    assert.deepEqual(await lookupSession('foreign'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'foreign' }), []);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-s');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -421,7 +411,7 @@ test('a stale done paused across a completed takeover refuses and appends nothin
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-b');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
-    assert.deepEqual(await lookupSession('owner-a'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'owner-a' }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -468,7 +458,7 @@ test('a takeover cannot append when the old owner completed first', async () => 
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done']);
     assert.equal(await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()), undefined);
-    assert.deepEqual(await lookupSession('kicker-b'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-b' }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -496,8 +486,8 @@ test('invalid join name validates before any ownership claim', async () => {
       await closeOpenSquare(square);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts, []);
-    assert.deepEqual(await lookupParticipant(squarePath, 'bad/name/'), []);
-    assert.deepEqual(await lookupSession('invalid-joiner'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ location: squarePath, participant: 'bad/name/' }), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'invalid-joiner' }), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -530,9 +520,9 @@ test('invalid takeover name performs no ownership mutation', async () => {
     } finally {
       await closeOpenSquare(kicker);
     }
-    assert.deepEqual(await lookupParticipant(squarePath, 'bad/name/'), []);
-    assert.deepEqual(await lookupSession('kicker-x'), []);
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ location: squarePath, participant: 'bad/name/' }), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
+    assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-0');
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
   } finally {
@@ -562,8 +552,8 @@ test('takeover of a never-joined participant refuses before any ownership claim'
       await kicker.close();
     }
     assert.deepEqual((await loadSquare(squarePath)).acts, []);
-    assert.deepEqual(await lookupParticipant(squarePath, 'Alice'), []);
-    assert.deepEqual(await lookupSession('kicker-x'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' }), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
 
     // The refused takeover must leave the name claimable by a later explicit join.
     const owner = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'owner-y' } });
@@ -580,35 +570,28 @@ test('takeover of a never-joined participant refuses before any ownership claim'
   }
 });
 
-test('registry folds lifecycle by session, square, and participant name', async () => {
+test('presence folds lifecycle by session, square, and participant name', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'triple-key-square.square');
     const now = Date.now();
-    await recordJoin('session-1', 'Alice', squarePath, {
-      channel: 'claude-code',
-      paseoAgentId: 'paseo-alice',
-      at: now - 3,
-    });
-    await recordJoin('session-1', 'Bob', squarePath, { channel: 'claude-code', at: now - 2 });
-    await recordDone('session-1', 'Alice', squarePath, { channel: 'claude-code', at: now - 1 });
+    const ledger = createHostLedgerPort();
+    await ledger.ensurePresence({ location: squarePath, participant: 'Alice', session: 'session-1', channel: 'claude-code', updatedAt: now - 3 });
+    await ledger.ensurePresence({ location: squarePath, participant: 'Bob', session: 'session-1', channel: 'claude-code', updatedAt: now - 2 });
+    await ledger.removePresence({ location: squarePath, participant: 'Alice', session: 'session-1', channel: 'claude-code' });
 
-    assert.deepEqual(await lookupSession('session-1', now), [
+    assert.deepEqual((await ledger.listPresence({ session: 'session-1', now })).map((row) => ({ name: row.participant, squarePath: row.location })), [
       { name: 'Bob', squarePath: await canonicalPath(squarePath) },
     ]);
-    assert.deepEqual(await lookupParticipant(squarePath, 'Alice', now), []);
+    assert.deepEqual(await ledger.listPresence({ location: squarePath, participant: 'Alice', now }), []);
 
-    await recordJoin('session-1', 'ALICE', squarePath, {
-      channel: 'claude-code',
-      paseoAgentId: 'paseo-alice',
-      at: now,
-    });
-    const alice = await lookupParticipant(squarePath, 'alice', now);
+    await ledger.ensurePresence({ location: squarePath, participant: 'ALICE', session: 'session-1', channel: 'claude-code', updatedAt: now });
+    const alice = await ledger.listPresence({ location: squarePath, participant: 'alice', now });
     assert.equal(alice.length, 1);
-    assert.equal(alice[0].name, 'ALICE');
+    assert.equal(alice[0].participant, 'ALICE');
     assert.equal(alice[0].channel, 'claude-code');
     assert.deepEqual(
-      (await lookupSession('session-1', now)).map((entry) => entry.name).sort(),
+      (await ledger.listPresence({ session: 'session-1', now })).map((entry) => entry.participant).sort(),
       ['ALICE', 'Bob']
     );
   } finally {
@@ -641,7 +624,7 @@ test('presence follows active session lifecycle without delivery routes', async 
     const reconnected = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env });
     assert.equal(reconnected.status, 0, reconnected.stderr);
     assert.match(reconnected.stdout, /already in the square/);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'join').length, 1);
 
     const observerEnv = {
@@ -655,37 +638,37 @@ test('presence follows active session lifecycle without delivery routes', async 
     };
     const status = runCli(['--location', squarePath, '--as', 'alice', 'status'], { env: observerEnv });
     assert.equal(status.status, 0, status.stderr);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'observer-session' }), []);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
 
     const catchNow = runCli(['--location', squarePath, '--as', 'Alice', 'catch', '--now'], { env });
     assert.equal(catchNow.status, 0, catchNow.stderr);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
 
     const expressed = runCli(['--location', squarePath, '--as', 'alice', 'express', '--no-mention', 'still not an owner @alice'], {
       env: observerEnv,
     });
     assert.notEqual(expressed.status, 0);
     assert.match(expressed.stderr, /already stands here — another session holds the name/);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'observer-session' }), []);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
 
     const repeated = runCli(['--location', squarePath, '--as', 'alice', 'join'], { env: observerEnv });
     assert.notEqual(repeated.status, 0);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'observer-session' }), []);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
 
     const foreignDone = runCli(['--location', squarePath, '--as', 'Alice', 'done'], { env: observerEnv });
     assert.notEqual(foreignDone.status, 0);
     assert.match(foreignDone.stderr, /already stands here — another session holds the name/);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-    assert.deepEqual((await lookupSession('resume-session')).map((entry) => entry.name), ['Alice']);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'observer-session' }), []);
+    assert.deepEqual((await createHostLedgerPort().listPresence({ session: 'resume-session' })).map((entry) => entry.participant), ['Alice']);
     assert.equal((await loadSquare(squarePath)).acts.filter((act) => act.kind === 'done').length, 0);
 
     const done = runCli(['--location', squarePath, '--as', 'Alice', 'done'], { env });
     assert.equal(done.status, 0, done.stderr);
-    assert.deepEqual(await lookupSession('observer-session'), []);
-    assert.deepEqual(await lookupSession('resume-session'), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'observer-session' }), []);
+    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'resume-session' }), []);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done']);
     fs.rmSync(root, { recursive: true, force: true });
   } finally {
@@ -693,61 +676,16 @@ test('presence follows active session lifecycle without delivery routes', async 
   }
 });
 
-test('registry ignores stale and malformed cache rows', async () => {
+test('presence reads ignore stale and malformed ledger rows', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'stale-square.square');
     const now = Date.now();
-    await recordJoin('stale-session', 'Alice', squarePath, { at: now - 8 * 24 * 60 * 60 * 1000 });
-    fs.appendFileSync(process.env.SQUARE_REGISTRY, '{bad json}\n');
-    assert.deepEqual(await lookupSession('stale-session', now), []);
+    const ledger = createHostLedgerPort();
+    await ledger.ensurePresence({ location: squarePath, participant: 'Alice', session: 'stale-session', channel: 'unknown', updatedAt: now - 8 * 24 * 60 * 60 * 1000 });
+    fs.appendFileSync(path.join(path.dirname(process.env.SQUARE_REGISTRY), 'presence.ndjsonl'), '{bad json}\n');
+    assert.deepEqual(await ledger.listPresence({ session: 'stale-session', now }), []);
   } finally {
-    cleanup();
-  }
-});
-
-test('registry pruning removes only bindings disproved by their square artifacts', async () => {
-  const cleanup = withRegistry();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-registry-prune-'));
-  try {
-    const squarePath = path.join(root, 'SQUARE.square');
-    const brokenPath = path.join(root, 'broken.square');
-    const missingPath = path.join(root, 'missing.square');
-    const isolatedEnv = {
-      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
-      CLAUDE_CODE_SESSION_ID: '',
-      CODEX_THREAD_ID: '',
-      OPENCODE_SESSION_ID: '',
-      PI_SESSION_ID: '',
-      PASEO_AGENT_ID: '',
-    };
-    assert.equal(runCli(['--location', squarePath, 'build', '--cap', '3'], { input: 'prune\n', env: isolatedEnv }).status, 0);
-    assert.equal(runCli(['--location', squarePath, '--as', 'Alice', 'join'], { env: isolatedEnv }).status, 0);
-    fs.writeFileSync(brokenPath, 'not a square\n');
-
-    await recordJoin('valid-session', 'Alice', squarePath);
-    await recordJoin('not-joined-session', 'Cara', squarePath);
-    await recordJoin('missing-session', 'Bob', missingPath);
-    await recordJoin('uncertain-session', 'Dave', brokenPath);
-
-    assert.deepEqual(await pruneRegistry(async (candidate) => {
-      try {
-        return (await loadSquare(candidate)).acts;
-      } catch {
-        try {
-          await fs.promises.access(candidate);
-          return undefined;
-        } catch {
-          return [];
-        }
-      }
-    }), { removed: 2, kept: 3 });
-    assert.equal((await lookupSession('valid-session')).length, 1);
-    assert.equal((await lookupSession('uncertain-session')).length, 1);
-    assert.deepEqual(await lookupSession('not-joined-session'), []);
-    assert.deepEqual(await lookupSession('missing-session'), []);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
     cleanup();
   }
 });
@@ -781,7 +719,7 @@ test('Square-assigned participant name is computed from current harness identity
   try {
     const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, CODEX_THREAD_ID: 'current-session' };
     assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
-    await recordJoin('current-session', 'Alice', path.join(os.tmpdir(), 'public.square'), { channel: 'codex' });
+    await createHostLedgerPort().ensurePresence({ location: path.join(os.tmpdir(), 'public.square'), participant: 'Alice', session: 'current-session', channel: 'codex' });
     assert.equal(squareAssignedParticipantName(env), 'codex-0392bc3a1701');
     assert.equal(squareAssignedParticipantName({ SQUARE_PARTICIPANT_NAME: 'Alice' }), 'Alice');
     assert.equal(squareAssignedParticipantName({ CODEX_THREAD_ID: 'one', OPENCODE_SESSION_ID: 'two' }), undefined);
@@ -794,28 +732,6 @@ test('equal native session ids in different providers stay ambiguous and are nev
   const env = { CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: 'shared-id', OPENCODE_SESSION_ID: 'shared-id', PI_SESSION_ID: ' ' };
   assert.deepEqual(sessionIdsFromEnvironment(env), ['shared-id', 'shared-id']);
   assert.equal(squareAssignedParticipantName(env), undefined);
-});
-
-test('current participant binding uses the Square-assigned name and is idempotent', async () => {
-  const cleanup = withRegistry();
-  try {
-    const squarePath = path.join(os.tmpdir(), 'current-binding.square');
-    const env = {
-      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
-      SQUARE_ROUTES: process.env.SQUARE_ROUTES,
-      CODEX_THREAD_ID: 'current-session',
-    };
-    const name = squareAssignedParticipantName(env);
-    assert.equal(name, 'codex-0392bc3a1701');
-    const first = await bindCurrentParticipant(squarePath, name, env);
-    const second = await bindCurrentParticipant(squarePath, name, env);
-    assert.equal(first.created, true);
-    assert.deepEqual(second, { created: false, sessionId: first.sessionId });
-    assert.equal(await unbindCurrentParticipant(squarePath, name, env), true);
-    assert.deepEqual(await lookupParticipant(squarePath, name), []);
-  } finally {
-    cleanup();
-  }
 });
 
 test('local session discovery recognizes native Codex, OpenCode, and Pi session ids', async () => {

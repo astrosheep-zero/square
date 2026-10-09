@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { Square } from '../dist/square-wiring.js';
 import { createSquareApplication } from '../dist/square-application.js';
-import { lookupSession } from '../dist/registry.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 
 test('application operations use explicit context and return plain data', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-'));
@@ -77,6 +78,31 @@ test('participant defaults and native identities use the captured environment', 
   assert.equal((await second.join()).kind, 'reconnected');
 });
 
+test('participant discovery reads the injected ledger for the current session', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-discovery-'));
+  const squarePath = path.join(root, 'square.square');
+  const built = await Square.build({ path: squarePath, markdown: 'context' });
+  await built.close();
+  const env = {
+    ...process.env,
+    SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
+    SQUARE_PARTICIPANT_NAME: '',
+    CLAUDE_CODE_SESSION_ID: '',
+    OPENCODE_SESSION_ID: '',
+    PI_SESSION_ID: '',
+    PASEO_AGENT_ID: '',
+    CODEX_THREAD_ID: 'discovery-session',
+  };
+  // The injected ledger lives outside the env-derived root: discovery must read it, not env.
+  const hostLedger = createHostLedgerPort({ rootPath: path.join(root, 'injected-ledger') });
+  await hostLedger.ensurePresence({ location: squarePath, participant: 'rei', session: 'discovery-session', channel: 'codex' });
+  const app = createSquareApplication({ cwd: root, env, squarePath, hostLedger });
+  assert.equal((await app.join()).participant, 'rei');
+  // The env-derived ledger knows nothing: only the injected ledger carries the name.
+  const envOnly = createSquareApplication({ cwd: root, env, squarePath });
+  await assert.rejects(() => envOnly.join(), (error) => error.code === 'invalid_args');
+});
+
 test('done keeps a same-session rejoin that happens after serialized cleanup', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-application-rejoin-'));
   const squarePath = path.join(root, 'square.square');
@@ -93,7 +119,10 @@ test('done keeps a same-session rejoin that happens after serialized cleanup', a
   };
   try {
     await app.done();
-    assert.deepEqual(await lookupSession('same-session', Date.now(), env), [{ name: 'rei', squarePath: await fs.promises.realpath(squarePath) }]);
+    assert.deepEqual(
+      (await hostLedgerForEnv(env).listPresence({ session: 'same-session' })).map((row) => ({ name: row.participant, squarePath: row.location })),
+      [{ name: 'rei', squarePath: await fs.promises.realpath(squarePath) }],
+    );
   } finally {
     Square.prototype.doneOwnedSession = originalDone;
   }

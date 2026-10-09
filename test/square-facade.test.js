@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Square, SquareError } from '../dist/index.js';
 import { loadSquare, writeSquareFile } from '../dist/artifact.js';
-import { recordJoin } from '../dist/registry.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { ROUTE_FRESH_MS, upsertWakeRoute } from '../dist/routes.js';
 
 test('fixed facade builds, opens, and exposes participant activity', async () => {
@@ -219,8 +219,6 @@ test('concurrent facade joins for one participant keep a single live owner', asy
   const previousRegistry = process.env.SQUARE_REGISTRY;
   process.env.SQUARE_REGISTRY = registryPath;
   try {
-    const { createHostLedgerPort } = await import('../dist/host-ledger-file-adapter.js');
-    const { lookupParticipant } = await import('../dist/registry.js');
     const hostLedger = createHostLedgerPort();
     const base = await Square.build({ path: squarePath, markdown: 'context', hostLedger });
     await base.close();
@@ -244,7 +242,7 @@ test('concurrent facade joins for one participant keep a single live owner', asy
     assert.equal(accepted.length, 1);
     assert.equal(refused.length, 1);
     assert.equal(refused[0].reason?.code, 'already_joined');
-    assert.equal((await lookupParticipant(squarePath, 'Alice')).length, 1);
+    assert.equal((await hostLedger.listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
     const reopened = await Square.at({ path: squarePath });
     assert.equal((await reopened.snapshot()).actCount, 1);
     await reopened.close();
@@ -289,12 +287,12 @@ test('recognize returns only the current locally bound participant without chang
     const square = await Square.build({ path: squarePath, markdown: 'context' });
     const alice = await square.join('Alice');
     const before = (await square.snapshot()).actCount;
-    await recordJoin('alice-session', alice.name, squarePath, { channel: 'codex' });
+    await createHostLedgerPort().ensurePresence({ location: squarePath, participant: alice.name, session: 'alice-session', channel: 'codex' });
     assert.equal((await square.recognize({ CODEX_THREAD_ID: 'alice-session' }))?.name, 'Alice');
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);
     assert.equal((await square.snapshot()).actCount, before);
     await square.join('Bob');
-    await recordJoin('alice-session', 'Bob', squarePath, { channel: 'codex' });
+    await createHostLedgerPort().ensurePresence({ location: squarePath, participant: 'Bob', session: 'alice-session', channel: 'codex' });
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'alice-session' }), null);
     await alice.done();
     assert.equal(await square.recognize({ CODEX_THREAD_ID: 'missing-session' }), null);

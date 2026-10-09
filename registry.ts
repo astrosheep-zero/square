@@ -1,7 +1,6 @@
-/** Machine-local participant discovery cache. */
+/** Participant ownership and local session identity on the host ledger. */
 
-import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
-import { isCurrentlyJoined } from './runtime.js';
+import { SquareError } from './model.js';
 import { harnessSessionSources, squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
 import { createHostLedgerPort, type FileHostLedgerPort } from './host-ledger-file-adapter.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
@@ -9,10 +8,7 @@ import type { HostLedgerPort, PresenceChannel, PresenceRecord } from './host-led
 import { canonicalPath } from './canonical-path.js';
 
 export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: PresenceChannel; child: boolean; updatedAt: number; epoch: number; }
-export interface RegistryWriteOptions { channel?: PresenceChannel; child?: boolean; at?: number; env?: NodeJS.ProcessEnv; }
 type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
-
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function ledger(env: NodeJS.ProcessEnv): FileHostLedgerPort { return createHostLedgerPort({ rootPath: hostLedgerRoot(env) }); }
 export function presenceEpoch(record: PresenceWithEpoch | undefined): number {
@@ -29,20 +25,8 @@ function toBinding(record: PresenceWithEpoch): RegistryBinding {
     epoch: presenceEpoch(record),
   };
 }
-async function activeBindings(now: number, env: NodeJS.ProcessEnv): Promise<RegistryBinding[]> { return (await ledger(env).listPresence({ now })).map(toBinding).sort((a, b) => b.updatedAt - a.updatedAt); }
-async function writePresence(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions, done: boolean): Promise<void> { if (!sessionId || !name || !squarePath) return; const env = options.env ?? process.env; const channel = options.channel ?? 'unknown'; const port = ledger(env); const location = await canonicalPath(squarePath); if (done) await port.removePresence({ location, participant: name, session: sessionId, channel }); else await port.ensurePresence({ location, participant: name, session: sessionId, channel, updatedAt: options.at ?? Date.now() }); }
-export function recordJoin(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions = {}): Promise<void> { return writePresence(sessionId, name, squarePath, options, false); }
-export async function recordDone(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions = {}): Promise<void> {
-  await writePresence(sessionId, name, squarePath, options, true);
-}
-export async function readActiveBindings(now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<RegistryBinding[]> { try { return await activeBindings(now, env); } catch { return []; } }
-export async function lookupSessionBindings(sessionId: string, now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<RegistryBinding[]> { return (await readActiveBindings(now, env)).filter((binding) => binding.sessionId === sessionId); }
-export async function lookupSession(sessionId: string, now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<Array<{ name: string; squarePath: string }>> { return (await lookupSessionBindings(sessionId, now, env)).map(({ name, squarePath }) => ({ name, squarePath })); }
-export async function lookupParticipant(squarePath: string, name: string, now = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<RegistryBinding[]> { const canonical = await canonicalPath(squarePath); return (await readActiveBindings(now, env)).filter((binding) => binding.squarePath === canonical && sameName(binding.name, name)); }
-export async function localParticipantOwner(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<string | undefined> { const sessionIds = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); if (sessionIds.size === 0) return undefined; return (await lookupParticipant(squarePath, name, now, env)).find((binding) => sessionIds.has(binding.sessionId))?.sessionId; }
-export async function localParticipantName(squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> { const canonical = await canonicalPath(squarePath); const names = new Set((await Promise.all(localSessionIdentities(env).map(async (identity) => (await lookupSession(identity.sessionId, Date.now(), env)).filter((item) => item.squarePath === canonical).map((item) => item.name)))).flat()); return names.size === 1 ? [...names][0] : undefined; }
+export async function localParticipantName(squarePath: string, hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> { const canonical = await canonicalPath(squarePath); const names = new Set((await Promise.all(localSessionIdentities(env).map(async (identity) => (await hostLedger.listPresence({ location: canonical, session: identity.sessionId })).map((row) => row.participant)))).flat()); return names.size === 1 ? [...names][0] : undefined; }
 export function squareAssignedParticipantName(env: NodeJS.ProcessEnv = process.env): string | undefined { return computeSquareAssignedParticipantName(env); }
-export type CurrentParticipantBinding = Readonly<{ created: boolean; sessionId: string }>;
 export type OwnershipClaim =
   | { readonly status: 'acquired' | 'owned'; readonly record: PresenceWithEpoch; readonly sessionId: string; readonly epoch: number }
   | undefined;
@@ -165,19 +149,10 @@ export async function releaseSessionParticipant(squarePath: string, name: string
   if (identity === undefined) return;
   await hostLedger.removePresence({ location: squarePath, participant: name, session: identity.sessionId, channel: identity.channel });
 }
-export async function bindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<CurrentParticipantBinding> { if (squareAssignedParticipantName(env) !== name) throw new SquareError('invalid_args', `The current session is not assigned ${name}`); const sessionId = await localParticipantOwner(squarePath, name, env); if (sessionId !== undefined) return { created: false, sessionId }; if ((await lookupParticipant(squarePath, name, Date.now(), env)).at(0) !== undefined) throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`); await recordLocalJoin(name, squarePath, env); const currentSessionId = await localParticipantOwner(squarePath, name, env); if (currentSessionId === undefined) throw new Error(`Current participant binding did not commit for ${name}`); return { created: true, sessionId: currentSessionId }; }
-export async function unbindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, Date.now(), env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel, env); return current.length > 0; }
-export interface RegistryPruneResult { removed: number; kept: number; }
-function bindingIsProvablyObsolete(binding: RegistryBinding, acts: StoredAct[] | undefined): boolean { return acts !== undefined && !isCurrentlyJoined(acts, binding.name); }
-export async function pruneRegistry(readActs: (squarePath: string) => StoredAct[] | undefined | Promise<StoredAct[] | undefined>, now = Date.now()): Promise<RegistryPruneResult> { const active = await readActiveBindings(now); let removed = 0; for (const binding of active) { if (!bindingIsProvablyObsolete(binding, await readActs(binding.squarePath))) continue; await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at: now }); removed++; } return { removed, kept: active.length - removed }; }
 export interface LocalSessionIdentity { sessionId: string; channel: PresenceChannel; child: boolean; paseoAgentId?: string; }
 function addLocalSession(identities: LocalSessionIdentity[], sessionId: string | undefined, channel: PresenceChannel, child: boolean, paseoAgentId: string | undefined): void { if (!sessionId || identities.some((identity) => identity.sessionId === sessionId)) return; identities.push({ sessionId, channel, child, ...(paseoAgentId ? { paseoAgentId } : {}) }); }
 export function localSessionIdentities(env: NodeJS.ProcessEnv = process.env): LocalSessionIdentity[] { const paseoAgentId = env.PASEO_AGENT_ID?.trim() || undefined; const identities: LocalSessionIdentity[] = []; for (const source of harnessSessionSources) addLocalSession(identities, env[source.variable]?.trim(), source.channel, source.childVariable !== undefined && env[source.childVariable] === '1', paseoAgentId); return identities; }
 export function hasAutomaticDeliveryIdentity(env: NodeJS.ProcessEnv = process.env): boolean { return localSessionIdentities(env).length > 0; }
-export async function recordLocalJoin(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = localSessionIdentities(env); const current = await lookupParticipant(squarePath, name, at, env); for (const identity of identities) { for (const binding of current.filter((item) => item.sessionId === identity.sessionId)) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await recordJoin(identity.sessionId, name, squarePath, { ...identity, at, env }); } }
-export async function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); }
-export async function recordSessionJoin(sessionId: string, name: string, squarePath: string, channel: PresenceChannel, env: NodeJS.ProcessEnv = process.env): Promise<string> { const at = Date.now(); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => binding.sessionId === sessionId); for (const binding of current) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await recordJoin(sessionId, name, squarePath, { channel, at, env }); return sessionId; }
-export async function recordSessionDone(sessionId: string, name: string, squarePath: string, channel: PresenceChannel, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const canonical = await canonicalPath(squarePath); const binding = (await lookupSessionBindings(sessionId, Date.now(), env)).find((item) => item.squarePath === canonical && sameName(item.name, name) && item.channel === channel); if (binding === undefined) return false; const options = { channel, at: Date.now(), env }; await recordDone(sessionId, binding.name, binding.squarePath, options); return true; }
 
 /** Bind the host ledger to the caller's captured environment. */
 export function hostLedgerForEnv(env: NodeJS.ProcessEnv = process.env): FileHostLedgerPort { return ledger(env); }

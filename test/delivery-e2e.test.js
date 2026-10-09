@@ -13,7 +13,6 @@ import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
 import { projectWakeEvidenceFromState } from '../dist/square-projections.js';
@@ -98,11 +97,6 @@ function restoreRegistry(previous, previousLedger) {
 }
 
 async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-session', at = Date.now()) {
-  await withRegistry(item.env, async () => await recordJoin(sessionId, 'Bob', item.squarePath, {
-    channel: 'paseo',
-    paseoAgentId: sessionId,
-    at,
-  }));
   await upsertWakeRoute({
     location: item.squarePath,
     participant: 'Bob',
@@ -470,10 +464,9 @@ test('an old route and clipped presentation do not suppress the replacement sess
     const newAt = oldAt + 1;
     await registerRoute(item, 'old-owner', 'old-session', oldAt);
     await markPresentationEvidence(item, 'old-session', act, 'Bob', 'clipped');
-    await withRegistry(item.env, async () => {
-      await recordDone('old-session', 'Bob', item.squarePath, { channel: 'paseo', at: oldAt + 1 });
-      await recordJoin('new-session', 'Bob', item.squarePath, { channel: 'paseo', at: newAt });
-    });
+    const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    await ledger.removePresence({ location: item.squarePath, participant: 'Bob', session: 'old-session', channel: 'paseo' });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', updatedAt: newAt + 1 });
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env, at: newAt + 1 });
@@ -650,10 +643,8 @@ test('one sweep projects every candidate from one ledger read and keeps individu
   const item = workshop();
   const now = Date.now();
   try {
-    await withRegistry(item.env, async () => {
-      await recordJoin('carol-session', 'Carol', item.squarePath, {
-        channel: 'paseo', paseoAgentId: 'carol-session', at: now - 200,
-      });
+    await createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT }).ensurePresence({
+      location: item.squarePath, participant: 'Carol', session: 'carol-session', channel: 'paseo', updatedAt: now - 200,
     });
     await upsertWakeRoute({
       location: item.squarePath, participant: 'Carol', sessionId: 'carol-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'carol-session' },

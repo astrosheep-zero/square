@@ -28,7 +28,7 @@ import {
   withPathOutput,
   type WatchStatus,
 } from './presentation.js';
-import { hasAutomaticDeliveryIdentity, localParticipantOwner } from './registry.js';
+import { hasAutomaticDeliveryIdentity } from './registry.js';
 import { parseActivityId } from './square-core.js';
 import type { CatchResult } from './square-facade.js';
 import type { WatchPresentation } from './views.js';

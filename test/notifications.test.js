@@ -7,7 +7,6 @@ import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact
 import { createWakeTransport, processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
 import { readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
@@ -66,10 +65,6 @@ function withRegistry(env, fn) {
 async function route(item, options = {}) {
   const agentId = options.agentId ?? 'bob-agent';
   const sessionId = options.sessionId ?? agentId;
-  await withRegistry(item.env, async () => await recordJoin(sessionId, 'Bob', item.squarePath, {
-    channel: 'paseo',
-    paseoAgentId: agentId,
-  }));
   await upsertWakeRoute({
     location: item.squarePath,
     participant: 'Bob',
@@ -141,7 +136,6 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
 test('privileged sweep stops at its native hook deadline', async () => {
   const item = await fixture();
   try {
-    await recordSessionJoin('deadline-session', 'Bob', item.squarePath, 'claude-code', item.env);
     await upsertWakeRoute({
       location: item.squarePath,
       participant: 'Bob',

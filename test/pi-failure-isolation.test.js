@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import squarePiExtension from '../extensions/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
-import { recordJoin } from '../dist/registry.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
 
@@ -45,7 +45,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
   process.env.SQUARE_REGISTRY = registry;
   process.env.SQUARE_PRESENTED = presented;
   delete process.env.PI_SESSION_ID;
-  await recordJoin(sessionId, 'Bob', squarePath, { channel: 'pi', ownerId: 'pi-owner' });
+  await hostLedgerForEnv().ensurePresence({ location: squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
 
   const original = fs.readFileSync(squarePath);
   const before = (await loadSquare(squarePath)).runtime.observations;

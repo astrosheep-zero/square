@@ -7,7 +7,7 @@ import test from 'node:test';
 import { formatActivityId } from '../dist/square-core.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
 import { Square } from '../dist/index.js';
-import { lookupSessionBindings } from '../dist/registry.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 import { readWakeRoutes } from '../dist/routes.js';
 import {
   ROOT,
@@ -378,8 +378,9 @@ test('join and catch only show fallback catch hints without automatic session de
   const lifecycle = (await historySquare.history({ limit: 100 })).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
   await historySquare.close();
   assert.deepEqual(lifecycle, ['join', 'done', 'join']);
-  assert.equal((await lookupSessionBindings('codex-bob', Date.now(), { SQUARE_REGISTRY: registry })).length, 0);
-  assert.equal((await lookupSessionBindings('codex-other', Date.now(), { SQUARE_REGISTRY: registry })).some((binding) => binding.name === 'Bob'), true);
+  const ledger = hostLedgerForEnv({ SQUARE_REGISTRY: registry });
+  assert.equal((await ledger.listPresence({ session: 'codex-bob' })).length, 0);
+  assert.equal((await ledger.listPresence({ session: 'codex-other' })).some((binding) => binding.participant === 'Bob'), true);
   assert.deepEqual((await readWakeRoutes({ location: file, participant: 'Bob' })).map((route) => route.sessionId), ['codex-other']);
 });
 
@@ -400,7 +401,7 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   assert.doesNotMatch(caught.stderr, /error/i);
   assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join --kick`));
   assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
-  assert.equal((await lookupSessionBindings('worker', Date.now(), env)).length, 0);
+  assert.equal((await hostLedgerForEnv(env).listPresence({ session: 'worker' })).length, 0);
   const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
   assert.equal(foreign.status, 2, foreign.stdout);
   const original = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'still mine']), { env });
@@ -424,9 +425,9 @@ test('join --kick reclaims a name when a secondary inherited session matches the
   assert.equal(takeover.status, 0, takeover.stderr);
   const expressed = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'after']), { env: caller });
   assert.equal(expressed.status, 0, expressed.stderr);
-  const bindings = await lookupSessionBindings('standing-pi', Date.now(), env);
+  const bindings = await hostLedgerForEnv(env).listPresence({ session: 'standing-pi' });
   assert.equal(bindings.length, 0);
-  assert.equal((await lookupSessionBindings('new-codex', Date.now(), env)).length, 1);
+  assert.equal((await hostLedgerForEnv(env).listPresence({ session: 'new-codex' })).length, 1);
   const selfKick = run(withName(file, 'Alice', ['join', '--kick']), { env: caller });
   assert.equal(selfKick.status, 0, selfKick.stderr);
   const square = await Square.at({ path: file });

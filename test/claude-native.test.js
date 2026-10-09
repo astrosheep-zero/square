@@ -13,7 +13,7 @@ import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { Square } from '../dist/square-wiring.js';
 import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { deliverPending } from '../dist/delivery-operations.js';
-import { recordJoin, claimSessionTakeover } from '../dist/registry.js';
+import { claimSessionTakeover } from '../dist/registry.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
@@ -27,7 +27,8 @@ async function fixture(t, body = 'hello @Bob') {
   const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger'), SQUARE_REGISTRY: path.join(root, 'sessions'), SQUARE_DISABLE_PASEO_WAKE: '1' };
   const acts = [{ kind: 'join', actor: 'Alice', at: 1, index: 0 }, { kind: 'join', actor: 'Bob', at: 2, index: 1 }, { kind: 'say', actor: 'Alice', at: 3, index: 2, body, mentions: ['Bob'] }, { kind: 'say', actor: 'Alice', at: 4, index: 3, body: 'not for Bob', mentions: ['Alice'] }];
   await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts: acts.slice(0, 2), runtime: { ...emptyRuntimeState(2), nextActIndex: 2 } });
-  await recordJoin('claude-test', 'Bob', squarePath, { channel: 'claude-code', env });
+  const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT });
+  await ledger.ensurePresence({ location: squarePath, participant: 'Bob', session: 'claude-test', channel: 'claude-code' });
   const frames = [];
   let resolveFrame;
   const firstFrame = new Promise((resolve) => { resolveFrame = resolve; });
@@ -39,7 +40,6 @@ async function fixture(t, body = 'hello @Bob') {
   await once(server, 'listening');
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
   const coordinate = { sessionId: 'claude-test', cwd: root, version: '2.1.295', endpoint };
-  const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT });
   const bridge = async (value) => JSON.parse(await runClaudeMod(JSON.stringify({ ...coordinate, ...value }), env));
   const start = await bridge({ operation: 'start' });
   const square = await openSquare(squarePath);

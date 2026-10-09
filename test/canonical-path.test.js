@@ -6,7 +6,7 @@ import test from 'node:test';
 import { canonicalPath, canonicalPathSync } from '../dist/canonical-path.js';
 import { writeSquareFile } from '../dist/artifact.js';
 import { closeOpenSquare } from '../dist/open-square.js';
-import { lookupParticipant } from '../dist/registry.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 import { readWakeRoutes } from '../dist/routes.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { join } from '../dist/square-actions.js';
@@ -36,7 +36,7 @@ test('a missing square under a directory symlink joins and reads as its real pat
     try { await join(square, 'Alice'); } finally { await closeOpenSquare(square); }
 
     assert.deepEqual(
-      (await lookupParticipant(throughReal, 'Alice', Date.now(), item.env)).map((binding) => [binding.squarePath, binding.sessionId]),
+      (await hostLedgerForEnv(item.env).listPresence({ location: throughReal, participant: 'Alice' })).map((binding) => [binding.location, binding.session]),
       [[target, 'codex-session']],
       'presence written through the symlinked path is found through the real path',
     );

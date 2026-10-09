@@ -10,7 +10,7 @@ import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
-import { hostLedgerForEnv, lookupSessionBindings, readParticipantOwner } from '../dist/registry.js';
+import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 import { takeover } from '../dist/square-actions.js';
 import { openSquare } from '../dist/square-file-adapter.js';
@@ -340,7 +340,7 @@ test('automatic implicit join rejects an active participant bound to another ses
       () => automaticSessionStart('pi', 'second-session', item.cwd, env),
       (error) => error?.code === 'already_joined',
     );
-    assert.equal((await lookupSessionBindings('second-session')).some((binding) => binding.name === 'shared'), false);
+    assert.equal((await hostLedgerForEnv(env).listPresence({ session: 'second-session' })).some((binding) => binding.participant === 'shared'), false);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
 });
@@ -424,8 +424,8 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
   });
   const acts = (await loadSquare(item.publicPath)).acts.map((act) => act.kind);
   assert.deepEqual(acts, ['join', 'done', 'join']);
-  assert.equal((await lookupSessionBindings('owner-a', Date.now(), item.env)).some((binding) => binding.name === 'shared'), false);
-  assert.equal((await lookupSessionBindings('owner-b', Date.now(), item.env)).some((binding) => binding.name === 'shared'), true);
+  assert.equal((await hostLedgerForEnv(item.env).listPresence({ session: 'owner-a' })).some((binding) => binding.participant === 'shared'), false);
+  assert.equal((await hostLedgerForEnv(item.env).listPresence({ session: 'owner-b' })).some((binding) => binding.participant === 'shared'), true);
 });
 test('automatic resume republishes the current epoch and stale retirement leaves it in place', { concurrency: false }, async () => {
   const item = await fixture();

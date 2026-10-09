@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { sessionInbox } from '../dist/inbox.js';
-import { recordJoin } from '../dist/registry.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 import { persistSquare, run, testEnv } from './square-cli-helpers.js';
 
 test('inbox is a bounded, ordered snapshot that does not expose notification internals', async (t) => {
@@ -29,10 +29,11 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
     return squarePath;
   });
   const env = testEnv({ SQUARE_REGISTRY: path.join(root, 'inbox-sessions.ndjsonl') });
+  const ledger = hostLedgerForEnv(env);
   for (const squarePath of [source, ...copies]) {
-    await recordJoin('inbox-snapshot', 'Alpha', squarePath, { channel: 'codex', env });
+    await ledger.ensurePresence({ location: squarePath, participant: 'Alpha', session: 'inbox-snapshot', channel: 'codex' });
   }
-  await recordJoin('inbox-snapshot', longName, source, { channel: 'codex', env });
+  await ledger.ensurePresence({ location: source, participant: longName, session: 'inbox-snapshot', channel: 'codex' });
 
   const complete = await sessionInbox('inbox-snapshot', env);
   assert.equal(complete.length, 102);

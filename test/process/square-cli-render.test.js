@@ -618,8 +618,8 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   const env = { SQUARE_REGISTRY: registry };
 
   const register = spawnSync(process.execPath, ['--input-type=module', '-e', `
-    import { recordJoin } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
-    recordJoin('sid-cli', 'Bob', ${JSON.stringify(file)}, { channel: 'codex' });
+    import { hostLedgerForEnv } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
+    await hostLedgerForEnv().ensurePresence({ location: ${JSON.stringify(file)}, participant: 'Bob', session: 'sid-cli', channel: 'codex' });
   `], { encoding: 'utf8', env: testEnv(env) });
   assert.equal(register.status, 0, register.stderr);
 
@@ -661,8 +661,8 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   assert.equal(fresh.status, 0, fresh.stderr);
 
   const registerStop = spawnSync(process.execPath, ['--input-type=module', '-e', `
-    import { recordJoin } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
-    recordJoin('sid-cli-stop', 'Bob', ${JSON.stringify(file)}, { channel: 'codex' });
+    import { hostLedgerForEnv } from ${JSON.stringify(path.join(ROOT, 'dist/registry.js'))};
+    await hostLedgerForEnv().ensurePresence({ location: ${JSON.stringify(file)}, participant: 'Bob', session: 'sid-cli-stop', channel: 'codex' });
   `], { encoding: 'utf8', env: testEnv(env) });
   assert.equal(registerStop.status, 0, registerStop.stderr);
 

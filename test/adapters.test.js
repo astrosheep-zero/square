@@ -34,7 +34,7 @@ import {
   piPackageSource,
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
-import { recordJoin } from '../dist/registry.js';
+import { hostLedgerForEnv } from '../dist/registry.js';
 import { withFileLock } from '../dist/file-lock.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
@@ -513,7 +513,7 @@ async function withPiFixture(sessionId, fn, pending = true) {
   };
   process.env.SQUARE_REGISTRY = item.registry;
   delete process.env.PI_SESSION_ID;
-  await recordJoin(sessionId, 'Bob', item.squarePath, { channel: 'pi', ownerId: 'pi-owner' });
+  await hostLedgerForEnv().ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
   try {
     await fn(item);
   } finally {
