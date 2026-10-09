@@ -17,12 +17,13 @@ export interface InboxProjection { readonly name: string; readonly joined: boole
 export interface StreamProjection { readonly activities: readonly { readonly activity: StoredAct; readonly route?: string }[]; readonly cursor: number; readonly hasMore: boolean; }
 export interface PendingDeliveryProjection { readonly recipient: string; readonly notifications: readonly PlannedNotification[]; }
 
-function expose(stored: StoredAct): Activity {
+/** The one StoredAct-to-public-Activity field mapping. Rejects read and actorless acts. */
+export function toPublicActivity(stored: StoredAct): Activity {
   if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor, ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}), ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}), mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}), ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }
 
-function parseRequiredActivityId(id: ActivityId): number {
+export function parseRequiredActivityId(id: ActivityId): number {
   const index = parseActivityId(id);
   if (index === undefined) throw new SquareError('invalid_args', `Invalid activity id: ${id}`);
   return index;
@@ -68,8 +69,8 @@ function sayNumbers(state: Parameters<typeof coreStatus>[0]): Record<number, num
   return result;
 }
 
-export async function history(square: OpenSquare, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); return selectHistory(coreActivities(state, historyOptions(query)), query).map(expose); }
-export async function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective)), effective).map(expose); }
+export async function history(square: OpenSquare, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); return selectHistory(coreActivities(state, historyOptions(query)), query).map(toPublicActivity); }
+export async function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> { const { state } = await square.artifact.read(control?.signal); const effective = query.limit !== undefined ? query : { ...query, limit: 10 }; return selectHistory(coreActivities(state, historyOptions(effective)), effective).map(toPublicActivity); }
 export async function resolveParticipant(square: OpenSquare, name: string): Promise<{ readonly name: string; readonly roster: readonly string[] }> { const { state } = await square.artifact.read(); return { name: resolveKnownName(state, name), roster: rosterNames(state) }; }
 export async function currentParticipant(square: OpenSquare, name: string): Promise<string | undefined> { const { state } = await square.artifact.read(); const known = resolveRosterName(state, name); return known !== undefined && isCurrentlyJoined(state.acts, known) ? known : undefined; }
 export async function participants(square: OpenSquare): Promise<ParticipantStatus[]> { const { state } = await square.artifact.read(); return statuses(square, state); }

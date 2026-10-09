@@ -4,6 +4,7 @@ import { z, type ZodType } from 'zod/v4';
 import { SquareError, isSquareError } from './model.js';
 import { createSquareApplication, type ExpressApplicationOptions, type SquareApplication, type SquareApplicationContext } from './square-application.js';
 import type { Activity, CatchOptions, HistoryQuery, OperationControl } from './square-facade.js';
+import { toPublicActivity } from './views.js';
 
 type JsonObject = Record<string, unknown>;
 interface InputProperty { type: string; minimum?: number; enum?: readonly string[]; pattern?: string; items?: { type: 'string' }; }
@@ -63,7 +64,7 @@ function publicResult(name: string, value: unknown): unknown {
       doneCount: rest.doneCount,
       hold: rest.holdActive ? { by: rest.holdActor, ...(rest.holdReason === undefined ? {} : { reason: rest.holdReason }), ...(rest.holdAt === undefined ? {} : { at: rest.holdAt }) } : null,
       participants: participants.filter((participant) => participant.state !== 'not joined').map((participant) => ({ name: participant.name, state: participant.state, presence: participant.presence, activityCount: participant.activityCount, ...(participant.lastActiveAt === undefined ? {} : { lastActiveAt: participant.lastActiveAt }), unreadActivityCount: participant.unreadActivityCount, pendingMentionCount: participant.pendingMentionCount, listening: participant.listening })),
-      ...(latestAct === undefined ? {} : { latestActivity: publicActivity({ id: `act/${latestAct.index}`, at: latestAct.at, kind: latestAct.kind as Activity['kind'], actor: latestAct.actor ?? '', ...('body' in latestAct && latestAct.body !== undefined ? { body: latestAct.body } : {}), mentions: 'mentions' in latestAct ? latestAct.mentions ?? [] : [], ...('target' in latestAct ? { target: latestAct.target } : {}), ...(latestAct.kind === 'say' && latestAct.reach !== undefined ? { reach: latestAct.reach } : {}), ...(latestAct.kind === 'say' && latestAct.reply !== undefined ? { reply: `act/${latestAct.reply}` as Activity['reply'] } : {}) }) }),
+      ...(latestAct === undefined ? {} : { latestActivity: publicActivity(toPublicActivity(latestAct)) }),
       now: rest.now,
     };
   }

@@ -1,4 +1,4 @@
-import { formatActivityId, parseActivityId, type Act } from './square-core.js';
+import { type Act } from './square-core.js';
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type SquareState, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
@@ -9,6 +9,7 @@ import { decideCatch, type CatchDecision, type CatchProjection } from './catch-d
 import { claimSessionParticipant, claimSessionTakeover, releaseSessionParticipantClaim, readParticipantOwner, withOwnershipClaimLock } from './registry.js';
 import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
 import { applyWakeRouteToState, dropEndedSessionWakeRoutesFromState, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, sessionCanEndParticipant } from './routes.js';
+import { parseRequiredActivityId, toPublicActivity } from './views.js';
 
 export interface OperationContext extends HostContext {
   readonly wakeTransport?: WakeTransportPort;
@@ -19,15 +20,7 @@ export type { OwnershipFenceOptions };
 function throwIfAborted(control?: OperationControl): void { if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted'); }
 
 function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
-  if (activity.kind === 'read' || activity.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(activity.index)}`);
-  const result = {
-    id: formatActivityId(activity.index), at: activity.at, kind: activity.kind, actor: activity.actor,
-    mentions: activity.kind === 'say' ? activity.mentions ?? [] : [],
-    ...(activity.kind === 'say' && activity.reach !== undefined ? { reach: activity.reach } : {}),
-    ...('body' in activity && activity.body !== undefined ? { body: activity.body } : {}),
-    ...('target' in activity ? { target: activity.target } : {}),
-    ...(activity.kind === 'say' && activity.reply !== undefined ? { reply: formatActivityId(activity.reply) } : {}),
-  } as Activity;
+  const result = toPublicActivity(activity);
   if (perception === 'full' || !('body' in result)) return { ...result, perception };
   const { body: _body, ...withoutBody } = result;
   return { ...withoutBody, perception };
@@ -89,24 +82,6 @@ function committedActivity(stored: readonly StoredAct[], verb: string): StoredAc
   return activity;
 }
 
-function exposeActivity(stored: StoredAct): Activity {
-  if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
-  return {
-    id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
-    ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
-    mentions: stored.kind === 'say' ? stored.mentions ?? [] : [],
-    ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
-    ...('target' in stored ? { target: stored.target } : {}),
-    ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
-  };
-}
-
-function parseRequiredActivityId(id: import('./square-core.js').ActivityId): number {
-  const index = parseActivityId(id);
-  if (index === undefined) throw new SquareError('invalid_args', `Invalid activity id: ${id}`);
-  return index;
-}
-
 export async function join(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly activity: Activity | null }> {
   // Rejected validation must not perform an ownership claim.
   throwIfAborted(control);
@@ -161,7 +136,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
   }
   await ensureLocalPresence(square, committed.name, epoch);
   await publishIdentityRoute(square, committed.name, epoch);
-  return { name: committed.name, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+  return { name: committed.name, activity: committed.stored === null ? null : toPublicActivity(committed.stored) };
 }
 
 /** End the standing participant and immediately let the caller reclaim the name. */
@@ -208,12 +183,12 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
       return committed;
     }, control?.signal);
     if (outcome.status === 'busy') throw new SquareError('already_joined', `✕ ${participantIdentity(name)} already stands here — another session holds the name`);
-    return { name: outcome.result.name, activities: outcome.result.stored.map(exposeActivity), epoch: outcome.epoch };
+    return { name: outcome.result.name, activities: outcome.result.stored.map(toPublicActivity), epoch: outcome.epoch };
   }
   const committed = await commitLifecycle();
   await ensureLocalPresence(square, committed.name);
   await publishIdentityRoute(square, committed.name);
-  return { name: committed.name, activities: committed.stored.map(exposeActivity) };
+  return { name: committed.name, activities: committed.stored.map(toPublicActivity) };
 }
 
 export async function implicitJoin(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
@@ -235,7 +210,7 @@ export async function implicitJoin(square: OperationContext, name: string, contr
   await ensureLocalPresence(square, committed.name);
   if (committed.state === 'done') await retireIdentityRoute(square, committed.name);
   else if (committed.stored !== null) await publishIdentityRoute(square, committed.name);
-  return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : exposeActivity(committed.stored) };
+  return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : toPublicActivity(committed.stored) };
 }
 
 /** Only admission failures can advertise a safe retry; storage and post-commit
@@ -286,7 +261,7 @@ export async function express(square: OperationContext, name: string, body: stri
   } else {
     delivery = { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
   }
-  return { activity: exposeActivity(committed.stored), delivery };
+  return { activity: toPublicActivity(committed.stored), delivery };
 }
 
 export interface ListenerChangeResult { readonly activity: Activity | null }
@@ -299,7 +274,7 @@ async function landListenerChange(square: OperationContext, verb: 'listen' | 'ig
     if (act === undefined) return { result: null };
     return { state, result: committedActivity(storeActs(state, [act]), verb) };
   }, control?.signal);
-  return { activity: stored === null ? null : exposeActivity(stored) };
+  return { activity: stored === null ? null : toPublicActivity(stored) };
 }
 
 export function listen(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> { return landListenerChange(square, 'listen', actor, target, control); }
@@ -342,7 +317,7 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
   const stored = fenced
     ? await withOwnershipClaimLock(square.env ?? process.env, commitAndCleanup, control?.signal)
     : await commitAndCleanup();
-  return { activity: exposeActivity(stored) };
+  return { activity: toPublicActivity(stored) };
 }
 
 export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'done', name, body, fence, control); }
@@ -420,7 +395,7 @@ export async function endOwnedSession(square: OperationContext, name: string, se
   const stored = fenced
     ? await withOwnershipClaimLock(square.env ?? process.env, run)
     : await run();
-  return stored === null ? null : { activity: exposeActivity(stored) };
+  return stored === null ? null : { activity: toPublicActivity(stored) };
 }
 
 /**
