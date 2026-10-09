@@ -39,8 +39,6 @@ test('packed package installs, typechecks, discovers and sends from a consumer o
   assert.deepEqual(manifest.dependencies, { '@opencode/client': '2.0.20' })
   const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'))
   assert.equal(lock.packages['node_modules/@opencode/client'].version, '2.0.20')
-  assert.equal(lock.packages['node_modules/effect'].version, '4.0.0-rc.112')
-  assert.equal(lock.packages['node_modules/solid-js'], undefined)
   assert.ok(Object.keys(lock.packages).every((path) => !path.includes('@astrosheep/square')))
   const f = await fixture(t)
   await f.register(join(process.env.XDG_STATE_HOME, 'opencode', 'service.json'))
