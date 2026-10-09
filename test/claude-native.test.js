@@ -11,7 +11,7 @@ import { observeClaudeDelivery } from '../dist/claude-delivery.js';
 import { emptyRuntimeState, writeSquareFile, loadSquare } from '../dist/artifact.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { Square } from '../dist/square-wiring.js';
-import { createWakeTransport } from '../dist/notifications.js';
+import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { recordJoin, claimSessionTakeover } from '../dist/registry.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
@@ -214,7 +214,7 @@ test('final native write revalidates catch after durable preparation', supported
     return prepared;
   };
   const square = await openSquare(f.squarePath, { hostLedger: f.ledger });
-  try { await deliverPending({ artifact: square.artifact, hostLedger: f.ledger, transport: createWakeTransport([], f.ledger, Date.now, f.env), location: f.squarePath, activity: 2 }); }
+  try { await deliverPending({ artifact: square.artifact, hostLedger: f.ledger, transport: await createDefaultWakeTransport(f.ledger, Date.now, f.env, []), location: f.squarePath, activity: 2 }); }
   finally { await closeOpenSquare(square); }
   assert.equal(f.frames.length, 0);
 });

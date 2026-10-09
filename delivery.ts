@@ -10,28 +10,16 @@ import {
   findParticipantName,
   sameName,
 } from './model.js';
-import { audienceOf, formatActivityId, replayLandedAudiences, type Perception } from './square-core.js';
+import { audienceOf, replayLandedAudiences, type Perception } from './square-core.js';
 import { derivePerceptionProjection } from './perception-projection.js';
 import { matchesMentionTarget, recordObservation } from './runtime.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
 
-export function notificationMessageId(squarePath: string, actIndex: number): string {
-  return `square:${squarePath}#${formatActivityId(actIndex)}`;
-}
-
 export interface PlannedNotification {
   item: SayItem;
   recipient: string;
-  route: DirectedNotificationRoute;
-}
-
-export interface WakeRequest {
-  squarePath: string;
-  actIndex: number;
-  recipient: string;
-  actor: string;
   route: DirectedNotificationRoute;
 }
 
@@ -150,10 +138,6 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     joinedRecipients: () => roster,
     replayedActivityCount: perception.replayedActivityCount,
   };
-}
-
-export function planActNotifications(squareState: SquareState, item: StoredAct, delivery = deriveDeliveryModel(squareState)): PlannedNotification[] {
-  return delivery.plan(item);
 }
 
 export function perceiveActivity(squareState: SquareState, item: StoredAct, viewer: string, delivery = deriveDeliveryModel(squareState)): Perception {

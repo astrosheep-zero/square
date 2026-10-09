@@ -15,8 +15,11 @@ import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
-import { readWakeAttempts, recordWakeAttempt } from '../dist/wake-attempts.js';
-import { wakeEvidence, wakeIsEligible } from '../dist/wake-evidence.js';
+import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
+import { projectWakeEvidenceFromState, wakeIsEligible } from '../dist/square-projections.js';
+import { openSquare } from '../dist/square-file-adapter.js';
+import { closeOpenSquare } from '../dist/open-square.js';
+import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { readCursor } from '../dist/runtime.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -127,6 +130,19 @@ async function markPresentationEvidence(item, session, act, participant = 'Bob',
 }
 
 const markPresentedEvidence = (item, session, act, participant = 'Bob') => markPresentationEvidence(item, session, act, participant, 'presented');
+
+/** Read one recipient's wake evidence straight from the canonical projection. */
+async function wakeEvidence(squarePath, recipient, actIndex, now, env) {
+  const hostLedger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
+  const square = await openSquare(squarePath, { clock: () => now, hostLedger, env });
+  try {
+    const { state } = await square.artifact.read();
+    const projection = await projectWakeEvidenceFromState({ location: squarePath, state, hostLedger: square.hostLedger ?? hostLedger, now });
+    return projection.evidence(recipient, actIndex);
+  } finally {
+    await closeOpenSquare(square);
+  }
+}
 
 function acceptedAdapter(onBeforeSend) {
   return {

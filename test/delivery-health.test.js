@@ -16,15 +16,13 @@ test('delivery evidence writers and health labels stay inside their owning modul
     .sort();
 
   assert.deepEqual(externalUsers('markSeenNotifications', 'delivery.ts'), []);
-  assert.deepEqual(externalUsers('recordWakeAttempt', 'wake-attempts.ts'), []);
-  assert.deepEqual(externalUsers('recordRecoveredUnknown', 'wake-attempts.ts'), []);
 
   const labels = ['wake-accepted', 'wake-unknown', 'presented-not-delivered', 'unreachable'];
   for (const [name, source] of sources) {
     if (name === 'delivery-health.ts') continue;
     for (const label of labels) assert.equal(source.includes(label), false, `${label} leaked into ${name}`);
   }
-  for (const name of ['notifications.ts', 'routes.ts', 'wake-attempts.ts', 'wake-port.ts']) {
+  for (const name of ['notifications.ts', 'routes.ts', 'wake-attempts.ts']) {
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, name), 'utf8'), /delivery-health/);
   }
 

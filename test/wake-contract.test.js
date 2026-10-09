@@ -1,164 +1,75 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { WAKE_ROUTE_KINDS } from '../dist/model.js';
-import { WakePort } from '../dist/wake-port.js';
+import { createWakeTransport } from '../dist/notifications.js';
 
-function route(kind, address = { endpoint: 'endpoint' }) {
-  return { ownerId: 'owner', sessionId: `${kind}-session`, kind, address, updatedAt: 1 };
-}
+const clock = () => 1_700_000_000_000;
+const hostLedger = { listPresence: async () => [] };
 
-/** A scripted adapter that honors the beforeSend gate, then plays outcomes in order. */
-function scriptedAdapter(kind, script, calls) {
+function request(kind) {
   return {
-    kind,
-    async dispatch(address, payload, beforeSend) {
-      if (!(await beforeSend())) return { outcome: 'cancelled' };
-      calls.push({ address, payload });
-      return script.shift();
+    location: '/nonexistent/square.square',
+    participant: 'Faye',
+    activity: 'act/1',
+    actor: 'Bev',
+    route: {
+      location: '/nonexistent/square.square',
+      participant: 'Faye',
+      sessionId: `${kind}-session`,
+      channel: kind,
+      kind,
+      address: { endpoint: 'endpoint' },
+      updatedAt: 1,
     },
   };
 }
 
-// The same contract matrix runs for every required route kind: the port's
-// outcome semantics must be kind-independent, not a per-kind scenario maze.
-for (const kind of WAKE_ROUTE_KINDS) {
-  test(`wake adapter contract is kind-independent: ${kind}`, async () => {
-    // accepted stops global fall-through and records once
-    {
-      const calls = [];
-      const records = [];
-      const adapter = scriptedAdapter(kind, [{ outcome: 'accepted' }, { outcome: 'accepted' }], calls);
-      const port = new WakePort([adapter]);
-      const result = await port.dispatch([route(kind), route(kind)], 'wake', {
-        nextAttemptN: () => 1,
-        beforeSend: async () => true,
-        record: async (r, n, res) => records.push({ kind: r.kind, attemptN: n, outcome: res.outcome }),
-      });
-      assert.deepEqual(result, { outcome: 'accepted' });
-      assert.equal(calls.length, 1);
-      assert.deepEqual(records, [{ kind, attemptN: 1, outcome: 'accepted' }]);
-    }
-
-    // unknown stops global fall-through and records once
-    {
-      const calls = [];
-      const records = [];
-      const adapter = scriptedAdapter(kind, [{ outcome: 'unknown', signature: 's', message: 'm' }, { outcome: 'accepted' }], calls);
-      const port = new WakePort([adapter]);
-      const result = await port.dispatch([route(kind), route(kind)], 'wake', {
-        nextAttemptN: () => 1,
-        beforeSend: async () => true,
-        record: async (r, n, res) => records.push({ kind: r.kind, attemptN: n, outcome: res.outcome }),
-      });
-      assert.deepEqual(result, { outcome: 'unknown' });
-      assert.equal(calls.length, 1);
-      assert.deepEqual(records, [{ kind, attemptN: 1, outcome: 'unknown' }]);
-    }
-
-    // failed falls through to the next route and records each attempt
-    {
-      const calls = [];
-      const records = [];
-      const adapter = scriptedAdapter(kind, [{ outcome: 'failed', signature: 's', message: 'm' }, { outcome: 'accepted' }], calls);
-      const port = new WakePort([adapter]);
-      const result = await port.dispatch([route(kind), route(kind)], 'wake', {
-        nextAttemptN: () => 1,
-        beforeSend: async () => true,
-        record: async (r, n, res) => records.push({ kind: r.kind, attemptN: n, outcome: res.outcome }),
-      });
-      assert.deepEqual(result, { outcome: 'accepted' });
-      assert.equal(calls.length, 2);
-      assert.deepEqual(records, [
-        { kind, attemptN: 1, outcome: 'failed' },
-        { kind, attemptN: 1, outcome: 'accepted' },
-      ]);
-    }
-
-    // beforeSend cancels: nothing is sent, nothing is recorded, and no further adapter is called
-    {
-      const calls = [];
-      const records = [];
-      const adapter = scriptedAdapter(kind, [{ outcome: 'accepted' }, { outcome: 'accepted' }], calls);
-      const port = new WakePort([adapter]);
-      const result = await port.dispatch([route(kind), route(kind)], 'wake', {
-        nextAttemptN: () => 1,
-        beforeSend: async () => false,
-        record: async (r, n, res) => records.push({ kind: r.kind, attemptN: n, outcome: res.outcome }),
-      });
-      assert.deepEqual(result, { outcome: 'cancelled' });
-      assert.equal(calls.length, 0);
-      assert.deepEqual(records, []);
-    }
-  });
+function adapter(kind, extra = {}) {
+  return { kind, async dispatch() { return { outcome: 'accepted' }; }, ...extra };
 }
 
-test('wake port skips route kinds without an adapter and keeps walking', async () => {
-  const calls = [];
-  const adapter = scriptedAdapter('paseo', [{ outcome: 'accepted' }], calls);
-  const port = new WakePort([adapter]);
-  const result = await port.dispatch([route('claude-native'), route('paseo')], 'wake', {
-    nextAttemptN: () => 1,
-    beforeSend: async () => true,
-    record: async () => undefined,
-  });
-  assert.deepEqual(result, { outcome: 'accepted' });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].address.endpoint, 'endpoint');
-});
-
-test('wake port falls through across kinds only after a provable failed', async () => {
-  const firstCalls = [];
-  const secondCalls = [];
-  const port = new WakePort([
-    scriptedAdapter('opencode-server', [{ outcome: 'failed', signature: 's', message: 'm' }], firstCalls),
-    scriptedAdapter('codex-queue', [{ outcome: 'accepted' }], secondCalls),
-  ]);
-  const result = await port.dispatch([route('opencode-server'), route('codex-queue')], 'wake', {
-    nextAttemptN: () => 1,
-    beforeSend: async () => true,
-    record: async () => undefined,
-  });
-  assert.deepEqual(result, { outcome: 'accepted' });
-  assert.equal(firstCalls.length, 1);
-  assert.equal(secondCalls.length, 1);
-});
-
-test('wake port retires an unavailable route without recording an attempt', async () => {
-  const routeValue = route('paseo');
-  const records = [];
-  const invalidated = [];
-  const port = new WakePort([{
-    kind: 'paseo',
-    async dispatch() {
-      return { outcome: 'unavailable', signature: 'address_not_found', message: 'gone', routeStale: true };
+test('injected native transport receives the full request without an awareness payload', async () => {
+  const nativeRequest = request('claude-native');
+  const beforeSend = async () => true;
+  const native = {
+    async probe(route) { assert.equal(route, nativeRequest.route); return true; },
+    async attempt(actual, timeoutMs, gate) {
+      assert.equal(actual, nativeRequest);
+      assert.equal(timeoutMs, 100);
+      assert.equal(gate, beforeSend);
+      return { outcome: 'unknown' };
     },
-  }]);
-  const result = await port.dispatch([routeValue], 'wake', {
-    nextAttemptN: () => 1,
-    beforeSend: async () => true,
-    record: async (_route, _attemptN, value) => records.push(value),
-    invalidate: async (value) => invalidated.push(value),
-  });
-  assert.deepEqual(result, { outcome: 'exhausted' });
-  assert.deepEqual(records, []);
-  assert.deepEqual(invalidated, [routeValue]);
+  };
+  const transport = createWakeTransport([], hostLedger, clock, { 'claude-native': native });
+  assert.equal(await transport.probe(nativeRequest.route), true);
+  assert.deepEqual(await transport.attempt(nativeRequest, 100, beforeSend), { outcome: 'unknown' });
 });
 
-test('wake port retains an unavailable route when the adapter asks for retry', async () => {
-  const routeValue = route('paseo');
-  const invalidated = [];
-  const port = new WakePort([{
-    kind: 'paseo',
-    async dispatch() {
-      return { outcome: 'unavailable', signature: 'discovery_transient', message: 'daemon down', retainRoute: true };
+test('wake transport reports not-capable when no adapter owns the route kind', async () => {
+  const transport = createWakeTransport([], hostLedger, clock, {});
+  assert.deepEqual(await transport.probe(request('codex-queue').route), { outcome: 'not-capable', diagnostic: 'no adapter for codex-queue' });
+  assert.deepEqual(await transport.attempt(request('codex-queue'), 100), { outcome: 'not-capable', diagnostic: 'no adapter for codex-queue' });
+});
+
+test('wake transport probe uses the adapter probe when present and assumes capable otherwise', async () => {
+  const probed = [];
+  const withProbe = adapter('paseo', { async probe(address) { probed.push(address); return false; } });
+  assert.equal(await createWakeTransport([withProbe], hostLedger, clock, {}).probe(request('paseo').route), false);
+  assert.deepEqual(probed, [{ endpoint: 'endpoint' }]);
+  assert.equal(await createWakeTransport([adapter('codex-queue')], hostLedger, clock, {}).probe(request('codex-queue').route), true);
+});
+
+test('wake transport reports a probe failure as not-capable with its diagnostic', async () => {
+  const failing = adapter('paseo', { async probe() { throw new Error('daemon down'); } });
+  assert.deepEqual(await createWakeTransport([failing], hostLedger, clock, {}).probe(request('paseo').route), { outcome: 'not-capable', diagnostic: 'daemon down' });
+});
+
+test('a cancelled send without a verified revalidation stays unknown', async () => {
+  const gated = adapter('paseo', {
+    async dispatch(_address, _payload, beforeSend) {
+      return (await beforeSend()) ? { outcome: 'accepted' } : { outcome: 'cancelled' };
     },
-  }]);
-  await port.dispatch([routeValue], 'wake', {
-    nextAttemptN: () => 1,
-    beforeSend: async () => true,
-    record: async () => undefined,
-    invalidate: async (value) => invalidated.push(value),
   });
-  assert.deepEqual(invalidated, []);
+  const transport = createWakeTransport([gated], hostLedger, clock, {});
+  assert.deepEqual(await transport.attempt(request('paseo'), 100, async () => false), { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' });
 });

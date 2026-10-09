@@ -75,7 +75,7 @@ test('uncapable native sessions keep ownership in presence without a callable ro
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-test('distinct parent and child native Pi sessions resolve distinct participants and routes', async () => {
+test('distinct parent and child native Pi sessions resolve distinct participants', async () => {
   const item = fixture();
   const location = path.join(item.root, 'square.square');
   const base = {
@@ -97,12 +97,6 @@ test('distinct parent and child native Pi sessions resolve distinct participants
   assert.equal(await localParticipantOwner(location, parentName, parentEnv), 'pi-parent-session');
   assert.equal(await localParticipantOwner(location, childName, childEnv), 'pi-child-session');
   assert.equal(await localParticipantOwner(location, childName, parentEnv), undefined, 'the parent session must not be attributed to the child participant');
-  const capabilities = { canUse: (kind) => kind === 'pi-extension' };
-  const parentRoute = selectPrimaryWakeRoute({ boundary: { location, participant: parentName, sessionId: 'pi-parent-session', provider: 'pi' }, env: parentEnv, capabilities });
-  const childRoute = selectPrimaryWakeRoute({ boundary: { location, participant: childName, sessionId: 'pi-child-session', provider: 'pi' }, env: childEnv, capabilities });
-  assert.deepEqual(parentRoute?.address, { sessionId: 'pi-parent-session' });
-  assert.deepEqual(childRoute?.address, { sessionId: 'pi-child-session' });
-  assert.notEqual(parentRoute?.participant, childRoute?.participant);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('local registry cannot plant or shadow an artifact route', async () => {

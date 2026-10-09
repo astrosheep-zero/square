@@ -69,21 +69,23 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
   const observation = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now });
-  const routes = (observation.state.routes ?? []).map((route) => ({
-    location: route.location,
-    participant: route.participant,
-    session: route.sessionId,
-    channel: route.channel as import('./host-ledger.js').PresenceChannel,
-    route: { kind: route.kind, address: route.address },
-    updatedAt: route.updatedAt,
-    epoch: route.epoch,
-  }));
-  const liveRoutes = currentSessionBindings(routes.filter((route) => observation.bindings.some((binding) =>
-    nameKey(binding.participant) === nameKey(route.participant)
-    && binding.sessionId === route.session
-    && binding.location === route.location
-    && (route.route.kind !== 'claude-native' || binding.epoch === route.epoch)
-  )));
+  const routes = (observation.state.routes ?? []).flatMap((route) => {
+    const owner = observation.bindings.find((binding) => nameKey(binding.participant) === nameKey(route.participant)
+      && binding.sessionId === route.sessionId && binding.location === route.location
+      && (route.epoch === undefined || binding.epoch === route.epoch));
+    if (owner === undefined) return [];
+    return [{
+      location: route.location,
+      participant: route.participant,
+      session: route.sessionId,
+      channel: route.channel as import('./host-ledger.js').PresenceChannel,
+      route: { kind: route.kind, address: route.address },
+      updatedAt: route.updatedAt,
+      epoch: route.epoch,
+      cancelledThrough: owner.cancelledThrough,
+    }];
+  });
+  const liveRoutes = currentSessionBindings(routes);
   let presentations: readonly PresentationEvidenceProjection[] = [];
   try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* capability is handled by the route-level wake checks */ }
   let attempted = 0; let accepted = 0; let failed = 0; let unknown = 0; let notCapable = 0;
@@ -94,7 +96,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (requested === undefined || requested !== notification.item.index) continue;
       }
       const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient)
-        && (route.route?.kind !== 'claude-native' || observation.bindings.some((binding) => binding.sessionId === route.session && binding.epoch === route.epoch && nameKey(binding.participant) === nameKey(route.participant) && notification.item.index > (binding.cancelledThrough ?? -1))));
+        && notification.item.index > (route.cancelledThrough ?? -1));
       let acceptedForAttention = false;
       let failedForAttention = false;
       let unknownForAttention = false;
@@ -266,7 +268,7 @@ export function selectPendingWakeActivities(state: SquareState, routes: readonly
       if (attempts.some((attempt) => attempt.attention.actIndex === notification.item.index && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.outcome === 'accepted')) continue;
       const eligible = routes.some((binding) => {
         if (binding.route === undefined || nameKey(binding.participant) !== nameKey(membership)) return false;
-        if (binding.route.kind === 'claude-native' && notification.item.index <= (binding.cancelledThrough ?? -1)) return false;
+        if (notification.item.index <= (binding.cancelledThrough ?? -1)) return false;
         const presented = presentations.filter((row) => row.activity === formatActivityId(notification.item.index) && row.participant.toLocaleLowerCase() === membership.toLocaleLowerCase() && row.sessionId === binding.session && presentationSuppressesWake([row]));
         if (presented.length > 0) return false;
         const matching = attempts.filter((attempt) => attempt.session === binding.session && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.attention.actIndex === notification.item.index);
@@ -284,11 +286,11 @@ export async function sweepPending(input: { readonly artifact: SquareArtifactPor
 }
 
 export async function sweepPendingFromState(input: { readonly state: SquareState; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number; readonly deriveDelivery?: (snapshot: SquareState) => ReturnType<typeof deriveDeliveryModel> }): Promise<number[]> {
-  const owners = input.state.routes?.some((route) => route.kind === 'claude-native')
+  const owners = input.state.routes?.some((route) => route.epoch !== undefined)
     ? await input.hostLedger.listPresence({ location: input.location, now: input.now }) : [];
   const bindings: PresenceRecord[] = currentSessionBindings((input.state.routes ?? []).flatMap((route) => {
     const owner = owners.find((row) => row.session === route.sessionId && nameKey(row.participant) === nameKey(route.participant));
-    if (route.kind === 'claude-native' && (!owner || owner.epoch !== route.epoch)) return [];
+    if (route.epoch !== undefined && (!owner || owner.epoch !== route.epoch)) return [];
     return [{ location: input.location, participant: route.participant, session: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { kind: route.kind, address: route.address }, updatedAt: route.updatedAt, ...(owner?.cancelledThrough === undefined ? {} : { cancelledThrough: owner.cancelledThrough }) }];
   }));
   let records: readonly import('./host-ledger.js').EvidenceRecord[] = [];

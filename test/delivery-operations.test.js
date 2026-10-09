@@ -25,7 +25,7 @@ test('release preserves token authority and rejects late or tokenless terminal e
     await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: first.claimToken, at: 13 });
     await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: 'forged-token', at: 13 });
     await ledger.appendEvidence({ ...claim, outcome: 'failed', claimToken: '', at: 13 });
-    await ledger.appendWakeAttempt({ ...claim, kind: 'wake', outcome: 'failed', routeKind: 'paseo', attemptN: 1, claimToken: 'forged-token', at: 13 });
+    await ledger.appendEvidence({ ...claim, kind: 'wake', outcome: 'failed', routeKind: 'paseo', attemptN: 1, claimToken: 'forged-token', at: 13 });
     assert.deepEqual(await ledger.listEvidence({ ...claim, now: 13 }), []);
     assert.deepEqual(await ledger.listEvidence({ ...claim, kind: 'wake', now: 13 }), []);
     const released = await ledger.listEvidence({ ...claim, includeReleased: true, now: 13 });

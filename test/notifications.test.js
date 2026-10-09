@@ -10,7 +10,8 @@ import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordJoin, recordSessionJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { PaseoWakeSendError } from '../dist/wake-sink.js';
-import { readWakeAttempts, readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
+import { readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
+import { readWakeAttempts } from './wake-attempt-fixtures.js';
 import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
@@ -83,6 +84,31 @@ async function route(item, options = {}) {
 function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
 }
+test('default notifications honor disabled Paseo while explicit injection remains usable', async () => {
+  const item = await fixture();
+  const dispatch = PaseoAdapter.prototype.dispatch;
+  let calls = 0;
+  PaseoAdapter.prototype.dispatch = async () => { calls += 1; return { outcome: 'accepted' }; };
+  try {
+    item.env.SQUARE_DISABLE_PASEO_WAKE = '1';
+    await route(item);
+    const blocked = await processActNotificationsOnce(item.squarePath, 2, { env: item.env });
+    assert.equal(calls, 0);
+    assert.equal(blocked.attempted, 0);
+    assert.equal(blocked.notCapable, 1);
+    assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
+    const injected = await processActNotificationsOnce(item.squarePath, 2, {
+      env: item.env,
+      adapters: [new PaseoAdapter()],
+    });
+    assert.equal(calls, 1);
+    assert.equal(injected.accepted, 1);
+  } finally {
+    PaseoAdapter.prototype.dispatch = dispatch;
+    fs.rmSync(item.root, { recursive: true, force: true });
+  }
+});
+
 test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async () => {
   const item = await fixture();
   await route(item, { agentId: 'exact-agent' });

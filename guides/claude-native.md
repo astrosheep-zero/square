@@ -50,26 +50,18 @@ preview. A clipped preview ends with the full `catch --id act/<index>` command.
 Opaque text correlation resolves through bound memberships and the existing
 attempt ledger, never a path or asserted source from incoming text.
 
-The reusable transport is the same Node-only leaf published as
-`@astrosheep/agent-delivery/claude-native`, sourced from
-`packages/agent-delivery/src/claude-native.ts`. Square imports that source directly;
-its root package ships the compiled leaf without loading the OpenCode SDK or
-requiring a separate agent-delivery installation. There is no second socket sender.
+Transport is the Node-only leaf published as `@astrosheep/agent-delivery/claude-native`,
+sourced from `packages/agent-delivery/src/claude-native.ts`. Square imports that
+source directly; its root package ships the compiled leaf without loading the
+OpenCode SDK or requiring a separate agent-delivery installation. There is no
+second socket sender. Receipt semantics (`written` is local bytes only, never
+admission), the plain-peer use, and the standalone client API are documented in
+the package `README.md`; the leaf accepts only target/session endpoint, text, and
+bounded deadline/cancellation control.
 
-The leaf accepts only target/session endpoint, text, and bounded
-deadline/cancellation control. It writes tokenless `msgV:1`, session-targeted
-UTF-8 NDJSON with `priority:'next'`. **Socket write is not admission or seen.**
-External consumers may use the standalone package's `connectExisting`/`sendText`
-with `{harness:'claude', sessionId, endpoint}`. The endpoint must be an explicit
-absolute native socket path from the receiver; the package does not discover it
-from an arbitrary session ID. Its `steer` means the next native boundary, not
-interruption; `queue` and caller input IDs are unsupported. A plain native peer
-does not require Square's mod, which adds Square-specific lifecycle/evidence only.
-The generic package reports `written`/`unknown`/`unavailable`, never native
-admission. Native permissions and inbound policy remain authoritative.
-
-`session.receive` runs before native policy. `await next(e)` confirms queue
-admission only when the returned text is unchanged. Hold/refuse reject that gate;
+`session.receive` runs before native policy; Square owns this admission gate and
+the presentation writer, not the leaf. `await next(e)` confirms queue admission
+only when the returned text is unchanged. Hold/refuse reject that gate;
 consumed/rewritten results cannot confirm the original. Unknown peer messages
 pass through. Recognized stale/cancelled deliveries can be consumed before queueing.
 No ambiguous send is blindly retried.
@@ -78,8 +70,7 @@ The sole presentation writer observes **returned stored main user-role text**
 after `session.append.next`. It matches the entire expected payload within
 Claude's idle/busy peer framing. A complete preview records seen + presented;
 a clipped one records clipped only. This means stored in model context, not
-processed or understood. Native hold release does not replay receive; append
-still confirms it. Catch/presentation races are idempotent and revalidated
+processed or understood. Catch/presentation races are idempotent and revalidated
 immediately before send and inside the observation transaction.
 
 ## Cancellation and custody
@@ -104,9 +95,7 @@ Claude behavior.
 release a held message without another receive guard. Append is observational,
 not a veto. Square suppresses local retries and stale evidence but cannot erase
 native custody or promise that remote work will not run. New activity after the
-abort remains eligible. The protocol and runtime evidence used for this migration is retained in the
-commission artifacts `/tmp/claude-inbox-design-validation.md` and
-`/tmp/square-claude-final-runtime.log`; the latter records the shipped plugin's
-isolated idle, busy, hold, lifecycle, fork, and cancellation runs. The repository
-fixtures cover the same coordinator and packaging boundaries without requiring a
-Claude installation.
+abort remains eligible. Protocol design and runtime evidence live in the package
+`VALIDATION.md` and the commission artifacts it cites; the repository fixtures
+cover the same coordinator and packaging boundaries without requiring a Claude
+installation.

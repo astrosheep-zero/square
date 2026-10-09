@@ -3,27 +3,20 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 import {
-  planActNotifications,
   type WakeAdapter,
 } from './delivery.js';
 import { SquareError, type SquareState } from './model.js';
-import { matchesMentionTarget } from './runtime.js';
-import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
+import { parseActivityId, type ActivityId } from './square-core.js';
 import { displayAttentionPath } from './attention-presentation.js';
-import { openSquare, observeSquareChanges } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
-import { notificationDelivered, resolveParticipant } from './views.js';
 import { deliverPending, observeSquare, sweepPending, sweepPendingFromState } from './delivery-operations.js';
 import { nameKey } from './model.js';
-import { projectPresentationEvidence } from './square-projections.js';
-import type { WakeTransportPort, WakeOutcome, WakeRequest, PresenceChannel } from './ports.js';
+import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 export type { PlannedNotification } from './delivery.js';
-export { planActNotifications, matchesMentionTarget };
-
-export { notificationMessageId } from './delivery.js';
 
 export const PRIVILEGED_HOOK_BUDGET_MS = 3000;
 
@@ -48,50 +41,6 @@ function renderWakePayload(request: WakeRequest): string {
     `attention: ${request.activity} for ${request.participant} from ${request.actor}`,
     '</system-reminder>',
   ].join('\n');
-}
-
-function notificationIndex(ref: number | ActivityId): number {
-  if (typeof ref === 'number') return ref;
-  const index = parseActivityId(ref);
-  if (index === undefined) throw new Error(`Invalid act ref: ${ref}`);
-  return index;
-}
-
-export async function hasDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId): Promise<boolean> {
-  const square = await openSquare(squarePath);
-  try {
-    const recipient = (await resolveParticipant(square, name)).name;
-    return notificationDelivered(square, recipient, notificationIndex(ref));
-  } finally {
-    await closeOpenSquare(square);
-  }
-}
-
-export async function hasAttentionNotification(squarePath: string, name: string, ref: number | ActivityId, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  const square = await openSquare(squarePath);
-  try {
-    const recipient = (await resolveParticipant(square, name)).name;
-    const index = notificationIndex(ref);
-    if (await notificationDelivered(square, recipient, index)) return true;
-    const root = hostLedgerRoot(env);
-    const hostLedger = createHostLedgerPort({ rootPath: root });
-    return (await projectPresentationEvidence({ hostLedger, location: squarePath, participant: recipient, activity: formatActivityId(index), now: Date.now() })).some((row) => row.outcome === 'presented');
-  } finally {
-    await closeOpenSquare(square);
-  }
-}
-
-export async function waitForDeliveredNotification(squarePath: string, name: string, ref: number | ActivityId, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {
-  const deadline = Date.now() + (opts.timeoutMs ?? 30000);
-  const observer = await observeSquareChanges(squarePath);
-  try {
-    while (Date.now() <= deadline) {
-      const baseline = await observer.read(opts.signal);
-      if (await hasDeliveredNotification(squarePath, name, ref)) return true;
-      if (!await observer.changed(baseline, Math.max(0, deadline - Date.now()), opts.signal)) return false;
-    }
-    return false;
-  } finally { observer.close(); }
 }
 
 interface ProcessNotificationOptions {
@@ -121,13 +70,15 @@ export async function createDefaultWakeTransport(
   hostLedger: import('./host-ledger.js').HostLedgerPort,
   clock: () => number,
   env: NodeJS.ProcessEnv = process.env,
+  suppliedAdapters?: readonly WakeAdapter[],
 ): Promise<WakeTransportPort> {
-  const adapters = await defaultWakeAdapters();
+  const adapters = suppliedAdapters ?? await defaultWakeAdapters();
+  const { createClaudeWakeTransport } = await import('./claude-delivery.js');
   return createWakeTransport(
-    env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,
+    suppliedAdapters === undefined && env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,
     hostLedger,
     clock,
-    env,
+    { 'claude-native': createClaudeWakeTransport(hostLedger, env) },
   );
 }
 
@@ -165,15 +116,16 @@ async function wakeRequestCurrentness(request: WakeRequest, hostLedger: import('
 }
 
 
-export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger: import('./host-ledger.js').HostLedgerPort, clock: () => number, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
+export function createWakeTransport(
+  adapters: readonly WakeAdapter[],
+  hostLedger: import('./host-ledger.js').HostLedgerPort,
+  clock: () => number,
+  nativePorts: Readonly<Partial<Record<import('./model.js').WakeRouteKind, WakeTransportPort>>> = {},
+): WakeTransportPort {
   return {
     probe: async (route) => {
-      if (route.kind === 'claude-native') {
-        const { nativeSupported } = await import('./claude-delivery.js');
-        if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: macOS 2.1.295 loaded mod required.' };
-        try { return (await fs.promises.stat(route.address.endpoint!)).isSocket() || { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint is not a socket.' }; }
-        catch { return { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint unavailable.' }; }
-      }
+      const native = nativePorts[route.kind];
+      if (native !== undefined) return native.probe?.(route) ?? true;
       const adapter = adapters.find((candidate) => candidate.kind === route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${route.kind}` };
       const probe = (adapter as WakeAdapter & { probe?: (address: Readonly<Record<string, string>>) => Promise<boolean> }).probe;
@@ -183,10 +135,8 @@ export function createWakeTransport(adapters: readonly WakeAdapter[], hostLedger
       }
     },
     attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
-      if (request.route.kind === 'claude-native') {
-        const { dispatchClaude } = await import('./claude-delivery.js');
-        return dispatchClaude(request, hostLedger, timeoutMs, beforeSend, env);
-      }
+      const native = nativePorts[request.route.kind];
+      if (native !== undefined) return native.attempt(request, timeoutMs, beforeSend);
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
@@ -228,8 +178,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   });
   const square = await openSquare(squarePath, { clock: now, hostLedger, env });
   try {
-    const adapters = opts.adapters ?? await defaultWakeAdapters();
-    const transport = createWakeTransport(adapters, hostLedger, now, env);
+    const transport = await createDefaultWakeTransport(hostLedger, now, env, opts.adapters);
     try {
       return await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch {
@@ -261,7 +210,7 @@ export async function sweepPrivilegedPending(
     }
   } catch { /* no local square directory */ }
   if (remainingMs() === 0 || signal?.aborted) return;
-  const adapters = suppliedAdapters ?? await defaultWakeAdapters();
+  const transport = await createDefaultWakeTransport(hostLedger, Date.now, env, suppliedAdapters);
   for (const squarePath of paths) {
     if (remainingMs() === 0 || signal?.aborted) break;
     try {
@@ -271,7 +220,6 @@ export async function sweepPrivilegedPending(
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
         const selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
-        const transport = createWakeTransport(adapters, hostLedger, Date.now, env);
         for (const actIndex of selected) {
           const remaining = remainingMs();
           if (remaining === 0 || signal?.aborted) break;

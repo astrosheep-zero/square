@@ -5,15 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { formatActivityId } from '../dist/square-core.js';
-import {
-  hasAttemptableWakeRoute,
-  isWakeRouteAttemptable,
-  readWakeAttempts,
-  readWakeReleaseDiagnostics,
-  recordWakeAttempt,
-  redactWakeDiagnostic,
-  terminalWakeEvidence,
-} from '../dist/wake-attempts.js';
+import { hasAttemptableWakeRoute, isWakeRouteAttemptable, terminalWakeEvidence } from '../dist/square-projections.js';
+import { readWakeReleaseDiagnostics, redactWakeDiagnostic } from '../dist/wake-attempts.js';
+import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,7 +37,7 @@ function row(item, overrides = {}) {
   };
 }
 
-test('wake attempt reads accept only real adapter outcomes inside retention', async () => {
+test('canonical wake evidence reads ignore malformed, expired and future rows', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
   fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
@@ -51,7 +45,6 @@ test('wake attempt reads accept only real adapter outcomes inside retention', as
     '{bad json',
     JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
     JSON.stringify(row(item, { at: now + 1 })),
-    JSON.stringify(row(item, { at: now - DAY_MS, routeKind: undefined })),
     JSON.stringify(row(item, { at: now - DAY_MS, outcome: 'unknown', signature: undefined })),
     JSON.stringify(row(item, { at: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attemptN: 2 })),
   ].join('\n'));
@@ -89,25 +82,6 @@ test('wake release diagnostics are readable without entering behavior evidence',
   const [release] = await readWakeReleaseDiagnostics({ attention: item.attention, now: 1_002, env: item.env });
   assert.deepEqual([release.at, release.routeKind, release.attemptN, release.signature], [1_001, 'paseo', 2, 'agent_not_idle']);
   assert.deepEqual(release.diagnostic, { phase: 'selection', code: 'not_idle' });
-  fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('wake attempt persistence redacts transport credentials recursively', async () => {
-  const item = fixture();
-  const env = { ...item.env, PASEO_PASSWORD: 'very-secret' };
-  await recordWakeAttempt({
-    attention: item.attention,
-    routeKind: 'paseo',
-    outcome: 'unknown',
-    signature: 'send_unknown',
-    attemptN: 1,
-    message: 'failed with very-secret and ?password=query-secret',
-    diagnostic: { nested: ['very-secret', 'tcp://host?password=another-secret&x=1'] },
-  }, env);
-
-  const raw = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8');
-  assert.doesNotMatch(raw, /very-secret|query-secret|another-secret/);
-  assert.match(raw, /\[redacted\]/);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 

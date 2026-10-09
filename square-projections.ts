@@ -146,7 +146,7 @@ export async function projectWakeEvidenceFromState(input: {
 }): Promise<WakeEvidenceProjection> {
   const canonicalLocation = await canonicalRouteLocation(input.location);
   const delivery = input.delivery ?? deriveDeliveryModel(input.state);
-  const owners = input.state.routes?.some((route) => route.kind === 'claude-native') ? await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now }) : [];
+  const owners = input.state.routes?.some((route) => route.epoch !== undefined) ? await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now }) : [];
   const bindings: SessionBindingProjection[] = (input.state.routes ?? [])
     .filter((route) => route.location === canonicalLocation || route.location === input.location)
     .map((route) => ({ location: route.location, participant: route.participant, sessionId: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { ...route, address: { ...route.address } }, updatedAt: route.updatedAt }));
@@ -167,10 +167,9 @@ export async function projectWakeEvidenceFromState(input: {
       const recipientBindings = currentSessionBindings(bindings.filter((binding) => nameKey(binding.participant) === nameKey(recipient)));
       const routes = recipientBindings.flatMap((binding) => {
         if (binding.route === undefined) return [];
-        if (binding.route.kind === 'claude-native') {
-          const owner = owners.find((row) => row.session === binding.sessionId && nameKey(row.participant) === nameKey(binding.participant) && row.epoch === binding.route!.epoch);
-          if (!owner || actIndex <= (owner.cancelledThrough ?? -1)) return [];
-        }
+        const owner = owners.find((row) => row.session === binding.sessionId && nameKey(row.participant) === nameKey(binding.participant));
+        if (binding.route.epoch !== undefined && (!owner || owner.epoch !== binding.route.epoch)) return [];
+        if (actIndex <= (owner?.cancelledThrough ?? -1)) return [];
         return [binding.route];
       });
       const attempts = recipientBindings.flatMap((binding) => attemptsByBinding.get(JSON.stringify([nameKey(recipient), actIndex, binding.sessionId])) ?? []);

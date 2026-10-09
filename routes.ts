@@ -31,9 +31,6 @@ export async function defaultWakeRouteCapabilities(hostLedger?: import('./host-l
 }
 function nativeCandidate(boundary: WakeBoundary): { kind: WakeRouteKind; address: Record<string, string> } | undefined {
   if (boundary.provider === 'codex') return { kind: 'codex-queue', address: { threadId: boundary.sessionId } };
-  if (boundary.provider === 'claude') return { kind: 'claude-native', address: { sessionId: boundary.sessionId } };
-  if (boundary.provider === 'opencode') return { kind: 'opencode-server', address: { sessionId: boundary.sessionId } };
-  if (boundary.provider === 'pi') return { kind: 'pi-extension', address: { sessionId: boundary.sessionId } };
   return undefined;
 }
 export function selectPrimaryWakeRoute(input: { readonly boundary: WakeBoundary; readonly env: NodeJS.ProcessEnv; readonly capabilities: WakeRouteCapabilities }): Omit<WakeRoute, 'updatedAt'> | undefined {

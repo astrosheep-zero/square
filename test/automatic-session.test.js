@@ -246,11 +246,9 @@ test('automatic session end does not done a replacement that still owns the part
     await automaticSessionStart('pi', 'old-session', item.cwd, env);
     const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT ?? path.dirname(env.SQUARE_REGISTRY) });
     await ledger.ensurePresence({ location: item.publicPath, participant: 'shared', session: 'new-session', channel: 'pi', updatedAt: Date.now() });
-    await upsertWakeRoute({ location: item.publicPath, participant: 'shared', sessionId: 'new-session', channel: 'pi', kind: 'pi-extension', address: { sessionId: 'new-session' } }, { at: Date.now() });
     await automaticSessionEnd('pi', 'old-session', item.cwd, env);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join']);
-  assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['new-session']);
 });
 test('done then rejoin leaves only the current session route', { concurrency: false }, async () => {
   const item = await fixture();
