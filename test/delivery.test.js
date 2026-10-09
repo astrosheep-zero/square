@@ -4,6 +4,8 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications, perceiveActivity } from '../dist/delivery.js';
+import { decideCatch } from '../dist/catch-decisions.js';
+import { pendingAtBoundary } from '../dist/square-projections.js';
 import { previewAttentionBody, renderAttentionPreview } from '../dist/attention-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { readCursor, recordObservation } from '../dist/runtime.js';
@@ -199,7 +201,7 @@ test('a later listen does not retroactively receive an earlier bare say', () => 
 
 test('a catch lease owns only the notifications admitted by its filter', () => {
   const mention = { actor: 'Alice', body: 'question @Bob', route: 'mention', recipient: 'Bob' };
-  const bell = { actor: 'Alice', body: 'attention', route: 'bell' };
+  const bell = { actor: 'Alice', body: 'attention', route: 'bell', recipient: 'Bob' };
   const lease = { leaseId: 'a', heartbeatAt: 1, expiresAt: 2 };
 
   assert.equal(leaseOwnsNotification(lease, mention), true);
@@ -207,7 +209,71 @@ test('a catch lease owns only the notifications admitted by its filter', () => {
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Cara' } }, mention), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'], mention: 'Cara' } }, bell), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, mention), true);
-  assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { actor: 'aku/riko', body: 'bare answer', route: 'attention', recipient: 'Bob' }), true);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { actor: 'aku/riko', body: 'bare answer', route: 'attention', recipient: 'Bob' }), false);
+});
+
+test('a mention-filtered catch leaves listening-only activity eligible at the native boundary', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 4 },
+    { kind: 'say', actor: 'Alice', body: 'bare answer', at: 5 },
+    { kind: 'say', actor: 'Alice', body: 'for Cara @Cara', mentions: ['Cara'], at: 6 },
+  ]);
+  const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { mention: 'Bob' } };
+  const pending = deriveDeliveryModel(square).pendingFor('Bob');
+  const before = structuredClone(square);
+  assert.deepEqual(pending.map(({ route }) => route), ['attention', 'attention']);
+  for (const { item, recipient, route } of pending) {
+    assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), false);
+  }
+  assert.deepEqual(square, before, 'lease filtering never records observations');
+  const caught = decideCatch(square, 'Bob', { mention: true }, 11);
+  assert.deepEqual(caught.delivered, []);
+  assert.equal(caught.changed, false);
+  assert.deepEqual(square, before, 'excluded notifications stay unread');
+  const membership = {
+    name: 'Bob', squarePath: '/tmp/listener.square', catchLease: lease,
+    notifications: pending.map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route })),
+  };
+  assert.deepEqual(pendingAtBoundary([membership]), [membership]);
+  assert.deepEqual(decideCatch(square, 'Bob', {}, 12).delivered.map(({ index }) => index), [4, 5]);
+});
+
+test('bells satisfy mention filtering but still require the catch sender filter', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'say', actor: 'Alice', body: 'everyone listen', reach: 'bell', at: 4 },
+  ]);
+  const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { participants: ['Cara'], mention: 'Bob' } };
+  const [{ item, recipient, route }] = deriveDeliveryModel(square).pendingFor('Bob');
+  const notification = { ...item, recipient, route };
+  assert.equal(leaseOwnsNotification(lease, notification), false);
+  assert.deepEqual(decideCatch(square, 'Bob', { from: ['Cara'], mention: true }, 11).delivered, []);
+  assert.deepEqual(decideCatch(square, 'Bob', { from: ['Cara'] }, 11).delivered, []);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'] } }, notification), false);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['alice'], mention: 'bob' } }, notification), true);
+  assert.deepEqual(decideCatch(square, 'BOB', { from: ['alice'], mention: true }, 12).delivered.map(({ index }) => index), [3]);
+});
+
+test('a catch lease owns all matching unread notifications beyond the current page', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    ...Array.from({ length: 3 }, (_, index) => ({ kind: 'say', actor: 'Alice', body: `message ${index}`, mentions: ['Bob'], at: index + 3 })),
+  ]);
+  const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { participants: ['alice'], mention: 'bob' } };
+  const owns = ({ item, recipient, route }) => leaseOwnsNotification(lease, { ...item, recipient, route });
+  assert.equal(deriveDeliveryModel(square).pendingFor('Bob').every(owns), true);
+  const caught = decideCatch(square, 'Bob', { from: ['alice'], mention: true, limit: 1 }, 11);
+  assert.deepEqual(caught.delivered.map(({ index }) => index), [2]);
+  assert.equal(caught.remaining, 2);
+  const pending = deriveDeliveryModel(square).pendingFor('Bob');
+  assert.deepEqual(pending.map(({ item }) => item.index), [3, 4]);
+  assert.equal(pending.every(owns), true);
 });
 
 test('delivery route distinguishes mentioned recipients from listeners on the same say', () => {

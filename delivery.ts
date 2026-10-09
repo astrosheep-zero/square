@@ -3,16 +3,14 @@ import {
   type SquareState,
   type StoredAct,
   type WatchLease,
-  type WatchLeaseFilter,
   type WakeRoute,
   type WakeRouteKind,
-  type Reach,
   findParticipantName,
-  sameName,
 } from './model.js';
 import { audienceOf, replayLandedAudiences, type Perception } from './square-core.js';
 import { derivePerceptionProjection } from './perception-projection.js';
 import { matchesMentionTarget, recordObservation } from './runtime.js';
+import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
@@ -42,18 +40,8 @@ export interface WakeAdapter {
 
 export interface RoutedNotification {
   actor: string;
-  body: string;
-  mentions?: readonly string[];
   route: DirectedNotificationRoute;
-  recipient?: string;
-}
-
-export interface CatchFilterShape {
-  actor: string;
-  body: string;
-  mentions?: readonly string[];
-  reach?: Reach;
-  recipients?: readonly string[];
+  recipient: string;
 }
 
 export interface DeliveryModel {
@@ -155,36 +143,13 @@ export function markSeenNotifications(squareState: SquareState, recipient: strin
   return changed;
 }
 
-/** Canonical say-activity filter shared by catch selection and hook ownership. */
-export function matchesCatchFilter(activity: CatchFilterShape, filter: WatchLeaseFilter): boolean {
-  if (
-    filter.participants !== undefined &&
-    !filter.participants.some((participant) => sameName(participant, activity.actor))
-  ) {
-    return false;
-  }
-  if (audienceOf(activity).kind === 'bell') return true;
-  if (filter.mention === undefined) return true;
-  return activity.recipients?.some((recipient) => sameName(recipient, filter.mention!)) === true
-    || matchesMentionTarget(activity, filter.mention);
-}
-
-/** True only when the live catch's own filters would deliver this notification. */
+/** True only when the live catch's own filters would deliver this unread notification, independent of page size. */
 export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNotification): boolean {
-  if (
-    lease.filter?.mention !== undefined
-    && notification.route !== 'bell'
-    && notification.recipient !== undefined
-    && !sameName(lease.filter.mention, notification.recipient)
-  ) return false;
-  return matchesCatchFilter(
-    {
-      actor: notification.actor,
-      body: notification.body,
-      ...(notification.mentions === undefined ? {} : { mentions: notification.mentions }),
-      ...(notification.recipient === undefined ? {} : { recipients: [notification.recipient] }),
-      ...(notification.route === 'bell' ? { reach: 'bell' as const } : {}),
-    },
-    lease.filter ?? {}
+  return matchesCatchSelection(
+    notification.actor,
+    notification.route === 'bell'
+      ? { kind: 'bell' }
+      : { kind: 'mentions', names: notification.route === 'mention' ? [notification.recipient] : [] },
+    lease.filter ?? {},
   );
 }

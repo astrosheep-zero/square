@@ -1,8 +1,9 @@
 import { audienceOf, formatActivityId, parseActivityId, type Perception } from './square-core.js';
 import { derivePerceptionProjection, type PerceptionProjection } from './perception-projection.js';
-import { matchesMentionTarget, recordObservation } from './runtime.js';
+import { recordObservation } from './runtime.js';
+import { matchesCatchSelection } from './catch-selection.js';
 import { participantIdentity } from './participant-identity.js';
-import { SquareError, sameName, type SquareState, type StoredAct, validateName } from './model.js';
+import { SquareError, type SquareState, type StoredAct, validateName } from './model.js';
 import { resolveRosterName } from './runtime.js';
 import type { CatchOptions } from './square-facade.js';
 
@@ -70,16 +71,14 @@ export function decideCatch(
       remaining: state.acts.filter((item) => item.kind === 'say' && delivery.directedTo(item, viewer) && !delivery.isSeen(viewer, item.index)).length,
     };
   }
-  const from = options.from;
-  const mentionOnly = options.mention === true;
+  const filter = { participants: options.from, mention: options.mention === true ? viewer : undefined };
   const delivered: StoredAct[] = [];
   const perceptions = new Map<number, Perception>();
 
   const matching: StoredAct[] = [];
   for (const activity of state.acts) {
     if (activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) continue;
-    if (from !== undefined && !from.some((participant) => sameName(participant, activity.actor))) continue;
-    if (mentionOnly && audienceOf(activity).kind !== 'bell' && !matchesMentionTarget(activity, viewer)) continue;
+    if (!matchesCatchSelection(activity.actor, audienceOf(activity), filter)) continue;
     if (delivery.isSeen(viewer, activity.index)) continue;
     matching.push(activity);
   }
