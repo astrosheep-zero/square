@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { nameKey, type SquareState } from './model.js';
 import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput,  SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
@@ -101,11 +100,11 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
       let failedForAttention = false;
       let unknownForAttention = false;
       let notCapableForAttention = false;
+      // Already-accepted attention is a no-op even if its route is no longer available.
       try {
         const prior = await input.hostLedger.listWakeAttempts({ attention: { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient }, now: Date.now() });
-        acceptedForAttention = prior.some((attempt) => attempt.outcome === 'accepted');
-      } catch { /* capability is handled by the route-level probe */ }
-      if (acceptedForAttention) continue;
+        if (prior.some((attempt) => attempt.outcome === 'accepted')) continue;
+      } catch { /* the atomic claim below still gates dispatch */ }
       if (candidates.length === 0) notCapableForAttention = true;
       for (const route of candidates) {
         const activity = formatActivityId(notification.item.index);
@@ -120,63 +119,28 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
             if (probe === false || (typeof probe === 'object' && probe.outcome === 'not-capable')) { notCapableForAttention = true; continue; }
           } catch { notCapableForAttention = true; continue; }
         }
-        let leaseId = randomUUID();
-        let lease;
-        try { lease = await input.hostLedger.claimWakeDispatch({ attention, leaseId, leaseMs, session: route.session }); }
+        let claim: import('./host-ledger.js').WakeAttemptClaim;
+        try { claim = await input.hostLedger.claimWakeAttempt({ attention, session: route.session, routeKind: route.route!.kind, leaseMs }); }
         catch { notCapableForAttention = true; continue; }
-        if (lease.type === 'ambiguous') {
-          let recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: lease.lease.leaseId });
-          if (recovered.status === 'busy' && recovered.record.claimToken !== undefined) {
-            await releaseWakeClaim({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken: recovered.record.claimToken, routeKind: lease.lease.routeKind ?? route.route!.kind, attemptN: lease.lease.attemptN }, {
-              signature: 'stale_dispatch_claim_recovered',
-              message: 'A stale dispatch claim was released so recovery could continue.',
-            });
-            recovered = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: lease.lease.leaseId });
-          }
-          if (recovered.status === 'acquired') {
-            await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: 'unknown', routeKind: lease.lease.routeKind ?? route.route!.kind, attemptN: lease.lease.attemptN ?? 1, signature: 'worker_interrupted_during_dispatch', message: 'The notification worker ended after dispatch began; transport acceptance is unknown.', claimToken: recovered.claimToken });
-          }
-          await input.hostLedger.releaseWakeDispatch({ attention, leaseId: lease.lease.leaseId, session: route.session });
-          break;
-        }
-        if (lease.type === 'busy') break;
-        if (lease.type !== 'acquired') continue;
-        // One teardown path for every exit after claim acquisition; each call site keeps its own error policy.
-        const releaseDispatchLease = () => input.hostLedger.releaseWakeDispatch({ attention, leaseId, session: route.session });
-        try {
-          const completed = await input.hostLedger.listWakeAttempts({ attention, now: Date.now() });
-          if (completed.some((attempt) => attempt.outcome === 'accepted')) {
-            await releaseDispatchLease();
-            acceptedForAttention = true;
-            break;
-          }
-        } catch { /* continue with the evidence claim */ }
-        let attempts;
-        try { attempts = await input.hostLedger.listWakeAttempts({ attention, now: Date.now() }); }
-        catch { notCapableForAttention = true; await releaseDispatchLease().catch(() => undefined); continue; }
-        if (attempts.some((attempt) => attempt.outcome === 'unknown')) {
-          await releaseDispatchLease();
-          break;
-        }
-        const sessionAttempts = attempts.filter((attempt) => attempt.session === route.session);
-        const attemptN = sessionAttempts.reduce((highest, record) => Math.max(highest, record.attemptN ?? 0), 0) + 1;
+        if (claim.status === 'degraded') { notCapableForAttention = true; continue; }
+        // Busy and terminal outcomes are attention-wide: no other session or route may dispatch.
+        // A terminal attempt was already accepted or may already have been sent, so it reports nothing new.
+        if (claim.status === 'busy') break;
+        if (claim.status === 'terminal') break;
+        const { claimToken, attemptN } = claim;
         const request = { location: input.location, participant: membership.recipient, activity, actor: notification.item.actor, route: requestRoute };
-        let outcome;
-        const claim = await input.hostLedger.claimEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', leaseMs, claimToken: leaseId });
-        if (claim.status !== 'acquired') { await releaseDispatchLease(); if (claim.status === 'degraded') notCapableForAttention = true; continue; }
-        const claimToken = claim.claimToken;
         const claimRelease: Parameters<typeof releaseWakeClaim>[0] = { hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN };
-        const abandon = async (details: Parameters<typeof releaseWakeClaim>[1], options: { readonly attemptN?: number; readonly bestEffortClaim?: boolean } = {}): Promise<void> => {
-          const claim = releaseWakeClaim(options.attemptN === undefined ? claimRelease : { ...claimRelease, attemptN: options.attemptN }, details);
-          if (options.bestEffortClaim === true) await claim.catch(() => undefined);
-          else await claim;
-          await releaseDispatchLease();
+        // One teardown path for every exit after claim acquisition; each call site keeps its own error policy.
+        const abandon = async (details: Parameters<typeof releaseWakeClaim>[1], options: { readonly bestEffortClaim?: boolean } = {}): Promise<void> => {
+          const release = releaseWakeClaim(claimRelease, details);
+          if (options.bestEffortClaim === true) await release.catch(() => undefined);
+          else await release;
         };
-        const dispatching = await input.hostLedger.transitionWakeDispatch({ attention, leaseId, phase: 'dispatching', leaseMs, routeKind: route.route!.kind, attemptN, session: route.session });
+        const dispatching = await input.hostLedger.transitionWakeAttempt({ attention, session: route.session, claimToken, leaseMs });
         if (!dispatching) {
           await abandon({
-            signature: 'dispatch_claim_transition_failed',
-            message: 'The wake dispatch claim could not enter the dispatching phase.',
+            signature: 'wake_attempt_transition_failed',
+            message: 'The wake attempt could not enter the dispatching phase.',
           }, { bestEffortClaim: true });
           continue;
         }
@@ -211,6 +175,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           }, { bestEffortClaim: true }).catch(() => undefined);
           continue;
         }
+        let outcome;
         let suppressedDuringSend = false;
         const beforeSend = async () => {
           let finalPresentations: readonly PresentationEvidenceProjection[] = [];
@@ -243,13 +208,12 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
             signature: outcome.signature ?? 'transport_unavailable',
             message: outcome.message ?? 'The wake transport was unavailable.',
             diagnostic: outcome.diagnostic,
-          }, { attemptN: outcome.attemptN ?? attemptN });
+          });
           failedForAttention = true;
           continue;
         }
         const safeOutcome = redactCurrentDiagnostic(outcome) as typeof outcome;
-        await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: safeOutcome.outcome, routeKind: route.route!.kind, attemptN: safeOutcome.attemptN ?? attemptN, ...(safeOutcome.signature === undefined ? {} : { signature: safeOutcome.signature }), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.message !== undefined ? { message: safeOutcome.message } : {}), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.diagnostic !== undefined ? { diagnostic: safeOutcome.diagnostic } : {}), claimToken });
-        await releaseDispatchLease();
+        await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: safeOutcome.outcome, routeKind: route.route!.kind, attemptN, ...(safeOutcome.signature === undefined ? {} : { signature: safeOutcome.signature }), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.message !== undefined ? { message: safeOutcome.message } : {}), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.diagnostic !== undefined ? { diagnostic: safeOutcome.diagnostic } : {}), claimToken });
         if (outcome.outcome === 'accepted') { acceptedForAttention = true; break; }
         if (outcome.outcome === 'failed') failedForAttention = true;
         else { unknownForAttention = true; break; }

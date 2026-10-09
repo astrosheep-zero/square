@@ -58,17 +58,18 @@ test('canonical wake evidence reads ignore malformed, expired and future rows', 
 test('wake release diagnostics are readable without entering behavior evidence', async () => {
   const item = fixture();
   const ledger = (await import('../dist/host-ledger-file-adapter.js')).createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-  const claimInput = {
+  const address = {
     location: item.attention.squarePath,
     participant: item.attention.recipient,
     session: 'test-session',
     activity: formatActivityId(item.attention.actIndex),
-    kind: 'wake',
   };
-  const claim = await ledger.claimEvidence({ ...claimInput, leaseMs: 5_000, now: 1_000 });
+  const claim = await ledger.claimWakeAttempt({ attention: item.attention, session: 'test-session', routeKind: 'paseo', leaseMs: 5_000, now: 1_000 });
   assert.equal(claim.status, 'acquired');
+  await ledger.transitionWakeAttempt({ attention: item.attention, session: 'test-session', claimToken: claim.claimToken, leaseMs: 5_000, now: 1_000 });
   await ledger.releaseEvidence({
-    ...claimInput,
+    ...address,
+    kind: 'wake',
     claimToken: claim.claimToken,
     routeKind: 'paseo',
     attemptN: 2,
@@ -108,10 +109,10 @@ test('a wake attempt write drops expired and malformed ledger rows', async () =>
   await recordWakeAttempt({
     at: now,
     attention: item.attention,
+    session: 'test-session',
     routeKind: 'paseo',
     outcome: 'failed',
     signature: 'new_route_failure',
-    attemptN: 3,
   }, item.env);
 
   const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);

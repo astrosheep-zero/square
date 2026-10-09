@@ -37,7 +37,7 @@ export interface WakeRequest {
   readonly participant: string;
   readonly activity: string;
   readonly actor: string;
-  /** Existing dispatch claim, also the opaque native correlation. */
+  /** Wake attempt token, also the opaque native correlation. */
   readonly claimToken?: string;
   readonly attemptN?: number;
   readonly route: WakeRoute;

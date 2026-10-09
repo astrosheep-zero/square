@@ -426,11 +426,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
-    const claimsPath = path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'wake-claims.ndjsonl');
-    const claims = fs.existsSync(claimsPath)
-      ? fs.readFileSync(claimsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
-      : [];
-    assert.equal(claims.some((claim) => claim.phase === 'dispatching'), false);
+    assert.equal(fs.existsSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'wake-claims.ndjsonl')), false);
     const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,

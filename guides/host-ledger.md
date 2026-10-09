@@ -1,6 +1,8 @@
 # Host Ledger Configuration
 
-Square uses one user-level host ledger for participant bindings, delivery evidence, and wake dispatch claims.
+Square uses one user-level host ledger for participant bindings, delivery evidence, and wake attempts.
+
+One wake attempt is one `evidence.ndjsonl` row: it carries the attention-wide exclusion for a recipient and activity, and the session-scoped history for that attempt. A row is `claimed` before any send and `dispatching` from the moment a send may happen; a stale `claimed` row is replaceable, while a stale `dispatching` row becomes `unknown` and forbids redispatch. Accepted and possibly-sent wake attempts stay readable at any age, and are eligible for explicit `gcEvidence` removal once their activity is no longer pending. Older Square versions kept a separate `wake-claims.ndjsonl`; that file is no longer read or written, and is left on disk untouched. Running old and new processes against the same ledger at once is unsupported: restart every host process together when upgrading.
 
 The default root is `~/.square/host-ledger`. Tests and isolated harnesses may set `SQUARE_HOST_LEDGER_ROOT`; when it is absent, `SQUARE_REGISTRY` provides the test root. An explicit `rootPath` passed to a ledger adapter takes precedence over both environment defaults.
 
