@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { codexQueueEligible } from './codex-boundary-state.js';
-import type { WakeAdapter, WakeDispatchResult } from './delivery.js';
+import type { WakeAdapter, WakeAdapterResult } from './delivery.js';
 import { type WakeRoute } from './model.js';
 
 export interface CodexQueueRequest {
@@ -58,26 +58,28 @@ export class CodexQueueAdapter implements WakeAdapter {
     payload: string,
     beforeSend: () => Promise<boolean>,
     timeoutMs = 5000,
-  ): Promise<WakeDispatchResult> {
+  ): Promise<WakeAdapterResult> {
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(0, deadline - Date.now());
     const threadId = address.threadId?.trim();
     if (!threadId) {
-      return { outcome: 'unavailable', signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
+      return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
     }
     const env = this.opts.env ?? process.env;
     if (!await codexQueueEligible(threadId, env)) {
       return {
-        outcome: 'unavailable',
+        outcome: 'failed',
+        unavailable: true,
         signature: 'boundary_not_stopped',
         message: 'The Codex thread has not reached a current Stop boundary.',
         retainRoute: true,
       };
     }
-    if (!(await beforeSend())) return { outcome: 'cancelled' };
+    if (!(await beforeSend())) return { outcome: 'gate-rejected' };
     if (!await codexQueueEligible(threadId, env)) {
       return {
-        outcome: 'unavailable',
+        outcome: 'failed',
+        unavailable: true,
         signature: 'boundary_not_stopped',
         message: 'The Codex thread left its Stop boundary before queueing.',
         retainRoute: true,
@@ -85,7 +87,7 @@ export class CodexQueueAdapter implements WakeAdapter {
     }
     const remaining = remainingMs();
     if (remaining === 0) {
-      return { outcome: 'unavailable', signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
+      return { outcome: 'failed', unavailable: true, signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
     }
     try {
       (this.opts.sendQueue ?? sendCodexQueue)({ threadId, message: payload }, { env, timeoutMs: remaining });

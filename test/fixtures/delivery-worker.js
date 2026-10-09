@@ -10,7 +10,7 @@ if (!squarePath || !/^\d+$/.test(actIndexText ?? '') || !mode || !callLog) {
 const adapter = {
   kind: 'paseo',
   async dispatch(_route, _request, beforeSend) {
-    if (!(await beforeSend())) return { outcome: 'cancelled' };
+    if (!(await beforeSend())) return { outcome: 'gate-rejected' };
     fs.appendFileSync(callLog, `${process.pid}\n`);
     if (mode === 'hold-after-send') {
       process.stdout.write('sent\n');

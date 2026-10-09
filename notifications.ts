@@ -130,11 +130,8 @@ export function createWakeTransport(
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
         const result = await adapter.dispatch(request.route.address, renderWakePayload(request), finalGate, timeoutMs);
-        if (result.outcome === 'accepted') return { outcome: 'accepted' };
-        if (result.outcome === 'failed') return { outcome: 'failed', ...(result.signature === undefined ? {} : { signature: result.signature }), message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) };
-        if (result.outcome === 'unavailable') return { outcome: 'failed', signature: result.signature, message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }), unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };
-        if (result.outcome === 'unknown') return { outcome: 'unknown', ...(result.signature === undefined ? {} : { signature: result.signature }), ...(result.message === undefined ? {} : { message: result.message }), ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) };
-        if (result.outcome === 'cancelled' && revalidation !== undefined && !revalidation.current) {
+        if (result.outcome !== 'gate-rejected') return result;
+        if (revalidation !== undefined && !revalidation.current) {
           return {
             outcome: 'failed',
             signature: 'pre_send_revalidation_failed',

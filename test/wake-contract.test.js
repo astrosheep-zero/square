@@ -91,12 +91,27 @@ test('wake transport reports a probe failure as not-capable with its diagnostic'
   assert.deepEqual(await createWakeTransport([failing], hostLedger, clock, {}).probe(request('paseo').route), { outcome: 'not-capable', diagnostic: 'daemon down' });
 });
 
-test('a cancelled send without a verified revalidation stays unknown', async () => {
+test('a gate-rejected send without a verified revalidation stays unknown', async () => {
   const gated = adapter('paseo', {
     async dispatch(_address, _payload, beforeSend) {
-      return (await beforeSend()) ? { outcome: 'accepted' } : { outcome: 'cancelled' };
+      return (await beforeSend()) ? { outcome: 'accepted' } : { outcome: 'gate-rejected' };
     },
   });
   const transport = createWakeTransport([gated], hostLedger, clock, {});
   assert.deepEqual(await transport.attempt(request('paseo'), 100, async () => false), { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' });
+});
+
+test('an unavailable failure passes retainRoute and routeStale through to the transport caller', async () => {
+  const retained = adapter('paseo', {
+    async dispatch() { return { outcome: 'failed', unavailable: true, signature: 'agent_not_idle', message: 'not idle', retainRoute: true }; },
+  });
+  assert.deepEqual(await createWakeTransport([retained], hostLedger, clock, {}).attempt(request('paseo'), 100), {
+    outcome: 'failed', unavailable: true, signature: 'agent_not_idle', message: 'not idle', retainRoute: true,
+  });
+  const stale = adapter('paseo', {
+    async dispatch() { return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'no agent id', routeStale: true }; },
+  });
+  assert.deepEqual(await createWakeTransport([stale], hostLedger, clock, {}).attempt(request('paseo'), 100), {
+    outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'no agent id', routeStale: true,
+  });
 });

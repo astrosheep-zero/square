@@ -151,7 +151,7 @@ function acceptedAdapter(onBeforeSend) {
     calls: 0,
   async dispatch(_route, _request, beforeSend) {
       if (onBeforeSend) await onBeforeSend();
-      if (!(await beforeSend())) return { outcome: 'cancelled' };
+      if (!(await beforeSend())) return { outcome: 'gate-rejected' };
       this.calls += 1;
       return { outcome: 'accepted' };
     },
@@ -357,7 +357,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
       kind: 'paseo',
       async dispatch(_route, value, beforeSend) {
         payload = value;
-        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        if (!(await beforeSend())) return { outcome: 'gate-rejected' };
         return { outcome: 'accepted' };
       },
     };
@@ -518,7 +518,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
     const failed = {
       kind: 'paseo',
       async dispatch(_route, _request, beforeSend) {
-        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        if (!(await beforeSend())) return { outcome: 'gate-rejected' };
         return { outcome: 'failed', signature: 'address_not_found', message: 'not found' };
       },
     };

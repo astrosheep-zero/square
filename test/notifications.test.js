@@ -206,7 +206,8 @@ test('PaseoAdapter does not wake a running agent', async () => {
     waitForBoundary: async () => { boundary = true; return true; },
     sendWake: () => { sent = true; },
   }).dispatch({ agentId: 'running-agent' }, '<system-reminder source="square">awareness</system-reminder>', async () => true);
-  assert.equal(outcome.outcome, 'unavailable');
+  assert.equal(outcome.outcome, 'failed');
+  assert.equal(outcome.unavailable, true);
   assert.equal(outcome.signature, 'agent_not_idle');
   assert.equal(boundary, false);
   assert.equal(sent, false);
@@ -323,14 +324,15 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
   assert.equal(unknown.outcome, 'unknown');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
-test('PaseoAdapter treats a closed agent as unavailable instead of a failed send', async () => {
+test('PaseoAdapter treats a closed agent as an unavailable failure instead of a plain failed send', async () => {
   const item = await fixture();
   await route(item, { agentId: 'closed-agent' });
   const registered = { location: item.squarePath, participant: 'Bob', sessionId: 'closed-agent', channel: 'paseo', kind: 'paseo', address: { agentId: 'closed-agent' }, updatedAt: Date.now() };
   const outcome = await new PaseoAdapter({
     discover: () => ({ agents: [] }),
   }).dispatch(registered.address, '<system-reminder source="square">awareness</system-reminder>', async () => true);
-  assert.equal(outcome.outcome, 'unavailable');
+  assert.equal(outcome.outcome, 'failed');
+  assert.equal(outcome.unavailable, true);
   assert.equal(outcome.signature, 'address_not_found');
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -397,7 +399,7 @@ test('wake transport rechecks pending and route ownership before send', async ()
       dispatch: async (_address, _payload, beforeSend) => {
         const current = await loadSquare(item.squarePath);
         await writeSquareFile(item.squarePath, { ...current, routes: [] });
-        if (!(await beforeSend())) return { outcome: 'cancelled' };
+        if (!(await beforeSend())) return { outcome: 'gate-rejected' };
         calls += 1;
         return { outcome: 'accepted' };
       },
@@ -427,7 +429,7 @@ test('standalone wake transport uses strict eligibility and structural address e
       route: { ...state.routes[0], address: { extra: 'value', agentId: 'bob-agent' } } };
     let sends = 0;
     const adapter = fakeAdapter('paseo', async (_address, _payload, beforeSend) => {
-      if (!(await beforeSend())) return { outcome: 'cancelled' };
+      if (!(await beforeSend())) return { outcome: 'gate-rejected' };
       sends += 1;
       return { outcome: 'accepted' };
     });
@@ -435,6 +437,8 @@ test('standalone wake transport uses strict eligibility and structural address e
     assert.equal((await transport.attempt(request, 100)).outcome, 'accepted');
     await ledger.ensurePresence({ ...owner, epoch: 8 });
     const stale = await transport.attempt(request, 100);
+    assert.equal(stale.outcome, 'failed');
+    assert.equal(stale.unavailable, true);
     assert.equal(stale.signature, 'pre_send_revalidation_failed');
     assert.equal(stale.diagnostic.sessionBound, false);
     assert.equal(sends, 1);

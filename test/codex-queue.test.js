@@ -58,7 +58,8 @@ test('Codex queue adapter retains an ineligible route without sending', async ()
       sendQueue: () => { sent = true; },
     }).dispatch({ threadId: 'thread-a' }, 'awareness', async () => true);
     assert.deepEqual(result, {
-      outcome: 'unavailable',
+      outcome: 'failed',
+      unavailable: true,
       signature: 'boundary_not_stopped',
       message: 'The Codex thread has not reached a current Stop boundary.',
       retainRoute: true,

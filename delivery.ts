@@ -11,6 +11,7 @@ import { audienceOf, replayLandedAudiences, type Perception } from './square-cor
 import { derivePerceptionProjection } from './perception-projection.js';
 import { matchesMentionTarget, recordObservation } from './runtime.js';
 import { matchesCatchSelection } from './catch-selection.js';
+import type { WakeOutcome } from './ports.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 export type SayItem = StoredAct & { kind: 'say' };
@@ -21,12 +22,14 @@ export interface PlannedNotification {
   route: DirectedNotificationRoute;
 }
 
-export type WakeDispatchResult =
-  | { outcome: 'accepted' }
-  | { outcome: 'unknown'; signature: string; message: string; diagnostic?: unknown }
-  | { outcome: 'failed'; signature: string; message: string; diagnostic?: unknown }
-  | { outcome: 'unavailable'; signature: string; message: string; diagnostic?: unknown; retainRoute?: boolean; routeStale?: boolean }
-  | { outcome: 'cancelled' };
+/**
+ * What one adapter reports about a wake it was handed.
+ * `gate-rejected` means exactly one thing: the supplied beforeSend gate returned false and nothing was sent.
+ * It is not a bin for other not-sent reasons; those stay `failed` with `unavailable: true`.
+ */
+export type WakeAdapterResult =
+  | Exclude<WakeOutcome, { outcome: 'not-capable' }>
+  | { outcome: 'gate-rejected' };
 
 export interface WakeAdapter {
   readonly kind: WakeRouteKind;
@@ -35,7 +38,7 @@ export interface WakeAdapter {
     payload: string,
     beforeSend: () => Promise<boolean>,
     timeoutMs?: number,
-  ): Promise<WakeDispatchResult>;
+  ): Promise<WakeAdapterResult>;
 }
 
 export interface RoutedNotification {
