@@ -17,6 +17,28 @@ export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
   }).filter((membership) => membership.notifications.length > 0);
 }
 
+/**
+ * One eligibility projection for a freshly read session inbox: a fresh catch lease owns what it
+ * admitted, and a delivered (or clipped) boundary already raised awareness for its activity, so
+ * neither belongs at the next boundary. Ordering, session scoping, suppression outcomes and
+ * ledger errors stay exactly as the boundary callers read them.
+ */
+export async function projectBoundaryEligibility(input: {
+  readonly hostLedger: HostLedgerPort;
+  readonly sessionId: string;
+  readonly inbox: readonly InboxMembership[];
+}): Promise<InboxMembership[]> {
+  const pending: InboxMembership[] = [];
+  for (const membership of pendingAtBoundary([...input.inbox])) {
+    const evidence = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: membership.squarePath, participant: membership.name, sessionId: input.sessionId });
+    const notifications = membership.notifications.filter((notification) => !presentationSuppressesWake(
+      evidence.filter((row) => row.activity === formatActivityId(notification.actIndex)),
+    ));
+    if (notifications.length > 0) pending.push({ ...membership, notifications });
+  }
+  return pending;
+}
+
 function bindingProjection(record: PresenceRecord): SessionBindingProjection {
   return {
     location: record.location,

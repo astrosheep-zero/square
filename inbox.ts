@@ -2,8 +2,7 @@ import { type InboxMembership } from './model.js';
 import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
 import { hostLedgerForEnv } from './registry.js';
 import { canonicalFilePath, type VersionObserver } from './file-changes.js';
-import { pendingAtBoundary, presentationSuppressesWake, projectPresentation, projectPresentationEvidence, projectSessionBindings } from './square-projections.js';
-import { formatActivityId } from './square-core.js';
+import { projectBoundaryEligibility, projectPresentation, projectSessionBindings } from './square-projections.js';
 import { WATCH_STALE_MS } from './runtime.js';
 
 export interface PendingWaitOptions {
@@ -94,17 +93,15 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
           }
           sources.push(...await Promise.all([...artifacts.values()].map((observer) => capture(observer, 'artifact', signal))));
           const inbox = await sessionInbox(sessionId, env, signal);
-          const pending: InboxMembership[] = [];
-          for (const membership of pendingAtBoundary(inbox)) {
-            const evidence = await projectPresentationEvidence({ hostLedger, location: membership.squarePath, participant: membership.name, sessionId });
-            const notifications = membership.notifications.filter((notification) =>
-              !options.excludeKeys?.has(notificationKey(membership, notification.actIndex)) &&
-              !presentationSuppressesWake(evidence.filter((row) => row.activity === formatActivityId(notification.actIndex))));
-            if (notifications.length > 0) pending.push({ ...membership, notifications });
-          }
-          const eligible = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => notificationKey(membership, note.actIndex))).sort());
-          if (previousEligible !== undefined && previousEligible !== eligible) canReturn = true;
-          previousEligible = eligible;
+          const eligible = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
+          const excludeKeys = options.excludeKeys;
+          const pending: InboxMembership[] = excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
+            const notifications = membership.notifications.filter((notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)));
+            return notifications.length === 0 ? [] : [{ ...membership, notifications }];
+          });
+          const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => notificationKey(membership, note.actIndex))).sort());
+          if (previousEligible !== undefined && previousEligible !== eligibleKeys) canReturn = true;
+          previousEligible = eligibleKeys;
           if (signal.aborted) return [];
           if (canReturn && pending.length > 0) return pending;
           const remaining = deadline - Date.now();

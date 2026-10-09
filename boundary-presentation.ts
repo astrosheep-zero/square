@@ -11,9 +11,8 @@ import { hostLedgerForEnv } from './registry.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
-import { pendingAtBoundary, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+import { projectBoundaryEligibility } from './square-projections.js';
 export { pendingAtBoundary } from './square-projections.js';
-import { formatActivityId } from './square-core.js';
 
 const CONTEXT_MAX = 1200;
 const presentationLocks = new Map<string, Promise<void>>();
@@ -109,14 +108,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
   const inbox = await lookup(sessionId, env, signal);
   if (signal?.aborted) return undefined;
   const hostLedger = hostLedgerForEnv(env);
-  const pending: InboxMembership[] = [];
-  for (const membership of pendingAtBoundary(inbox)) {
-    const evidence = await projectPresentationEvidence({ hostLedger, location: membership.squarePath, participant: membership.name, sessionId });
-    const notifications = membership.notifications.filter((notification) => !presentationSuppressesWake(
-      evidence.filter((row) => row.activity === formatActivityId(notification.actIndex)),
-    ));
-    if (notifications.length > 0) pending.push({ ...membership, notifications });
-  }
+  const pending = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
   if (pending.length === 0 || signal?.aborted) return undefined;
   const delivered = renderBoundary(pending);
   if (delivered.context === '') return undefined;
