@@ -392,6 +392,12 @@ test('expired dispatch is unknown across sessions and its late accepted completi
     const recovered = await ledger.claimWakeAttempt({ ...request, session: 'other', now: 110 });
     assert.equal(recovered.status, 'terminal');
     assert.equal(recovered.record.outcome, 'unknown');
+    assert.equal(recovered.record.unknownSource, 'interrupted');
+    // Diagnostics can change without changing the recovered attempt's authority.
+    const evidenceFile = path.join(root, 'evidence.ndjsonl');
+    const stored = fs.readFileSync(evidenceFile, 'utf8').trim().split('\n').map(JSON.parse);
+    stored[0].signature = 'edited_diagnostic';
+    fs.writeFileSync(evidenceFile, stored.map(JSON.stringify).join('\n') + '\n');
     assert.equal(recovered.record.session, 'first');
     assert.equal(recovered.record.claimToken, first.claimToken);
     assert.equal((await ledger.claimWakeAttempt({ ...request, session: 'other', routeKind: 'codex-queue', now: 111 })).status, 'terminal');
@@ -401,6 +407,40 @@ test('expired dispatch is unknown across sessions and its late accepted completi
     await ledger.appendEvidence({ ...completion, claimToken: first.claimToken });
     await ledger.appendEvidence({ ...completion, outcome: 'unknown', claimToken: first.claimToken });
     assert.deepEqual((await ledger.listWakeAttempts({ attention, now: 112 })).map(row => row.outcome), ['accepted']);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('transport unknown cannot impersonate recovery; native admission can still confirm it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-unknown-origin-'));
+  const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 100 });
+  const attention = { squarePath: path.join(root, 'SQUARE.square'), recipient: 'Bob', actIndex: 2 };
+  const request = { attention, session: 's', routeKind: 'claude-native', leaseMs: 10, now: 100 };
+  try {
+    const claim = await ledger.claimWakeAttempt(request);
+    await ledger.transitionWakeAttempt({ ...request, claimToken: claim.claimToken });
+    const row = { location: attention.squarePath, participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'claude-native', attemptN: claim.attemptN, claimToken: claim.claimToken, at: 100 };
+    assert.equal(await ledger.prepareNativeWake({ ...row, nativeDelivery: { harness: 'claude', endpoint: '/tmp/native.sock', payload: 'payload', epoch: 1 } }), true);
+    await ledger.appendEvidence({ ...row, outcome: 'unknown', signature: 'worker_interrupted_during_dispatch' });
+    await ledger.appendEvidence({ ...row, outcome: 'accepted' });
+    const [unknown] = await ledger.listWakeAttempts({ attention });
+    assert.equal(unknown.outcome, 'unknown');
+    assert.equal(unknown.unknownSource, 'transport');
+    assert.equal(await ledger.confirmWakeAdmission({ ...row, claimToken: 'wrong' }), false);
+    assert.equal(await ledger.confirmWakeAdmission(row), true);
+    await ledger.releaseEvidence(row);
+    await ledger.appendEvidence({ ...row, outcome: 'failed' });
+    assert.equal((await ledger.listWakeAttempts({ attention }))[0].outcome, 'accepted');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('legacy recovered unknown still accepts the original sender completion', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-legacy-recovery-'));
+  const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 100 });
+  const row = { v: 1, location: path.join(root, 'SQUARE.square'), participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'paseo', attemptN: 1, claimToken: 'original', at: 100, outcome: 'unknown', signature: 'worker_interrupted_during_dispatch' };
+  try {
+    fs.writeFileSync(path.join(root, 'evidence.ndjsonl'), JSON.stringify(row) + '\n');
+    await ledger.appendEvidence({ ...row, outcome: 'accepted', signature: undefined });
+    assert.equal((await ledger.listWakeAttempts())[0].outcome, 'accepted');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
