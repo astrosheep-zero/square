@@ -1,11 +1,12 @@
-import { formatActivityId, parseActivityId } from './square-core.js';
+import { formatActivityId } from './square-core.js';
 import { nameKey, type InboxMembership, type InboxNotification, type SquareState } from './model.js';
 import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEvidenceProjection, PresentationProjection, SessionBindingProjection } from './ports.js';
 import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
 import { freshWatchLease } from './runtime.js';
-import type { WakeRoute, WakeRouteKind } from './model.js';
+import type { WakeRoute } from './model.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
 import { canonicalRouteLocation } from './routes.js';
+import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
 
 /** A fresh blocking catch owns only the notifications admitted by its filter. */
 export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
@@ -140,18 +141,6 @@ export function currentSessionBindings<T extends { readonly participant: string;
   return bindings.filter((binding) => (binding.updatedAt ?? 0) === latest.get(nameKey(binding.participant)));
 }
 
-export interface WakeAttempt {
-  readonly at: number;
-  readonly attention: { readonly squarePath: string; readonly actIndex: number; readonly recipient: string };
-  readonly routeKind: WakeRouteKind;
-  readonly outcome: 'accepted' | 'unknown' | 'failed';
-  readonly signature?: string;
-  readonly attemptN: number;
-  readonly session?: string;
-  readonly message?: string;
-  readonly diagnostic?: unknown;
-}
-
 export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined { return attempts.findLast((attempt) => attempt.outcome === 'accepted'); }
 export function isWakeRouteAttemptable(route: Pick<WakeRoute, 'kind' | 'updatedAt'>, attempts: readonly WakeAttempt[]): boolean {
   if (terminalWakeEvidence(attempts) !== undefined) return false;
@@ -185,10 +174,10 @@ export async function projectWakeEvidenceFromState(input: {
   const wakeRecords = await input.hostLedger.listEvidence({ location: canonicalLocation, kind: 'wake', now: input.now });
   const attemptsByBinding = new Map<string, WakeAttempt[]>();
   for (const record of wakeRecords) {
-    const actIndex = parseActivityId(record.activity);
-    if (actIndex === undefined || record.routeKind === undefined || typeof record.attemptN !== 'number') continue;
-    const attempt: WakeAttempt = { attention: { squarePath: record.location, recipient: record.participant, actIndex }, outcome: record.outcome as WakeAttempt['outcome'], at: record.at ?? input.now, routeKind: record.routeKind, attemptN: record.attemptN, ...(record.signature === undefined ? {} : { signature: record.signature }), ...(record.session === undefined ? {} : { session: record.session }), ...(record.message === undefined ? {} : { message: record.message }), ...(record.diagnostic === undefined ? {} : { diagnostic: record.diagnostic }) };
-    const key = JSON.stringify([nameKey(record.participant), actIndex, record.session]);
+    const decoded = decodeWakeEvidence(record, input.now);
+    if (decoded?.kind !== 'attempt') continue;
+    const attempt = decoded.value;
+    const key = JSON.stringify([nameKey(attempt.attention.recipient), attempt.attention.actIndex, attempt.session]);
     const existing = attemptsByBinding.get(key) ?? [];
     existing.push(attempt);
     attemptsByBinding.set(key, existing);

@@ -2,7 +2,8 @@ import { formatActivityId, parseActivityId, type ActivityId } from './square-cor
 import { nameKey, type SquareState } from './model.js';
 import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput,  SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
 import { deriveDeliveryModel } from './delivery.js';
-import { currentSessionBindings, isWakeRouteAttemptable, presentationSuppressesWake, projectPresentationEvidence, type WakeAttempt } from './square-projections.js';
+import { currentSessionBindings, isWakeRouteAttemptable, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
 
@@ -257,9 +258,8 @@ export async function sweepPendingFromState(input: { readonly state: SquareState
   let presentations: readonly PresentationEvidenceProjection[] = [];
   try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { presentations = []; }
   const attempts: WakeAttempt[] = records.flatMap((record) => {
-    const index = parseActivityId(record.activity);
-    if (index === undefined || record.routeKind === undefined || typeof record.attemptN !== 'number') return [];
-    return [{ at: record.at ?? input.now, attention: { squarePath: record.location, actIndex: index, recipient: record.participant }, routeKind: record.routeKind, outcome: record.outcome as WakeAttempt['outcome'], attemptN: record.attemptN, ...(record.session === undefined ? {} : { session: record.session }) }];
+    const decoded = decodeWakeEvidence(record, input.now);
+    return decoded?.kind === 'attempt' ? [decoded.value] : [];
   });
   const delivery = input.deriveDelivery?.(input.state) ?? deriveDeliveryModel(input.state);
   return selectPendingWakeActivities(input.state, bindings, attempts, input.now, input.graceMs, input.limit, delivery, presentations);

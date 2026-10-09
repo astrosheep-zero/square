@@ -2,11 +2,12 @@ import { type DirectedNotificationRoute, deriveDeliveryModel } from './delivery.
 import { formatActivityId } from './square-core.js';
 import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
-import { projectWakeEvidenceFromState, type WakeAttempt } from './square-projections.js';
+import { projectWakeEvidenceFromState } from './square-projections.js';
+import type { WakeAttempt, WakeReleaseDiagnostic } from './wake-evidence.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { pendingDeliveriesFromState } from './views.js';
-import { readWakeReleaseDiagnostics, type WakeReleaseDiagnostic } from './wake-attempts.js';
+import { readWakeReleaseDiagnostics } from './wake-attempts.js';
 
 export type DeliveryHealthKind =
   | 'awaiting'

@@ -1,21 +1,11 @@
 import { hostLedgerRoot } from './host-ledger-root.js';
-import { nameKey, type WakeRouteKind } from './model.js';
+import { nameKey } from './model.js';
 import { canonicalSquarePath } from './registry.js';
-import { formatActivityId, parseActivityId } from './square-core.js';
+import { formatActivityId } from './square-core.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import type { WakeAttention } from './host-ledger.js';
 import { redactDiagnostic } from './diagnostic-redaction.js';
-
-export interface WakeReleaseDiagnostic {
-  readonly at: number;
-  readonly attention: WakeAttention;
-  readonly routeKind?: WakeRouteKind;
-  readonly attemptN?: number;
-  readonly session?: string;
-  readonly signature?: string;
-  readonly message?: string;
-  readonly diagnostic?: unknown;
-}
+import { decodeWakeEvidence, type WakeReleaseDiagnostic } from './wake-evidence.js';
 
 async function wakeAttentionKey(attention: WakeAttention): Promise<string> {
   return JSON.stringify([await canonicalSquarePath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
@@ -43,21 +33,16 @@ export async function readWakeReleaseDiagnostics(opts: {
   const expected = opts.attention === undefined ? undefined : await wakeAttentionKey(opts.attention);
   const releases: WakeReleaseDiagnostic[] = [];
   for (const row of rows) {
-    if (row.outcome !== 'released') continue;
-    const actIndex = parseActivityId(row.activity);
-    if (actIndex === undefined || row.at === undefined) continue;
-    if (opts.sessionId !== undefined && row.session !== opts.sessionId) continue;
-    const attention = { squarePath: row.location, recipient: row.participant, actIndex };
-    if (expected !== undefined && JSON.stringify([row.location, formatActivityId(actIndex), nameKey(row.participant)]) !== expected) continue;
+    const decoded = decodeWakeEvidence(row, now);
+    if (decoded?.kind !== 'release') continue;
+    const release = decoded.value;
+    if (opts.sessionId !== undefined && release.session !== opts.sessionId) continue;
+    const { attention } = release;
+    if (expected !== undefined && JSON.stringify([attention.squarePath, formatActivityId(attention.actIndex), nameKey(attention.recipient)]) !== expected) continue;
     releases.push({
-      at: row.at,
-      attention,
-      ...(row.routeKind === undefined ? {} : { routeKind: row.routeKind }),
-      ...(row.attemptN === undefined ? {} : { attemptN: row.attemptN }),
-      ...(row.session === undefined ? {} : { session: row.session }),
-      ...(row.signature === undefined ? {} : { signature: row.signature }),
-      ...(row.message === undefined ? {} : { message: redactWakeDiagnostic(row.message, env) as string }),
-      ...(row.diagnostic === undefined ? {} : { diagnostic: redactWakeDiagnostic(row.diagnostic, env) }),
+      ...release,
+      ...(release.message === undefined ? {} : { message: redactWakeDiagnostic(release.message, env) as string }),
+      ...(release.diagnostic === undefined ? {} : { diagnostic: redactWakeDiagnostic(release.diagnostic, env) }),
     });
   }
   return releases.sort((left, right) => right.at - left.at);
