@@ -25,6 +25,8 @@ test('packed package installs, typechecks, discovers and sends from a consumer o
   assert.ok(packed.files.some((file) => file.path === 'dist/pi.js'))
   assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.js'))
   assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.d.ts'))
+  assert.ok(packed.files.some((file) => file.path === 'dist/opencode-native.js'))
+  assert.ok(packed.files.some((file) => file.path === 'dist/opencode-native.d.ts'))
   assert.ok(packed.files.some((file) => file.path === 'README.md'))
   assert.ok(packed.files.some((file) => file.path === 'LICENSE'))
   assert.ok(packed.files.some((file) => file.path === 'VALIDATION.md'))
@@ -72,6 +74,11 @@ const accepted: 'accepted' = written.state;
 import { writeClaudeNative, type ClaudeNativeControl } from '@astrosheep/agent-delivery/claude-native';
 const control: ClaudeNativeControl = { deadline: Date.now() + 1000 };
 await writeClaudeNative({ sessionId: 'uuid', endpoint: '/tmp/explicit.sock' }, 'text', control);
+import { connectNative, createNativeInputId, sendNativeText } from '@astrosheep/agent-delivery/opencode-native';
+const native = await connectNative({ sessionId: 'ses_explicit', session: {
+  async get() { return { id: 'ses_explicit' }; }, async prompt() { return {}; },
+} });
+await sendNativeText(native, 'exact', { inputId: createNativeInputId(), delivery: 'steer' });
 `)
   await exec(process.execPath, [join(packageRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2023',
@@ -89,6 +96,18 @@ if (specifier.includes('@opencode/') || context.parentURL?.includes('/@opencode/
 return next(specifier, context);
 }`)
   await writeFile(join(consumer, 'register.mjs'), `import { register } from 'node:module'; register('./no-sdk.mjs', import.meta.url);`)
+  await writeFile(join(consumer, 'native.mjs'), `import {connectNative, createNativeInputId, sendNativeText} from '@astrosheep/agent-delivery/opencode-native';
+let sent;
+const session = {async get({sessionID}) {return {id:sessionID}}, async prompt(input) {
+  sent=input; return {id:input.id, sessionID:input.sessionID, type:'user', delivery:input.delivery, payload:{text:input.text}, time:{created:Date.now()}};
+}};
+const target=await connectNative({sessionId:'native-packed',session});
+const result=await sendNativeText(target,'packed native 字',{inputId:createNativeInputId(),delivery:'steer'});
+console.log(JSON.stringify({result,sent}));`)
+  const native = JSON.parse((await exec(process.execPath, ['--import', './register.mjs', 'native.mjs'], { ...options, cwd: consumer })).stdout)
+  assert.equal(native.result.state, 'accepted')
+  assert.equal(native.result.inputId, native.sent.id)
+  assert.deepEqual(native.sent, { sessionID: 'native-packed', id: native.result.inputId, text: 'packed native 字', delivery: 'steer', resume: true })
   const endpoint = join(consumer, 'in.sock')
   const frames = []
   const sockets = new Set()

@@ -8,6 +8,7 @@
   "files": ["dist", "README.md", "VALIDATION.md", "LICENSE"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./opencode-native": { "types": "./dist/opencode-native.d.ts", "import": "./dist/opencode-native.js" },
     "./claude-native": { "types": "./dist/claude-native.d.ts", "import": "./dist/claude-native.js" },
     "./pi": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" }
   },

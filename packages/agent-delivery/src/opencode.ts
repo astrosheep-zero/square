@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { OpenCode } from '@opencode/client'
 import { Service, type Endpoint } from '@opencode/client/service'
 import { deadline, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError } from './errors.js'
+import { isNativeSession, sendNativeText } from './opencode-native.js'
 import type { OpenCodeDeliveryResult, OpenCodeTarget, OpenCodeSendTextOptions } from './types.js'
 
 export interface OpenCodeConnectExistingOptions {
@@ -34,7 +34,7 @@ function endpointValid(value: unknown): value is Endpoint {
 }
 
 /** SDK transport observation: never parse or expose arbitrary error bodies. */
-function transport(endpoint: Endpoint, scope: ReturnType<typeof deadline>) {
+function transport(endpoint: Endpoint, scope: Pick<ReturnType<typeof deadline>, 'check'>) {
   let dispatched = false
   let status: number | undefined
   const client = OpenCode.make({
@@ -97,7 +97,7 @@ export async function connectExisting(options: OpenCodeConnectExistingOptions): 
       { sessionID: options.sessionId }, { signal: scope.signal },
     ))
     scope.check()
-    if (!isRecord(session) || session.id !== options.sessionId) throw new ConnectionError('invalid_response')
+    if (!isNativeSession(session, options.sessionId)) throw new ConnectionError('invalid_response')
     const target = Object.freeze({ harness: 'opencode' as const, sessionId: options.sessionId }) as OpenCodeTarget
     endpoints.set(target, privateEndpoint)
     return target
@@ -108,50 +108,20 @@ export async function connectExisting(options: OpenCodeConnectExistingOptions): 
   } finally { scope.close() }
 }
 
-function isAdmission(value: unknown, sessionId: string, inputId: string):
-  value is { id: string; sessionID: string; delivery: 'steer' | 'queue' } {
-  return isRecord(value) && value.id === inputId && value.sessionID === sessionId &&
-    value.type === 'user' && (value.delivery === 'steer' || value.delivery === 'queue') &&
-    isRecord(value.payload) && typeof value.payload.text === 'string' &&
-    isRecord(value.time) && typeof value.time.created === 'number' &&
-    Number.isFinite(value.time.created) && value.time.created >= 0
-}
-
-/** Submit once. Unknown is not a retry instruction. */
+/** Submit once through the shared native sender; HTTP metadata alone refines rejection. */
 export async function sendText(target: OpenCodeTarget, text: string, options: OpenCodeSendTextOptions = {}): Promise<OpenCodeDeliveryResult> {
-  if (!isRecord(target) || !endpoints.has(target as unknown as OpenCodeTarget) ||
-    !isIdentity(target.sessionId) || typeof text !== 'string' || text.length === 0 ||
-    !isRecord(options) || !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
-    (options.delivery !== undefined && options.delivery !== 'steer' && options.delivery !== 'queue') ||
-    (options.inputId !== undefined && (typeof options.inputId !== 'string' || !options.inputId.startsWith('msg_')))) {
+  if (!isRecord(target) || !endpoints.has(target as unknown as OpenCodeTarget)) {
     throw new TypeError('Invalid sendText arguments.')
   }
-  const inputId = options.inputId ?? `msg_${randomUUID()}`
-  const attempt = { harness: 'opencode' as const, sessionId: target.sessionId, inputId }
-  const scope = deadline(options.timeoutMs, options.signal)
-  const current = transport(endpoints.get(target)!, scope)
-  try {
-    scope.check()
-    const admission: unknown = await scope.wait(current.client.session.prompt({
-      sessionID: target.sessionId,
-      text,
-      delivery: options.delivery ?? 'steer',
-      id: inputId,
-      resume: true,
-    }, { signal: scope.signal }))
-    scope.check()
-    if (!isAdmission(admission, target.sessionId, inputId)) {
-      return { ...attempt, state: 'unknown', code: 'invalid_response' }
-    }
-    return { ...attempt, state: 'accepted', inboxId: admission.id, delivery: admission.delivery }
-  } catch {
-    // Only native validation/auth/not-found/conflict responses establish rejection.
-    // A proxy or backend can fail after durable admission, including with a 5xx.
-    if (current.status !== undefined && [400, 401, 403, 404, 409].includes(current.status)) {
-      return { ...attempt, state: 'rejected', code: 'http_rejection', status: current.status }
-    }
-    if (!current.dispatched) return { ...attempt, state: 'unavailable', code: scope.code ?? 'aborted' }
-    return { ...attempt, state: 'unknown', code: scope.code ??
-      (current.status === 200 ? 'invalid_response' : 'transport') }
-  } finally { scope.close() }
+  const current = transport(endpoints.get(target)!, { check() {} })
+  const result = await sendNativeText({ sessionId: target.sessionId, session: current.client.session }, text, options)
+  if (result.state !== 'unknown') return result
+  // Only native validation/auth/not-found/conflict responses establish rejection.
+  // A proxy or backend can fail after durable admission, including with a 5xx.
+  if (current.status !== undefined && [400, 401, 403, 404, 409].includes(current.status)) {
+    return { harness: result.harness, sessionId: result.sessionId, inputId: result.inputId,
+      state: 'rejected', code: 'http_rejection', status: current.status }
+  }
+  if (!current.dispatched) return { ...result, state: 'unavailable', code: result.code === 'timeout' ? 'timeout' : 'aborted' }
+  return { ...result, code: current.status === 200 && result.code === 'transport' ? 'invalid_response' : result.code }
 }

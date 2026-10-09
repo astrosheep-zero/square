@@ -6,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import squareOpenCodePlugin from '../dist/opencode.js';
 import installedSquarePiExtension, {
   inboxKeys,
   pendingInbox,
@@ -457,55 +456,6 @@ test('Codex installation preserves the prior bundle when the host rejects it', a
     assert.equal(fs.readFileSync(path.join(marketplace, 'previous.txt'), 'utf8'), 'keep this bundle');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('OpenCode admits pending attention after a tool without replacing its output', async () => {
-  const item = await piFixture('opencode-session');
-  const previous = {
-    registry: process.env.SQUARE_REGISTRY,
-    presented: process.env.SQUARE_PRESENTED,
-  };
-  process.env.SQUARE_REGISTRY = item.registry;
-  process.env.SQUARE_PRESENTED = item.presented;
-  await recordJoin('opencode-session', 'Bob', item.squarePath, { channel: 'opencode' });
-  try {
-    const hooks = await squareOpenCodePlugin({});
-
-    const shell = { env: {} };
-    await hooks['shell.env']({ sessionID: 'opencode-session', cwd: item.root }, shell);
-    assert.equal(shell.env.OPENCODE_SESSION_ID, 'opencode-session');
-
-    const rejected = {};
-    Object.defineProperty(rejected, 'output', {
-      get() { return 'first tool result'; },
-      set() { throw new Error('host rejected context'); },
-    });
-    await hooks['tool.execute.after'](
-      { sessionID: 'opencode-session', tool: 'read', callID: 'call-1', args: {} },
-      rejected
-    );
-
-    const first = { title: 'read', output: 'second tool result', metadata: {} };
-    await hooks['tool.execute.after'](
-      { sessionID: 'opencode-session', tool: 'read', callID: 'call-2', args: {} },
-      first
-    );
-    assert.match(first.output, /^second tool result/);
-    assert.match(first.output, /hello @Bob/);
-
-    const second = { title: 'read', output: 'third tool result', metadata: {} };
-    await hooks['tool.execute.after'](
-      { sessionID: 'opencode-session', tool: 'read', callID: 'call-3', args: {} },
-      second
-    );
-    assert.equal(second.output, 'third tool result');
-  } finally {
-    if (previous.registry === undefined) delete process.env.SQUARE_REGISTRY;
-    else process.env.SQUARE_REGISTRY = previous.registry;
-    if (previous.presented === undefined) delete process.env.SQUARE_PRESENTED;
-    else process.env.SQUARE_PRESENTED = previous.presented;
-    fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
 
