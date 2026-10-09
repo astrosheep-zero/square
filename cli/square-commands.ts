@@ -27,7 +27,7 @@ import {
   readParticipantOwner,
   recordSessionDone,
 } from '../registry.js';
-import { sessionIdsFromEnvironment } from '../square-projections.js';
+import { sessionIdsFromEnvironment } from '../participant-identity.js';
 import { actId, inSquareCount, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';

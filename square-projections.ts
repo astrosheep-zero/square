@@ -72,11 +72,6 @@ export async function projectSessionBindings(input: {
   return rows.map(bindingProjection);
 }
 
-export function sessionIdsFromEnvironment(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  return [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.PI_SESSION_ID, env.PASEO_AGENT_ID]
-    .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
-}
-
 export async function projectLocalParticipantBinding(input: {
   readonly hostLedger: HostLedgerPort;
   readonly location: string;

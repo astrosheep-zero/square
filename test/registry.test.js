@@ -26,6 +26,7 @@ import {
   recordSessionDone,
 } from '../dist/registry.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { sessionIdsFromEnvironment } from '../dist/participant-identity.js';
 import { writeSquareFile, createSquareState } from '../dist/artifact.js';
 import { done, join, takeover } from '../dist/square-actions.js';
 import { Square } from '../dist/square-wiring.js';
@@ -784,6 +785,12 @@ test('Square-assigned participant name is computed from current harness identity
   } finally {
     cleanup();
   }
+});
+
+test('equal native session ids in different providers stay ambiguous and are never deduped', () => {
+  const env = { CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: 'shared-id', OPENCODE_SESSION_ID: 'shared-id', PI_SESSION_ID: ' ' };
+  assert.deepEqual(sessionIdsFromEnvironment(env), ['shared-id', 'shared-id']);
+  assert.equal(squareAssignedParticipantName(env), undefined);
 });
 
 test('current participant binding uses the Square-assigned name and is idempotent', async () => {

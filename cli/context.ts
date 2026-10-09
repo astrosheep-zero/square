@@ -3,7 +3,8 @@ import os from 'node:os';
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
-import { projectSessionBindings, sessionIdsFromEnvironment } from '../square-projections.js';
+import { projectSessionBindings } from '../square-projections.js';
+import { sessionIdsFromEnvironment } from '../participant-identity.js';
 
 export interface CommandContext {
   cwd: string;

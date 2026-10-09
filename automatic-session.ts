@@ -5,34 +5,26 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
 import { entryPresentation } from './views.js';
-import { automaticParticipant } from './participant-identity.js';
+import { automaticParticipant, harnessSessionSources, type AutomaticProvider } from './participant-identity.js';
 import { SquareError } from './model.js';
 import { projectSessionBindings } from './square-projections.js';
 import type { PresenceRecord } from './host-ledger.js';
 import { claimSessionParticipant, hostLedgerForEnv, readParticipantOwner, releaseSessionParticipant } from './registry.js';
 import { publishWakeRoute, resolvePrimaryWakeRoute, defaultWakeRouteCapabilities } from './routes.js';
 
-export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
+export type { AutomaticProvider } from './participant-identity.js';
 
 export { automaticParticipant } from './participant-identity.js';
 
-const providerEnv: Record<AutomaticProvider, string> = {
-  codex: 'CODEX_THREAD_ID',
-  claude: 'CLAUDE_CODE_SESSION_ID',
-  opencode: 'OPENCODE_SESSION_ID',
-  pi: 'PI_SESSION_ID',
-};
-
 export function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    CLAUDE_CODE_SESSION_ID: '',
-    CLAUDE_CODE_CHILD_SESSION: '',
-    CODEX_THREAD_ID: '',
-    OPENCODE_SESSION_ID: '',
-    PI_SESSION_ID: '',
-    [providerEnv[provider]]: sessionId,
-  };
+  const scoped: NodeJS.ProcessEnv = { ...env };
+  // Clear every native coordinate (and the Claude child flag); PASEO_AGENT_ID stays as it is.
+  for (const source of harnessSessionSources) {
+    if (source.provider === undefined) continue;
+    scoped[source.variable] = source.provider === provider ? sessionId : '';
+    if (source.childVariable !== undefined) scoped[source.childVariable] = '';
+  }
+  return scoped;
 }
 export function publicSquarePath(cwd: string): string {
   return path.join(cwd, '.square', 'PUBLIC.square');

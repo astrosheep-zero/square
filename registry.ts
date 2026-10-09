@@ -5,7 +5,7 @@ import path from 'node:path';
 import { withFileLock } from './file-lock.js';
 import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
-import { squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
+import { harnessSessionSources, squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
 import { createHostLedgerPort, type FileHostLedgerPort } from './host-ledger-file-adapter.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import type { PresenceRecord } from './host-ledger.js';
@@ -17,12 +17,6 @@ type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PRESENCE_CLAIM_LOCK = { retryMs: 10 } as const;
-const LOCAL_SESSION_SOURCES: ReadonlyArray<{ variable: 'CLAUDE_CODE_SESSION_ID' | 'CODEX_THREAD_ID' | 'OPENCODE_SESSION_ID' | 'PI_SESSION_ID'; channel: Exclude<SessionChannel, 'paseo' | 'unknown'>; child?: 'CLAUDE_CODE_CHILD_SESSION'; }> = [
-  { variable: 'CLAUDE_CODE_SESSION_ID', channel: 'claude-code', child: 'CLAUDE_CODE_CHILD_SESSION' },
-  { variable: 'CODEX_THREAD_ID', channel: 'codex' },
-  { variable: 'OPENCODE_SESSION_ID', channel: 'opencode' },
-  { variable: 'PI_SESSION_ID', channel: 'pi' },
-];
 
 export function registryPath(env: NodeJS.ProcessEnv = process.env): string { return env.SQUARE_REGISTRY || path.join(hostLedgerRoot(env), '..', 'sessions.ndjsonl'); }
 export async function canonicalSquarePath(squarePath: string): Promise<string> { const absolute = path.resolve(squarePath); try { return await (await import('node:fs/promises')).realpath(absolute); } catch { return absolute; } }
@@ -188,7 +182,7 @@ function bindingIsProvablyObsolete(binding: RegistryBinding, acts: StoredAct[] |
 export async function pruneRegistry(readActs: (squarePath: string) => StoredAct[] | undefined | Promise<StoredAct[] | undefined>, now = Date.now()): Promise<RegistryPruneResult> { const active = await readActiveBindings(now); let removed = 0; for (const binding of active) { if (!bindingIsProvablyObsolete(binding, await readActs(binding.squarePath))) continue; await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at: now }); removed++; } return { removed, kept: active.length - removed }; }
 export interface LocalSessionIdentity { sessionId: string; channel: SessionChannel; child: boolean; paseoAgentId?: string; }
 function addLocalSession(identities: LocalSessionIdentity[], sessionId: string | undefined, channel: SessionChannel, child: boolean, paseoAgentId: string | undefined): void { if (!sessionId || identities.some((identity) => identity.sessionId === sessionId)) return; identities.push({ sessionId, channel, child, ...(paseoAgentId ? { paseoAgentId } : {}) }); }
-export function localSessionIdentities(env: NodeJS.ProcessEnv = process.env): LocalSessionIdentity[] { const paseoAgentId = env.PASEO_AGENT_ID?.trim() || undefined; const identities: LocalSessionIdentity[] = []; for (const source of LOCAL_SESSION_SOURCES) addLocalSession(identities, env[source.variable]?.trim(), source.channel, source.child !== undefined && env[source.child] === '1', paseoAgentId); addLocalSession(identities, paseoAgentId, 'paseo', false, paseoAgentId); return identities; }
+export function localSessionIdentities(env: NodeJS.ProcessEnv = process.env): LocalSessionIdentity[] { const paseoAgentId = env.PASEO_AGENT_ID?.trim() || undefined; const identities: LocalSessionIdentity[] = []; for (const source of harnessSessionSources) addLocalSession(identities, env[source.variable]?.trim(), source.channel, source.childVariable !== undefined && env[source.childVariable] === '1', paseoAgentId); return identities; }
 export function hasAutomaticDeliveryIdentity(env: NodeJS.ProcessEnv = process.env): boolean { return localSessionIdentities(env).length > 0; }
 export async function recordLocalJoin(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = localSessionIdentities(env); const current = await lookupParticipant(squarePath, name, at, env); for (const identity of identities) { for (const binding of current.filter((item) => item.sessionId === identity.sessionId)) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); await recordJoin(identity.sessionId, name, squarePath, { ...identity, at, env }); } }
 export async function recordLocalDone(name: string, squarePath: string, env: NodeJS.ProcessEnv = process.env): Promise<void> { const at = Date.now(); const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, at, env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordDone(binding.sessionId, binding.name, binding.squarePath, { channel: binding.channel, at, env }); }

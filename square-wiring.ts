@@ -22,6 +22,7 @@ import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 import type { Participant, OperationControl, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { projectSessionBindings } from './square-projections.js';
+import { sessionIdsFromEnvironment } from './participant-identity.js';
 
 class ParticipantHandle implements Participant {
   constructor(readonly name: string, private readonly square: OpenSquare, private readonly context: OperationContext) {}
@@ -116,8 +117,7 @@ export class Square {
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return history(this.square, query, control); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
     if (this.square.hostLedger === undefined) return null;
-    const sessions = [env.CLAUDE_CODE_SESSION_ID, env.CODEX_THREAD_ID, env.OPENCODE_SESSION_ID, env.PI_SESSION_ID, env.PASEO_AGENT_ID]
-      .map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+    const sessions = sessionIdsFromEnvironment(env);
     if (sessions.length === 0) return null;
     const candidates = (await Promise.all(sessions.map((sessionId) => projectSessionBindings({
       hostLedger: this.square.hostLedger!,

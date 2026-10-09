@@ -1,5 +1,6 @@
 import type { HostLedgerPort, PresenceChannel, PresenceRecord, SquareArtifactPort } from './ports.js';
 import { readParticipantOwner, sessionOwnsParticipant } from './registry.js';
+import { firstHarnessSession } from './participant-identity.js';
 import { defaultWakeRouteCapabilities, publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, ROUTE_FRESH_MS, type WakeBoundaryProvider, type WakeRoute } from './routes.js';
 
 export interface HostContext {
@@ -11,12 +12,8 @@ export interface HostContext {
 }
 
 export function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
-  const choices: readonly [string | undefined, PresenceChannel][] = [
-    [env.CLAUDE_CODE_SESSION_ID, 'claude-code'], [env.CODEX_THREAD_ID, 'codex'],
-    [env.OPENCODE_SESSION_ID, 'opencode'], [env.PI_SESSION_ID, 'pi'], [env.PASEO_AGENT_ID, 'paseo'],
-  ];
-  const found = choices.find(([session]) => session?.trim());
-  return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found[0]!.trim(), channel: found[1] };
+  const found = firstHarnessSession(env);
+  return found === undefined ? { session: `process:${process.pid}`, channel: 'unknown' } : { session: found.sessionId, channel: found.channel };
 }
 
 export async function identityRouteDraft(context: HostContext, participant: string): Promise<Omit<WakeRoute, 'updatedAt'> | undefined> {
