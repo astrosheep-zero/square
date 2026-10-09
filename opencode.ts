@@ -1,5 +1,5 @@
 import { automaticSessionStart, operationEnv } from './automatic-session.js';
-import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
+import { hostLedgerForEnv } from './registry.js';
 import { canonicalRouteLocation } from './routes.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
@@ -74,7 +74,7 @@ export default {
       if (!receivers.has(sessionId)) return;
       // Stop synchronously; persist the cutoff before allowing reconciliation to start fresh work.
       stop(sessionId);
-      await withOwnershipClaimLock(env, async () => {
+      await ledger.withClaimLock(async () => {
         for (const owner of (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode')) {
           const square = await openSquare(owner.location, { hostLedger: ledger, env, signal: lifetime.signal });
           try { await ledger.suppressPresence(owner, (await square.artifact.read(lifetime.signal)).state.runtime.nextActIndex - 1); }

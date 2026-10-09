@@ -155,7 +155,7 @@ test('reload preserves generation; cancellation suppresses old callbacks and uns
 test('pinned end epochs retire all manual memberships but never remove a replacement', supported, async (t) => {
   const f = await fixture(t);
   const newer = { ...f.env, CLAUDE_CODE_SESSION_ID: 'claude-test' };
-  const result = await claimSessionTakeover(f.squarePath, 'Bob', newer, {}, async () => undefined);
+  const result = await claimSessionTakeover(f.squarePath, 'Bob', f.ledger, newer, {}, async () => undefined);
   assert.equal(result.status, 'acquired');
   await f.bridge({ operation: 'end', bindings: f.start.bindings });
   assert.equal((await f.ledger.listPresence({ participant: 'Bob' }))[0].epoch, result.epoch);
@@ -194,7 +194,7 @@ test('retained cancellation cannot acquire replacement same-session epochs acros
   const f = await fixture(t);
   const at = Date.now();
   await f.bridge({ operation: 'cancel', bindings: f.start.bindings, cancelledBindings: f.start.bindings, cancelAt: at });
-  const result = await claimSessionTakeover(f.squarePath, 'Bob', { ...f.env, CLAUDE_CODE_SESSION_ID: 'claude-test' }, {}, async () => undefined);
+  const result = await claimSessionTakeover(f.squarePath, 'Bob', f.ledger, { ...f.env, CLAUDE_CODE_SESSION_ID: 'claude-test' }, {}, async () => undefined);
   assert.equal(result.status, 'acquired');
   const first = await f.bridge({ operation: 'reconcile', bindings: f.start.bindings, cancelledBindings: f.start.bindings, cancelAt: at });
   await f.bridge({ operation: 'reconcile', bindings: first.bindings, cancelledBindings: f.start.bindings, cancelAt: at });

@@ -124,10 +124,11 @@ test("owned claim cleanup never removes rightful ownership", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-owned-claim-"));
   const env = { ...process.env, CODEX_THREAD_ID: "owned-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_ROOT: root };
   const location = path.join(root, "SQUARE.square");
-  const first = await claimSessionParticipant(location, "Owner", env);
-  const second = await claimSessionParticipant(location, "Owner", env);
-  await releaseSessionParticipantClaim(location, "Owner", env, second);
-  const rows = await new FileHostLedgerPort({ rootPath: root }).listPresence({ location, participant: "Owner" });
+  const ledger = new FileHostLedgerPort({ rootPath: root });
+  const first = await claimSessionParticipant(location, "Owner", ledger, env);
+  const second = await claimSessionParticipant(location, "Owner", ledger, env);
+  await releaseSessionParticipantClaim(location, "Owner", ledger, second);
+  const rows = await ledger.listPresence({ location, participant: "Owner" });
   assert.equal(rows.length, 1);
   assert.equal(first?.status, "acquired");
   assert.equal(second?.status, "owned");

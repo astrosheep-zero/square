@@ -1,5 +1,5 @@
 import type { HostLedgerPort, PresenceChannel, PresenceRecord, SquareArtifactPort } from './ports.js';
-import { readParticipantOwner, sessionOwnsParticipant } from './registry.js';
+import { hostLedgerForEnv, readParticipantOwner, sessionOwnsParticipant } from './registry.js';
 import { firstHarnessSession } from './participant-identity.js';
 import { defaultWakeRouteCapabilities, publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, ROUTE_FRESH_MS, type WakeBoundaryProvider, type WakeRoute } from './routes.js';
 
@@ -9,6 +9,12 @@ export interface HostContext {
   readonly location?: string;
   readonly hostLedger?: HostLedgerPort;
   readonly env?: NodeJS.ProcessEnv;
+}
+
+/** Ownership runs on the square's own ledger; a hand-built square without one falls back to its captured environment. */
+export function ownershipLedger(context: HostContext): HostLedgerPort | undefined {
+  if (context.location === undefined || context.location === 'memory') return undefined;
+  return context.hostLedger ?? hostLedgerForEnv(context.env ?? process.env);
 }
 
 export function processIdentity(env: NodeJS.ProcessEnv): { session: string; channel: PresenceChannel } {
@@ -25,8 +31,9 @@ export async function identityRouteDraft(context: HostContext, participant: stri
 }
 
 async function currentOwnerEpoch(context: HostContext, participant: string): Promise<number | undefined> {
-  if (context.location === undefined || context.location === 'memory') return undefined;
-  const owner = await readParticipantOwner(context.location, participant, context.env ?? process.env);
+  const hostLedger = ownershipLedger(context);
+  if (hostLedger === undefined || context.location === undefined) return undefined;
+  const owner = await readParticipantOwner(context.location, participant, hostLedger);
   return owner?.epoch;
 }
 
@@ -48,11 +55,12 @@ export async function retireIdentityRoute(context: HostContext, participant: str
 }
 
 export async function assertLiveOwner(context: HostContext, participant: string, expectedEpoch?: number): Promise<boolean> {
-  if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return true;
+  const hostLedger = ownershipLedger(context);
+  if (hostLedger === undefined || context.location === undefined) return true;
   const identity = processIdentity(context.env ?? process.env);
   // Library callers without a harness session are not ownership-fenced unless an epoch was supplied.
   if (identity.channel === 'unknown' && expectedEpoch === undefined) return true;
-  return sessionOwnsParticipant(context.location, participant, identity.session, context.env ?? process.env, expectedEpoch);
+  return sessionOwnsParticipant(context.location, participant, identity.session, hostLedger, expectedEpoch);
 }
 
 /** Presence is best effort and runs only after the artifact mutation commits. */

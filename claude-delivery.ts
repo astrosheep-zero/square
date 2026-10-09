@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
+import { hostLedgerForEnv } from './registry.js';
 import type { EvidenceRecord, HostLedgerPort, PresenceRecord } from './host-ledger.js';
 import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
 import { nativePendingPreview, projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
@@ -48,7 +48,7 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
   const deadline = Date.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
   if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires macOS Claude 2.1.295 and a loaded interactive Square mod.' };
-  return withOwnershipClaimLock(env, async () => {
+  return hostLedger.withClaimLock(async () => {
     if (signal.aborted) return { outcome: 'not-capable', diagnostic: 'Native dispatch deadline elapsed before send.' };
     if (!request.claimToken || !await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'unknown', signature: 'native_send_suppressed' };
     const owner = (await hostLedger.listPresence({ location: request.location, participant: request.participant })).find((binding) => binding.session === request.route.sessionId && binding.epoch === request.route.epoch);
@@ -75,7 +75,7 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
 /** Authority comes only from bound memberships and the existing attempt ledger. */
 export async function observeClaudeDelivery(sessionId: string, text: string, operation: 'guard' | 'admitted' | 'stored', env: NodeJS.ProcessEnv = process.env): Promise<{ recognized: boolean; current: boolean }> {
   const ledger = hostLedgerForEnv(env);
-  return withOwnershipClaimLock(env, async () => {
+  return ledger.withClaimLock(async () => {
     const tokens = nativeTokens(text);
     const rows = (await ledger.listEvidence({ kind: 'wake', session: sessionId })).filter((row) => row.nativeDelivery?.harness === 'claude' && row.claimToken && tokens.includes(row.claimToken) && ['dispatching', 'unknown', 'accepted'].includes(row.outcome));
     let current = false;

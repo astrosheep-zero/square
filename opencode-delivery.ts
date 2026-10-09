@@ -2,7 +2,7 @@ import type { EvidenceRecord, NativeDeliveryEvidence, PresenceRecord } from './h
 import type { WakeTransportPort } from './ports.js';
 import { nameKey, type SquareState } from './model.js';
 import { observeSessionPending, sessionInbox } from './inbox.js';
-import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
+import { hostLedgerForEnv } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { nativePendingPreview, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
@@ -32,7 +32,7 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.
       const deadline = Date.now() + timeoutMs;
       // Start the native call under the ownership fence, but await it OUTSIDE: prompt may
       // enter our context hook synchronously and that hook needs the same ownership lock.
-      const started = await withOwnershipClaimLock(env, async () => {
+      const started = await ledger.withClaimLock(async () => {
         if (signal.aborted || request.route.sessionId !== target.sessionId || !request.claimToken
           || !await (beforeSend?.() ?? Promise.resolve(true))) return undefined;
         const owner = (await ledger.listPresence({ location: request.location, participant: request.participant, session: target.sessionId }))
@@ -64,7 +64,7 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.
 /** Only the matching prepared primary context authorizes presentation, never admission. */
 export async function observeOpenCodeContext(sessionId: string, messages: readonly OpenCodeContextMessage[], env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
   const ledger = hostLedgerForEnv(env);
-  await withOwnershipClaimLock(env, async () => {
+  await ledger.withClaimLock(async () => {
     if (signal.aborted) return;
     const rows = (await ledger.listEvidence({ kind: 'wake', session: sessionId })).filter((row): row is NativeRow =>
       row.nativeDelivery?.harness === 'opencode' && !!row.claimToken && ['dispatching', 'unknown', 'accepted'].includes(row.outcome));
@@ -136,7 +136,7 @@ export async function receiveOpenCodePending(target: OpenCodeNativeSession, env:
 
 export async function publishOpenCodeRoutes(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<boolean> {
   const ledger = hostLedgerForEnv(env);
-  return withOwnershipClaimLock(env, async () => {
+  return ledger.withClaimLock(async () => {
     const owners = (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode');
     for (const owner of owners) {
       const square = await openSquare(owner.location, { hostLedger: ledger, env, signal });

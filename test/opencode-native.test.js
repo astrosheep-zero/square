@@ -131,7 +131,7 @@ test('local cancellation and binding replacement fence late native context, whil
   assert.equal(await f.seen(old), undefined);
   const fresh = await f.express('fresh BODY');
   await waitFor(() => f.sent.length === 2);
-  await claimSessionTakeover(f.squarePath, 'Bob', f.env, {}, async () => undefined);
+  await claimSessionTakeover(f.squarePath, 'Bob', f.ledger, f.env, {}, async () => undefined);
   await f.context(f.sent[1]);
   assert.equal(await f.seen(fresh), undefined);
   assert.equal(f.sent.length, 2);

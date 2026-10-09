@@ -98,6 +98,10 @@ export class FileHostLedgerPort implements HostLedgerPort {
     }
     return next;
   }
+  /** The ownership claim critical section: the same lock as claimPresence and finalize. */
+  withClaimLock<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return withFileLock(path.join(this.root, 'presence-claim.lock'), { ...LOCK, signal }, fn);
+  }
   async claimPresence(i: PresenceRecord, signal?: AbortSignal): Promise<PresenceClaimResult> {
     const location = await canon(i.location);
     const record = { ...i, location, updatedAt: i.updatedAt ?? this.clock(), v: 1 as const };

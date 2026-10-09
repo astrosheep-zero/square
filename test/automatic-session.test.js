@@ -10,7 +10,7 @@ import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
-import { lookupSessionBindings, readParticipantOwner } from '../dist/registry.js';
+import { hostLedgerForEnv, lookupSessionBindings, readParticipantOwner } from '../dist/registry.js';
 import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
 import { takeover } from '../dist/square-actions.js';
 import { openSquare } from '../dist/square-file-adapter.js';
@@ -56,7 +56,7 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
   await withEnv(item.env, async (env) => {
     const first = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(first, undefined);
-    assert.equal((await readParticipantOwner(item.publicPath, automaticParticipant('codex', 'thread-1', env), env))?.epoch, 1);
+    assert.equal((await readParticipantOwner(item.publicPath, automaticParticipant('codex', 'thread-1', env), hostLedgerForEnv(env)))?.epoch, 1);
     const second = await automaticSessionStart('codex', 'thread-1', item.cwd, env);
     assert.equal(second, undefined);
   });
@@ -120,7 +120,7 @@ test('automatic session end preserves a replacement owner after committed cleanu
           try {
             await replacement.join('shared');
             await replacement.takeover('shared');
-            ownerBeforeOldCleanup = await readParticipantOwner(item.publicPath, 'shared', replacementEnv);
+            ownerBeforeOldCleanup = await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(replacementEnv));
           } finally { await replacement.close(); }
           return result;
         };
@@ -129,7 +129,7 @@ test('automatic session end preserves a replacement owner after committed cleanu
       await automaticSessionEnd('pi', 'old-session', item.cwd, env);
       assert.equal(ownerBeforeOldCleanup?.sessionId, 'new-session');
       assert.equal(ownerBeforeOldCleanup?.epoch, 2);
-      assert.equal((await readParticipantOwner(item.publicPath, 'shared', env))?.sessionId, 'new-session');
+      assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.sessionId, 'new-session');
     } finally { Square.at = originalAt; }
   });
 });
@@ -158,7 +158,7 @@ test('automatic session end preserves a same-session rejoin after committed clea
           try {
             await rejoin.join('shared');
             await rejoin.takeover('shared');
-            ownerAfterRejoin = await readParticipantOwner(item.publicPath, 'shared', rejoinEnv);
+            ownerAfterRejoin = await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(rejoinEnv));
             routesAfterRejoin = await readWakeRoutes({ location: item.publicPath });
           } finally { await rejoin.close(); }
           return result;
@@ -169,7 +169,7 @@ test('automatic session end preserves a same-session rejoin after committed clea
     } finally { Square.at = originalAt; }
     assert.equal(ownerAfterRejoin?.sessionId, 'rejoin-session');
     assert.equal(ownerAfterRejoin?.epoch, 2);
-    assert.equal((await readParticipantOwner(item.publicPath, 'shared', env))?.sessionId, 'rejoin-session');
+    assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.sessionId, 'rejoin-session');
     assert.deepEqual(routesAfterRejoin.map((route) => route.sessionId), ['rejoin-session']);
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['rejoin-session']);
   });
@@ -392,7 +392,7 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
       location: item.publicPath,
     }))[0];
     assert.ok(pausedBinding);
-    const expectedEpoch = (await readParticipantOwner(item.publicPath, pausedBinding.participant, env))?.epoch ?? 0;
+    const expectedEpoch = (await readParticipantOwner(item.publicPath, pausedBinding.participant, hostLedgerForEnv(env)))?.epoch ?? 0;
     assert.equal(expectedEpoch, 1);
     // Mirror operationEnv: only the pi session claims ownership; ambient runner identities must not leak in.
     const replacementEnv = {
@@ -432,7 +432,7 @@ test('automatic resume republishes the current epoch and stale retirement leaves
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'shared', PASEO_AGENT_ID: 'paseo-agent' }, async (env) => {
     await automaticSessionStart('pi', 'owner-a', item.cwd, env);
     const participant = 'shared';
-    assert.equal((await readParticipantOwner(item.publicPath, participant, env))?.epoch, 1);
+    assert.equal((await readParticipantOwner(item.publicPath, participant, hostLedgerForEnv(env)))?.epoch, 1);
     assert.equal((await readWakeRoutes({ location: item.publicPath, participant, sessionId: 'owner-a', now: Date.now() }))[0]?.epoch, 1);
     const replacement = await Square.at({
       path: item.publicPath,
@@ -446,7 +446,7 @@ test('automatic resume republishes the current epoch and stale retirement leaves
     } finally {
       await replacement.close();
     }
-    assert.equal((await readParticipantOwner(item.publicPath, participant, env))?.epoch, 2);
+    assert.equal((await readParticipantOwner(item.publicPath, participant, hostLedgerForEnv(env)))?.epoch, 2);
     await automaticSessionStart('pi', 'owner-a', item.cwd, env);
     const currentRoute = (await readWakeRoutes({ location: item.publicPath, participant, sessionId: 'owner-a', now: Date.now() }))[0];
     assert.equal(currentRoute?.epoch, 2);
@@ -552,8 +552,8 @@ test('done retires only its own route in a session that holds several participan
       await a.done();
     } finally { await square.close(); }
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.participant).sort(), ['b']);
-    assert.equal((await readParticipantOwner(item.publicPath, 'b', env))?.sessionId, 'dual-session');
-    assert.equal(await readParticipantOwner(item.publicPath, 'a', env), undefined);
+    assert.equal((await readParticipantOwner(item.publicPath, 'b', hostLedgerForEnv(env)))?.sessionId, 'dual-session');
+    assert.equal(await readParticipantOwner(item.publicPath, 'a', hostLedgerForEnv(env)), undefined);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'join', 'done']);
 });

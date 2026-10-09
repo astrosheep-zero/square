@@ -1,5 +1,5 @@
 import { automaticSessionStart, operationEnv } from './automatic-session.js';
-import { claimSessionParticipant, hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
+import { claimSessionParticipant, hostLedgerForEnv } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact } from './routes.js';
@@ -86,9 +86,9 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       const lateCancelledJoin = input.operation === 'cancel' && input.cancelAt !== undefined && (binding.updatedAt ?? Infinity) <= input.cancelAt && expected === undefined;
       if (lateCancelledJoin) cancelledBindings.push(binding);
       if (input.operation !== 'start' && input.operation !== 'reconcile' && !lateCancelledJoin && (!expected || expected.epoch !== binding.epoch)) continue;
-      const claim = await claimSessionParticipant(binding.location, binding.participant, scoped, signal);
+      const claim = await claimSessionParticipant(binding.location, binding.participant, ledger, scoped, signal);
       if (!claim || claim.epoch !== (binding.epoch ?? 0)) continue;
-      await withOwnershipClaimLock(env, async () => {
+      await ledger.withClaimLock(async () => {
         const current = (await ledger.listPresence({ location: binding.location, participant: binding.participant })).find((row) => row.session === input.sessionId && (row.epoch ?? 0) === claim.epoch);
         if (!current) return;
         const epoch = claim.epoch || 1;

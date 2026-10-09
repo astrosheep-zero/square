@@ -2,13 +2,12 @@
 
 import path from 'node:path';
 
-import { withFileLock } from './file-lock.js';
 import { nameKey, sameName, SquareError, type StoredAct } from './model.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { harnessSessionSources, squareAssignedParticipantName as computeSquareAssignedParticipantName } from './participant-identity.js';
 import { createHostLedgerPort, type FileHostLedgerPort } from './host-ledger-file-adapter.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
-import type { PresenceRecord } from './host-ledger.js';
+import type { HostLedgerPort, PresenceRecord } from './host-ledger.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
 export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: SessionChannel; child: boolean; updatedAt: number; epoch: number; }
@@ -16,11 +15,9 @@ export interface RegistryWriteOptions { channel?: SessionChannel; child?: boolea
 type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const PRESENCE_CLAIM_LOCK = { retryMs: 10 } as const;
 
 export async function canonicalSquarePath(squarePath: string): Promise<string> { const absolute = path.resolve(squarePath); try { return await (await import('node:fs/promises')).realpath(absolute); } catch { return absolute; } }
-function ledgerRoot(env: NodeJS.ProcessEnv): string { return hostLedgerRoot(env); }
-function ledger(env: NodeJS.ProcessEnv): FileHostLedgerPort { return createHostLedgerPort({ rootPath: ledgerRoot(env) }); }
+function ledger(env: NodeJS.ProcessEnv): FileHostLedgerPort { return createHostLedgerPort({ rootPath: hostLedgerRoot(env) }); }
 export function presenceEpoch(record: PresenceWithEpoch | undefined): number {
   return typeof record?.epoch === 'number' && Number.isSafeInteger(record.epoch) && record.epoch > 0 ? record.epoch : 0;
 }
@@ -34,14 +31,6 @@ function toBinding(record: PresenceWithEpoch): RegistryBinding {
     updatedAt: record.updatedAt ?? 0,
     epoch: presenceEpoch(record),
   };
-}
-function presenceClaimLockPath(env: NodeJS.ProcessEnv): string {
-  return path.join(ledgerRoot(env), 'presence-claim.lock');
-}
-
-/** Runs `fn` inside the ownership claim critical section, under the same lock as claims and finalize. */
-export async function withOwnershipClaimLock<T>(env: NodeJS.ProcessEnv, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, fn);
 }
 async function activeBindings(now: number, env: NodeJS.ProcessEnv): Promise<RegistryBinding[]> { return (await ledger(env).listPresence({ now })).map(toBinding).sort((a, b) => b.updatedAt - a.updatedAt); }
 async function writePresence(sessionId: string, name: string, squarePath: string, options: RegistryWriteOptions, done: boolean): Promise<void> { if (!sessionId || !name || !squarePath) return; const env = options.env ?? process.env; const channel = options.channel ?? 'unknown'; const port = ledger(env); const location = await canonicalSquarePath(squarePath); if (done) await port.removePresence({ location, participant: name, session: sessionId, channel }); else await port.ensurePresence({ location, participant: name, session: sessionId, channel, updatedAt: options.at ?? Date.now() }); }
@@ -68,37 +57,43 @@ export type TakeoverRunResult<T> =
 export async function readParticipantOwner(
   squarePath: string,
   name: string,
-  env: NodeJS.ProcessEnv = process.env,
+  hostLedger: HostLedgerPort,
 ): Promise<RegistryBinding | undefined> {
-  const bindings = await lookupParticipant(squarePath, name, Date.now(), env);
+  // The registry cache this read replaces reported an unreadable cache as "no visible owner";
+  // an ownership read stays equally tolerant so a degraded ledger cannot fail an operation.
+  const bindings = await participantBindings(squarePath, name, hostLedger).catch(() => []);
   return bindings.sort((left, right) => right.epoch - left.epoch || right.updatedAt - left.updatedAt)[0];
+}
+
+async function participantBindings(squarePath: string, name: string, hostLedger: HostLedgerPort): Promise<RegistryBinding[]> {
+  const canonicalPath = await canonicalSquarePath(squarePath);
+  return (await hostLedger.listPresence({ location: canonicalPath, participant: name, now: Date.now() })).map(toBinding);
 }
 
 export async function sessionOwnsParticipant(
   squarePath: string,
   name: string,
   sessionId: string,
-  env: NodeJS.ProcessEnv = process.env,
+  hostLedger: HostLedgerPort,
   expectedEpoch?: number,
 ): Promise<boolean> {
-  const owner = await readParticipantOwner(squarePath, name, env);
+  const owner = await readParticipantOwner(squarePath, name, hostLedger);
   if (owner === undefined || owner.sessionId !== sessionId) return false;
   return expectedEpoch === undefined || owner.epoch === expectedEpoch;
 }
 
 
-export async function releaseSessionParticipantClaim(squarePath: string, name: string, env: NodeJS.ProcessEnv, claim: OwnershipClaim): Promise<void> {
+export async function releaseSessionParticipantClaim(squarePath: string, name: string, hostLedger: HostLedgerPort, claim: OwnershipClaim): Promise<void> {
   if (claim?.status !== 'acquired') return;
-  const port = ledger(env);
-  await port.removePresenceIfUnchanged(claim.record);
+  await hostLedger.removePresenceIfUnchanged(claim.record);
 }
 
-export async function claimSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<OwnershipClaim> {
+export async function claimSessionParticipant(squarePath: string, name: string, hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<OwnershipClaim> {
   const identity = localSessionIdentities(env)[0];
   if (identity === undefined) return undefined;
   if (signal?.aborted) throw signal.reason ?? new Error('Operation aborted');
   const location = await canonicalSquarePath(squarePath);
-  const result = await ledger(env).claimPresence({
+  const result = await hostLedger.claimPresence({
     location,
     participant: name,
     session: identity.sessionId,
@@ -124,6 +119,7 @@ export async function claimSessionParticipant(squarePath: string, name: string, 
 export async function claimSessionTakeover<T>(
   squarePath: string,
   name: string,
+  hostLedger: HostLedgerPort,
   env: NodeJS.ProcessEnv = process.env,
   opts: { readonly expectedEpoch?: number; readonly expectedSession?: string } = {},
   lifecycle: (claim: TakeoverClaimToken) => Promise<T>,
@@ -132,9 +128,8 @@ export async function claimSessionTakeover<T>(
   const identity = localSessionIdentities(env)[0];
   if (identity === undefined) throw new SquareError('invalid_args', 'No local session identity for takeover');
   const location = await canonicalSquarePath(squarePath);
-  return withFileLock(presenceClaimLockPath(env), { ...PRESENCE_CLAIM_LOCK, signal }, async () => {
-    const port = ledger(env);
-    const standing = await port.listPresence({ location, participant: name }) as PresenceWithEpoch[];
+  return hostLedger.withClaimLock(async () => {
+    const standing = await hostLedger.listPresence({ location, participant: name }) as PresenceWithEpoch[];
     const owner = standing
       .map((row) => toBinding(row))
       .sort((left, right) => right.epoch - left.epoch || right.updatedAt - left.updatedAt)[0];
@@ -154,24 +149,24 @@ export async function claimSessionTakeover<T>(
       // token (session + channel + epoch) — whatever the lifecycle itself ensured — then restore
       // the captured standing rows so the old owner survives byte-consistently. Foreign rows and
       // later owners are never touched.
-      const tokenRows = await ledger(env).listPresence({ location, participant: name, session: identity.sessionId }) as PresenceWithEpoch[];
-      for (const row of tokenRows) { if (row.channel === identity.channel && presenceEpoch(row) === epoch) await ledger(env).removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel }); }
-      for (const row of standing) await ledger(env).ensurePresence(row as unknown as PresenceRecord);
+      const tokenRows = await hostLedger.listPresence({ location, participant: name, session: identity.sessionId }) as PresenceWithEpoch[];
+      for (const row of tokenRows) { if (row.channel === identity.channel && presenceEpoch(row) === epoch) await hostLedger.removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel }); }
+      for (const row of standing) await hostLedger.ensurePresence(row as unknown as PresenceRecord);
       throw error;
     }
     // Finalize: the lifecycle committed. Replace the standing owner with the new owner's row at
     // the claim epoch where the owner was visible, so exactly one current owner
     // remains — also when the takeover is a self-takeover (same session as the standing owner).
-    for (const row of standing) await ledger(env).removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel });
-    await ledger(env).ensurePresence({ location, participant: name, session: identity.sessionId, channel: identity.channel, updatedAt: Date.now(), epoch } as PresenceWithEpoch);
+    for (const row of standing) await hostLedger.removePresence({ location: row.location, participant: row.participant, session: row.session, channel: row.channel });
+    await hostLedger.ensurePresence({ location, participant: name, session: identity.sessionId, channel: identity.channel, updatedAt: Date.now(), epoch } as PresenceWithEpoch);
     return { status: 'acquired', sessionId: identity.sessionId, epoch, result };
-  });
+  }, signal);
 }
 
-export async function releaseSessionParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function releaseSessionParticipant(squarePath: string, name: string, hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const identity = localSessionIdentities(env)[0];
   if (identity === undefined) return;
-  await ledger(env).removePresence({ location: squarePath, participant: name, session: identity.sessionId, channel: identity.channel });
+  await hostLedger.removePresence({ location: squarePath, participant: name, session: identity.sessionId, channel: identity.channel });
 }
 export async function bindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<CurrentParticipantBinding> { if (squareAssignedParticipantName(env) !== name) throw new SquareError('invalid_args', `The current session is not assigned ${name}`); const sessionId = await localParticipantOwner(squarePath, name, env); if (sessionId !== undefined) return { created: false, sessionId }; if ((await lookupParticipant(squarePath, name, Date.now(), env)).at(0) !== undefined) throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`); await recordLocalJoin(name, squarePath, env); const currentSessionId = await localParticipantOwner(squarePath, name, env); if (currentSessionId === undefined) throw new Error(`Current participant binding did not commit for ${name}`); return { created: true, sessionId: currentSessionId }; }
 export async function unbindCurrentParticipant(squarePath: string, name: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> { const identities = new Set(localSessionIdentities(env).map((identity) => identity.sessionId)); const current = (await lookupParticipant(squarePath, name, Date.now(), env)).filter((binding) => identities.has(binding.sessionId)); for (const binding of current) await recordSessionDone(binding.sessionId, binding.name, binding.squarePath, binding.channel, env); return current.length > 0; }

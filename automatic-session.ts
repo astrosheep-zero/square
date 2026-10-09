@@ -65,17 +65,17 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   }
   const scopedEnv = operationEnv(provider, sessionId, env);
-  const claim = await claimSessionParticipant(squarePath, name, scopedEnv);
-  const square = await Square.at({ path: squarePath, hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
+  const claim = await claimSessionParticipant(squarePath, name, hostLedger, scopedEnv);
+  const square = await Square.at({ path: squarePath, hostLedger, env: scopedEnv });
   try {
     const implicit = await square.implicitJoin(name);
     if (implicit.state === 'done') {
-      if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, scopedEnv);
+      if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, hostLedger, scopedEnv);
       return undefined;
     }
-    const route = resolvePrimaryWakeRoute({ location: squarePath, participant: name, sessionId, provider }, env, await defaultWakeRouteCapabilities(hostLedgerForEnv(env)));
+    const route = resolvePrimaryWakeRoute({ location: squarePath, participant: name, sessionId, provider }, env, await defaultWakeRouteCapabilities(hostLedger));
     if (route !== undefined) {
-      const publisher = await openSquare(squarePath, { hostLedger: hostLedgerForEnv(scopedEnv), env: scopedEnv });
+      const publisher = await openSquare(squarePath, { hostLedger, env: scopedEnv });
       try {
         await publishWakeRoute(
           publisher.artifact,
@@ -84,7 +84,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
         );
       } finally { await closeOpenSquare(publisher); }
     }
-    await hostLedgerForEnv(env).ensurePresence({
+    await hostLedger.ensurePresence({
       location: squarePath,
       participant: name,
       session: sessionId,
@@ -94,7 +94,7 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
     } as PresenceRecord & { epoch?: number });
     return undefined;
   } catch (error) {
-    if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, scopedEnv).catch(() => undefined);
+    if (claim?.status === 'acquired') await releaseSessionParticipant(squarePath, name, hostLedger, scopedEnv).catch(() => undefined);
     throw error;
   } finally {
     await square.close();
@@ -114,7 +114,7 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   }))[0];
   const expectedEpoch = binding === undefined
     ? undefined
-    : (await readParticipantOwner(squarePath, binding.participant, scopedEnv))?.epoch;
+    : (await readParticipantOwner(squarePath, binding.participant, hostLedger))?.epoch;
   await closeOpenSquare(probe);
   const square = await Square.at({ path: squarePath, hostLedger, env: scopedEnv });
   try {

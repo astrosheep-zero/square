@@ -19,13 +19,8 @@ import {
   withPathOutput,
 } from '../presentation.js';
 import {
-  claimSessionParticipant,
   hostLedgerForEnv,
   hasAutomaticDeliveryIdentity,
-  localSessionIdentities,
-  lookupParticipant,
-  readParticipantOwner,
-  recordSessionDone,
 } from '../registry.js';
 import { sessionIdsFromEnvironment } from '../participant-identity.js';
 import { actId, inSquareCount, nowMs } from '../runtime.js';

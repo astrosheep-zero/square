@@ -107,7 +107,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         const before = await square.snapshot();
         const standing = before.participants.some((item) => item.name.toLocaleLowerCase() === participantName.toLocaleLowerCase() && item.state === 'joined');
         const identity = localSessionIdentities(env)[0];
-        const owner = standing ? await readParticipantOwner(squarePath, participantName, env).catch(() => undefined) : undefined;
+        const owner = standing ? await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined) : undefined;
         const reconnect = standing && identity !== undefined && owner?.sessionId === identity.sessionId;
         if (standing && owner !== undefined && identity !== undefined && !options.takeover && !reconnect) {
           throw new SquareError('already_joined', `✕ ${participantName} already stands here — another session holds the name`, { pending: before.participants.length });
@@ -173,7 +173,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const squarePath = location();
       const participantName = await requireParticipant(context, squarePath, env);
       const identity = localSessionIdentities(env)[0];
-      const owner = identity === undefined ? undefined : await readParticipantOwner(squarePath, participantName, env).catch(() => undefined);
+      const owner = identity === undefined ? undefined : await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined);
       if (identity !== undefined && owner?.sessionId === identity.sessionId && owner.epoch > 0) {
         const square = await open();
         try { return await square.doneOwnedSession(participantName, body ?? '', owner.epoch, control); }
