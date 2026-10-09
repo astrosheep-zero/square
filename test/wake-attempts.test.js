@@ -5,7 +5,6 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { formatActivityId } from '../dist/square-core.js';
-import { hasAttemptableWakeRoute, isWakeRouteAttemptable, terminalWakeEvidence } from '../dist/square-projections.js';
 import { readWakeReleaseDiagnostics, redactWakeDiagnostic } from '../dist/wake-attempts.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
 
@@ -117,33 +116,4 @@ test('a wake attempt write drops expired and malformed ledger rows', async () =>
   const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(rows.map((entry) => entry.attemptN), [2, 3]);
   fs.rmSync(item.root, { recursive: true, force: true });
-});
-
-test('failed routes remain retryable while unknown stops the same route', () => {
-  const attention = { squarePath: '/SQUARE.square', actIndex: 4, recipient: 'Faye' };
-  const failed = {
-    at: 100,
-    attention,
-    routeKind: 'paseo',
-    outcome: 'failed',
-    signature: 'address_not_found',
-    attemptN: 1,
-  };
-  const sameFact = { kind: 'paseo', updatedAt: 100 };
-  const newFact = { kind: 'paseo', updatedAt: 101 };
-
-  assert.equal(isWakeRouteAttemptable(sameFact, [failed]), true);
-  assert.equal(isWakeRouteAttemptable(newFact, [failed]), true);
-  assert.equal(hasAttemptableWakeRoute([sameFact], [failed]), true);
-
-  const unknown = {
-    at: 102,
-    attention,
-    routeKind: 'paseo',
-    outcome: 'unknown',
-    signature: 'send_unknown',
-    attemptN: 2,
-  };
-  assert.equal(terminalWakeEvidence([failed, unknown]), undefined);
-  assert.equal(isWakeRouteAttemptable({ kind: 'paseo', updatedAt: 200 }, [failed, unknown]), false);
 });

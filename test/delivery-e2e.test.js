@@ -16,7 +16,8 @@ import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordDone, recordJoin } from '../dist/registry.js';
 import { upsertWakeRoute } from '../dist/routes.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
-import { projectWakeEvidenceFromState, wakeIsEligible } from '../dist/square-projections.js';
+import { projectWakeEvidenceFromState } from '../dist/square-projections.js';
+import { wakeIsEligible } from '../dist/wake-eligibility.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
@@ -158,7 +159,7 @@ function acceptedAdapter(onBeforeSend) {
 }
 
 function snapshotFiles(root) {
-  return Object.fromEntries(fs.readdirSync(root).sort().map((name) => {
+  return Object.fromEntries(fs.readdirSync(root, { recursive: true }).sort().map((name) => {
     const file = path.join(root, name);
     return [name, fs.statSync(file).isFile() ? fs.readFileSync(file) : '<directory>'];
   }));
@@ -554,7 +555,52 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
   }
 });
 
-test('worker, sweep, and doctor derive the same wake eligibility without diagnostic writes', async () => {
+test('worker, sweep, and doctor derive the same wake eligibility without diagnostic writes', async (t) => {
+  for (const scenario of ['absent owner', 'foreign location', 'optional epoch', 'mismatched epoch', 'cancellation', 'tied-session presentation', 'newer unowned route', 'other-square evidence']) {
+    await t.test(scenario, async () => {
+      const item = workshop();
+      try {
+        item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'agreement @Bob'], 30);
+        const act = (await loadSquare(item.squarePath)).acts.at(-1);
+        const now = Date.now();
+        await registerRoute(item, 'bob-owner', 'bob-session', now - 1000);
+        const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+        const state = await loadSquare(item.squarePath);
+        const owner = (await ledger.listPresence({ location: item.squarePath })).find((r) => r.session === 'bob-session');
+        state.routes = state.routes.filter((r) => r.sessionId === 'bob-session');
+        if (scenario === 'absent owner') await ledger.removePresence(owner);
+        if (scenario === 'foreign location') state.routes[0].location = path.join(item.root, 'OTHER.square');
+        if (scenario === 'mismatched epoch') state.routes[0].epoch = (owner.epoch ?? 0) + 1;
+        if (scenario === 'cancellation') await ledger.suppressPresence(owner, act.index);
+        if (scenario === 'tied-session presentation') {
+          state.routes.push({ ...state.routes[0], sessionId: 'tied-session', address: { agentId: 'tied-session' } });
+          await ledger.ensurePresence({ ...owner, session: 'tied-session' });
+          await markPresentationEvidence(item, 'bob-session', act);
+        }
+        if (scenario === 'newer unowned route') state.routes.push({ ...state.routes[0], sessionId: 'unowned', updatedAt: now });
+        if (scenario === 'other-square evidence') {
+          const other = { ...item, squarePath: path.join(item.root, 'OTHER.square') };
+          await markPresentationEvidence(other, 'bob-session', act);
+          await recordWakeAttempt({ attention: { squarePath: other.squarePath, recipient: 'Bob', actIndex: act.index }, session: 'bob-session', routeKind: 'paseo', outcome: 'accepted', at: now - 1 }, item.env);
+        }
+        await writeSquareFile(item.squarePath, state);
+        const eligible = !['absent owner', 'foreign location', 'mismatched epoch', 'cancellation'].includes(scenario);
+        const before = snapshotFiles(item.root);
+        const evidence = await wakeEvidence(item.squarePath, 'Bob', act.index, now, item.env);
+        const health = await classifyDeliveryHealth(item.squarePath, { graceMs: 5000, now, env: item.env });
+        const doctor = await doctorDeliveryHealth(item.squarePath, 5000, now, item.env);
+        const selected = await sweepPendingNotifications(item.squarePath, { env: { ...item.env, SQUARE_DISABLE_PASEO_WAKE: '0' }, now });
+        assert.equal(wakeIsEligible(evidence), eligible);
+        assert.equal(health.find((r) => r.actIndex === act.index).kind, eligible ? 'awaiting' : 'unreachable');
+        assert.match(doctor.join('\n'), eligible ? /awaiting: 1/ : /unreachable: 1/);
+        assert.deepEqual(selected, eligible ? [act.index] : []);
+        assert.deepEqual(snapshotFiles(item.root), before);
+        const adapter = acceptedAdapter();
+        await processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] });
+        assert.equal(adapter.calls, Number(eligible));
+      } finally { item.cleanup(); }
+    });
+  }
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'shared evidence @Bob'], 30);
@@ -717,5 +763,47 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     })), expectedSelected.slice(0, 1));
   } finally {
     item.cleanup();
+  }
+});
+
+test('mid-dispatch generation, route, cancellation, consumption and presentation changes prevent send', async (t) => {
+  for (const change of ['generation', 'route', 'cancellation', 'consumption', 'presentation', 'superseded route', 'unavailable observation']) {
+    await t.test(change, async () => {
+      const item = workshop();
+      try {
+        item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'final fence @Bob'], 30);
+        const act = (await loadSquare(item.squarePath)).acts.at(-1);
+        await registerRoute(item);
+        const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+        const state = await loadSquare(item.squarePath);
+        state.routes = state.routes.filter((r) => r.sessionId === 'bob-session');
+        // Give this request a generation to pin, rather than weakening optional-epoch semantics.
+        const owner = (await ledger.listPresence({ location: item.squarePath })).find((r) => r.session === 'bob-session');
+        await ledger.ensurePresence({ ...owner, epoch: 7 });
+        state.routes[0].epoch = 7;
+        await writeSquareFile(item.squarePath, state);
+        const adapter = acceptedAdapter(async () => {
+          const current = await loadSquare(item.squarePath);
+          if (change === 'generation') await ledger.ensurePresence({ ...owner, epoch: 8 });
+          if (change === 'route') { current.routes[0].address.agentId = 'replacement'; await writeSquareFile(item.squarePath, current); }
+          if (change === 'cancellation') await ledger.suppressPresence({ ...owner, epoch: 7 }, act.index);
+          if (change === 'consumption') item.cli('Bob', ['catch', '--id', formatActivityId(act.index)], 40);
+          if (change === 'presentation') await markPresentationEvidence(item, 'bob-session', act);
+          if (change === 'superseded route') {
+            current.routes.push({ ...current.routes[0], sessionId: 'replacement', updatedAt: current.routes[0].updatedAt + 1 });
+            await ledger.ensurePresence({ ...owner, session: 'replacement', epoch: 7 });
+            await writeSquareFile(item.squarePath, current);
+          }
+          if (change === 'unavailable observation') fs.renameSync(item.squarePath, `${item.squarePath}.hidden`);
+        });
+        await processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] });
+        assert.equal(adapter.calls, 0);
+        assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
+        const { readWakeReleaseDiagnostics } = await import('../dist/wake-attempts.js');
+        const [release] = await readWakeReleaseDiagnostics({ location: state.routes[0].location, env: item.env });
+        assert.equal(release.signature, change === 'presentation' ? 'presentation_recorded_during_dispatch' : 'pre_send_revalidation_failed');
+        if (change === 'unavailable observation') assert.equal(release.diagnostic.observationAvailable, false);
+      } finally { item.cleanup(); }
+    });
   }
 });

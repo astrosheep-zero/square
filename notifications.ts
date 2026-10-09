@@ -6,13 +6,14 @@ import {
   type WakeAdapter,
 } from './delivery.js';
 import { SquareError, type SquareState } from './model.js';
-import { parseActivityId, type ActivityId } from './square-core.js';
 import { displayAttentionPath } from './attention-presentation.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
-import { deliverPending, observeSquare, sweepPending, sweepPendingFromState } from './delivery-operations.js';
-import { nameKey } from './model.js';
+import { deliverPending, sweepPending, sweepPendingFromState } from './delivery-operations.js';
+import { projectWakeEvidenceFromState } from './square-projections.js';
+import type { WakeCurrentness } from './wake-eligibility.js';
+import { canonicalRouteLocation } from './routes.js';
 import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
@@ -82,34 +83,17 @@ export async function createDefaultWakeTransport(
   );
 }
 
-interface WakeRequestCurrentness {
-  readonly current: boolean;
-  readonly activityPending: boolean;
-  readonly sessionBound: boolean;
-  readonly routePublished: boolean;
-  readonly observationAvailable: boolean;
-}
-
-async function wakeRequestCurrentness(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<WakeRequestCurrentness> {
-  const activity = parseActivityId(request.activity as ActivityId);
-  if (activity === undefined) return { current: false, activityPending: false, sessionBound: false, routePublished: false, observationAvailable: true };
+async function observeWakeRequest(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<WakeCurrentness & { readonly observationAvailable: boolean }> {
   let square: OpenSquare | undefined;
   try {
-    square = await openSquare(request.location, { hostLedger });
-    const current = await observeSquare({ artifact: square.artifact, hostLedger, location: request.location, now });
-    const activityPending = current.pending.some((entry) => nameKey(entry.recipient) === nameKey(request.participant)
-      && entry.notifications.some((notification) => notification.item.index === activity));
-    const sessionBound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(request.route.participant)
-      && binding.sessionId === request.route.sessionId
-      && binding.location === request.route.location);
-    const routePublished = (current.state.routes ?? []).some((route) => route.location === request.route.location
-      && nameKey(route.participant) === nameKey(request.route.participant)
-      && route.sessionId === request.route.sessionId
-      && route.kind === request.route.kind
-      && JSON.stringify(route.address) === JSON.stringify(request.route.address));
-    return { current: activityPending && sessionBound && routePublished, activityPending, sessionBound, routePublished, observationAvailable: true };
+    const location = await canonicalRouteLocation(request.location);
+    square = await openSquare(location, { hostLedger });
+    const { state } = await square.artifact.read();
+    const eligibility = await projectWakeEvidenceFromState({ state, hostLedger, location, now });
+    return { ...eligibility.currentness({ ...request, location }), observationAvailable: true };
   } catch {
-    return { current: false, activityPending: false, sessionBound: false, routePublished: false, observationAvailable: false };
+    return { current: false, activityPending: false, sessionBound: false, routePublished: false,
+      selectedOwner: false, cancelled: false, presented: false, observationAvailable: false };
   } finally {
     if (square !== undefined) await closeOpenSquare(square);
   }
@@ -135,17 +119,17 @@ export function createWakeTransport(
       }
     },
     attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
+      let revalidation: Awaited<ReturnType<typeof observeWakeRequest>> | undefined;
+      const finalGate = beforeSend ?? (async () => {
+        revalidation = await observeWakeRequest(request, hostLedger, clock());
+        return revalidation.current;
+      });
       const native = nativePorts[request.route.kind];
-      if (native !== undefined) return native.attempt(request, timeoutMs, beforeSend);
+      if (native !== undefined) return native.attempt(request, timeoutMs, finalGate);
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        let revalidation: WakeRequestCurrentness | undefined;
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), async () => {
-          if (!(await (beforeSend ?? (async () => true))())) return false;
-          revalidation = await wakeRequestCurrentness(request, hostLedger, clock());
-          return revalidation.current;
-        }, timeoutMs);
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), finalGate, timeoutMs);
         if (result.outcome === 'accepted') return { outcome: 'accepted' };
         if (result.outcome === 'failed') return { outcome: 'failed', ...(result.signature === undefined ? {} : { signature: result.signature }), message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) };
         if (result.outcome === 'unavailable') return { outcome: 'failed', signature: result.signature, message: result.message, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }), unavailable: true, ...(result.retainRoute === true ? { retainRoute: true } : {}), ...(result.routeStale === true ? { routeStale: true } : {}) };

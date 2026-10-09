@@ -3,10 +3,9 @@ import { nameKey, type InboxMembership, type InboxNotification, type SquareState
 import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEvidenceProjection, PresentationProjection, SessionBindingProjection } from './ports.js';
 import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
 import { freshWatchLease } from './runtime.js';
-import type { WakeRoute } from './model.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
 import { canonicalRouteLocation } from './routes.js';
-import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
+import { projectWakeEligibility, type WakeEligibility } from './wake-eligibility.js';
 
 /** A fresh blocking catch owns only the notifications admitted by its filter. */
 export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
@@ -66,7 +65,7 @@ function bindingProjection(record: PresenceRecord): SessionBindingProjection {
 
 export async function projectSessionBindings(input: {
   readonly hostLedger: HostLedgerPort;
-  readonly sessionId: string;
+  readonly sessionId?: string;
   readonly location?: string;
   readonly now?: number;
 }): Promise<readonly SessionBindingProjection[]> {
@@ -131,74 +130,18 @@ export function presentationSuppressesWake(evidence: readonly Pick<PresentationE
   return evidence.some((row) => row.outcome === 'clipped' || row.outcome === 'presented');
 }
 
-/** The most recently published session owns wake eligibility for its participant. */
-export function currentSessionBindings<T extends { readonly participant: string; readonly updatedAt?: number }>(bindings: readonly T[]): T[] {
-  const latest = new Map<string, number>();
-  for (const binding of bindings) {
-    const participant = nameKey(binding.participant);
-    latest.set(participant, Math.max(latest.get(participant) ?? Number.NEGATIVE_INFINITY, binding.updatedAt ?? 0));
-  }
-  return bindings.filter((binding) => (binding.updatedAt ?? 0) === latest.get(nameKey(binding.participant)));
-}
-
-export function terminalWakeEvidence(attempts: readonly WakeAttempt[]): WakeAttempt | undefined { return attempts.findLast((attempt) => attempt.outcome === 'accepted'); }
-export function isWakeRouteAttemptable(route: Pick<WakeRoute, 'kind' | 'updatedAt'>, attempts: readonly WakeAttempt[]): boolean {
-  if (terminalWakeEvidence(attempts) !== undefined) return false;
-  if (attempts.some((attempt) => attempt.routeKind === route.kind && attempt.outcome === 'unknown')) return false;
-  return true;
-}
-export function hasAttemptableWakeRoute(routes: readonly Pick<WakeRoute, 'kind' | 'updatedAt'>[], attempts: readonly WakeAttempt[]): boolean { return routes.some((route) => isWakeRouteAttemptable(route, attempts)); }
-
-export interface WakeEvidence {
-  readonly delivered: boolean;
-  readonly presented: boolean;
-  readonly attempts: readonly WakeAttempt[];
-  readonly terminal?: WakeAttempt;
-  readonly attemptableRoutes: readonly WakeRoute[];
-}
-export interface WakeEvidenceProjection { evidence(recipient: string, actIndex: number): WakeEvidence }
-
+/** Read primary evidence once; wake behavior belongs to the pure eligibility projection. */
 export async function projectWakeEvidenceFromState(input: {
   readonly location: string;
   readonly state: SquareState;
   readonly hostLedger: HostLedgerPort;
   readonly now: number;
   readonly delivery?: ReturnType<typeof deriveDeliveryModel>;
-}): Promise<WakeEvidenceProjection> {
+}): Promise<WakeEligibility> {
   const canonicalLocation = await canonicalRouteLocation(input.location);
   const delivery = input.delivery ?? deriveDeliveryModel(input.state);
-  const owners = input.state.routes?.some((route) => route.epoch !== undefined) ? await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now }) : [];
-  const bindings: SessionBindingProjection[] = (input.state.routes ?? [])
-    .filter((route) => route.location === canonicalLocation || route.location === input.location)
-    .map((route) => ({ location: route.location, participant: route.participant, sessionId: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { ...route, address: { ...route.address } }, updatedAt: route.updatedAt }));
+  const owners = await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now });
   const wakeRecords = await input.hostLedger.listEvidence({ location: canonicalLocation, kind: 'wake', now: input.now });
-  const attemptsByBinding = new Map<string, WakeAttempt[]>();
-  for (const record of wakeRecords) {
-    const decoded = decodeWakeEvidence(record, input.now);
-    if (decoded?.kind !== 'attempt') continue;
-    const attempt = decoded.value;
-    const key = JSON.stringify([nameKey(attempt.attention.recipient), attempt.attention.actIndex, attempt.session]);
-    const existing = attemptsByBinding.get(key) ?? [];
-    existing.push(attempt);
-    attemptsByBinding.set(key, existing);
-  }
-  const presentedRows = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: canonicalLocation, now: input.now });
-  return {
-    evidence(recipient: string, actIndex: number): WakeEvidence {
-      const recipientBindings = currentSessionBindings(bindings.filter((binding) => nameKey(binding.participant) === nameKey(recipient)));
-      const routes = recipientBindings.flatMap((binding) => {
-        if (binding.route === undefined) return [];
-        const owner = owners.find((row) => row.session === binding.sessionId && nameKey(row.participant) === nameKey(binding.participant));
-        if (binding.route.epoch !== undefined && (!owner || owner.epoch !== binding.route.epoch)) return [];
-        if (actIndex <= (owner?.cancelledThrough ?? -1)) return [];
-        return [binding.route];
-      });
-      const attempts = recipientBindings.flatMap((binding) => attemptsByBinding.get(JSON.stringify([nameKey(recipient), actIndex, binding.sessionId])) ?? []);
-      const terminal = terminalWakeEvidence(attempts);
-      const presented = presentedRows.some((row) => row.activity === formatActivityId(actIndex) && row.participant.toLocaleLowerCase() === recipient.toLocaleLowerCase() && recipientBindings.some((binding) => binding.sessionId === row.sessionId) && presentationSuppressesWake([row]));
-      return { delivered: delivery.isSeen(recipient, actIndex), presented, attempts, ...(terminal === undefined ? {} : { terminal }), attemptableRoutes: terminal === undefined ? routes.filter((route) => isWakeRouteAttemptable(route, attempts)) : [] };
-    },
-  };
+  const presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: canonicalLocation, now: input.now });
+  return projectWakeEligibility({ state: input.state, location: canonicalLocation, owners, wakeRecords, presentations, now: input.now, delivery });
 }
-
-export function wakeIsEligible(evidence: WakeEvidence): boolean { return !evidence.delivered && !evidence.presented && evidence.terminal === undefined && evidence.attemptableRoutes.length > 0; }

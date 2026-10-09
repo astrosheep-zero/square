@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
-import { processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
+import { createWakeTransport, processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { recordJoin, recordSessionJoin } from '../dist/registry.js';
@@ -412,6 +412,36 @@ test('wake transport rechecks pending and route ownership before send', async ()
   assert.equal(releases[0].diagnostic.routePublished, false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
+test('standalone wake transport uses strict eligibility and structural address equality from a fresh projection', async () => {
+  const item = await fixture();
+  try {
+    await route(item);
+    const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    const state = await loadSquare(item.squarePath);
+    state.routes[0].epoch = 7;
+    state.routes[0].address = { agentId: 'bob-agent', extra: 'value' };
+    await writeSquareFile(item.squarePath, state);
+    const owner = (await ledger.listPresence({ location: item.squarePath }))[0];
+    await ledger.ensurePresence({ ...owner, epoch: 7 });
+    const request = { location: item.squarePath, participant: 'Bob', activity: 'act/2', actor: 'Alice',
+      route: { ...state.routes[0], address: { extra: 'value', agentId: 'bob-agent' } } };
+    let sends = 0;
+    const adapter = fakeAdapter('paseo', async (_address, _payload, beforeSend) => {
+      if (!(await beforeSend())) return { outcome: 'cancelled' };
+      sends += 1;
+      return { outcome: 'accepted' };
+    });
+    const transport = createWakeTransport([adapter], ledger, Date.now);
+    assert.equal((await transport.attempt(request, 100)).outcome, 'accepted');
+    await ledger.ensurePresence({ ...owner, epoch: 8 });
+    const stale = await transport.attempt(request, 100);
+    assert.equal(stale.signature, 'pre_send_revalidation_failed');
+    assert.equal(stale.diagnostic.sessionBound, false);
+    assert.equal(sends, 1);
+    assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
 test('Codex PostToolUse hook aborts a contended presentation boundary within its budget and traces stages', async () => {
   const item = await fixture();
   const traces = [];

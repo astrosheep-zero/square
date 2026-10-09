@@ -260,7 +260,7 @@ test('a local binding without a route still matches its artifact route', async (
   state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'local-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'local-agent' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'local-agent' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'local-session', channel: 'claude-code', updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   try {
@@ -293,7 +293,10 @@ test('attention caught after claim is not sent', async () => {
   const ledger = Object.create(base);
   ledger.claimWakeAttempt = async (input) => {
     const claim = await base.claimWakeAttempt(input);
-    if (claim.status === 'acquired') await artifactRef.transact((current) => ({ state: { ...current, routes: [] }, result: undefined }));
+    if (claim.status === 'acquired') await artifactRef.transact((current) => {
+      current.runtime.observations.Bob = { 'act/2': { state: 'seen', at: 10 } };
+      return { state: current, result: undefined };
+    });
     return claim;
   };
   const square = await openSquare(location, { hostLedger: base });

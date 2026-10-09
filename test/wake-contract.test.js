@@ -45,6 +45,33 @@ test('injected native transport receives the full request without an awareness p
   assert.deepEqual(await transport.attempt(nativeRequest, 100, beforeSend), { outcome: 'unknown' });
 });
 
+test('supplied final gate alone owns transport revalidation without another artifact or ledger observation', async () => {
+  const unreadableLedger = new Proxy({}, { get() { throw new Error('transport must not read the ledger with a supplied gate'); } });
+  let gates = 0;
+  const gate = async () => { gates += 1; return true; };
+  const gated = adapter('paseo', {
+    async dispatch(_address, payload, finalGate) {
+      assert.equal(finalGate, gate);
+      assert.match(payload, /attention: act\/1 for Faye from Bev/);
+      assert.equal(await finalGate(), true);
+      return { outcome: 'accepted' };
+    },
+  });
+  assert.deepEqual(await createWakeTransport([gated], unreadableLedger, clock).attempt(request('paseo'), 100, gate), { outcome: 'accepted' });
+  assert.equal(gates, 1);
+});
+
+test('standalone native dispatch receives the same fresh projection gate', async () => {
+  let gated = false;
+  const native = { async attempt(_request, _timeout, finalGate) {
+    assert.equal(await finalGate(), false); // unavailable artifact is never permission to send
+    gated = true;
+    return { outcome: 'unknown' };
+  } };
+  await createWakeTransport([], hostLedger, clock, { 'claude-native': native }).attempt(request('claude-native'), 100);
+  assert.equal(gated, true);
+});
+
 test('wake transport reports not-capable when no adapter owns the route kind', async () => {
   const transport = createWakeTransport([], hostLedger, clock, {});
   assert.deepEqual(await transport.probe(request('codex-queue').route), { outcome: 'not-capable', diagnostic: 'no adapter for codex-queue' });

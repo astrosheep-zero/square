@@ -1,10 +1,10 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { nameKey, type SquareState } from './model.js';
-import type { HostLedgerPort, PresenceRecord, PresentationEvidenceProjection, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput,  SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
+import type { SquareState } from './model.js';
+import type { HostLedgerPort, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput, SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
 import { deriveDeliveryModel } from './delivery.js';
-import { currentSessionBindings, isWakeRouteAttemptable, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
-import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
-import { retireWakeRouteFromArtifact } from './routes.js';
+import { projectSessionBindings, projectWakeEvidenceFromState } from './square-projections.js';
+import { wakeIsEligible, type WakeCurrentness } from './wake-eligibility.js';
+import { canonicalRouteLocation, retireWakeRouteFromArtifact } from './routes.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
 
 async function releaseWakeClaim(input: {
@@ -51,69 +51,42 @@ async function attemptWakeWithin(
 export async function observeSquare(input: ObserveSquareInput): Promise<SquareObservation> {
   const snapshot = await input.artifact.read();
   const delivery = deriveDeliveryModel(snapshot.state);
-  let rows: readonly PresenceRecord[] = [];
+  let bindings: SquareObservation['bindings'] = [];
   if (input.hostLedger !== undefined) {
-    try { rows = await input.hostLedger.listPresence({ location: input.location, now: input.now }); } catch { rows = []; }
+    try { bindings = await projectSessionBindings({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* observation is best effort */ }
   }
-  const bindings = rows.map((record) => ({
-    location: record.location,
-    participant: record.participant,
-    sessionId: record.session,
-    channel: record.channel,
-    ...(record.route === undefined ? {} : { route: { location: record.location, participant: record.participant, sessionId: record.session, channel: record.channel, kind: record.route.kind, address: { ...record.route.address }, updatedAt: record.updatedAt ?? 0 } }),
-    updatedAt: record.updatedAt ?? 0,
-    ...(record.epoch === undefined ? {} : { epoch: record.epoch }),
-    ...(record.cancelledThrough === undefined ? {} : { cancelledThrough: record.cancelledThrough }),
-  }));
   return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
-  const observation = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now });
-  const routes = (observation.state.routes ?? []).flatMap((route) => {
-    const owner = observation.bindings.find((binding) => nameKey(binding.participant) === nameKey(route.participant)
-      && binding.sessionId === route.sessionId && binding.location === route.location
-      && (route.epoch === undefined || binding.epoch === route.epoch));
-    if (owner === undefined) return [];
-    return [{
-      location: route.location,
-      participant: route.participant,
-      session: route.sessionId,
-      channel: route.channel as import('./host-ledger.js').PresenceChannel,
-      route: { kind: route.kind, address: route.address },
-      updatedAt: route.updatedAt,
-      epoch: route.epoch,
-      cancelledThrough: owner.cancelledThrough,
-    }];
-  });
-  const liveRoutes = currentSessionBindings(routes);
-  let presentations: readonly PresentationEvidenceProjection[] = [];
-  try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* capability is handled by the route-level wake checks */ }
+  const location = await canonicalRouteLocation(input.location);
+  const { state } = await input.artifact.read();
+  const delivery = deriveDeliveryModel(state);
+  const eligibility = await projectWakeEvidenceFromState({ state, location, hostLedger: input.hostLedger, now: input.now ?? Date.now(), delivery });
+  const observeCurrentness = async (request: WakeRequest, now: number): Promise<WakeCurrentness & { readonly observationAvailable: boolean }> => {
+    const { state: currentState } = await input.artifact.read();
+    const projection = await projectWakeEvidenceFromState({ state: currentState, location, hostLedger: input.hostLedger, now });
+    return { ...projection.currentness({ ...request, location }), observationAvailable: true };
+  };
   let attempted = 0; let accepted = 0; let failed = 0; let unknown = 0; let notCapable = 0;
-  for (const membership of observation.pending) {
-    for (const notification of membership.notifications) {
+  for (const recipient of delivery.joinedRecipients()) {
+    for (const notification of delivery.pendingFor(recipient)) {
       if (input.activity !== undefined) {
         const requested = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
         if (requested === undefined || requested !== notification.item.index) continue;
       }
-      const candidates = liveRoutes.filter((route) => nameKey(route.participant) === nameKey(membership.recipient)
-        && notification.item.index > (route.cancelledThrough ?? -1));
+      const evidence = eligibility.evidence(recipient, notification.item.index);
+      if (evidence.terminal !== undefined) continue;
+      const candidates = evidence.attemptableRoutes;
       let acceptedForAttention = false;
       let failedForAttention = false;
       let unknownForAttention = false;
       let notCapableForAttention = false;
-      // Already-accepted attention is a no-op even if its route is no longer available.
-      try {
-        const prior = await input.hostLedger.listWakeAttempts({ attention: { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient }, now: Date.now() });
-        if (prior.some((attempt) => attempt.outcome === 'accepted')) continue;
-      } catch { /* the atomic claim below still gates dispatch */ }
-      if (candidates.length === 0) notCapableForAttention = true;
+      if (candidates.length === 0 && !evidence.presented) notCapableForAttention = true;
       for (const route of candidates) {
         const activity = formatActivityId(notification.item.index);
-        const presented = presentations.filter((row) => row.activity === activity && row.participant.toLocaleLowerCase() === membership.recipient.toLocaleLowerCase() && row.sessionId === route.session && presentationSuppressesWake([row]));
-        if (presented.length > 0) continue;
-        const attention = { squarePath: input.location, actIndex: notification.item.index, recipient: membership.recipient };
+        const attention = { squarePath: location, actIndex: notification.item.index, recipient };
         const leaseMs = input.timeoutMs ?? 5000;
-        const requestRoute = { location: route.location, participant: route.participant, sessionId: route.session, channel: route.channel, kind: route.route!.kind, address: { ...route.route!.address }, updatedAt: route.updatedAt ?? 0, epoch: route.epoch };
+        const requestRoute = route;
         if (input.transport.probe !== undefined) {
           try {
             const probe = await input.transport.probe(requestRoute);
@@ -121,7 +94,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           } catch { notCapableForAttention = true; continue; }
         }
         let claim: import('./host-ledger.js').WakeAttemptClaim;
-        try { claim = await input.hostLedger.claimWakeAttempt({ attention, session: route.session, routeKind: route.route!.kind, leaseMs }); }
+        try { claim = await input.hostLedger.claimWakeAttempt({ attention, session: route.sessionId, routeKind: route.kind, leaseMs }); }
         catch { notCapableForAttention = true; continue; }
         if (claim.status === 'degraded') { notCapableForAttention = true; continue; }
         // Busy and terminal outcomes are attention-wide: no other session or route may dispatch.
@@ -129,59 +102,45 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (claim.status === 'busy') break;
         if (claim.status === 'terminal') break;
         const { claimToken, attemptN } = claim;
-        const request = { location: input.location, participant: membership.recipient, activity, actor: notification.item.actor, route: requestRoute };
-        const claimRelease: Parameters<typeof releaseWakeClaim>[0] = { hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, session: route.session, activity, claimToken, routeKind: route.route!.kind, attemptN };
+        const request = { location: input.location, participant: recipient, activity, actor: notification.item.actor, route: requestRoute };
+        const claimRelease: Parameters<typeof releaseWakeClaim>[0] = { hostLedger: input.hostLedger, location, participant: recipient, session: route.sessionId, activity, claimToken, routeKind: route.kind, attemptN };
         // One teardown path for every exit after claim acquisition; each call site keeps its own error policy.
         const abandon = async (details: Parameters<typeof releaseWakeClaim>[1], options: { readonly bestEffortClaim?: boolean } = {}): Promise<void> => {
           const release = releaseWakeClaim(claimRelease, details);
           if (options.bestEffortClaim === true) await release.catch(() => undefined);
           else await release;
         };
-        let current: SquareObservation;
-        try { current = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now }); }
-        catch { current = { ...observation, pending: [], bindings: [] }; }
-        const stillPending = current.pending.some((entry) => nameKey(entry.recipient) === nameKey(membership.recipient)
-          && entry.notifications.some((entryNotification) => entryNotification.item.index === notification.item.index));
-        const stillBound = current.bindings.some((binding) => nameKey(binding.participant) === nameKey(route.participant)
-          && binding.sessionId === route.session
-          && binding.location === route.location);
-        const stillPublished = (current.state.routes ?? []).some((published) => published.location === route.location
-          && nameKey(published.participant) === nameKey(route.participant)
-          && published.sessionId === route.session
-          && published.kind === route.route!.kind
-          && JSON.stringify(published.address) === JSON.stringify(route.route!.address));
-        if (!stillPending || !stillBound || !stillPublished) {
-          await abandon({
-            signature: 'pre_send_revalidation_failed',
-            message: 'Wake was not sent because the activity, session binding, or published route changed before dispatch.',
-            diagnostic: { pending: stillPending, bound: stillBound, publishedRoute: stillPublished },
-          }, { bestEffortClaim: true }).catch(() => undefined);
+        let current: Awaited<ReturnType<typeof observeCurrentness>>;
+        try { current = await observeCurrentness(request, input.now ?? Date.now()); }
+        catch {
+          await abandon({ signature: 'pre_send_revalidation_failed', message: 'Wake was not sent because current Square delivery state could not be verified.', diagnostic: { observationAvailable: false } }, { bestEffortClaim: true }).catch(() => undefined);
           continue;
         }
-        let latestPresentations: readonly PresentationEvidenceProjection[] = [];
-        try { latestPresentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, sessionId: route.session, activity, now: input.now }); } catch { /* capability is handled by the transport path */ }
-        if (presentationSuppressesWake(latestPresentations)) {
+        if (!current.current) {
           await abandon({
-            signature: 'presentation_already_recorded',
-            message: 'Wake was suppressed because presentation evidence already exists.',
-            diagnostic: { outcomes: latestPresentations.map((row) => row.outcome) },
+            signature: current.presented ? 'presentation_already_recorded' : 'pre_send_revalidation_failed',
+            message: current.presented ? 'Wake was suppressed because presentation evidence already exists.' : 'Wake was not sent because current attention, session binding, or route no longer matches.',
+            diagnostic: current,
           }, { bestEffortClaim: true }).catch(() => undefined);
           continue;
         }
         let outcome;
         let suppressedDuringSend = false;
+        let finalCurrentness: Awaited<ReturnType<typeof observeCurrentness>> | undefined;
         const beforeSend = async () => {
-          let finalPresentations: readonly PresentationEvidenceProjection[] = [];
-          try { finalPresentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, participant: membership.recipient, sessionId: route.session, activity, now: Date.now() }); } catch { /* capability is handled by the transport path */ }
-          suppressedDuringSend = presentationSuppressesWake(finalPresentations);
+          try {
+            finalCurrentness = await observeCurrentness(request, Date.now());
+            suppressedDuringSend = !finalCurrentness.current;
+          } catch { suppressedDuringSend = true; }
           return !suppressedDuringSend;
         };
         try { outcome = await attemptWakeWithin(input.transport, { ...request, claimToken, attemptN }, leaseMs, beforeSend); }
         catch (error) { outcome = { outcome: 'unknown' as const, diagnostic: error instanceof Error ? error.message : String(error) }; }
         if (suppressedDuringSend) {
           await abandon({
-            signature: 'presentation_recorded_during_dispatch',
-            message: 'Wake was cancelled because presentation evidence appeared before the final send check.',
+            signature: finalCurrentness?.presented === true ? 'presentation_recorded_during_dispatch' : 'pre_send_revalidation_failed',
+            message: finalCurrentness === undefined ? 'Wake was not sent because current Square delivery state could not be verified.' : 'Wake was cancelled because current attention, ownership, cancellation, or presentation changed before the final send check.',
+            diagnostic: finalCurrentness ?? { observationAvailable: false },
           }, { bestEffortClaim: true }).catch(() => undefined);
           continue;
         }
@@ -196,7 +155,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           continue;
         }
         if (outcome.outcome === 'failed' && outcome.unavailable) {
-          if (outcome.routeStale === true) await retireWakeRouteFromArtifact(input.artifact, { location: route.location, participant: route.participant, sessionId: route.session });
+          if (outcome.routeStale === true) await retireWakeRouteFromArtifact(input.artifact, { location: route.location, participant: route.participant, sessionId: route.sessionId });
           await abandon({
             signature: outcome.signature ?? 'transport_unavailable',
             message: outcome.message ?? 'The wake transport was unavailable.',
@@ -206,7 +165,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           continue;
         }
         const safeOutcome = redactCurrentDiagnostic(outcome) as typeof outcome;
-        await input.hostLedger.appendEvidence({ location: input.location, participant: membership.recipient, session: route.session, activity, kind: 'wake', outcome: safeOutcome.outcome, routeKind: route.route!.kind, attemptN, ...(safeOutcome.signature === undefined ? {} : { signature: safeOutcome.signature }), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.message !== undefined ? { message: safeOutcome.message } : {}), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.diagnostic !== undefined ? { diagnostic: safeOutcome.diagnostic } : {}), claimToken });
+        await input.hostLedger.appendEvidence({ location, participant: recipient, session: route.sessionId, activity, kind: 'wake', outcome: safeOutcome.outcome, routeKind: route.kind, attemptN, ...(safeOutcome.signature === undefined ? {} : { signature: safeOutcome.signature }), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.message !== undefined ? { message: safeOutcome.message } : {}), ...(safeOutcome.outcome !== 'accepted' && safeOutcome.diagnostic !== undefined ? { diagnostic: safeOutcome.diagnostic } : {}), claimToken });
         if (outcome.outcome === 'accepted') { acceptedForAttention = true; break; }
         if (outcome.outcome === 'failed') failedForAttention = true;
         else { unknownForAttention = true; break; }
@@ -220,47 +179,20 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
   return { attempted, accepted, failed, unknown, notCapable };
 }
 
-export function selectPendingWakeActivities(state: SquareState, routes: readonly PresenceRecord[], attempts: readonly WakeAttempt[], now: number, graceMs: number, limit: number, delivery = deriveDeliveryModel(state), presentations: readonly PresentationEvidenceProjection[] = []): number[] {
-  const selected = new Set<number>();
-  for (const membership of delivery.joinedRecipients()) {
-    for (const notification of delivery.pendingFor(membership)) {
-      if (now - notification.item.at <= graceMs) continue;
-      if (attempts.some((attempt) => attempt.attention.actIndex === notification.item.index && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.outcome === 'accepted')) continue;
-      const eligible = routes.some((binding) => {
-        if (binding.route === undefined || nameKey(binding.participant) !== nameKey(membership)) return false;
-        if (notification.item.index <= (binding.cancelledThrough ?? -1)) return false;
-        const presented = presentations.filter((row) => row.activity === formatActivityId(notification.item.index) && row.participant.toLocaleLowerCase() === membership.toLocaleLowerCase() && row.sessionId === binding.session && presentationSuppressesWake([row]));
-        if (presented.length > 0) return false;
-        const matching = attempts.filter((attempt) => attempt.session === binding.session && nameKey(attempt.attention.recipient) === nameKey(membership) && attempt.attention.actIndex === notification.item.index);
-        return isWakeRouteAttemptable({ kind: binding.route.kind, updatedAt: binding.updatedAt ?? 0 }, matching);
-      });
-      if (eligible) selected.add(notification.item.index);
-    }
-  }
-  return [...selected].sort((left, right) => left - right).slice(0, Math.max(0, limit));
-}
-
 export async function sweepPending(input: { readonly artifact: SquareArtifactPort; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number }): Promise<number[]> {
   const { state } = await input.artifact.read();
   return sweepPendingFromState({ ...input, state });
 }
 
 export async function sweepPendingFromState(input: { readonly state: SquareState; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number; readonly deriveDelivery?: (snapshot: SquareState) => ReturnType<typeof deriveDeliveryModel> }): Promise<number[]> {
-  const owners = input.state.routes?.some((route) => route.epoch !== undefined)
-    ? await input.hostLedger.listPresence({ location: input.location, now: input.now }) : [];
-  const bindings: PresenceRecord[] = currentSessionBindings((input.state.routes ?? []).flatMap((route) => {
-    const owner = owners.find((row) => row.session === route.sessionId && nameKey(row.participant) === nameKey(route.participant));
-    if (route.epoch !== undefined && (!owner || owner.epoch !== route.epoch)) return [];
-    return [{ location: input.location, participant: route.participant, session: route.sessionId, channel: route.channel as import('./host-ledger.js').PresenceChannel, route: { kind: route.kind, address: route.address }, updatedAt: route.updatedAt, ...(owner?.cancelledThrough === undefined ? {} : { cancelledThrough: owner.cancelledThrough }) }];
-  }));
-  let records: readonly import('./host-ledger.js').EvidenceRecord[] = [];
-  try { records = await input.hostLedger.listWakeAttempts({ now: input.now }); } catch { records = []; }
-  let presentations: readonly PresentationEvidenceProjection[] = [];
-  try { presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { presentations = []; }
-  const attempts: WakeAttempt[] = records.flatMap((record) => {
-    const decoded = decodeWakeEvidence(record, input.now);
-    return decoded?.kind === 'attempt' ? [decoded.value] : [];
-  });
   const delivery = input.deriveDelivery?.(input.state) ?? deriveDeliveryModel(input.state);
-  return selectPendingWakeActivities(input.state, bindings, attempts, input.now, input.graceMs, input.limit, delivery, presentations);
+  const eligibility = await projectWakeEvidenceFromState({ ...input, delivery });
+  const selected = new Set<number>();
+  for (const recipient of delivery.joinedRecipients()) {
+    for (const notification of delivery.pendingFor(recipient)) {
+      if (input.now - notification.item.at <= input.graceMs) continue;
+      if (wakeIsEligible(eligibility.evidence(recipient, notification.item.index))) selected.add(notification.item.index);
+    }
+  }
+  return [...selected].sort((left, right) => left - right).slice(0, Math.max(0, input.limit));
 }
