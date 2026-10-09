@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { once, EventEmitter } from 'node:events';
+import { EventEmitter } from 'node:events';
 import plugin from '../dist/opencode.js';
 import { Square } from '../dist/square-wiring.js';
 import { loadSquare } from '../dist/artifact.js';
@@ -30,6 +30,16 @@ async function fixture(t) {
   const ledger = hostLedgerForEnv(env);
   const hooks = new Map();
   const events = new EventEmitter();
+  // A real OpenCode event stream buffers; the plugin awaits each event's handler before pulling the
+  // next one, so events emitted in that window must be retained instead of dropped by an unlistening
+  // emitter. Emit-time queueing keeps delivery ordered and lossless under load.
+  const queue = [];
+  let wake = null;
+  events.on('event', (event) => {
+    queue.push(event);
+    wake?.();
+    wake = null;
+  });
   const sent = [];
   let failure = false;
   let nativeDirectory = root;
@@ -44,7 +54,18 @@ async function fixture(t) {
         return { id: input.id, sessionID: input.sessionID, type: 'user', delivery: input.delivery, payload: { text: input.text }, time: { created: Date.now() } };
       },
     },
-    event: { async *subscribe({ signal }) { while (!signal.aborted) { try { const [event] = await once(events, 'event', { signal }); yield event; } catch { return; } } } },
+    event: {
+      async *subscribe({ signal }) {
+        while (!signal.aborted) {
+          if (queue.length) { yield queue.shift(); continue; }
+          await new Promise((resolve) => {
+            const ready = () => { signal.removeEventListener('abort', ready); resolve(); };
+            wake = ready;
+            signal.addEventListener('abort', ready, { once: true });
+          });
+        }
+      },
+    },
   };
   let cleanup = await plugin.setup(ctx);
   t.after(async () => {
