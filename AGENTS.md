@@ -49,7 +49,7 @@ CLI voice:
 - The square is furnished with a closed prop lexicon: the square (join/presence), embodied expression (express), a packed square and its lull (throttle), a raised hand (hold), behind you (unread), walking over to someone (mention/directed presence), a bell (everyone's attention), a shoo and a banish (the name gate), footsteps and dust (quiet), the circle (done). One metaphor per mechanism; new props require amending this list.
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
-- A blocked action always ends with a full copy-pasteable command; a clipped body always ends with the full command to read it all.
+- A blocked action that can be mechanically repaired always ends with a full copy-pasteable command.
 - Express hints (the 3-line pool) surface on a participant's first activity and every fifth after; they encourage embodied expression and meaningful conversation, not CLI mechanics.
 
 Implementation taste:
