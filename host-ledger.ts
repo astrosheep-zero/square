@@ -1,6 +1,6 @@
 import type { WakeRouteKind } from './model.js';
 export type PresenceChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
-export interface PresenceRecord { readonly location: string; readonly participant: string; readonly session: string; readonly channel: PresenceChannel; readonly route?: { readonly kind: WakeRouteKind; readonly address: Readonly<Record<string,string>> }; readonly updatedAt?: number; readonly epoch?: number; readonly cancelledThrough?: number }
+export interface PresenceRecord { readonly location: string; readonly participant: string; readonly session: string; readonly channel: PresenceChannel; readonly updatedAt?: number; readonly epoch?: number; readonly cancelledThrough?: number }
 export type PresenceKey = Pick<PresenceRecord,'location'|'participant'|'session'|'channel'>;
 export interface PresenceLookup { readonly location?: string; readonly participant?: string; readonly session?: string;  readonly now?: number }
 export type PresenceResult = { readonly status:'ensured'; readonly record:PresenceRecord } | { readonly status:'degraded'; readonly record:PresenceRecord; readonly error:unknown };

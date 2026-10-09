@@ -22,7 +22,7 @@ function snapshot(overrides = {}) {
 const request = (overrides = {}) => ({ location, participant: 'bob', actor: 'Alice', activity: 'act/2', route: route(), ...overrides });
 
 // No I/O: deliberately non-existent locations and frozen primary evidence.
-test('strict route ownership requires local presence, with optional epoch and independent channel/address', () => {
+test('strict route ownership requires local presence, with optional epoch and channel independence', () => {
   for (const [label, owners, routes, expected] of [
     ['absent owner', [], [route()], false],
     ['foreign owner location', [owner({ location: '/other.square' })], [route()], false],
@@ -31,7 +31,7 @@ test('strict route ownership requires local presence, with optional epoch and in
     ['matching epoch', [owner()], [route({ epoch: 7 })], true],
     ['mismatched epoch', [owner()], [route({ epoch: 8 })], false],
     ['missing owner epoch', [owner({ epoch: undefined })], [route({ epoch: 7 })], false],
-    ['independent owner channel/address', [owner({ route: { kind: 'codex-queue', address: { threadId: 'other' } } })], [route()], true],
+    ['stale presence route key is ignored', [owner({ route: { kind: 'codex-queue', address: { threadId: 'other' } } })], [route()], true],
     ['cancelled epochless route', [owner({ cancelledThrough: 2 })], [route()], false],
   ]) {
     const input = snapshot({ owners });

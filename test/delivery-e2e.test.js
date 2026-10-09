@@ -112,7 +112,7 @@ async function registerRoute(item, ownerId = 'bob-owner', sessionId = 'bob-sessi
     address: { agentId: sessionId },
   }, { env: item.env, at });
   const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId: sessionId } }, updatedAt: at });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', updatedAt: at });
 }
 
 function inboxFor(item, act) {
@@ -478,7 +478,7 @@ test('an old route and clipped presentation do not suppress the replacement sess
       location: item.squarePath, participant: 'Bob', sessionId: 'new-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'new-session' },
     }, { env: item.env, at: newAt + 1 });
     const newLedger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'new-session' } }, updatedAt: newAt + 1 });
+    await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', updatedAt: newAt + 1 });
     const adapter = acceptedAdapter();
 
     const routes = (await loadSquare(item.squarePath)).routes;

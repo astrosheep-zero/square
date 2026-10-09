@@ -56,7 +56,6 @@ export interface SessionBindingProjection {
   readonly participant: string;
   readonly sessionId: string;
   readonly channel: import('./host-ledger.js').PresenceChannel;
-  readonly route?: WakeRoute;
   readonly updatedAt: number;
 }
 

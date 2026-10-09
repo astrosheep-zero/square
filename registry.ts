@@ -11,8 +11,8 @@ import { hostLedgerRoot } from './host-ledger-root.js';
 import type { PresenceRecord } from './host-ledger.js';
 
 export type SessionChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
-export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: SessionChannel; child: boolean; route?: PresenceRecord['route']; updatedAt: number; epoch: number; }
-export interface RegistryWriteOptions { channel?: SessionChannel; child?: boolean; route?: PresenceRecord['route']; at?: number; env?: NodeJS.ProcessEnv; }
+export interface RegistryBinding { sessionId: string; name: string; squarePath: string; channel: SessionChannel; child: boolean; updatedAt: number; epoch: number; }
+export interface RegistryWriteOptions { channel?: SessionChannel; child?: boolean; at?: number; env?: NodeJS.ProcessEnv; }
 type PresenceWithEpoch = PresenceRecord & { readonly epoch?: number };
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -31,7 +31,6 @@ function toBinding(record: PresenceWithEpoch): RegistryBinding {
     squarePath: record.location,
     channel: record.channel,
     child: false,
-    ...(record.route === undefined ? {} : { route: record.route }),
     updatedAt: record.updatedAt ?? 0,
     epoch: presenceEpoch(record),
   };

@@ -48,17 +48,6 @@ function bindingProjection(record: PresenceRecord): SessionBindingProjection {
     channel: record.channel,
     ...(record.epoch === undefined ? {} : { epoch: record.epoch }),
     ...(record.cancelledThrough === undefined ? {} : { cancelledThrough: record.cancelledThrough }),
-    ...(record.route === undefined ? {} : {
-      route: {
-        location: record.location,
-        participant: record.participant,
-        sessionId: record.session,
-        channel: record.channel,
-        kind: record.route.kind,
-        address: { ...record.route.address },
-        updatedAt: record.updatedAt ?? 0,
-      },
-    }),
     updatedAt: record.updatedAt ?? 0,
   };
 }

@@ -155,8 +155,8 @@ test('all not-capable candidates classify one attention and persist no attempts'
   ];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   try {
     const result = await deliverPending({
@@ -192,8 +192,8 @@ test('concurrent sessions serialize one attention to one transport call', { conc
   ];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', updatedAt: 3 });
   const left = await openSquare(location, { hostLedger: ledger });
   const right = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
@@ -229,8 +229,8 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
   ];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'b' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'paseo', updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   const transport = { attempt: async () => { calls += 1; return { outcome: 'accepted' }; } };
@@ -246,7 +246,7 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
   }
 });
 
-test('a local binding without a route still matches its artifact route', async () => {
+test('a local binding matches its artifact route', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-binding-route-'));
   const location = path.join(root, 'SQUARE.square');
   const state = await createSquareState({ force: true, hardCap: null }, '');
@@ -287,7 +287,7 @@ test('attention caught after claim is not sent', async () => {
   state.routes = [{ location: fs.realpathSync.native(location), participant: 'Bob', sessionId: 'session-a', channel: 'paseo', kind: 'paseo', address: { agentId: 'a' }, updatedAt: 3 }];
   await writeSquareFile(location, state);
   const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger')});
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
   let calls = 0;
   let artifactRef;
   const ledger = Object.create(base);
@@ -549,8 +549,8 @@ test('a failed candidate followed by an accepted candidate is accepted once for 
   ];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   let calls = 0;
   try {
@@ -588,8 +588,8 @@ test('unknown outcome stops fallback across sessions and route kinds', async () 
   ];
   await writeSquareFile(location, state);
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', updatedAt: 3 });
   const square = await openSquare(location, { hostLedger: ledger });
   const calls = [];
   try {
@@ -628,8 +628,8 @@ test('route ledger read failure stays attention-local when a later route accepts
   ];
   await writeSquareFile(location, state);
   const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', updatedAt: 3 });
   let claims = 0;
   const ledger = Object.create(base);
   ledger.claimWakeAttempt = async (input) => {
@@ -675,8 +675,8 @@ test('evidence release failures preserve error policy and leave the single attem
   ];
   await writeSquareFile(location, state);
   const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 4 });
-  await base.ensurePresence({ location, participant: 'Carol', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 4 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 4 });
+  await base.ensurePresence({ location, participant: 'Carol', session: 'session-b', channel: 'codex', updatedAt: 4 });
   const ledger = Object.create(base);
   ledger.releaseEvidence = async () => { throw new Error('wake evidence ledger unavailable'); };
   const square = await openSquare(location, { hostLedger: base });
@@ -720,8 +720,8 @@ test('recovered ambiguous dispatch stops every fallback route', async () => {
   ];
   await writeSquareFile(location, state);
   const base = new FileHostLedgerPort({ rootPath: path.join(root, 'user-ledger'), now: () => 10 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', route: { kind: 'paseo', address: { agentId: 'a' } }, updatedAt: 3 });
-  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'b' } }, updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-a', channel: 'paseo', updatedAt: 3 });
+  await base.ensurePresence({ location, participant: 'Bob', session: 'session-b', channel: 'codex', updatedAt: 3 });
   const ledger = base;
   const attention = { squarePath: location, recipient: 'Bob', actIndex: 2 };
   const interrupted = await base.claimWakeAttempt({ attention, session: 'session-a', routeKind: 'paseo', leaseMs: 1, now: 1 });

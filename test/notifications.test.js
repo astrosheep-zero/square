@@ -79,7 +79,7 @@ async function route(item, options = {}) {
     address: { agentId },
   }, { env: item.env, at: options.at });
   const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', route: { kind: 'paseo', address: { agentId } }, updatedAt: options.at ?? Date.now() });
+  await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'paseo', updatedAt: options.at ?? Date.now() });
 }
 function fakeAdapter(kind, dispatch) {
   return { kind, dispatch };
@@ -151,7 +151,7 @@ test('privileged sweep stops at its native hook deadline', async () => {
       address: { agentId: 'deadline-agent' },
     }, { env: item.env });
     const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code', route: { kind: 'paseo', address: { agentId: 'deadline-agent' } } });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'deadline-session', channel: 'claude-code' });
     let timeoutMs;
     const hanging = {
       kind: 'paseo',
@@ -283,7 +283,6 @@ test('the notification worker uses an artifact Paseo route with a local binding'
       participant: 'Bob',
       session: 'local-paseo-session',
       channel: 'claude-code',
-      route: { kind: 'paseo', address: { agentId: 'local-paseo-agent' } },
       updatedAt: Date.now(),
     }, 'local');
     let calls = 0;

@@ -38,12 +38,20 @@ test('callable routes are read from receiver-owned square artifact', async () =>
     assert.equal((await loadSquare(location)).routes[0].location, canonical, 'published routes must use the same native path as presence and artifact adapters');
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
+/** A persisted presence row carrying a stale `route` key is ignored on read: no migration, no route authority. */
+async function writeStalePresenceRow(env, row) {
+  await fs.promises.mkdir(env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
+  const file = path.join(await fs.promises.realpath(env.SQUARE_HOST_LEDGER_ROOT), 'presence.ndjsonl');
+  await fs.promises.writeFile(file, `${JSON.stringify({ v: 1, ...row })}\n`, { flag: 'a' });
+}
 test('local presence cannot plant a callable route', async () => {
   const item = fixture();
   try {
-    const local = new FileHostLedgerPort({ ...item.env });
-    await local.ensurePresence({ location: '/tmp/square-a.square', participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } } });
+    const local = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    await writeStalePresenceRow(item.env, { location: '/tmp/square-a.square', participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: Date.now() });
     assert.deepEqual(await readWakeRoutes({ location: '/tmp/square-a.square', env: item.env, now: Date.now() }), []);
+    const presence = await local.listPresence({ location: '/tmp/square-a.square', participant: 'Alice' });
+    assert.deepEqual(presence.map((row) => [row.session, row.channel]), [['s-a', 'codex']], 'the stale key must not disturb presence itself');
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 test('uncapable native sessions keep ownership in presence without a callable route', async () => {
@@ -71,7 +79,7 @@ test('uncapable native sessions keep ownership in presence without a callable ro
     const presence = await ledger.listPresence({ location, session: `${provider}-session` });
     assert.equal(presence.length, 1);
     assert.equal(presence[0].channel, channel);
-    assert.equal(presence[0].route, undefined);
+    assert.equal('route' in presence[0], false, 'a presence binding carries no route field');
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
@@ -102,11 +110,9 @@ test('distinct parent and child native Pi sessions resolve distinct participants
 test('local registry cannot plant or shadow an artifact route', async () => {
   const item = fixture();
   try {
-    const user = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    const local = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
     const location = path.join(item.root, 'square.square');
     await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [{ location, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 'real' }, updatedAt: 10 }], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
-    await local.ensurePresence({ location, participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: 20 });
+    await writeStalePresenceRow(item.env, { location, participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: 20 });
     assert.deepEqual((await readWakeRoutes({ location, env: item.env, now: 30 })).map((route) => route.address), [{ threadId: 'real' }]);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
