@@ -429,7 +429,8 @@ test('transport unknown cannot impersonate recovery; native admission can still 
 });
 
 test('legacy recovered unknown still accepts the original sender completion', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-legacy-recovery-'));
+  // The ledger compares canonical location keys; a seeded row must already carry one.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-legacy-recovery-')));
   const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 100 });
   const row = { v: 1, location: path.join(root, 'SQUARE.square'), participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'paseo', attemptN: 1, claimToken: 'original', at: 100, outcome: 'unknown', signature: 'worker_interrupted_during_dispatch' };
   try {

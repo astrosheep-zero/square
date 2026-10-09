@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import {
@@ -16,19 +14,9 @@ import {
 } from './artifact.js';
 import type { SquareState } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
+import { canonicalPath } from './canonical-path.js';
 
 export { createSquareState };
-
-async function canonicalPath(squarePath: string): Promise<string> {
-  const absolute = path.resolve(squarePath);
-  try {
-    return await fs.promises.realpath(absolute);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    const parent = await fs.promises.realpath(path.dirname(absolute)).catch(() => path.dirname(absolute));
-    return path.join(parent, path.basename(absolute));
-  }
-}
 
 export async function readSquareFile(squarePath: string): Promise<SquareState> {
   return loadSquare(await canonicalPath(squarePath));

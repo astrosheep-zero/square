@@ -4,7 +4,7 @@ import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEv
 import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
 import { freshWatchLease } from './runtime.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
-import { canonicalRouteLocation } from './routes.js';
+import { canonicalPath } from './canonical-path.js';
 import { projectWakeEligibility, type WakeEligibility } from './wake-eligibility.js';
 
 /** A fresh blocking catch owns only the notifications admitted by its filter. */
@@ -127,7 +127,7 @@ export async function projectWakeEvidenceFromState(input: {
   readonly now: number;
   readonly delivery?: ReturnType<typeof deriveDeliveryModel>;
 }): Promise<WakeEligibility> {
-  const canonicalLocation = await canonicalRouteLocation(input.location);
+  const canonicalLocation = await canonicalPath(input.location);
   const delivery = input.delivery ?? deriveDeliveryModel(input.state);
   const owners = await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now });
   const wakeRecords = await input.hostLedger.listEvidence({ location: canonicalLocation, kind: 'wake', now: input.now });

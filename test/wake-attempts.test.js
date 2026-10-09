@@ -11,7 +11,8 @@ import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js'
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attempts-'));
+  // The ledger compares canonical location keys; seed rows through a canonical root.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attempts-')));
   return {
     root,
     attention: { squarePath: path.join(root, 'SQUARE.square'), actIndex: 4, recipient: 'Faye' },

@@ -1,23 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { canonicalPath } from './canonical-path.js';
 
 /** Filesystem notifications are hints, never proof of a committed change. */
 const RECONCILE_MS = 2_000;
-
-export async function canonicalFilePath(value: string): Promise<string> {
-  let current = path.resolve(value);
-  const suffix: string[] = [];
-  for (;;) {
-    try { return path.join(await fs.promises.realpath(current), ...suffix.reverse()); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return path.resolve(value);
-      const parent = path.dirname(current);
-      if (parent === current) return path.resolve(value);
-      suffix.push(path.basename(current));
-      current = parent;
-    }
-  }
-}
 
 /** A local edge counter: register first, inspect state, then wait from that counter. */
 class Edges {
@@ -149,7 +135,7 @@ export async function observeFileVersion<T>(
   kind: string,
   read: (file: string, signal: AbortSignal) => Promise<T>,
 ): Promise<VersionObserver<T>> {
-  const file = await canonicalFilePath(filePath);
+  const file = await canonicalPath(filePath);
   const key = kind + '\0' + file;
   let shared = versions.get(key) as SharedVersion<T> | undefined;
   if (shared === undefined) {

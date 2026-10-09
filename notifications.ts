@@ -13,7 +13,7 @@ import type { OpenSquare } from './open-square.js';
 import { deliverPending, sweepPending, sweepPendingFromState } from './delivery-operations.js';
 import { projectWakeEvidenceFromState } from './square-projections.js';
 import type { WakeCurrentness } from './wake-eligibility.js';
-import { canonicalRouteLocation } from './routes.js';
+import { canonicalPath } from './canonical-path.js';
 import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
@@ -86,7 +86,7 @@ export async function createDefaultWakeTransport(
 async function observeWakeRequest(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<WakeCurrentness & { readonly observationAvailable: boolean }> {
   let square: OpenSquare | undefined;
   try {
-    const location = await canonicalRouteLocation(request.location);
+    const location = await canonicalPath(request.location);
     square = await openSquare(location, { hostLedger });
     const { state } = await square.artifact.read();
     const eligibility = await projectWakeEvidenceFromState({ state, hostLedger, location, now });

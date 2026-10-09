@@ -5,12 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createSquareState, writeSquareFile } from '../dist/artifact.js';
+import { canonicalPathSync } from '../dist/canonical-path.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
 import { Square } from '../dist/square-wiring.js';
-
-function canon(value) {
-  try { return fs.realpathSync.native(value); } catch { return path.resolve(value); }
-}
 
 /**
  * The injected in-memory host ledger: presence rows in a list, with one in-process
@@ -25,26 +22,26 @@ function memoryHostLedger() {
     mutex = result.then(() => undefined, () => undefined);
     return result;
   };
-  const sameKey = (row, key) => row.location === canon(key.location)
+  const sameKey = (row, key) => row.location === canonicalPathSync(key.location)
     && row.session === key.session && row.participant.toLowerCase() === key.participant.toLowerCase() && row.channel === key.channel;
   return {
     withClaimLock: (fn) => serialize(fn),
     claimPresence: (input) => serialize(async () => {
-      const record = { ...input, location: canon(input.location), updatedAt: input.updatedAt ?? Date.now() };
+      const record = { ...input, location: canonicalPathSync(input.location), updatedAt: input.updatedAt ?? Date.now() };
       const owner = presence.findLast((row) => row.location === record.location && row.participant.toLowerCase() === record.participant.toLowerCase());
       if (owner !== undefined) return owner.session === record.session ? { status: 'owned', record: owner } : { status: 'busy', record: owner };
       presence.push(record);
       return { status: 'acquired', record };
     }),
     ensurePresence: async (input) => {
-      const record = { ...input, location: canon(input.location), updatedAt: input.updatedAt ?? Date.now() };
+      const record = { ...input, location: canonicalPathSync(input.location), updatedAt: input.updatedAt ?? Date.now() };
       const index = presence.findIndex((row) => sameKey(row, record));
       if (index === -1) presence.push(record);
       else presence[index] = record;
       return { status: 'ensured', record };
     },
     listPresence: async (lookup = {}) => presence.filter((row) =>
-      (lookup.location === undefined || row.location === canon(lookup.location))
+      (lookup.location === undefined || row.location === canonicalPathSync(lookup.location))
       && (lookup.participant === undefined || row.participant.toLowerCase() === lookup.participant.toLowerCase())
       && (lookup.session === undefined || row.session === lookup.session)),
     removePresence: async (key) => {

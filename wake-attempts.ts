@@ -1,6 +1,6 @@
 import { hostLedgerRoot } from './host-ledger-root.js';
 import { nameKey } from './model.js';
-import { canonicalSquarePath } from './registry.js';
+import { canonicalPath } from './canonical-path.js';
 import { formatActivityId } from './square-core.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 import type { WakeAttention } from './host-ledger.js';
@@ -8,7 +8,7 @@ import { redactDiagnostic } from './diagnostic-redaction.js';
 import { decodeWakeEvidence, type WakeReleaseDiagnostic } from './wake-evidence.js';
 
 async function wakeAttentionKey(attention: WakeAttention): Promise<string> {
-  return JSON.stringify([await canonicalSquarePath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
+  return JSON.stringify([await canonicalPath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
 }
 
 export function redactWakeDiagnostic(value: unknown, env: NodeJS.ProcessEnv = process.env): unknown {

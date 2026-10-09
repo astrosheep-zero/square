@@ -1,5 +1,6 @@
 import type { WakeRouteKind } from './model.js';
-export type PresenceChannel = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'paseo' | 'unknown';
+import type { HarnessSessionChannel } from './participant-identity.js';
+export type PresenceChannel = HarnessSessionChannel | 'unknown';
 export interface PresenceRecord { readonly location: string; readonly participant: string; readonly session: string; readonly channel: PresenceChannel; readonly updatedAt?: number; readonly epoch?: number; readonly cancelledThrough?: number }
 export type PresenceKey = Pick<PresenceRecord,'location'|'participant'|'session'|'channel'>;
 export interface PresenceLookup { readonly location?: string; readonly participant?: string; readonly session?: string;  readonly now?: number }

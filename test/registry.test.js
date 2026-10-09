@@ -7,7 +7,6 @@ import test from 'node:test';
 
 import { loadSquare } from '../dist/artifact.js';
 import {
-  canonicalSquarePath,
   bindCurrentParticipant,
   claimSessionParticipant,
   claimSessionTakeover,
@@ -26,6 +25,7 @@ import {
   recordSessionDone,
 } from '../dist/registry.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { canonicalPath } from '../dist/canonical-path.js';
 import { sessionIdsFromEnvironment } from '../dist/participant-identity.js';
 import { writeSquareFile, createSquareState } from '../dist/artifact.js';
 import { done, join, takeover } from '../dist/square-actions.js';
@@ -594,7 +594,7 @@ test('registry folds lifecycle by session, square, and participant name', async 
     await recordDone('session-1', 'Alice', squarePath, { channel: 'claude-code', at: now - 1 });
 
     assert.deepEqual(await lookupSession('session-1', now), [
-      { name: 'Bob', squarePath: await canonicalSquarePath(squarePath) },
+      { name: 'Bob', squarePath: await canonicalPath(squarePath) },
     ]);
     assert.deepEqual(await lookupParticipant(squarePath, 'Alice', now), []);
 

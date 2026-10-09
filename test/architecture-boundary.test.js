@@ -53,6 +53,15 @@ test('artifact storage has one production import boundary', () => {
   assert.deepEqual(bypasses, [], `production modules bypass square-storage.ts: ${bypasses.join(', ')}`);
 });
 
+test('one canonicalizer owns square location keys', () => {
+  const realpathEscapes = filesContaining(/realpath/, ['canonical-path.ts', 'presentation.ts', 'harness-links.ts']);
+  assert.deepEqual(realpathEscapes, [], `square location canonicalization escaped canonical-path.ts: ${realpathEscapes.join(', ')}`);
+
+  const retired = ['canonicalSquarePath', 'canonicalFilePath', 'canonicalRouteLocation', 'canonicalRouteLocationSync', 'canonRoot', 'SessionChannel'];
+  const leaks = retired.flatMap((identifier) => ownershipLeaks(identifier, []));
+  assert.deepEqual(leaks, [], `retired canonicalization or channel names survived:\n${leaks.join('\n')}`);
+});
+
 test('SQLite snapshot ownership stays at the artifact boundary', () => {
   const sqliteImports = filesContaining(/from ['"]node:sqlite['"]/, ['artifact.ts', 'file-lock.ts']);
   assert.deepEqual(sqliteImports, [], `SQLite escaped its storage owners: ${sqliteImports.join(', ')}`);

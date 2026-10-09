@@ -1,7 +1,8 @@
 import { type InboxMembership } from './model.js';
 import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
 import { hostLedgerForEnv } from './registry.js';
-import { canonicalFilePath, type VersionObserver } from './file-changes.js';
+import { type VersionObserver } from './file-changes.js';
+import { canonicalPath } from './canonical-path.js';
 import { projectBoundaryEligibility, projectPresentation, projectSessionBindings } from './square-projections.js';
 import { WATCH_STALE_MS } from './runtime.js';
 
@@ -81,7 +82,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
           // Subscribe/capture the ledger BEFORE discovering bindings; a concurrent join cannot fall in a gap.
           const sources = await Promise.all([capture(ledger.presence, 'presence', signal), capture(ledger.evidence, 'evidence', signal)]);
           const bindings = await projectSessionBindings({ hostLedger, sessionId });
-          const paths = new Set(await Promise.all(bindings.map((binding) => canonicalFilePath(binding.location))));
+          const paths = new Set(await Promise.all(bindings.map((binding) => canonicalPath(binding.location))));
           for (const [file, observer] of artifacts) {
             if (!paths.has(file)) { observer.close(); artifacts.delete(file); }
           }

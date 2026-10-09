@@ -1,6 +1,6 @@
 import { automaticSessionStart, operationEnv } from './automatic-session.js';
 import { hostLedgerForEnv } from './registry.js';
-import { canonicalRouteLocation } from './routes.js';
+import { canonicalPath } from './canonical-path.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-wiring.js';
@@ -27,7 +27,7 @@ export default {
     const ledger = hostLedgerForEnv(env);
     const lifetime = new AbortController();
     const receivers = new Map<string, Receiver>(); // Operational handles only; presence owns membership.
-    const directory = await canonicalRouteLocation(ctx.location.directory);
+    const directory = await canonicalPath(ctx.location.directory);
     let coordinating = Promise.resolve();
     const coordinate = (operation: () => Promise<void>) => {
       const task = coordinating.then(() => lifetime.signal.aborted ? undefined : operation());
@@ -49,7 +49,7 @@ export default {
       const record = info as { projectID?: string; location?: { directory?: string; workspaceID?: string } } | undefined;
       if (!target || !record?.location?.directory || record.projectID !== ctx.location.project.id
         || record.location.workspaceID !== ctx.location.workspaceID
-        || await canonicalRouteLocation(record.location.directory) !== directory) return undefined;
+        || await canonicalPath(record.location.directory) !== directory) return undefined;
       return target;
     };
     const reconcile = async (activeSession?: string) => {

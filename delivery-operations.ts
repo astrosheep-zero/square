@@ -4,7 +4,8 @@ import type { HostLedgerPort, SquareArtifactPort, DeliverPendingInput, DeliveryR
 import { deriveDeliveryModel } from './delivery.js';
 import { projectSessionBindings, projectWakeEvidenceFromState } from './square-projections.js';
 import { wakeIsEligible, type WakeCurrentness } from './wake-eligibility.js';
-import { canonicalRouteLocation, retireWakeRouteFromArtifact } from './routes.js';
+import { canonicalPath } from './canonical-path.js';
+import { retireWakeRouteFromArtifact } from './routes.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
 
 async function releaseWakeClaim(input: {
@@ -58,7 +59,7 @@ export async function observeSquare(input: ObserveSquareInput): Promise<SquareOb
   return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
-  const location = await canonicalRouteLocation(input.location);
+  const location = await canonicalPath(input.location);
   const { state } = await input.artifact.read();
   const delivery = deriveDeliveryModel(state);
   const eligibility = await projectWakeEvidenceFromState({ state, location, hostLedger: input.hostLedger, now: input.now ?? Date.now(), delivery });

@@ -48,9 +48,11 @@ test('local presence cannot plant a callable route', async () => {
   const item = fixture();
   try {
     const local = new FileHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    await writeStalePresenceRow(item.env, { location: '/tmp/square-a.square', participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: Date.now() });
-    assert.deepEqual(await readWakeRoutes({ location: '/tmp/square-a.square', env: item.env, now: Date.now() }), []);
-    const presence = await local.listPresence({ location: '/tmp/square-a.square', participant: 'Alice' });
+    // The row is raw ledger data; its location key must already be the canonical one.
+    const location = path.join(fs.realpathSync.native(item.root), 'square-a.square');
+    await writeStalePresenceRow(item.env, { location, participant: 'Alice', session: 's-a', channel: 'codex', route: { kind: 'codex-queue', address: { threadId: 'forged' } }, updatedAt: Date.now() });
+    assert.deepEqual(await readWakeRoutes({ location, env: item.env, now: Date.now() }), []);
+    const presence = await local.listPresence({ location, participant: 'Alice' });
     assert.deepEqual(presence.map((row) => [row.session, row.channel]), [['s-a', 'codex']], 'the stale key must not disturb presence itself');
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });

@@ -7,7 +7,7 @@ import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
 import { nativePendingPreview, projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
 import { presentPending } from './presentation-operations.js';
 import { type WakeRoute } from './model.js';
-import { canonicalRouteLocation } from './routes.js';
+import { canonicalPath } from './canonical-path.js';
 import { parseActivityId } from './square-core.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
@@ -44,7 +44,7 @@ async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) 
 
 /** Square owns rendering, correlation and evidence; socket transport owns none of them. */
 async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
-  request = { ...request, location: await canonicalRouteLocation(request.location) };
+  request = { ...request, location: await canonicalPath(request.location) };
   const deadline = Date.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
   if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires macOS Claude 2.1.295 and a loaded interactive Square mod.' };
