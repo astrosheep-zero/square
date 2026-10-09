@@ -131,7 +131,6 @@ export async function cmdActivity(
     const reentered = entry.kind === 'joined' && entry.activity !== null;
     const before = await presentation();
     const pendingPublic = before.pendingPublic;
-    const pendingRoomChanges = before.pendingRoomChanges;
     expressAttempted = true;
     const landed = await application.express(rawInput.replace(/\r\n/g, '\n').trim(), {
       force: opts.force ?? false,
@@ -159,8 +158,8 @@ export async function cmdActivity(
     const headerCount = fresh.participantCount;
     const held = fresh.held;
     const ownActCount = fresh.ownActivityCount;
-    const hasPending = pendingPublic.length > 0 || pendingRoomChanges.length > 0;
-    const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], [...pendingRoomChanges], knownName, fresh.state)}` : '';
+    const hasPending = pendingPublic.length > 0;
+    const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], knownName, fresh.state)}` : '';
     const hint = expressHintLine(ownActCount);
     const reachEcho = landed.activity.reach === 'bell'
       ? ' · to everyone (bell)'
@@ -189,7 +188,6 @@ export async function cmdActivity(
           retryCommand,
           forceCommand,
           activitySummaries: unreadActivitySummaries(fresh.state, knownName, nowMs()),
-          unreadRoomChanges: [],
         }));
         process.exit(1);
         return;

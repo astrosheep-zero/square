@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  renderActivitiesView,
   renderActivityBlocked,
   renderAmbientEvent,
   renderDoctorUnfixable,
@@ -52,7 +51,6 @@ test('blocked activity output bounds unread participant summaries', () => {
     retryCommand: 'square express -',
     forceCommand: 'square express --force -',
     activitySummaries: summaries,
-    unreadRoomChanges: [],
   });
 
   assert.match(output, /@Person9 spoke/);
@@ -73,35 +71,4 @@ test('replace reports when there was no active catch to replace', () => {
   assert.match(output, /^· no catch stood here/);
   assert.match(output, /yours takes the spot/);
   assert.equal(renderWatchForceTakeover({ squarePath: '.square/PUBLIC.square', name: 'Alice' }), '✓ your new catch takes over');
-});
-
-test('history footprints preserve singular and separate coordinates while grouping shared anchors', () => {
-  const state = {
-    hardCap: null,
-    preamble: [],
-    warmup: [],
-    acts: [
-      { kind: 'join', actor: 'Alice', index: 1, at: 0 },
-      { kind: 'join', actor: 'Bob', index: 2, at: 0 },
-      { kind: 'join', actor: 'Cara', index: 3, at: 0 },
-      { kind: 'say', actor: 'Alice', body: 'first @Bob', mentions: ['Bob'], index: 4, at: 0 },
-      { kind: 'say', actor: 'Cara', body: 'second @Alice', mentions: ['Alice'], index: 5, at: 0 },
-    ],
-    runtime: {
-      observations: { Bob: { 'act/4': { state: 'seen', at: 0 } } },
-      leases: {},
-      notifyLeases: {},
-      nextActIndex: 6,
-    },
-  };
-
-  const output = renderActivitiesView(state, state.acts, null, true, '/tmp/square', '', 'archive');
-  const grouped = output.indexOf('→ @Alice, @Bob were here');
-  const cara = output.indexOf('→ @Cara was here');
-
-  assert.ok(grouped > output.indexOf('first @Bob'));
-  assert.ok(cara > output.indexOf('second @Alice'));
-  assert.ok(grouped < cara);
-  assert.doesNotMatch(output, /→ @(?:Alice|Bob) was here/);
-  assert.doesNotMatch(output, /@Bob, @Cara were here/);
 });

@@ -22,7 +22,7 @@ import {
   rosterNames,
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
-import { actDelta, directedPeerSays, peerRoomChanges } from './activity-feed.js';
+import { actDelta, directedPeerSays } from './activity-feed.js';
 import { formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
@@ -118,12 +118,8 @@ export type ActDecision =
   | {
       type: 'sent';
       act: Act;
-      confirmation: string;
-      ownActCount: number;
-      pendingPublic: ReturnType<typeof directedPeerSays>;
-      pendingRoomChanges: ReturnType<typeof peerRoomChanges>;
     }
-  | { type: 'blocked'; activitySummaries: UnreadActivitySummary[]; unreadRoomChanges: ReturnType<typeof peerRoomChanges> }
+  | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped'; count: number; hardCap: number }
   | { type: 'throttled'; delayMs: number }
   | { type: 'held'; reason: string | undefined }
@@ -238,7 +234,6 @@ export function decideAct(
     }
   }
 
-  const current = participantState(state, name);
   const result = validate(
     state,
     {
@@ -261,7 +256,6 @@ export function decideAct(
   const delivery = deriveDeliveryModel(squareState);
   const delta = actDelta(squareState.acts, delivery.cursorFor(name));
   const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
-  const unreadRoomChanges: ReturnType<typeof peerRoomChanges> = [];
   const activitySummaries = unreadActivitySummaries(squareState, name, now);
 
   const latestActivityAgeMs = activitySummaries[0]?.latestActivityAgeMs;
@@ -269,10 +263,9 @@ export function decideAct(
   const hasFreshUnreadActivity = latestActivityAgeMs !== undefined && latestActivityAgeMs <= UNREAD_BLOCK_GRACE_MS;
 
   if (!force && hasUnread && !hasFreshUnreadActivity) {
-    return { type: 'blocked', activitySummaries, unreadRoomChanges };
+    return { type: 'blocked', activitySummaries };
   }
 
-  const ownActCount = (current?.activityCount ?? 0) + 1;
   return {
     type: 'sent',
     act: {
@@ -280,10 +273,6 @@ export function decideAct(
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
-    confirmation: `● your activity lands — #${ownActCount}`,
-    ownActCount,
-    pendingPublic: unreadPublic,
-    pendingRoomChanges: unreadRoomChanges,
   };
 }
 

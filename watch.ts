@@ -53,27 +53,21 @@ function watchOutputResult(
   presentation: WatchPresentation,
   name: string,
   caught: CatchResult,
-  opts: { stalePartial?: boolean; participants?: string[]; mention?: string; limit?: number; status?: WatchStatus; idleMs?: number } = {}
+  opts: { participants?: string[]; mention?: string; limit?: number; status?: WatchStatus } = {}
 ): WatchResult {
   const delivered = caught.activities.flatMap((activity) => {
     const index = parseActivityId(activity.id);
     const stored = index === undefined ? undefined : presentation.activities.find((item) => item.index === index);
     return stored === undefined ? [] : [{ activity: stored, perception: activity.perception }];
   });
-  const publicItems = delivered
-    .map(({ activity }) => activity)
-    .filter((item) => item.kind === 'say' || item.kind === 'done');
-  const roomChanges = delivered
-    .map(({ activity }) => activity)
-    .filter((item) => item.kind === 'join' || item.kind === 'done' || item.kind === 'hold' || item.kind === 'resume');
+  // Catch delivers only directed say activities, so there is no lifecycle list to split off.
+  const publicItems = delivered.map(({ activity }) => activity).filter((item) => item.kind === 'say' || item.kind === 'done');
   const perceptions = new Map(delivered.map(({ activity, perception }) => [activity.index, perception]));
   return {
     type: 'output',
-    stdout: renderWatchOutput([...presentation.activities], publicItems, roomChanges, {
+    stdout: renderWatchOutput([...presentation.activities], publicItems, {
       ...opts,
-      squarePath,
       viewer: name,
-      showCatchHint: !hasAutomaticDeliveryIdentity(),
       perceptions,
     }) + (caught.remaining > 0
       ? `\n○ ${caught.remaining} matching ${caught.remaining === 1 ? 'activity remains' : 'activities remain'}\n${catchContinuationCommand(squarePath, name, opts)}`

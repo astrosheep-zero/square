@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, replayLandedAudiences, type LandedAudienceReplay, type Perception } from './square-core.js';
+import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, type Perception } from './square-core.js';
 import { perceiveActivity } from './delivery.js';
-import { actId, presenceAnchor, rosterNames, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
+import { actId, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
@@ -38,7 +38,6 @@ interface ActivityBlockedOptions extends ParticipantOutputOptions {
   retryCommand: string;
   forceCommand: string;
   activitySummaries: UnreadActivitySummary[];
-  unreadRoomChanges: RoomChangeAct[];
   draftPath?: string;
 }
 
@@ -331,7 +330,7 @@ function withDraftInput(command: string, draftPath: string | undefined): string 
   return draftPath === undefined ? command : `${command} < ${quoteShell(draftPath)}`;
 }
 
-function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[]; roomChanges: RoomChangeAct[]; viewer: string }): string[] {
+function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[]; viewer: string }): string[] {
   const visibleSummaries = opts.activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
   const remainingSummaries = opts.activitySummaries.length - visibleSummaries.length;
   return [
@@ -346,14 +345,12 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
       }),
     ]),
     ...(remainingSummaries === 0 ? [] : [style('dim', `  · ${remainingSummaries} more participants have unread activity`)]),
-    ...opts.roomChanges.map((act) => style('dim', `  · ${renderRoomChangeText(act)}`)),
   ];
 }
 
 export function renderPendingFeed(
   history: StoredAct[],
   publicItems: PublicAct[],
-  roomChanges: RoomChangeAct[],
   viewer = '',
   squareState: SquareState,
 ): string {
@@ -365,11 +362,6 @@ export function renderPendingFeed(
     });
     if (rendered !== '') lines.push(rendered);
   }
-  const publicIndexes = new Set(publicItems.map((item) => item.index));
-  for (const act of roomChanges) {
-    if (publicIndexes.has(act.index)) continue;
-    lines.push(`· ${renderRoomChangeText(act)}`);
-  }
   return lines.join('\n\n');
 }
 
@@ -379,7 +371,7 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
     opts.squarePath,
     [
       `${style('blocked', '✕')} your activity doesn't land — the square moved behind your back`,
-      ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, roomChanges: opts.unreadRoomChanges, viewer: opts.name }),
+      ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, viewer: opts.name }),
       ...draftSavedLines(opts.draftPath),
       `${readNowCommand}`,
       '  · take it in, then retry:',
@@ -440,62 +432,12 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
   return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount, held: opts.held });
 }
 
-function lastPresenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay): number {
-  return presenceAnchor(squareState, name, landed);
-}
-
 export function renderPresenceAnchor(names: readonly string[]): string {
   const visibleNames = names.slice(0, MAX_IDENTITY_SET_SIZE);
   const participants = visibleNames.map((name) => participantIdentity(name)).join(', ');
   const remaining = names.length - visibleNames.length;
   const suffix = remaining === 0 ? '' : ` and ${remaining} more`;
   return style('dim', names.length === 1 ? `→ ${participants} was here` : `→ ${participants}${suffix} were here`);
-}
-
-export function renderActivitiesView(
-  squareState: SquareState,
-  visible: StoredAct[],
-  lastN: number | null | undefined,
-  noTruncate: boolean | undefined,
-  squarePath: string,
-  viewer = '',
-  mode: 'ambient' | 'archive' = 'ambient'
-): string {
-  const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
-  const shown = lastN == null ? publicVisible : publicVisible.slice(-lastN);
-  const previewLen = noTruncate ? undefined : BODY_PREVIEW_LENGTH;
-
-  const markers = new Map<number, string[]>();
-  const landed = replayLandedAudiences(squareState.acts);
-  for (const participant of rosterNames(squareState)) {
-    const anchor = lastPresenceAnchor(squareState, participant, landed);
-    if (anchor >= 0) markers.set(anchor, [...(markers.get(anchor) ?? []), participant]);
-  }
-
-  const chunks: string[] = [];
-  for (const act of shown) {
-    const opts = {
-      preview: previewLen,
-      actNumber: act.kind === 'say' ? sayNumberFor(squareState.acts, act) : undefined,
-    };
-    const rendered = mode === 'archive'
-      ? renderEventCli(act, opts)
-      : renderAmbientEvent(act, viewer, { ...opts, squareState });
-    if (rendered !== '') chunks.push(rendered);
-    const participants = markers.get(act.index);
-    if (participants !== undefined) chunks.push(renderPresenceAnchor(participants));
-  }
-
-  if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
-
-  if (previewLen !== undefined) {
-    const truncated = shown.some((act) =>
-      act.kind === 'say' && act.body.length > previewLen && (mode === 'archive' || perceiveActivity(squareState, act, viewer) === 'full')
-    );
-    if (truncated) chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
-  }
-
-  return chunks.join('\n\n');
 }
 
 const GREP_PREVIEW_CHARS = 160;
@@ -623,11 +565,6 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
   }
 }
 
-function renderRoomChanges(changes: RoomChangeAct[]): string {
-  if (changes.length === 0) return '';
-  return [`${style('changed', '▲')} while your back was turned`, ...changes.map((act) => `  · ${renderRoomChangeText(act)}`)].join('\n');
-}
-
 export function renderDoctorClean(): string {
   return '✓ no problems found';
 }
@@ -639,29 +576,9 @@ export function renderDoctorUnfixable(reason: string): string {
 export function renderWatchOutput(
   history: StoredAct[],
   publicItems: PublicAct[],
-  roomChanges: RoomChangeAct[],
-  opts: { squarePath: string; stalePartial?: boolean; idleMs?: number; mention?: string; viewer: string; showCatchHint?: boolean; squareState?: SquareState; perceptions?: ReadonlyMap<number, Perception> }
+  opts: { mention?: string; viewer: string; squareState?: SquareState; perceptions?: ReadonlyMap<number, Perception> }
 ): string {
   const sections: string[] = [];
-  if (opts.stalePartial) {
-    const prefix = participantCommandPrefix(opts.squarePath, opts.viewer);
-    const quiet = opts.idleMs === undefined
-      ? '○ only footsteps in the square — nothing new for you'
-      : `○ ${formatDuration(opts.idleMs)} of quiet — nothing else for you`;
-    sections.push(
-      [
-        quiet,
-        ...(opts.showCatchHint === false
-          ? []
-          : [`${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
-      ].join('\n')
-    );
-  }
-
-  const publicIndexes = new Set(publicItems.map((item) => item.index));
-  const presenceChanges = roomChanges.filter(({ index }) => !publicIndexes.has(index));
-  const room = renderRoomChanges(presenceChanges);
-  if (room !== '') sections.push(room);
 
   if (publicItems.length > 0) {
     const rendered = publicItems

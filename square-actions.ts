@@ -235,7 +235,7 @@ export async function express(square: OperationContext, name: string, body: stri
     const decision = rejectUnsentActivity(() => {
       const decision = decideAct(state, { name, body, force: options.force ?? false, now, mentions: options.mentions, ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
       if (decision.type === 'blocked') {
-        const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0) + decision.unreadRoomChanges.length;
+        const pending = decision.activitySummaries.reduce((count, summary) => count + summary.count, 0);
         throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending });
       }
       if (decision.type === 'held') {

@@ -87,8 +87,7 @@ test('large delivered catch carries its settled perception into rendering withou
     const perceptions = new Map(caught.activities.map((activity) => [Number(activity.id.slice(4)), activity.perception]));
     const publicItems = state.acts.filter((activity) => perceptions.has(activity.index) && (activity.kind === 'say' || activity.kind === 'done'));
 
-    const output = renderWatchOutput(state.acts, publicItems, [], {
-      squarePath: 'memory-square',
+    const output = renderWatchOutput(state.acts, publicItems, {
       viewer: 'P0',
       perceptions,
     });
