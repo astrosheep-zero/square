@@ -7,14 +7,13 @@ export function readWakeAttempts({ env, now = Date.now() }) {
   return createHostLedgerPort({ rootPath: hostLedgerRoot(env) }).listWakeAttempts({ now });
 }
 
-/** Seed one terminal wake attempt through the real claim, transition and terminal write. */
+/** Seed one terminal wake attempt through the real claim and terminal write. */
 export async function recordWakeAttempt(attempt, env) {
   const ledger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
   const { attention, at = Date.now(), session = 'fixture-session', routeKind, ...details } = attempt;
   const leaseMs = 5000;
   const claim = await ledger.claimWakeAttempt({ attention, session, routeKind, leaseMs, now: at });
   assert.equal(claim.status, 'acquired');
-  await ledger.transitionWakeAttempt({ attention, session, claimToken: claim.claimToken, leaseMs, now: at });
   await ledger.appendEvidence({
     ...details,
     location: attention.squarePath,

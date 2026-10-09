@@ -66,7 +66,6 @@ test('accepted wake evidence survives retention only while attention is pending'
   try {
     const claim = await ledger.claimWakeAttempt({ attention, session: 's', routeKind: 'paseo', leaseMs: 10, now: 1 });
     assert.equal(claim.status, 'acquired');
-    await ledger.transitionWakeAttempt({ attention, session: 's', claimToken: claim.claimToken, leaseMs: 10, now: 1 });
     await ledger.appendEvidence({ ...row, routeKind: 'paseo', attemptN: claim.attemptN, claimToken: claim.claimToken });
     assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 1);
     await ledger.gcEvidence({ before: 2, pendingWakeActivities: ['act/1'] });
@@ -84,7 +83,6 @@ test('possibly-sent wake evidence stays readable past retention without native d
   try {
     const claim = await ledger.claimWakeAttempt({ attention, session: 's', routeKind: 'paseo', leaseMs: 10, now: 1 });
     assert.equal(claim.status, 'acquired');
-    await ledger.transitionWakeAttempt({ attention, session: 's', claimToken: claim.claimToken, leaseMs: 10, now: 1 });
     await ledger.appendEvidence({ ...row, routeKind: 'paseo', attemptN: claim.attemptN, claimToken: claim.claimToken });
     assert.deepEqual((await ledger.listWakeAttempts({ attention, now: aged })).map((attempt) => [attempt.outcome, attempt.attemptN]), [['unknown', 1]]);
     await ledger.gcEvidence({ before: 2, pendingWakeActivities: ['act/1'] });
@@ -103,13 +101,9 @@ test('wake attempts have exactly one acquisition path', async () => {
     assert.match(String(refused.error), /claimWakeAttempt/);
     const claimed = await ledger.claimWakeAttempt({ attention, session: 'wake-session', routeKind: 'paseo', leaseMs: 10, now: 1 });
     assert.equal(claimed.status, 'acquired');
-    assert.equal((await ledger.listWakeAttempts({ attention, now: 1 })).length, 1);
-    // The durable send transition is fenced: a native preparation cannot bypass it.
-    const prepared = await ledger.prepareNativeWake({ location: attention.squarePath, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', routeKind: 'claude-native', attemptN: claimed.attemptN, claimToken: claimed.claimToken, nativeDelivery: { harness: 'claude', endpoint: '/tmp/native.sock', payload: 'payload', epoch: 1 } });
-    assert.equal(prepared, false);
-    await ledger.transitionWakeAttempt({ attention, session: 'wake-session', claimToken: claimed.claimToken, leaseMs: 10, now: 1 });
+    const [persisted] = await ledger.listWakeAttempts({ attention, now: 1 });
+    assert.deepEqual([persisted.outcome, persisted.expiresAt, persisted.ownerPid], ['dispatching', 11, process.pid]);
     assert.equal(await ledger.prepareNativeWake({ location: attention.squarePath, participant: 'Bob', session: 'wake-session', activity: 'act/2', kind: 'wake', routeKind: 'claude-native', attemptN: claimed.attemptN, claimToken: claimed.claimToken, nativeDelivery: { harness: 'claude', endpoint: '/tmp/native.sock', payload: 'payload', epoch: 1 } }), true);
-    assert.equal(await ledger.transitionWakeAttempt({ attention, session: 'wake-session', claimToken: claimed.claimToken, leaseMs: 10, now: 2 }), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 test('activity-scoped wake results ignore older pending attention without routes', async () => {
@@ -297,10 +291,10 @@ test('attention caught after claim is not sent', async () => {
   let calls = 0;
   let artifactRef;
   const ledger = Object.create(base);
-  ledger.transitionWakeAttempt = async (input) => {
-    const transitioned = await base.transitionWakeAttempt(input);
-    if (transitioned) await artifactRef.transact((current) => ({ state: { ...current, routes: [] }, result: undefined }));
-    return transitioned;
+  ledger.claimWakeAttempt = async (input) => {
+    const claim = await base.claimWakeAttempt(input);
+    if (claim.status === 'acquired') await artifactRef.transact((current) => ({ state: { ...current, routes: [] }, result: undefined }));
+    return claim;
   };
   const square = await openSquare(location, { hostLedger: base });
   artifactRef = square.artifact;
@@ -387,7 +381,6 @@ test('expired dispatch is unknown across sessions and its late accepted completi
   try {
     const first = await ledger.claimWakeAttempt({ ...request, now: 100 });
     assert.equal(first.status, 'acquired');
-    await ledger.transitionWakeAttempt({ ...request, claimToken: first.claimToken, now: 100 });
     assert.equal((await ledger.claimWakeAttempt({ ...request, session: 'other', now: 109 })).status, 'busy');
     const recovered = await ledger.claimWakeAttempt({ ...request, session: 'other', now: 110 });
     assert.equal(recovered.status, 'terminal');
@@ -417,7 +410,6 @@ test('transport unknown cannot impersonate recovery; native admission can still 
   const request = { attention, session: 's', routeKind: 'claude-native', leaseMs: 10, now: 100 };
   try {
     const claim = await ledger.claimWakeAttempt(request);
-    await ledger.transitionWakeAttempt({ ...request, claimToken: claim.claimToken });
     const row = { location: attention.squarePath, participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'claude-native', attemptN: claim.attemptN, claimToken: claim.claimToken, at: 100 };
     assert.equal(await ledger.prepareNativeWake({ ...row, nativeDelivery: { harness: 'claude', endpoint: '/tmp/native.sock', payload: 'payload', epoch: 1 } }), true);
     await ledger.appendEvidence({ ...row, outcome: 'unknown', signature: 'worker_interrupted_during_dispatch' });
@@ -444,20 +436,20 @@ test('legacy recovered unknown still accepts the original sender completion', as
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('stale unsent claims can be replaced without letting old tokens touch the successor', async () => {
+test('an abandoned claim may have been sent: it recovers as unknown and fences its old token', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-claim-fence-'));
   const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 100 });
   const attention = { squarePath: path.join(root, 'SQUARE.square'), recipient: 'Bob', actIndex: 2 };
   const request = { attention, session: 's', routeKind: 'paseo', leaseMs: 10 };
   try {
     const first = await ledger.claimWakeAttempt({ ...request, now: 100 });
-    const second = await ledger.claimWakeAttempt({ ...request, now: 110 });
-    assert.equal(second.status, 'acquired');
-    assert.notEqual(first.claimToken, second.claimToken);
-    assert.equal(await ledger.transitionWakeAttempt({ ...request, claimToken: first.claimToken, now: 111 }), false);
-    await ledger.releaseEvidence({ location: attention.squarePath, participant: 'Bob', session: 's', activity: 'act/2', kind: 'wake', claimToken: first.claimToken, now: 111 });
-    assert.equal((await ledger.claimWakeAttempt({ ...request, session: 'other', now: 111 })).status, 'busy');
-    assert.equal(await ledger.transitionWakeAttempt({ ...request, claimToken: second.claimToken, now: 111 }), true);
+    const recovered = await ledger.claimWakeAttempt({ ...request, session: 'other', now: 110 });
+    assert.deepEqual([recovered.status, recovered.record.outcome, recovered.record.unknownSource], ['terminal', 'unknown', 'interrupted']);
+    const row = { location: attention.squarePath, participant: 'Bob', session: 's', activity: 'act/2', kind: 'wake', claimToken: first.claimToken, now: 111 };
+    await ledger.releaseEvidence(row);
+    await ledger.appendEvidence({ ...row, outcome: 'failed', attemptN: first.attemptN, at: 111 });
+    assert.deepEqual((await ledger.listWakeAttempts({ attention, now: 111 })).map((attempt) => attempt.outcome), ['unknown']);
+    assert.equal((await ledger.claimWakeAttempt({ ...request, session: 'other', now: 112 })).status, 'terminal');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -730,7 +722,6 @@ test('recovered ambiguous dispatch stops every fallback route', async () => {
   const ledger = base;
   const attention = { squarePath: location, recipient: 'Bob', actIndex: 2 };
   const interrupted = await base.claimWakeAttempt({ attention, session: 'session-a', routeKind: 'paseo', leaseMs: 1, now: 1 });
-  await base.transitionWakeAttempt({ attention, session: 'session-a', claimToken: interrupted.claimToken, leaseMs: 1, now: 1 });
   const square = await openSquare(location, { hostLedger: base });
   const calls = [];
   try {

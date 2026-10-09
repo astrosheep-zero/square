@@ -66,7 +66,6 @@ test('wake release diagnostics are readable without entering behavior evidence',
   };
   const claim = await ledger.claimWakeAttempt({ attention: item.attention, session: 'test-session', routeKind: 'paseo', leaseMs: 5_000, now: 1_000 });
   assert.equal(claim.status, 'acquired');
-  await ledger.transitionWakeAttempt({ attention: item.attention, session: 'test-session', claimToken: claim.claimToken, leaseMs: 5_000, now: 1_000 });
   await ledger.releaseEvidence({
     ...address,
     kind: 'wake',

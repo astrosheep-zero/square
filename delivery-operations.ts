@@ -136,14 +136,6 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
           if (options.bestEffortClaim === true) await release.catch(() => undefined);
           else await release;
         };
-        const dispatching = await input.hostLedger.transitionWakeAttempt({ attention, session: route.session, claimToken, leaseMs });
-        if (!dispatching) {
-          await abandon({
-            signature: 'wake_attempt_transition_failed',
-            message: 'The wake attempt could not enter the dispatching phase.',
-          }, { bestEffortClaim: true });
-          continue;
-        }
         let current: SquareObservation;
         try { current = await observeSquare({ artifact: input.artifact, hostLedger: input.hostLedger, location: input.location, now: input.now }); }
         catch { current = { ...observation, pending: [], bindings: [] }; }
