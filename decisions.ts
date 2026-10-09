@@ -45,7 +45,7 @@ export function resolveKnownName(squareState: SquareState, name: string): string
   validateName(name);
   const known = resolveRosterName(squareState, name);
   if (known === undefined) {
-    throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`);
+    throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
   }
   return known;
 }
@@ -180,7 +180,7 @@ export function decideAct(
     validateName(requested);
     const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
     if (resolved === undefined) {
-      throw new SquareError('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`);
+      throw new SquareError('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing' });
     }
     if (!mentionNames.some((existing) => sameName(existing, resolved))) {
       if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {

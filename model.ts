@@ -49,6 +49,8 @@ export type InternalSquareErrorCode = SquareErrorCode
 export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
+  /** Why a name could not be resolved: never in the roster, or no longer standing in it. */
+  reason?: 'never_joined' | 'not_standing';
   pending?: number;
   holder?: string;
   holdReason?: string;

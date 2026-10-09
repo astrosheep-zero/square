@@ -207,8 +207,16 @@ export function truncateExternalDiagnostic(diagnostic: string): string {
 }
 
 function previewBody(body: string, maxLen = BODY_PREVIEW_LENGTH): string {
+  return previewBodyFacts(body, maxLen).text;
+}
+
+/** The rendered preview plus whether it was cut short; callers branch on the fact, not the text. */
+function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: string; clipped: boolean } {
   const preview = truncateChars(body, maxLen);
-  return preview.remaining === 0 ? preview.text : `${preview.text}\n${style('dim', `… ${preview.remaining} more chars`)}`;
+  return {
+    text: preview.remaining === 0 ? preview.text : `${preview.text}\n${style('dim', `… ${preview.remaining} more chars`)}`,
+    clipped: preview.remaining > 0,
+  };
 }
 
 const UNREAD_PREVIEW_CHARS = 120;
@@ -239,9 +247,9 @@ export function renderRoomChangeText(event: RoomChangeAct): string {
   }
 }
 
-function renderedBody(body: string | undefined, maxChars: number | undefined): string {
-  if (!body) return '';
-  return maxChars === undefined ? body : previewBody(body, maxChars);
+function renderedBody(body: string | undefined, maxChars: number | undefined): { text: string; clipped: boolean } {
+  if (!body) return { text: '', clipped: false };
+  return maxChars === undefined ? { text: body, clipped: false } : previewBodyFacts(body, maxChars);
 }
 
 function bodySuffix(body: string): string {
@@ -249,22 +257,28 @@ function bodySuffix(body: string): string {
   return `\n${body.split('\n').map((line) => `  ${line}`).join('\n')}`;
 }
 
-export function renderEventCli(
+interface RenderedEvent {
+  text: string;
+  /** The rendered body was cut short by `preview`. */
+  bodyClipped: boolean;
+}
+
+function renderEventCliFacts(
   event: StoredAct,
   opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
-): string {
+): RenderedEvent {
   const now = opts.now;
   const maxBody = opts.preview;
   switch (event.kind) {
     case 'join':
-      return `· ${renderRoomChangeText(event)}`;
+      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'hold':
-      return `· ${renderRoomChangeText(event)}`;
+      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'resume':
-      return `${style('release', '✓')} ${renderRoomChangeText(event)}`;
+      return { text: `${style('release', '✓')} ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'listen':
     case 'ignore':
-      return `· ${renderRoomChangeText(event)}`;
+      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'say': {
       const body = renderedBody(event.body, maxBody);
       const mention = opts.mention;
@@ -274,15 +288,25 @@ export function renderEventCli(
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
       const meta = ` #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
-      return `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body)}`;
+      return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
-      return `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${actId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body)}`;
+      return {
+        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${actId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
+        bodyClipped: body.clipped,
+      };
     }
     case 'read':
-      return '';
+      return { text: '', bodyClipped: false };
   }
+}
+
+export function renderEventCli(
+  event: StoredAct,
+  opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
+): string {
+  return renderEventCliFacts(event, opts).text;
 }
 
 function renderPresenceOnlySay(
@@ -304,22 +328,30 @@ function renderPresenceOnlySay(
   return `● ${participantIdentity(event.actor)}${meta}\n${style('dim', `  talked to${dest}`)}`;
 }
 
-export function renderAmbientEvent(
+export function renderAmbientEventFacts(
   event: StoredAct,
   viewer: string,
   opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
-): string {
-  if (event.kind !== 'say') return renderEventCli(event, opts);
+): RenderedEvent {
+  if (event.kind !== 'say') return renderEventCliFacts(event, opts);
   if (opts.perception === undefined && opts.squareState === undefined) {
     throw new Error('Ambient say rendering requires a settled perception or SquareState');
   }
   const seen = opts.perception ?? perceiveActivity(opts.squareState!, event, viewer);
   if (seen === 'presence') {
     const presence = renderPresenceOnlySay(event, opts);
-    const body = opts.presencePreview === undefined ? '' : renderedBody(event.body, opts.presencePreview);
-    return `${presence}${bodySuffix(body)}`;
+    const body = opts.presencePreview === undefined ? { text: '', clipped: false } : renderedBody(event.body, opts.presencePreview);
+    return { text: `${presence}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
   }
-  return renderEventCli(event, opts);
+  return renderEventCliFacts(event, opts);
+}
+
+export function renderAmbientEvent(
+  event: StoredAct,
+  viewer: string,
+  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
+): string {
+  return renderAmbientEventFacts(event, viewer, opts).text;
 }
 
 function draftSavedLines(draftPath: string | undefined): string[] {

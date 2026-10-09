@@ -9,7 +9,7 @@ import {
   participantIdentity,
   renderGrepActivitiesView,
   renderEventCli,
-  renderAmbientEvent,
+  renderAmbientEventFacts,
   renderPresenceAnchor,
   truncateChars,
   withPathOutput,
@@ -538,18 +538,18 @@ export const statusCommand: CommandSpec<undefined, string> = {
       ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''}${style('dim', ` · ${holdTime}`)}`
       : undefined;
     const visible = result.latestAct === undefined
-      ? ''
-      : renderAmbientEvent(result.latestAct, context.name ?? '', {
+      ? { text: '', bodyClipped: false }
+      : renderAmbientEventFacts(result.latestAct, context.name ?? '', {
           now: result.now,
           preview: 200,
           actNumber: presentation.latestActNumber,
           squareState: presentation.state,
         });
-    const latest = visible === ''
+    const latest = visible.text === ''
       ? [result.latestAct === undefined
         ? '  ○ no public activity yet'
         : '  · the latest words were meant for other ears']
-      : [`  ${visible.replace(/\n/g, '\n  ')}`];
+      : [`  ${visible.text.replace(/\n/g, '\n  ')}`];
     // Presence events after the latest public act: otherwise the roster can say someone is
     // here while the latest line shows them leaving, with nothing to reconcile the two.
     const latestIndex = result.latestAct?.index ?? -1;
@@ -561,7 +561,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
       latest.push(style('dim', `  → ${participantIdentity(act.actor)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(act.at, result.now)}`));
     }
     if (stepsIn.length > 3) latest.push(style('dim', `  → … ${stepsIn.length - 3} more stepped in`));
-    if (visible.includes('more chars') && result.latestAct !== undefined) {
+    if (visible.bodyClipped && result.latestAct !== undefined) {
       latest.push(`${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }
     const counts = [

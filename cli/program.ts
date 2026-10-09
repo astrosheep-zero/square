@@ -26,11 +26,11 @@ async function handleSquareError(error: unknown, squarePath?: string, name?: str
     const existing = [error.message];
     if (squarePath !== undefined && name !== undefined && error.code === 'already_joined') {
       existing.push(...takeoverRecoveryLines(squarePath, name));
-    } else if (squarePath !== undefined && /^✕ .* has never stepped into/.test(error.message)) {
+    } else if (squarePath !== undefined && error.facts?.reason === 'never_joined') {
       // The caller's name has never joined this square; only a join admits it.
       if (name !== undefined) existing.push(joinRecoveryCommand(squarePath, name));
       else existing.push(participantsRecoveryCommand(squarePath));
-    } else if (squarePath !== undefined && /^✕ .* is not standing in this square/.test(error.message)) {
+    } else if (squarePath !== undefined && error.facts?.reason === 'not_standing') {
       existing.push(participantsRecoveryCommand(squarePath));
     }
     if (squarePath === undefined) {

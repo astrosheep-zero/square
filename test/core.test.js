@@ -89,14 +89,17 @@ test('unknown participant errors identify only the requested name', () => {
     () => decideCatch(squareState, unknown, {}, 2),
   ];
 
-  for (const attempt of cases) {
+  const expectedReasons = ['never_joined', 'not_standing', 'never_joined'];
+  cases.forEach((attempt, index) => {
     assert.throws(attempt, (error) => {
       assert.match(error.message, /✕ @Eve (?:has never stepped into this square|is not standing in this square)/);
       assert.match(error.message, /@Eve/);
       assert.doesNotMatch(error.message, /Expected one of|@Alice/);
+      // Recovery reads this fact; the wording above is free to change.
+      assert.equal(error.facts?.reason, expectedReasons[index]);
       return true;
     });
-  }
+  });
 });
 
 test('mention history selects historical direct attention for the addressed participant', () => {

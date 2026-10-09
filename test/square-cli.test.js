@@ -458,6 +458,48 @@ test('unknown participant errors end with the join recovery command', () => {
   assert.match(expressed.stderr, /--as 'Stranger' join/);
 });
 
+test('an unknown recipient errors with the roster command instead of a join', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+  });
+
+  const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']), { env: { SQUARE_REGISTRY: TEST_REGISTRY } });
+  assert.equal(expressed.status, 2);
+  assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
+  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
+  assert.doesNotMatch(expressed.stderr, /--as 'Eve' join/);
+});
+
+test('status offers the full history read only when the latest body is clipped', async () => {
+  const short = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('short words', { force: true });
+  }, { hardCap: 10 });
+  const unclipped = run(withName(short, 'Alice', ['status']));
+  assert.equal(unclipped.status, 0, unclipped.stderr);
+  assert.doesNotMatch(unclipped.stdout, /more chars/);
+  assert.doesNotMatch(unclipped.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+
+  // A short body that merely says "more chars" must not look clipped.
+  const literal = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('the phrase more chars fits without clipping', { force: true });
+  }, { hardCap: 10 });
+  const literalStatus = run(withName(literal, 'Alice', ['status']));
+  assert.equal(literalStatus.status, 0, literalStatus.stderr);
+  assert.match(literalStatus.stdout, /more chars fits without clipping/);
+  assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+
+  const clipped = await persistSquare(async ({ square }) => {
+    const alice = await square.join('Alice');
+    await alice.express('x'.repeat(260), { force: true });
+  }, { hardCap: 10 });
+  const clippedStatus = run(withName(clipped, 'Alice', ['status']));
+  assert.equal(clippedStatus.status, 0, clippedStatus.stderr);
+  assert.match(clippedStatus.stdout, /… \d+ more chars/);
+  assert.match(clippedStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+});
+
 test('doctor is a dry validator and rejects Markdown bytes', () => {
   const file = tempSquare();
   fs.writeFileSync(file, '---\nhard_cap: 3\n---\n\n## Warmup\nwarmup\n');

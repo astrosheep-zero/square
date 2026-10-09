@@ -227,7 +227,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
     if (isSquareError(err)) {
       const bodyLines = [err.message];
       // The caller's own name has never joined; only a join admits it.
-      if (/^✕ .* has never stepped into/.test(err.message)) bodyLines.push(joinRecoveryCommand(squarePath, name));
+      if (err.facts?.reason === 'never_joined') bodyLines.push(joinRecoveryCommand(squarePath, name));
       process.stderr.write(formatRefusal(squarePath, bodyLines, participantCount === undefined ? {} : { participantCount }));
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
@@ -244,7 +244,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
     if (isSquareError(err)) {
       const bodyLines = [err.message];
       // A filter target is unknown, not the caller; the roster is the useful next read.
-      if (/^✕ .*(has never stepped into|is not standing in this square)/.test(err.message)) bodyLines.push(participantsRecoveryCommand(squarePath));
+      if (err.facts?.reason === 'never_joined' || err.facts?.reason === 'not_standing') bodyLines.push(participantsRecoveryCommand(squarePath));
       process.stderr.write(formatRefusal(squarePath, bodyLines, participantCount === undefined ? {} : { participantCount }));
       process.exit(err.code === 'not_found' ? 1 : 2);
     }
