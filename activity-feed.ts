@@ -17,4 +17,3 @@ export function peerRoomChanges(delta: StoredAct[], name: string): RoomChangeAct
 export function directedPeerSays(squareState: SquareState, delta: StoredAct[], name: string, delivery = deriveDeliveryModel(squareState)): Extract<StoredAct, { kind: 'say' }>[] {
   return delta.filter((act): act is Extract<StoredAct, { kind: 'say' }> => delivery.directedTo(act, name));
 }
-
