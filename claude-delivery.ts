@@ -4,12 +4,9 @@ import { closeOpenSquare } from './open-square.js';
 import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
 import type { EvidenceRecord, HostLedgerPort, PresenceRecord } from './host-ledger.js';
 import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
-import { pendingAtBoundary, projectPresentation, projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
-import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
+import { nativePendingPreview, projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
 import { presentPending } from './presentation-operations.js';
-import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
-import { freshWatchLease } from './runtime.js';
-import { nameKey, type WakeRoute } from './model.js';
+import { type WakeRoute } from './model.js';
 import { canonicalRouteLocation } from './routes.js';
 import { parseActivityId } from './square-core.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
@@ -34,19 +31,14 @@ async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) 
   if (row.nativeDelivery?.harness !== 'claude') return undefined;
   const native = row.nativeDelivery;
   const owner = (await hostLedger.listPresence({ location: row.location, participant: row.participant })).find((binding) => binding.session === row.session && binding.epoch === native.epoch);
-  if (!owner) return undefined;
+  const index = parseActivityId(row.activity);
+  if (!owner || index === undefined || !row.claimToken) return undefined;
   const square = await openSquare(owner.location, { hostLedger });
   try {
     const state = (await square.artifact.read()).state;
-    const route = state.routes?.find((candidate) => candidate.kind === 'claude-native' && candidate.sessionId === row.session && nameKey(candidate.participant) === nameKey(row.participant) && candidate.epoch === owner?.epoch && candidate.address.endpoint === native.endpoint);
-    const index = parseActivityId(row.activity);
-    if (!route || index === undefined || index <= (owner.cancelledThrough ?? -1)) return undefined;
-    const projection = await projectPresentation({ artifact: square.artifact, binding: { location: row.location, participant: row.participant, sessionId: row.session, channel: owner.channel, updatedAt: owner.updatedAt ?? 0 } });
-    const notification = pendingAtBoundary([{ squarePath: row.location, name: row.participant, notifications: [...projection.notifications], ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) }])[0]?.notifications.find((entry) => entry.actIndex === index);
-    if (!notification || !row.claimToken) return undefined;
-    const expected = nativePayload(row.claimToken, renderAttentionPreview({ squarePath: row.location, recipient: row.participant, ...notification }));
-    if (expected !== native.payload) return undefined;
-    return { owner, notification };
+    const preview = nativePendingPreview(state, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+    if (!preview || nativePayload(row.claimToken, preview.payload) !== native.payload) return undefined;
+    return { cancelledThrough: owner.cancelledThrough, clipped: preview.clipped };
   } finally { await closeOpenSquare(square); }
 }
 
@@ -64,10 +56,10 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
     const square = await openSquare(request.location, { hostLedger });
     let payload: string;
     try {
-      const projection = await projectPresentation({ artifact: square.artifact, binding: { location: request.location, participant: request.participant, sessionId: request.route.sessionId, channel: owner.channel, updatedAt: owner.updatedAt ?? 0 } });
-      const notification = pendingAtBoundary([{ squarePath: request.location, name: request.participant, notifications: [...projection.notifications], ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) }])[0]?.notifications.find((entry) => entry.actIndex === parseActivityId(request.activity));
-      if (!notification) return { outcome: 'not-capable', diagnostic: 'Catch or consumption owns this activity.' };
-      payload = nativePayload(request.claimToken, renderAttentionPreview({ squarePath: request.location, recipient: request.participant, ...notification }));
+      const index = parseActivityId(request.activity);
+      const preview = index === undefined ? undefined : nativePendingPreview((await square.artifact.read()).state, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId, participant: request.participant, actIndex: index, epoch: request.route.epoch, address: { endpoint: request.route.address.endpoint! }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+      if (!preview) return { outcome: 'not-capable', diagnostic: 'Catch or consumption owns this activity.' };
+      payload = nativePayload(request.claimToken, preview.payload);
     } finally { await closeOpenSquare(square); }
     if (!await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'not-capable', diagnostic: 'Native activity was consumed before send.' };
     const native = { harness: 'claude' as const, payload, epoch: owner.epoch ?? 0, endpoint: request.route.address.endpoint! };
@@ -99,14 +91,11 @@ export async function observeClaudeDelivery(sessionId: string, text: string, ope
         const prior = await projectPresentationEvidence({ hostLedger: ledger, location: row.location, participant: row.participant, sessionId, activity: row.activity });
         if (presentationSuppressesWake(prior)) continue;
         const square = await openSquare(row.location, { hostLedger: ledger, env });
-        try { await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId, activity: row.activity, sink: { present() {} }, markSeen: !attentionBodyIsClipped(pending.notification.body), current: (state) => {
-          const route = state.routes?.find((candidate) => candidate.kind === 'claude-native' && candidate.sessionId === row.session && candidate.epoch === native.epoch && nameKey(candidate.participant) === nameKey(row.participant) && candidate.address.endpoint === native.endpoint);
-          const index = pending.notification.actIndex;
-          if (!route || index <= (pending.owner.cancelledThrough ?? -1)) return false;
-          const notification = deriveDeliveryModel(state).pendingFor(row.participant).find((entry) => entry.item.index === index);
-          const lease = freshWatchLease(state, row.participant, Date.now());
-          if (!notification || (lease && leaseOwnsNotification(lease, { ...notification.item, recipient: row.participant, route: notification.route }))) return false;
-          return nativePayload(row.claimToken!, renderAttentionPreview({ squarePath: row.location, recipient: row.participant, actIndex: index, actor: notification.item.actor, route: notification.route, body: notification.item.body })) === native.payload;
+        try { await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId, activity: row.activity, sink: { present() {} }, markSeen: !pending.clipped, current: (state) => {
+          const index = parseActivityId(row.activity);
+          if (index === undefined) return false;
+          const preview = nativePendingPreview(state, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: pending.cancelledThrough, now: Date.now() });
+          return preview !== undefined && nativePayload(row.claimToken!, preview.payload) === native.payload;
         } }); }
         finally { await closeOpenSquare(square); }
       }

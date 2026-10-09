@@ -5,10 +5,7 @@ import { observeSessionPending, sessionInbox } from './inbox.js';
 import { hostLedgerForEnv, withOwnershipClaimLock } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
-import { freshWatchLease } from './runtime.js';
-import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
-import { presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
+import { nativePendingPreview, presentationSuppressesWake, projectPresentationEvidence } from './square-projections.js';
 import { presentPending } from './presentation-operations.js';
 import { deliverPending } from './delivery-operations.js';
 import { createWakeTransport } from './notifications.js';
@@ -21,16 +18,9 @@ type NativeRow = EvidenceRecord & { claimToken: string; nativeDelivery: Extract<
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
 const key = (location: string, participant: string, index: number) => `${location}\0${nameKey(participant)}\0${index}`;
 
-/** The exact same audience/catch/epoch fence is used before send and inside presentation. */
+/** The one native pending preview: the audience/catch/epoch fence before send and inside presentation. */
 function preview(state: SquareState, owner: PresenceRecord, index: number) {
-  const route = state.routes?.find((candidate) => candidate.kind === routeKind && candidate.sessionId === owner.session
-    && candidate.address.sessionId === owner.session && candidate.epoch === owner.epoch && nameKey(candidate.participant) === nameKey(owner.participant));
-  if (!route || index <= (owner.cancelledThrough ?? -1)) return undefined;
-  const notification = deriveDeliveryModel(state).pendingFor(owner.participant).find((entry) => entry.item.index === index);
-  const lease = freshWatchLease(state, owner.participant, Date.now());
-  if (!notification || (lease && leaseOwnsNotification(lease, { ...notification.item, recipient: owner.participant, route: notification.route }))) return undefined;
-  return { payload: renderAttentionPreview({ squarePath: owner.location, recipient: owner.participant, actIndex: index,
-    actor: notification.item.actor, route: notification.route, body: notification.item.body }), clipped: attentionBodyIsClipped(notification.item.body) };
+  return nativePendingPreview(state, { location: owner.location, routeKind, sessionId: owner.session, participant: owner.participant, actIndex: index, epoch: owner.epoch, address: { sessionId: owner.session }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
 }
 
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, lifetime: AbortSignal): WakeTransportPort {

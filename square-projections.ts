@@ -4,6 +4,7 @@ import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEv
 import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
 import { freshWatchLease } from './runtime.js';
 import type { WakeRoute, WakeRouteKind } from './model.js';
+import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
 import { canonicalRouteLocation } from './routes.js';
 
 /** A fresh blocking catch owns only the notifications admitted by its filter. */
@@ -96,6 +97,31 @@ export async function projectPresentation(input: {
   const notifications: InboxNotification[] = delivery.pendingFor(known).map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, route, body: item.body }));
   const lease = freshWatchLease(state, known, input.now ?? Date.now());
   return { binding, joined: true, notifications, ...(lease === undefined ? {} : { catchLease: lease }) };
+}
+
+export interface NativePendingPreview {
+  readonly payload: string;
+  readonly clipped: boolean;
+}
+
+/** The one native pending preview. `epoch` matches exactly, and each harness pins its own address entry. */
+export type NativePendingPreviewInput = {
+  readonly location: string; readonly sessionId: string; readonly participant: string;
+  readonly actIndex: number; readonly epoch?: number; readonly cancelledThrough?: number; readonly now: number;
+} & (
+  | { readonly routeKind: 'claude-native'; readonly address: { readonly endpoint: string } }
+  | { readonly routeKind: 'opencode-server'; readonly address: { readonly sessionId: string } }
+);
+
+export function nativePendingPreview(state: SquareState, input: NativePendingPreviewInput): NativePendingPreview | undefined {
+  const route = state.routes?.find((candidate) => candidate.kind === input.routeKind && candidate.sessionId === input.sessionId
+    && candidate.epoch === input.epoch && nameKey(candidate.participant) === nameKey(input.participant)
+    && (input.routeKind === 'claude-native' ? candidate.address.endpoint === input.address.endpoint : candidate.address.sessionId === input.address.sessionId));
+  if (!route || input.actIndex <= (input.cancelledThrough ?? -1)) return undefined;
+  const notification = deriveDeliveryModel(state).pendingFor(input.participant).find((entry) => entry.item.index === input.actIndex);
+  const lease = freshWatchLease(state, input.participant, input.now);
+  if (!notification || (lease !== undefined && leaseOwnsNotification(lease, { ...notification.item, recipient: input.participant, route: notification.route }))) return undefined;
+  return { payload: renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: input.actIndex, actor: notification.item.actor, route: notification.route, body: notification.item.body }), clipped: attentionBodyIsClipped(notification.item.body) };
 }
 
 export async function projectPresentationEvidence(input: {
