@@ -19,7 +19,7 @@ async function fixture(t, held = false) {
   state.runtime.nextActIndex = state.acts.length;
   await writeSquareFile(file, state);
   const child = spawn(process.execPath, [CLI, ...withName(file, 'Bob', ['catch', '--mention', '--idle', '120ms'])], {
-    cwd: ROOT, env: testEnv({ SQUARE_STALE_MS: '120', SQUARE_WATCH_POLL_MS: '10000', SQUARE_WATCH_HEARTBEAT_MS: '100', SQUARE_WATCH_STALE_MS: '2000' }),
+    cwd: ROOT, env: testEnv({ SQUARE_WATCH_QUIET_MS: '120', SQUARE_WATCH_POLL_MS: '10000', SQUARE_WATCH_HEARTBEAT_MS: '100', SQUARE_WATCH_STALE_MS: '2000' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

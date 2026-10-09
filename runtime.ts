@@ -12,7 +12,8 @@ import {
   sameName,
 } from './model.js';
 
-function parseIntegerEnvValue(name: string, raw: string | undefined, fallback: number): number {
+function parseIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
   if (raw === undefined) return fallback;
   const value = parseInt(raw, 10);
   if (!Number.isFinite(value) || value <= 0) {
@@ -21,44 +22,10 @@ function parseIntegerEnvValue(name: string, raw: string | undefined, fallback: n
   return value;
 }
 
-function parseIntegerEnv(name: string, fallback: number): number {
-  return parseIntegerEnvValue(name, process.env[name], fallback);
-}
-
-function parseIntegerEnvAlias(primary: string, aliases: string[], fallback: number): number {
-  const candidates = [primary, ...aliases];
-  for (const name of candidates) {
-    if (process.env[name] !== undefined) return parseIntegerEnvValue(name, process.env[name], fallback);
-  }
-  return fallback;
-}
-
-function parseScaleEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = parseFloat(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new SquareError('invalid_args', `Invalid ${name}: expected a positive number.`);
-  }
-  return value;
-}
-
-function scaledMs(baseMs: number, scale: number): number {
-  return Math.max(1, Math.round(baseMs * scale));
-}
-
 export const WATCH_HEARTBEAT_MS = parseIntegerEnv('SQUARE_WATCH_HEARTBEAT_MS', 60000);
-export const SLEEP_MS = parseIntegerEnvAlias(
-  'SQUARE_WATCH_POLL_MS',
-  ['SQUARE_SLEEP_MS'],
-  scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_POLL_SCALE', 1 / 6))
-);
-export const STALE_MS = parseIntegerEnvAlias(
-  'SQUARE_WATCH_QUIET_MS',
-  ['SQUARE_STALE_MS'],
-  scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_QUIET_SCALE', 5))
-);
-export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', scaledMs(WATCH_HEARTBEAT_MS, parseScaleEnv('SQUARE_WATCH_STALE_SCALE', 3)));
+export const SLEEP_MS = parseIntegerEnv('SQUARE_WATCH_POLL_MS', 10000);
+export const STALE_MS = parseIntegerEnv('SQUARE_WATCH_QUIET_MS', 300000);
+export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', 180000);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
 /** A held express waits for the hand to lower, but not forever: past this budget it gives up exactly like --no-wait (draft saved, retry printed). 0 disables waiting. */
