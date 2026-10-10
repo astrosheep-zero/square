@@ -40,18 +40,6 @@ export async function projectBoundaryEligibility(input: {
   return pending;
 }
 
-function bindingProjection(record: PresenceRecord): SessionBindingProjection {
-  return {
-    location: record.location,
-    participant: record.participant,
-    sessionId: record.session,
-    channel: record.channel,
-    ...(record.epoch === undefined ? {} : { epoch: record.epoch }),
-    ...(record.cancelledThrough === undefined ? {} : { cancelledThrough: record.cancelledThrough }),
-    updatedAt: record.updatedAt ?? 0,
-  };
-}
-
 export async function projectSessionBindings(input: {
   readonly hostLedger: HostLedgerPort;
   readonly sessionId?: string;
@@ -59,7 +47,15 @@ export async function projectSessionBindings(input: {
   readonly now?: number;
 }): Promise<readonly SessionBindingProjection[]> {
   const rows = await input.hostLedger.listPresence({ location: input.location, session: input.sessionId, now: input.now });
-  return rows.map(bindingProjection);
+  return rows.map((record) => ({
+    location: record.location,
+    participant: record.participant,
+    sessionId: record.session,
+    channel: record.channel,
+    ...(record.epoch === undefined ? {} : { epoch: record.epoch }),
+    ...(record.cancelledThrough === undefined ? {} : { cancelledThrough: record.cancelledThrough }),
+    updatedAt: record.updatedAt ?? 0,
+  }));
 }
 
 export async function projectPresentation(input: {

@@ -125,18 +125,6 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'doctor',
 ]);
 
-function configuredLocation(): string | undefined {
-  const value = process.env.SQUARE_LOCATION?.trim();
-  return value === '' ? undefined : value;
-}
-
-function configuredName(): string | undefined {
-  const value = process.env.SQUARE_PARTICIPANT_NAME?.trim();
-  if (!value) return undefined;
-  validateName(value);
-  return value;
-}
-
 export interface ParsedGlobalArgs {
   squarePath?: string;
   explicitSquarePath: boolean;
@@ -161,10 +149,14 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
     }
   }
   const command = args[0];
-  if (name === undefined) name = configuredName();
+  if (name === undefined) {
+    const configured = process.env.SQUARE_PARTICIPANT_NAME?.trim();
+    if (configured) name = configured;
+  }
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
-  const configured = configuredLocation();
+  const configuredLocation = process.env.SQUARE_LOCATION?.trim();
+  const configured = configuredLocation === '' ? undefined : configuredLocation;
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
     fail(`✕ ${command} needs a square location\nsquare ls`);
   }

@@ -5,12 +5,12 @@ import fs from 'node:fs';
 import {
   type WakeAdapter,
 } from './delivery.js';
-import { SquareError, type SquareState } from './model.js';
+import { SquareError } from './model.js';
 import { displayAttentionPath } from './attention-presentation.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
-import { deliverPending, sweepPending, sweepPendingFromState } from './delivery-operations.js';
+import { deliverPending, sweepPending } from './delivery-operations.js';
 import { projectWakeEvidenceFromState } from './square-projections.js';
 import type { WakeCurrentness } from './wake-eligibility.js';
 import { canonicalPath } from './canonical-path.js';
@@ -27,21 +27,6 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
     throw new SquareError('invalid_args', 'Invalid SQUARE_NOTIFY_DELIVERY_WAIT_MS: expected a positive integer.');
   }
   return value;
-}
-
-function wakeLabel(kind: WakeRequest['route']['kind']): string {
-  if (kind === 'paseo') return 'paseo';
-  if (kind.startsWith('codex')) return 'codex-queue';
-  return kind;
-}
-
-function renderWakePayload(request: WakeRequest): string {
-  return [
-    `<system-reminder source="square" wake="${wakeLabel(request.route.kind)}">`,
-    `square: ${displayAttentionPath(request.location)}`,
-    `attention: ${request.activity} for ${request.participant} from ${request.actor}`,
-    '</system-reminder>',
-  ].join('\n');
 }
 
 interface ProcessNotificationOptions {
@@ -129,7 +114,14 @@ export function createWakeTransport(
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), finalGate, timeoutMs, request);
+        const kind = request.route.kind;
+        const payload = [
+          `<system-reminder source="square" wake="${kind === 'paseo' ? 'paseo' : kind.startsWith('codex') ? 'codex-queue' : kind}">`,
+          `square: ${displayAttentionPath(request.location)}`,
+          `attention: ${request.activity} for ${request.participant} from ${request.actor}`,
+          '</system-reminder>',
+        ].join('\n');
+        const result = await adapter.dispatch(request.route.address, payload, finalGate, timeoutMs, request);
         if (result.outcome !== 'gate-rejected') return result;
         if (revalidation !== undefined && !revalidation.current) {
           return {
@@ -217,19 +209,6 @@ export interface SweepPendingNotificationsOptions {
   now?: number;
   limit?: number;
   dispatchCandidate?: (actIndex: number) => void | Promise<void>;
-}
-
-/** Select sweep candidates from one frozen snapshot and one delivery replay. */
-export async function pendingNotificationSweepFromState(
-  squarePath: string,
-  state: SquareState,
-  now: number,
-  env: NodeJS.ProcessEnv,
-  limit: number,
-  deriveDelivery?: (snapshot: import('./model.js').SquareState) => ReturnType<typeof import('./delivery.js').deriveDeliveryModel>,
-): Promise<number[]> {
-  const ledger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
-  return sweepPendingFromState({ state, hostLedger: ledger, location: squarePath, now, graceMs: wakeGraceMs(env), limit, deriveDelivery });
 }
 
 /** Select old pending attention at a bounded action boundary for an explicit executor. */

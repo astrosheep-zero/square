@@ -1,9 +1,6 @@
-import fs from 'node:fs';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import { nameKey } from './model.js';
 import { WAKE_ROUTE_KINDS, type WakeRoute, type WakeRouteKind } from './model.js';
-import { openSquare } from './square-file-adapter.js';
-import { closeOpenSquare } from './open-square.js';
 import { isCurrentlyJoined } from './runtime.js';
 import { canonicalPath, canonicalPathSync } from './canonical-path.js';
 export { WAKE_ROUTE_KINDS } from './model.js';
@@ -29,47 +26,17 @@ export async function defaultWakeRouteCapabilities(hostLedger?: import('./host-l
   try { const { PaseoAdapter } = await import('./paseo-delivery.js'); available.add(new PaseoAdapter().kind); } catch { /* optional */ }
   return { canUse: (kind, address) => userCapable && available.has(kind) && Object.values(address).every((value) => value.trim() !== '') };
 }
-function nativeCandidate(boundary: WakeBoundary): { kind: WakeRouteKind; address: Record<string, string> } | undefined {
-  if (boundary.provider === 'codex') return { kind: 'codex-queue', address: { threadId: boundary.sessionId } };
-  return undefined;
-}
-export function selectPrimaryWakeRoute(input: { readonly boundary: WakeBoundary; readonly env: NodeJS.ProcessEnv; readonly capabilities: WakeRouteCapabilities }): Omit<WakeRoute, 'updatedAt'> | undefined {
-  const { boundary, env, capabilities } = input;
+export function resolvePrimaryWakeRoute(boundary: WakeBoundary, env: NodeJS.ProcessEnv, capabilities: WakeRouteCapabilities): Omit<WakeRoute, 'updatedAt'> | undefined {
   const paseoAgentId = env.PASEO_AGENT_ID?.trim();
   const candidates: Array<{ kind: WakeRouteKind; address: Record<string, string> }> = [];
   if (paseoAgentId) candidates.push({ kind: 'paseo', address: { agentId: paseoAgentId } });
-  const native = nativeCandidate(boundary);
-  if (native) candidates.push(native);
+  if (boundary.provider === 'codex') candidates.push({ kind: 'codex-queue', address: { threadId: boundary.sessionId } });
   const chosen = candidates.find((candidate) => Object.values(candidate.address).every((value) => value.trim() !== '') && capabilities.canUse(candidate.kind, candidate.address));
   return chosen === undefined ? undefined : { location: boundary.location, participant: boundary.participant, sessionId: boundary.sessionId, channel: boundary.provider === 'paseo' ? 'paseo' : boundary.provider === 'claude' ? 'claude-code' : boundary.provider, ...chosen };
 }
 
 export function routeIdentityKey(route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>, location = route.location): string {
   return JSON.stringify([location, nameKey(route.participant), route.sessionId]);
-}
-export function resolvePrimaryWakeRoute(boundary: WakeBoundary, env: NodeJS.ProcessEnv, capabilities: WakeRouteCapabilities): Omit<WakeRoute, 'updatedAt'> | undefined {
-  return selectPrimaryWakeRoute({ boundary, env, capabilities });
-}
-
-async function withArtifact<T>(location: string | undefined, fn: (square: import('./open-square.js').OpenSquare) => Promise<T>): Promise<T | undefined> {
-  if (location === undefined) return undefined;
-  try {
-    await fs.promises.access(location);
-    const square = await openSquare(location);
-    try { return await fn(square); } finally { await closeOpenSquare(square); }
-  } catch { return undefined; }
-}
-export async function readWakeRoutes(opts: { location?: string; participant?: string; sessionId?: string; freshOnly?: boolean; now?: number; env?: NodeJS.ProcessEnv } = {}): Promise<WakeRoute[]> {
-  const now = opts.now ?? Date.now();
-  const canonicalLocation = opts.location === undefined ? undefined : await canonicalPath(opts.location);
-  const routes = await withArtifact(canonicalLocation, async (square) => (await square.artifact.read()).state.routes ?? []) ?? [];
-  const filtered = routes.filter((route) => (opts.participant === undefined || nameKey(route.participant) === nameKey(opts.participant)) && (opts.sessionId === undefined || route.sessionId === opts.sessionId) && (!opts.freshOnly || now - route.updatedAt < ROUTE_FRESH_MS));
-  const canonicalized = await Promise.all(filtered.map(async (route) => ({ ...route, location: await canonicalPath(route.location), address: { ...route.address } })));
-  return canonicalLocation === undefined ? canonicalized : canonicalized.filter((route) => route.location === canonicalLocation);
-}
-export async function upsertWakeRoute(route: Omit<WakeRoute, 'updatedAt'>, opts: { at?: number; env?: NodeJS.ProcessEnv } = {}): Promise<void> {
-  const location = await canonicalPath(route.location);
-  await withArtifact(location, async (square) => publishWakeRoute(square.artifact, { ...route, location }, opts));
 }
 
 export type RouteEpoch = { readonly epoch?: number };
@@ -129,11 +96,6 @@ export function dropParticipantWakeRoutesFromState(state: import('./model.js').S
   const canonical = canonicalPathSync(location);
   state.routes = (state.routes ?? []).filter((item) => !(nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical));
 }
-export function sessionOwnsParticipantRoutes(state: import('./model.js').SquareState, location: string, participant: string, sessionId: string): boolean {
-  const canonical = canonicalPathSync(location);
-  const owned = (state.routes ?? []).filter((item) => nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical);
-  return owned.length > 0 && owned.every((item) => item.sessionId === sessionId);
-}
 export function sessionCanEndParticipant(state: import('./model.js').SquareState, location: string, participant: string, sessionId: string, currentSessionId?: string): boolean {
   const canonical = canonicalPathSync(location);
   const owned = (state.routes ?? []).filter((item) => nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical);
@@ -150,8 +112,8 @@ export async function publishWakeRoute(
   const at = opts.at ?? Date.now();
   await artifact.transact((state) => {
     if (opts.requireCurrentSession) {
-      const participantRoutes = (state.routes ?? []).filter((item) => nameKey(item.participant) === nameKey(route.participant) && canonicalPathSync(item.location) === location);
-      if (!isCurrentlyJoined(state.acts, route.participant) || participantRoutes.some((item) => item.sessionId !== route.sessionId)) return { state, result: undefined };
+      if (!isCurrentlyJoined(state.acts, route.participant)
+        || (state.routes ?? []).some((item) => nameKey(item.participant) === nameKey(route.participant) && canonicalPathSync(item.location) === location && item.sessionId !== route.sessionId)) return { state, result: undefined };
     }
     const identity = routeIdentityKey({ ...route, location });
     const matching = (state.routes ?? []).filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) === identity);
@@ -162,26 +124,12 @@ export async function publishWakeRoute(
     return { state: { ...state, routes: [...(state.routes ?? []).filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) !== identity), { ...route, location, updatedAt: at }] }, result: undefined };
   });
 }
-export async function retireWakeRoute(route: WakeRoute, opts: { at?: number; env?: NodeJS.ProcessEnv; expectedEpoch?: number } = {}): Promise<void> {
-  const location = await canonicalPath(route.location);
-  await withArtifact(location, async (square) => retireWakeRouteFromArtifact(square.artifact, { ...route, location }, opts));
-}
 export async function retireWakeRouteFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>, opts: { readonly expectedEpoch?: number } = {}): Promise<void> {
   const location = await canonicalPath(route.location);
   const target = routeIdentityKey({ ...route, location });
   await artifact.transact((state) => ({ state: { ...state, routes: (state.routes ?? []).filter((item) => {
     const itemLocation = canonicalPathSync(item.location);
     if (routeIdentityKey(item, itemLocation) !== target) return true;
-    const itemEpoch = (item as WakeRoute & RouteEpoch).epoch;
-    return opts.expectedEpoch !== undefined && itemEpoch !== opts.expectedEpoch;
-  }) }, result: undefined }));
-}
-export async function retireWakeRoutesForSessionFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'sessionId'>, opts: { readonly expectedEpoch?: number } = {}): Promise<void> {
-  const location = canonicalPathSync(route.location);
-  await artifact.transact((state) => ({ state: { ...state, routes: (state.routes ?? []).filter((item) => {
-    if (canonicalPathSync(item.location) !== location || item.sessionId !== route.sessionId) return true;
-    if (opts.expectedEpoch === undefined) return false;
-    const itemEpoch = (item as WakeRoute & RouteEpoch).epoch;
-    return itemEpoch !== undefined && itemEpoch !== opts.expectedEpoch;
+    return opts.expectedEpoch !== undefined && (item as WakeRoute & RouteEpoch).epoch !== opts.expectedEpoch;
   }) }, result: undefined }));
 }

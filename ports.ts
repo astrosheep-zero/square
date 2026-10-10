@@ -1,5 +1,4 @@
 import type { InboxNotification, SquareState, StoredAct, WakeRoute, WatchLease } from './model.js';
-import type { PlannedNotification } from './delivery.js';
 export type {
   ClaimResult,
   EvidenceClaim,
@@ -82,22 +81,6 @@ export type WakeOutcome =
   | { readonly outcome: 'failed'; readonly message?: string; readonly signature?: string; readonly diagnostic?: unknown; readonly attemptN?: number; readonly unavailable?: boolean; readonly retainRoute?: boolean; readonly routeStale?: boolean }
   | { readonly outcome: 'not-capable'; readonly diagnostic?: string }
   | { readonly outcome: 'unknown'; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown; readonly attemptN?: number };
-
-export interface SquareObservation {
-  readonly location?: string;
-  readonly version: number;
-  readonly state: SquareState;
-  readonly pending: readonly { readonly recipient: string; readonly notifications: readonly PlannedNotification[] }[];
-  readonly bindings: readonly SessionBindingProjection[];
-}
-
-export interface ObserveSquareInput {
-  readonly artifact: SquareArtifactPort;
-  readonly hostLedger?: HostLedgerPort;
-  readonly location?: string;
-  readonly now?: number;
-}
-
 
 export interface DeliveryResult {
   readonly attempted: number;

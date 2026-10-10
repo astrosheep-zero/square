@@ -35,10 +35,6 @@ async function awaitWithSignal(promise: Promise<void>, signal?: AbortSignal): Pr
   }
 }
 
-function pendingCount(inbox: InboxMembership[]): number {
-  return inbox.reduce((total, membership) => total + membership.notifications.length, 0);
-}
-
 export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
   return renderBoundary(inbox).context;
 }

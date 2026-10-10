@@ -50,10 +50,6 @@ export function resolveKnownName(squareState: SquareState, name: string): string
   return known;
 }
 
-function participantState(state: FoldedSquareState, name: string): FoldedSquareState['participants'][number] | undefined {
-  return state.participants.find((participant) => sameName(participant.name, name));
-}
-
 export interface DecideJoinResult {
   joinedName: string;
   addParticipant: boolean;
@@ -88,7 +84,7 @@ export function decideImplicitJoin(squareState: SquareState, name: string, now: 
   const knownName = resolveRosterName(squareState, name);
   const joinedName = knownName ?? name;
   if (knownName !== undefined) {
-    const current = participantState(foldedState(squareState), knownName);
+    const current = foldedState(squareState).participants.find((participant) => sameName(participant.name, knownName));
     return { joinedName, state: current?.joined === true ? 'active' : 'done' };
   }
   return {

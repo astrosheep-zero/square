@@ -11,7 +11,7 @@ import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
-import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from '../dist/routes.js';
+import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from './wake-routes.js';
 import { takeover } from '../dist/square-actions.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';

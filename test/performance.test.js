@@ -3,11 +3,13 @@ import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
-import { pendingNotificationSweepFromState } from '../dist/notifications.js';
+import { sweepPendingFromState } from '../dist/delivery-operations.js';
+import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { catchUp } from '../dist/square-actions.js';
 import { renderWatchOutput } from '../dist/presentation.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { pendingDeliveries } from '../dist/views.js';
+import { pendingDeliveriesFromState } from '../dist/views.js';
 
 function squareState(acts) {
   return {
@@ -38,7 +40,7 @@ test('large catch and pending sweep share one chronological delivery replay per 
     const caught = await catchUp(square, 'P0');
     assert.equal(caught.activities.length, 10);
     assert.equal(caught.remaining, 890);
-    const pending = await pendingDeliveries(square);
+    const pending = pendingDeliveriesFromState((await cell.read()).state);
     assert.equal(pending.length, 97);
     assert.equal(pending.find((item) => item.recipient === 'P0')?.notifications.length, 890);
   } finally {
@@ -56,12 +58,18 @@ test('large frozen wake sweep uses one delivery replay across every pending cand
   const state = squareState(acts);
   let derivations = 0;
 
-  const selected = await pendingNotificationSweepFromState('memory-square', state, 100_000, {
-    ...process.env,
-    SQUARE_NOTIFY_DELIVERY_WAIT_MS: '1',
-  }, 1_000, (snapshot) => {
-    derivations += 1;
-    return deriveDeliveryModel(snapshot);
+  const env = { ...process.env, SQUARE_NOTIFY_DELIVERY_WAIT_MS: '1' };
+  const selected = await sweepPendingFromState({
+    state,
+    hostLedger: createHostLedgerPort({ rootPath: hostLedgerRoot(env) }),
+    location: 'memory-square',
+    now: 100_000,
+    graceMs: 1,
+    limit: 1_000,
+    deriveDelivery: (snapshot) => {
+      derivations += 1;
+      return deriveDeliveryModel(snapshot);
+    },
   });
 
   assert.deepEqual(selected, []);

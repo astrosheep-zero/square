@@ -18,21 +18,19 @@ function packageRoot(): string {
   return fileURLToPath(new URL('../', import.meta.url));
 }
 
-function lstatMaybe(target: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  }
-}
-
 export function installHarnessLinks(links: HarnessLink[], force = false): string[] {
   const prepared = links.map((link) => {
     if (!fs.existsSync(link.source)) {
       throw new Error(`Harness link source is missing: ${link.source}`);
     }
-    const existing = lstatMaybe(link.target);
+    const existing = (() => {
+      try {
+        return fs.lstatSync(link.target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    })();
     return {
       ...link,
       existing,
@@ -102,15 +100,11 @@ function runOpenCode(homeDir: string, args: string[]): { status: number; stdout:
   return { status: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
-function requireOpenCodeSuccess(result: { status: number; stdout: string; stderr: string }, action: string): void {
-  if (result.status === 0) return;
-  throw new Error(`OpenCode ${action} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
-}
-
 export function installOpenCodePlugin(homeDir: string, force = false, run: OpenCodeCommandRunner = runOpenCode): string[] {
   const args = ['plugin', SQUARE_IDENTITY.packageName, '--global'];
   if (force) args.push('--force');
-  requireOpenCodeSuccess(run(homeDir, args), 'plugin install');
+  const result = run(homeDir, args);
+  if (result.status !== 0) throw new Error(`OpenCode plugin install failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
   return [SQUARE_IDENTITY.packageName];
 }
 

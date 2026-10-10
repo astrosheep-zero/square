@@ -1,8 +1,8 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import type { SquareState } from './model.js';
-import type { HostLedgerPort, SquareArtifactPort, DeliverPendingInput, DeliveryResult, ObserveSquareInput, SquareObservation, WakeRequest, WakeTransportPort } from './ports.js';
+import type { HostLedgerPort, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort } from './ports.js';
 import { deriveDeliveryModel } from './delivery.js';
-import { projectSessionBindings, projectWakeEvidenceFromState } from './square-projections.js';
+import { projectWakeEvidenceFromState } from './square-projections.js';
 import { wakeIsEligible, type WakeCurrentness } from './wake-eligibility.js';
 import { canonicalPath } from './canonical-path.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
@@ -48,15 +48,6 @@ async function attemptWakeWithin(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
-}
-export async function observeSquare(input: ObserveSquareInput): Promise<SquareObservation> {
-  const snapshot = await input.artifact.read();
-  const delivery = deriveDeliveryModel(snapshot.state);
-  let bindings: SquareObservation['bindings'] = [];
-  if (input.hostLedger !== undefined) {
-    try { bindings = await projectSessionBindings({ hostLedger: input.hostLedger, location: input.location, now: input.now }); } catch { /* observation is best effort */ }
-  }
-  return { ...(input.location === undefined ? {} : { location: input.location }), version: snapshot.version, state: snapshot.state, pending: delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })), bindings };
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
   const location = await canonicalPath(input.location);

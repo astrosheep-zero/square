@@ -13,7 +13,7 @@ import { wakeGraceMs } from '../dist/notifications.js';
 import { deriveDeliveryModel } from '../dist/delivery.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { upsertWakeRoute } from '../dist/routes.js';
+import { upsertWakeRoute } from './wake-routes.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
 import { projectWakeEvidenceFromState } from '../dist/square-projections.js';
 import { wakeIsEligible } from '../dist/wake-eligibility.js';

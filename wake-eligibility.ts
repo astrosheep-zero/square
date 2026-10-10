@@ -47,11 +47,6 @@ export interface WakeEligibility {
 
 function identity(...parts: readonly (string | number)[]): string { return JSON.stringify(parts); }
 
-function sameAddress(left: WakeRoute['address'], right: WakeRoute['address']): boolean {
-  const keys = Object.keys(left);
-  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
-}
-
 /** One strict ownership join, latest selection, and request fence over primary evidence only. */
 export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
   const delivery = input.delivery ?? deriveDeliveryModel(input.state);
@@ -136,7 +131,7 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
       const sessionBound = owner !== undefined;
       const matchesRequest = (published: WakeRoute): boolean => published.location === route.location
         && nameKey(published.participant) === nameKey(route.participant) && published.sessionId === route.sessionId
-        && published.kind === route.kind && published.epoch === route.epoch && sameAddress(published.address, route.address);
+        && published.kind === route.kind && published.epoch === route.epoch && Object.keys(published.address).length === Object.keys(route.address).length && Object.keys(published.address).every((key) => published.address[key] === route.address[key]);
       const routePublished = sameLocation && sameRecipient && (input.state.routes ?? []).some(matchesRequest);
       const selectedOwner = sameLocation && sameRecipient
         && (selectedByRecipient.get(nameKey(route.participant)) ?? []).some(({ route: published }) => matchesRequest(published));

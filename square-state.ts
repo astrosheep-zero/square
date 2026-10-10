@@ -47,10 +47,6 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
-function validateObservation(value: unknown): value is ActivityObservation {
-  return isObject(value) && hasExactKeys(value, ['state', 'at']) && value.state === 'seen' && isFiniteNumber(value.at);
-}
-
 function validateWatchLease(value: unknown): value is WatchLease {
   if (!isObject(value) || !hasExactKeys(value, ['leaseId', 'heartbeatAt', 'expiresAt'], ['filter'])
     || !isNonblankString(value.leaseId) || !isFiniteNumber(value.heartbeatAt)
@@ -69,7 +65,7 @@ function validateRuntime(value: unknown): value is SquareRuntimeState {
   return isObject(value) && hasExactKeys(value, ['nextActIndex', 'observations', 'leases'])
     && isNonNegativeInteger(value.nextActIndex)
     && validateRecord(value.observations, (candidate) => isObject(candidate)
-      && Object.entries(candidate).every(([id, observation]) => parseActivityId(id) !== undefined && validateObservation(observation)))
+      && Object.entries(candidate).every(([id, observation]) => parseActivityId(id) !== undefined && isObject(observation) && hasExactKeys(observation, ['state', 'at']) && observation.state === 'seen' && isFiniteNumber(observation.at)))
     && validateRecord(value.leases, validateWatchLease);
 }
 

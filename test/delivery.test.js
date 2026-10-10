@@ -3,7 +3,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { emptyRuntimeState } from '../dist/artifact.js';
-import { deriveDeliveryModel, leaseOwnsNotification, markSeenNotifications, perceiveActivity } from '../dist/delivery.js';
+import { deriveDeliveryModel, leaseOwnsNotification, perceiveActivity } from '../dist/delivery.js';
 import { decideCatch } from '../dist/catch-decisions.js';
 import { pendingAtBoundary } from '../dist/square-projections.js';
 import { previewAttentionBody, renderAttentionPreview } from '../dist/attention-presentation.js';
@@ -109,7 +109,7 @@ test('pending attention is post-join, independent of the read cursor, and closes
   const delivery = deriveDeliveryModel(square);
 
   assert.deepEqual(delivery.pendingFor('bob').map(({ item }) => item.index), [3]);
-  assert.equal(markSeenNotifications(square, 'Bob', [square.acts[3]], 6), true);
+  assert.equal(decideCatch(square, 'Bob', { id: formatActivityId(3) }, 6).changed, true);
   assert.deepEqual(deriveDeliveryModel(square).pendingFor('Bob'), []);
   assert.equal(square.runtime.observations.Bob[formatActivityId(3)].state, 'seen');
 });

@@ -2,13 +2,6 @@ function pad(value: number, length = 2): string {
   return String(value).padStart(length, '0');
 }
 
-function formatOffset(date: Date): string {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const abs = Math.abs(offsetMinutes);
-  return `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
-}
-
 export function formatTimestamp(at: number): string {
   const date = new Date(at);
   const time =
@@ -17,10 +10,11 @@ export function formatTimestamp(at: number): string {
       : date.getSeconds() !== 0
         ? `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
         : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const offsetMinutes = -date.getTimezoneOffset();
   return [
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
     time,
-    formatOffset(date),
+    `${offsetMinutes >= 0 ? '+' : '-'}${pad(Math.floor(Math.abs(offsetMinutes) / 60))}:${pad(Math.abs(offsetMinutes) % 60)}`,
   ].join(' ');
 }
 

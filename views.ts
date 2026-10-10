@@ -95,13 +95,6 @@ function projectStreamActivities(state: SquareState, activities: readonly Stored
   });
 }
 
-function selectStreamTail(activities: readonly StreamItem[], last: number): StreamItem[] {
-  if (!Number.isSafeInteger(last) || last < 0 || last > STREAM_BATCH_MAX) {
-    throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${STREAM_BATCH_MAX}.`);
-  }
-  return last === 0 ? [] : activities.slice(-last);
-}
-
 export async function streamProjection(square: OpenSquare | { readonly cell: { read(): Promise<{ state: SquareState }> } }, cursor: number, recipient?: string): Promise<StreamProjection> {
   const artifact = 'artifact' in square ? square.artifact : square.cell;
   const { state } = await artifact.read();
@@ -117,11 +110,14 @@ export async function streamProjection(square: OpenSquare | { readonly cell: { r
 export async function streamTailProjection(square: OpenSquare | { readonly cell: { read(): Promise<{ state: SquareState }> } }, last = 10, recipient?: string): Promise<StreamProjection> {
   const artifact = 'artifact' in square ? square.artifact : square.cell;
   const { state } = await artifact.read();
+  const activities = projectStreamActivities(state, state.acts, recipient);
+  if (!Number.isSafeInteger(last) || last < 0 || last > STREAM_BATCH_MAX) {
+    throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${STREAM_BATCH_MAX}.`);
+  }
   return {
-    activities: selectStreamTail(projectStreamActivities(state, state.acts, recipient), last),
+    activities: last === 0 ? [] : activities.slice(-last),
     cursor: state.acts.at(-1)?.index ?? -1,
     hasMore: false,
   };
 }
 export function pendingDeliveriesFromState(state: SquareState, delivery = deriveDeliveryModel(state)): readonly PendingDeliveryProjection[] { return delivery.joinedRecipients().map((recipient) => ({ recipient, notifications: delivery.pendingFor(recipient) })); }
-export async function pendingDeliveries(square: OpenSquare): Promise<readonly PendingDeliveryProjection[]> { const { state } = await square.artifact.read(); return pendingDeliveriesFromState(state); }

@@ -58,10 +58,6 @@ function inboxDisplay(value: string): string {
   return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
 }
 
-function inboxLimitCommand(sessionId: string, json: boolean): string {
-  return `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${json ? ' --json' : ''}`;
-}
-
 interface HistoryCommandOptions extends ActivitiesOptions {
   noTruncate: boolean;
   continuationArgs: string[];
@@ -298,14 +294,9 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   };
 }
 
-function historyContinuationCommand(options: HistoryCommandOptions, squarePath: string, direction: '--before' | '--after', index: number): string {
-  const args = [...(options.continuationArgs ?? []), direction, actId(index), '--limit', String(options.lastN ?? HISTORY_DEFAULT_LIMIT)];
-  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
-}
-
-function boundedHistoryCommand(options: HistoryCommandOptions, squarePath: string): string {
-  const args = [...(options.continuationArgs ?? []), '--limit', String(HISTORY_MAX_LIMIT)];
-  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
+function historyContinuationCommand(options: HistoryCommandOptions, squarePath: string, args: string[]): string {
+  const full = [...(options.continuationArgs ?? []), ...args];
+  return `${commandPrefix(squarePath)} history ${full.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
 }
 
 /** The archive-visible activity model: content plus the lifecycle moves that keep its story honest — a raised hand pairs with its lowering, and a departure pairs with the return. */
@@ -391,7 +382,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const hideReadActs = options.atIndexes === undefined && options.beforeContext === undefined && options.afterContext === undefined && options.after === undefined;
       let events = hideReadActs ? projection.activities.filter((activity) => activity.kind !== 'read') : [...projection.activities];
       if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
-        fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${boundedHistoryCommand(options, squarePath)}`);
+        fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${historyContinuationCommand(options, squarePath, ['--limit', String(HISTORY_MAX_LIMIT)])}`);
       }
       const searching = options.grep !== undefined || options.fixed !== undefined;
       const totalMatches = searching ? events.length : 0;
@@ -420,7 +411,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       );
       const cursorDirection = options.afterIndex !== undefined ? '--after' : '--before';
       const cursorIndex = cursorDirection === '--after' ? Math.max(...publicEvents.map((item) => item.index)) : Math.min(...publicEvents.map((item) => item.index));
-      const continuation = hasMore ? `\n\n${historyContinuationCommand(options, squarePath, cursorDirection, cursorIndex)}` : '';
+      const continuation = hasMore ? `\n\n${historyContinuationCommand(options, squarePath, [cursorDirection, actId(cursorIndex), '--limit', String(options.lastN ?? HISTORY_DEFAULT_LIMIT)])}` : '';
       return withPathOutput(squarePath, output + continuation, { participantCount: projection.participantCount });
     } finally {
       await closeOpenSquare(square);
@@ -605,7 +596,7 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
       else usage(context.command);
     }
     if (!sessionId) fail('inbox requires --for-session <session-id>.');
-    const retry = inboxLimitCommand(sessionId, json);
+    const retry = `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${json ? ' --json' : ''}`;
     if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
     const limit = hasLimit
       ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)

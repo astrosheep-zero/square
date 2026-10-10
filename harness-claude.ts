@@ -35,11 +35,6 @@ function requireSuccess(result: ClaudeCommandResult, operation: string, allowMis
   throw new Error(`Claude ${operation} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
 }
 
-function writeJson(file: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-}
-
 export async function installClaudePlugin(homeDir: string, run: ClaudeCommandRunner = runClaude): Promise<ClaudeInstallResult> {
   const marketplaceRoot = claudeMarketplaceRoot(homeDir);
   const staged = stageReplacement(marketplaceRoot, (stage) => {
@@ -48,11 +43,13 @@ export async function installClaudePlugin(homeDir: string, run: ClaudeCommandRun
     const skill = path.join(plugin, 'skills', 'square', 'SKILL.md');
     fs.mkdirSync(path.dirname(skill), { recursive: true });
     fs.copyFileSync(path.join(fileURLToPath(new URL('../skills/square/', import.meta.url)), 'SKILL.md'), skill);
-    writeJson(path.join(stage, '.claude-plugin', 'marketplace.json'), {
+    const manifestPath = path.join(stage, '.claude-plugin', 'marketplace.json');
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, `${JSON.stringify({
       name: CLAUDE_MARKETPLACE_NAME,
       owner: { name: 'Square' },
       plugins: [{ name: SQUARE_IDENTITY.pluginName, source: './plugins/square' }],
-    });
+    }, null, 2)}\n`, { mode: 0o600 });
   });
   try {
     const add = run(homeDir, ['plugin', 'marketplace', 'add', marketplaceRoot]);

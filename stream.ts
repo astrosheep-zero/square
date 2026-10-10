@@ -11,10 +11,6 @@ export type StreamStart =
   | { readonly kind: 'tail'; readonly last: number }
   | { readonly kind: 'after'; readonly after: number };
 
-async function writeNdjson(value: object): Promise<void> {
-  if (!process.stdout.write(`${JSON.stringify(value)}\n`)) await once(process.stdout, 'drain');
-}
-
 /** Machine-readable tailing stays available; interactive terminal rendering was retired. */
 export async function cmdStreamNdjson(squarePath: string, recipient?: string, start: StreamStart = { kind: 'tail', last: 10 }): Promise<void> {
   if (!fs.existsSync(squarePath)) {
@@ -37,8 +33,9 @@ export async function cmdStreamNdjson(squarePath: string, recipient?: string, st
             ? await streamProjection(square, cursor, recipient)
             : await streamTailProjection(square, initial.last, recipient);
           for (const item of projection.activities) {
-            await writeNdjson({ seq: item.activity.index, square: squarePath, ...item.activity,
-              ...(item.route === undefined ? {} : { route: item.route }) });
+            const line = { seq: item.activity.index, square: squarePath, ...item.activity,
+              ...(item.route === undefined ? {} : { route: item.route }) };
+            if (!process.stdout.write(`${JSON.stringify(line)}\n`)) await once(process.stdout, 'drain');
           }
           cursor = projection.cursor;
           initial = undefined;

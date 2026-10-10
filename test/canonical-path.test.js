@@ -7,7 +7,7 @@ import { canonicalPath, canonicalPathSync } from '../dist/canonical-path.js';
 import { writeSquareFile } from '../dist/artifact.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
-import { readWakeRoutes } from '../dist/routes.js';
+import { readWakeRoutes } from './wake-routes.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { join } from '../dist/square-actions.js';
 

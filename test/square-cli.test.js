@@ -8,7 +8,7 @@ import { formatActivityId } from '../dist/square-core.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
 import { Square } from '../dist/index.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
-import { readWakeRoutes } from '../dist/routes.js';
+import { readWakeRoutes } from './wake-routes.js';
 import {
   ROOT,
   TEST_REGISTRY,

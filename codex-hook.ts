@@ -26,18 +26,6 @@ const CODEX_HOOK_EVENTS: Readonly<Record<string, 'PostToolUse' | 'Stop'>> = {
 
 const defaultTrace: HookTrace = (line) => { process.stderr.write(`${line}\n`); };
 
-/** Per-stage timings, emitted as each stage completes so a killed hook still leaves a trace. */
-function stageTracer(trace: HookTrace): (stage: string, extra?: string) => void {
-  const startedAt = Date.now();
-  let mark = startedAt;
-  return (stage, extra = '') => {
-    const now = Date.now();
-    const durationMs = now - mark;
-    mark = now;
-    trace(`square-codex-hook: stage=${stage} durationMs=${durationMs} totalMs=${now - startedAt}${extra === '' ? '' : ` ${extra}`}`);
-  };
-}
-
 function hookBudgetMs(env: NodeJS.ProcessEnv): number {
   const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
   return Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS;
@@ -54,7 +42,15 @@ export async function codexHookResponse(
   if (typeof input.hook_event_name !== 'string') return undefined;
   const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
   if (hookEventName === undefined) return undefined;
-  const stage = stageTracer(trace);
+  // Per-stage timings, emitted as each stage completes so a killed hook still leaves a trace.
+  const startedAt = Date.now();
+  let mark = startedAt;
+  const stage = (name: string, extra = '') => {
+    const now = Date.now();
+    const durationMs = now - mark;
+    mark = now;
+    trace(`square-codex-hook: stage=${name} durationMs=${durationMs} totalMs=${now - startedAt}${extra === '' ? '' : ` ${extra}`}`);
+  };
   const signal = AbortSignal.timeout(hookBudgetMs(env));
   const sweepDeadline = Date.now() + Math.min(PRIVILEGED_HOOK_BUDGET_MS, hookBudgetMs(env));
   const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();

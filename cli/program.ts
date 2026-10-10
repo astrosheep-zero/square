@@ -8,19 +8,6 @@ import { closeOpenSquare } from '../open-square.js';
 import { defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
-async function participantCountFor(squarePath: string): Promise<number | undefined> {
-  try {
-    const square = await openSquare(squarePath, { clock: nowMs });
-    try {
-      return inSquareCount((await square.artifact.read()).state);
-    } finally {
-      await closeOpenSquare(square);
-    }
-  } catch {
-    return undefined;
-  }
-}
-
 async function handleSquareError(error: unknown, squarePath?: string, name?: string): Promise<never> {
   if (isSquareError(error)) {
     const existing = [error.message];
@@ -41,7 +28,11 @@ async function handleSquareError(error: unknown, squarePath?: string, name?: str
     if (squarePath === undefined) {
       process.stderr.write(`${existing.join('\n')}\n`);
     } else {
-      const participantCount = await participantCountFor(squarePath);
+      let participantCount: number | undefined;
+      try {
+        const square = await openSquare(squarePath, { clock: nowMs });
+        try { participantCount = inSquareCount((await square.artifact.read()).state); } finally { await closeOpenSquare(square); }
+      } catch { /* the header count is best effort */ }
       process.stderr.write(formatRefusal(squarePath, existing, participantCount === undefined ? {} : { participantCount }));
     }
     process.exit(error.code === 'not_found' ? 1 : 2);

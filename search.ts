@@ -5,25 +5,14 @@
 
 import { SquareError } from './model.js';
 
-function escapeRegex(pattern: string): string {
-  return pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export function compileGrepPattern(pattern: string): RegExp {
+export function compileSearchPattern(pattern: string, fixed: boolean): RegExp {
+  if (fixed) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   try {
     return new RegExp(pattern, 'i');
   } catch (err) {
     const detail = err instanceof Error ? err.message.replace(/^Invalid regular expression:\s*/i, '') : 'invalid expression';
     throw new SquareError('invalid_args', `Invalid --grep regex: ${detail}`);
   }
-}
-
-export function compileFixedPattern(pattern: string): RegExp {
-  return new RegExp(escapeRegex(pattern), 'i');
-}
-
-export function compileSearchPattern(pattern: string, fixed: boolean): RegExp {
-  return fixed ? compileFixedPattern(pattern) : compileGrepPattern(pattern);
 }
 
 export interface GrepSnippet {

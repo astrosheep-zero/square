@@ -9,7 +9,8 @@ import { hostLedgerForEnv, readParticipantOwner, sessionOwnsParticipant, squareA
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
-import { publishWakeRoute, readWakeRoutes, retireWakeRouteFromArtifact, retireWakeRoutesForSessionFromArtifact, ROUTE_FRESH_MS, selectPrimaryWakeRoute, sessionCanEndParticipant, sessionOwnsParticipantRoutes, upsertWakeRoute } from '../dist/routes.js';
+import { publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS, resolvePrimaryWakeRoute, sessionCanEndParticipant } from '../dist/routes.js';
+import { readWakeRoutes, retireWakeRoutesForSession, upsertWakeRoute } from './wake-routes.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_ROOT: path.join(root, 'user') } }; }
 
@@ -142,7 +143,7 @@ test('session route cleanup compares canonical locations', async () => {
       { location, participant: 'Codex', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' }, updatedAt: 2 },
     ], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
     const square = await openSquare(location);
-    try { await retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
+    try { await retireWakeRoutesForSession(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
     assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['new-session']);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
@@ -157,7 +158,7 @@ test('session route cleanup stays atomic with concurrent publication', async () 
     const square = await openSquare(location);
     try {
       await Promise.all([
-        retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }),
+        retireWakeRoutesForSession(square.artifact, { location, sessionId: 'old-session' }),
         publishWakeRoute(square.artifact, { location, participant: 'Codex', sessionId: 'new-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'new-session' } }, { at: 2 }),
       ]);
     } finally { await closeOpenSquare(square); }
@@ -179,7 +180,7 @@ test('session route cleanup matches live transaction state instead of a prior sn
       const snapshot = await read();
       return { ...snapshot, state: { ...snapshot.state, routes: [oldRoute] } };
     };
-    try { await retireWakeRoutesForSessionFromArtifact(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
+    try { await retireWakeRoutesForSession(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
     assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['extra-session', 'new-session']);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
@@ -194,9 +195,9 @@ test('session ownership is exclusive session identity, not a refreshable updated
     ],
     runtime: { nextActIndex: 0, observations: {}, leases: {} },
   };
-  assert.equal(sessionOwnsParticipantRoutes(state, location, 'shared', 'old-session'), false);
-  assert.equal(sessionOwnsParticipantRoutes(state, location, 'shared', 'new-session'), false);
-  assert.equal(sessionOwnsParticipantRoutes({ ...state, routes: state.routes.filter((route) => route.sessionId === 'new-session') }, location, 'shared', 'new-session'), true);
+  assert.equal(sessionCanEndParticipant(state, location, 'shared', 'old-session'), false);
+  assert.equal(sessionCanEndParticipant(state, location, 'shared', 'new-session'), false);
+  assert.equal(sessionCanEndParticipant({ ...state, routes: state.routes.filter((route) => route.sessionId === 'new-session') }, location, 'shared', 'new-session'), true);
 });
 
 test('missing participant routes require current session proof before SessionEnd can write done', () => {
@@ -228,33 +229,33 @@ test('done to joined clears stale participant routes before publishing the curre
 });
 
 test('primary route selection gives Paseo global precedence without changing session key', () => {
-  const route = selectPrimaryWakeRoute({
-    boundary: { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
-    env: { PASEO_AGENT_ID: ' agent-1 ', CODEX_THREAD_ID: 'thread-1' },
-    capabilities: { canUse: (kind) => kind === 'paseo' || kind === 'codex-queue' },
-  });
+  const route = resolvePrimaryWakeRoute(
+    { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
+    { PASEO_AGENT_ID: ' agent-1 ', CODEX_THREAD_ID: 'thread-1' },
+    { canUse: (kind) => kind === 'paseo' || kind === 'codex-queue' },
+  );
   assert.deepEqual(route, { location: '/square', participant: 'Bob', sessionId: 'thread-1', channel: 'codex', kind: 'paseo', address: { agentId: 'agent-1' } });
 });
 
 test('primary route selection falls back to native only when capable', () => {
-  const native = selectPrimaryWakeRoute({
-    boundary: { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
-    env: {},
-    capabilities: { canUse: (kind) => kind === 'codex-queue' },
-  });
+  const native = resolvePrimaryWakeRoute(
+    { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
+    {},
+    { canUse: (kind) => kind === 'codex-queue' },
+  );
   assert.equal(native?.kind, 'codex-queue');
-  const none = selectPrimaryWakeRoute({
-    boundary: { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'claude' },
-    env: {},
-    capabilities: { canUse: () => false },
-  });
+  const none = resolvePrimaryWakeRoute(
+    { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'claude' },
+    {},
+    { canUse: () => false },
+  );
   assert.equal(none, undefined);
 });
 
 test('primary route selection is independent for same participant sessions', () => {
   const capabilities = { canUse: (kind) => kind === 'codex-queue' };
-  const one = selectPrimaryWakeRoute({ boundary: { location: '/square', participant: 'Bob', sessionId: 's1', provider: 'codex' }, env: {}, capabilities });
-  const two = selectPrimaryWakeRoute({ boundary: { location: '/square', participant: 'Bob', sessionId: 's2', provider: 'codex' }, env: {}, capabilities });
+  const one = resolvePrimaryWakeRoute({ location: '/square', participant: 'Bob', sessionId: 's1', provider: 'codex' }, {}, capabilities);
+  const two = resolvePrimaryWakeRoute({ location: '/square', participant: 'Bob', sessionId: 's2', provider: 'codex' }, {}, capabilities);
   assert.equal(one?.sessionId, 's1');
   assert.equal(two?.sessionId, 's2');
 });

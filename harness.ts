@@ -145,18 +145,13 @@ export function harnessTargets(): readonly HarnessTarget[] {
   return TARGETS;
 }
 
-function requireHarnessCapability(target: string, action: HarnessAction): HarnessTarget {
-  const found = TARGETS.find((candidate) => candidate.name === target);
-  if (found === undefined || !found.capabilities.includes(action)) throw new Error(`Unsupported harness capability: ${action} ${target}`);
-  return found;
-}
-
 export async function executeHarnessTarget(
   targetName: string,
   action: HarnessAction,
   context: HarnessTargetContext
 ): Promise<HarnessTargetResult> {
-  const target = requireHarnessCapability(targetName, action);
+  const target = TARGETS.find((candidate) => candidate.name === targetName);
+  if (target === undefined || !target.capabilities.includes(action)) throw new Error(`Unsupported harness capability: ${action} ${targetName}`);
   const capability = target[action];
   if (capability === undefined) throw new Error(`Unsupported harness capability: ${action} ${targetName}`);
   return capability(context);

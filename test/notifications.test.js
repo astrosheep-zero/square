@@ -7,7 +7,7 @@ import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact
 import { createWakeTransport, processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { upsertWakeRoute } from '../dist/routes.js';
+import { upsertWakeRoute } from './wake-routes.js';
 import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 import { readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
 import { readWakeAttempts } from './wake-attempt-fixtures.js';
@@ -341,7 +341,7 @@ test('a closed Paseo route is retired without consuming pending attention', asyn
     adapters: [new PaseoAdapter({ discover: () => ({ agents: [] }) })],
   }));
   assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
-  const { readWakeRoutes } = await import('../dist/routes.js');
+  const { readWakeRoutes } = await import('./wake-routes.js');
   assert.deepEqual(await readWakeRoutes({ env: item.env, now: Date.now() }), []);
   assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
   fs.rmSync(item.root, { recursive: true, force: true });

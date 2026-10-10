@@ -10,7 +10,7 @@ import {
 } from './model.js';
 import { activityAuthors, audienceOf, replayLandedAudiences, type Perception } from './square-core.js';
 import { derivePerceptionProjection } from './perception-projection.js';
-import { matchesMentionTarget, recordObservation } from './runtime.js';
+import { matchesMentionTarget } from './runtime.js';
 import { matchesCatchSelection } from './catch-selection.js';
 import type { WakeOutcome } from './ports.js';
 
@@ -151,17 +151,6 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
 
 export function perceiveActivity(squareState: SquareState, item: StoredAct, viewer: string, delivery = deriveDeliveryModel(squareState)): Perception {
   return delivery.perceive(item, viewer);
-}
-
-/** Mark only the notifications selected by the canonical catch projection as fully seen. */
-export function markSeenNotifications(squareState: SquareState, recipient: string, delivered: StoredAct[], at = Date.now(), delivery = deriveDeliveryModel(squareState)): boolean {
-  const deliveredIndexes = new Set(delivered.map((item) => item.index));
-  let changed = false;
-  for (const notification of delivery.pendingFor(recipient)) {
-    if (!deliveredIndexes.has(notification.item.index)) continue;
-    changed = recordObservation(squareState, notification.recipient, notification.item.index, 'seen', at) || changed;
-  }
-  return changed;
 }
 
 /** True only when the live catch's own filters would deliver this unread notification, independent of page size. */

@@ -91,7 +91,6 @@ test('artifact port transactions accept synchronous state transitions only', () 
 test('raw file state APIs stay inside storage and the file artifact adapter', () => {
   const storageAndFileAdapter = ['square-storage.ts', 'square-file-adapter.ts'];
   const leaks = [
-    ...ownershipLeaks('readSquareFile', storageAndFileAdapter),
     ...ownershipLeaks('probeSquareFile', storageAndFileAdapter),
     ...ownershipLeaks('createMemoryCell', storageAndFileAdapter),
     ...ownershipLeaks('createFileCell', storageAndFileAdapter),
@@ -132,7 +131,7 @@ test('CLI observation consumes concern projections, not state or domain law', ()
 
   const observation = productionSources.get(path.join('cli', 'observation-commands.ts'));
   assert.ok(observation, 'cli/observation-commands.ts must be part of the production sources');
-  for (const identifier of ['SquareState', 'readSquareFile', 'probeSquareFile', 'createMemoryCell', 'createFileCell']) {
+  for (const identifier of ['SquareState', 'probeSquareFile', 'createMemoryCell', 'createFileCell']) {
     if (new RegExp(`\\b${identifier}\\b`).test(observation)) {
       leaks.push(`${identifier}: cli/observation-commands.ts`);
     }

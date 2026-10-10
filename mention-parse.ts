@@ -47,13 +47,6 @@ function codeSpanRanges(body: string): Array<readonly [number, number]> {
   return ranges;
 }
 
-function codePointBefore(body: string, index: number): string | undefined {
-  if (index <= 0) return undefined;
-  const unit = body.charCodeAt(index - 1);
-  if (unit >= 0xdc00 && unit <= 0xdfff && index >= 2) return String.fromCodePoint(body.codePointAt(index - 2)!);
-  return String.fromCodePoint(unit);
-}
-
 export interface MentionCandidate {
   /** The maximal name-grammar token after `@` (roster-free; resolution may shorten it). */
   readonly token: string;
@@ -68,7 +61,9 @@ export function scanMentionCandidates(body: string): MentionCandidate[] {
   for (const match of body.matchAll(MENTION_TOKEN)) {
     const start = match.index;
     if (spans.some(([from, to]) => start >= from && start < to)) continue;
-    const previous = codePointBefore(body, start);
+    const unit = start <= 0 ? undefined : body.charCodeAt(start - 1);
+    const previous = unit === undefined ? undefined
+      : unit >= 0xdc00 && unit <= 0xdfff && start >= 2 ? String.fromCodePoint(body.codePointAt(start - 2)!) : String.fromCodePoint(unit);
     if (previous !== undefined && BOUNDARY_BLOCKER.test(previous)) continue;
     const token = match[1];
     const key = token.toLocaleLowerCase();

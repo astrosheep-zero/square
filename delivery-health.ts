@@ -98,11 +98,6 @@ function displayField(value: string): string {
   return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
 }
 
-function formatItem(item: DeliveryHealthItem): string {
-  const evidence = item.attempt?.signature === undefined ? '' : ` · ${displayField(item.attempt.signature)}`;
-  return `  · ${formatActivityId(item.actIndex)} → ${displayField(participantIdentity(item.recipient))} from ${displayField(participantIdentity(item.actor))} · ${formatDuration(item.ageMs)}${evidence}`;
-}
-
 export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], releases: readonly WakeReleaseDiagnostic[] = [], now = Date.now()): string[] {
   const out = items.length === 0 ? ['✓ no pending delivery attention'] : [`· delivery attention · ${items.length} pending`];
   if (items.length > 0) {
@@ -112,7 +107,10 @@ export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], relea
       if (group.length === 0) continue;
       out.push(`${ACTIONABLE.has(kind) ? '✕' : '○'} ${kind}: ${group.length}`);
       const details = group.slice(0, DETAIL_LIMIT - displayed);
-      out.push(...details.map(formatItem));
+      out.push(...details.map((item) => {
+        const evidence = item.attempt?.signature === undefined ? '' : ` · ${displayField(item.attempt.signature)}`;
+        return `  · ${formatActivityId(item.actIndex)} → ${displayField(participantIdentity(item.recipient))} from ${displayField(participantIdentity(item.actor))} · ${formatDuration(item.ageMs)}${evidence}`;
+      }));
       displayed += details.length;
     }
     if (items.length > DETAIL_LIMIT) out.push(`${DETAIL_LIMIT} of ${items.length} pending details shown`);

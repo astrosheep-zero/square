@@ -4,7 +4,6 @@ import {
   createSquareFile,
   createSquareState,
   diagnoseSquareFile as diagnoseArtifactFile,
-  loadSquare,
   probeSquare,
   observeSquareRevision,
   readSquareSnapshot,
@@ -17,10 +16,6 @@ import type { SquareArtifactPort } from './ports.js';
 import { canonicalPath } from './canonical-path.js';
 
 export { createSquareState };
-
-export async function readSquareFile(squarePath: string): Promise<SquareState> {
-  return loadSquare(await canonicalPath(squarePath));
-}
 
 export async function probeSquareFile(squarePath: string): Promise<SquareState | undefined> {
   if (!squarePath.endsWith('.square')) return undefined;
@@ -163,10 +158,6 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
     return storage;
   }
 
-  function abortError(): Error {
-    return new Error('Square artifact is closed');
-  }
-
   /** Close wins over every operation; a per-call deadline bounds busy retries alongside it. */
   function operationSignal(signal?: AbortSignal): AbortSignal | undefined {
     if (signal === undefined && externalSignal === undefined) return cancel.signal;
@@ -206,7 +197,7 @@ export function createFileCell(squarePath: string, externalSignal?: AbortSignal)
     async close() {
       if (closed) return;
       closed = true;
-      cancel.abort(abortError());
+      cancel.abort(new Error('Square artifact is closed'));
       await tail;
     },
   };

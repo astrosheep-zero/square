@@ -44,23 +44,13 @@ export interface ActivityOptions {
   reply?: string;
 }
 
-function draftDirFor(squarePath: string): string {
-  return path.join(path.dirname(squarePath), 'drafts');
-}
-
-function draftTimestamp(at: number): string {
-  return new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:.]/g, '-');
-}
-
-function draftNamePart(name: string): string {
-  return name.replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || 'participant';
-}
-
 export function saveActivityDraft(squarePath: string, name: string, body: string): string {
-  const draftDir = draftDirFor(squarePath);
+  const draftDir = path.join(path.dirname(squarePath), 'drafts');
   fs.mkdirSync(draftDir, { recursive: true });
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 8);
-  const base = `${draftTimestamp(nowMs())}-${draftNamePart(name)}-${hash}`;
+  const stamp = new Date(nowMs()).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:.]/g, '-');
+  const namePart = name.replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || 'participant';
+  const base = `${stamp}-${namePart}-${hash}`;
   for (let i = 0; ; i++) {
     const filename = `${base}${i === 0 ? '' : `-${i}`}.md`;
     const target = path.join(draftDir, filename);

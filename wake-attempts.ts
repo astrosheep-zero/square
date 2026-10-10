@@ -7,10 +7,6 @@ import type { WakeAttention } from './host-ledger.js';
 import { redactDiagnostic } from './diagnostic-redaction.js';
 import { decodeWakeEvidence, type WakeReleaseDiagnostic } from './wake-evidence.js';
 
-async function wakeAttentionKey(attention: WakeAttention): Promise<string> {
-  return JSON.stringify([await canonicalPath(attention.squarePath), formatActivityId(attention.actIndex), nameKey(attention.recipient)]);
-}
-
 export function redactWakeDiagnostic(value: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
   return redactDiagnostic(value, env.PASEO_PASSWORD);
 }
@@ -30,7 +26,7 @@ export async function readWakeReleaseDiagnostics(opts: {
     includeReleased: true,
     now,
   });
-  const expected = opts.attention === undefined ? undefined : await wakeAttentionKey(opts.attention);
+  const expected = opts.attention === undefined ? undefined : JSON.stringify([await canonicalPath(opts.attention.squarePath), formatActivityId(opts.attention.actIndex), nameKey(opts.attention.recipient)]);
   const releases: WakeReleaseDiagnostic[] = [];
   for (const row of rows) {
     const decoded = decodeWakeEvidence(row, now);

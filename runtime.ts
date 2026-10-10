@@ -64,11 +64,6 @@ export function resolveRosterName(squareState: SquareState, name: string): strin
   return findParticipantName(rosterNames(squareState), name);
 }
 
-export function hasQuorum(squareState: SquareState, name: string, outs: Set<string>): boolean {
-  const peers = rosterNames(squareState).filter((participant) => !sameName(participant, name));
-  return peers.length > 0 && peers.every((peer) => outs.has(nameKey(peer)));
-}
-
 export function countSays(acts: StoredAct[], name: string): number {
   return acts.filter((act) => act.kind === 'say' && sameName(act.actor, name)).length;
 }
@@ -87,13 +82,10 @@ export function sayNumberFor(acts: StoredAct[], target: StoredAct): number {
 /** Shared terminal condition for a participant's watch lifecycle. */
 export function watchTerminalStatus(squareState: SquareState, name: string): 'capped' | 'quorum' | undefined {
   if (squareState.hardCap !== null && countSays(squareState.acts, name) >= squareState.hardCap) return 'capped';
-  const done = doneNames(squareState.acts);
+  const done = new Set(fold(squareState.acts).done.map((participant) => nameKey(participant)));
   done.delete(nameKey(name));
-  return hasQuorum(squareState, name, done) ? 'quorum' : undefined;
-}
-
-export function doneNames(acts: StoredAct[]): Set<string> {
-  return new Set(fold(acts).done.map((participant) => nameKey(participant)));
+  const peers = rosterNames(squareState).filter((participant) => !sameName(participant, name));
+  return peers.length > 0 && peers.every((peer) => done.has(nameKey(peer))) ? 'quorum' : undefined;
 }
 
 export function joinedNames(acts: StoredAct[]): Set<string> {
@@ -123,7 +115,7 @@ export function actId(actOrIndex: StoredAct | number): ActivityId {
   return formatActivityId(index);
 }
 
-function observationRecipient(squareState: SquareState, name: string): string {
+function canonicalRuntimeName(squareState: SquareState, name: string): string {
   return resolveRosterName(squareState, name) ?? name;
 }
 
@@ -136,10 +128,6 @@ export function publicActs(acts: StoredAct[]): Array<Extract<StoredAct, { kind: 
   return acts.filter((act): act is Extract<StoredAct, { kind: 'say' | 'done' }> => act.kind === 'say' || act.kind === 'done');
 }
 
-function canonicalRuntimeName(squareState: SquareState, name: string): string {
-  return resolveRosterName(squareState, name) ?? name;
-}
-
 export function recordObservation(
   squareState: SquareState,
   name: string,
@@ -148,7 +136,7 @@ export function recordObservation(
   at = Date.now(),
 ): boolean {
   if (!Number.isSafeInteger(index) || index < 0 || !Number.isFinite(at)) return false;
-  const key = observationRecipient(squareState, name);
+  const key = canonicalRuntimeName(squareState, name);
   const id = formatActivityId(index);
   const current = squareState.runtime.observations[key]?.[id];
   if (current?.state === 'seen' || (current?.state === state && current.at >= at)) return false;
@@ -181,11 +169,13 @@ export function readCursor(squareState: SquareState, name: string, landed: Lande
 }
 
 /**
+ * The last public act the participant was verifiably present for, or -1 when there is no evidence.
+ *
  * "Was here" is a claim of presence, so it rides on evidence: the participant's own acts
  * and seen receipts after their latest join. Anything else — in particular acts merely
  * not addressed to them — says nothing about where they actually were.
  */
-export function presenceEvidenceCursor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
+export function presenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
   const recipient = landed.resolveParticipant(name) ?? name;
   const boundary = landed.lastJoinIndex(recipient) ?? -1;
   if (boundary < 0) return -1;
@@ -197,15 +187,6 @@ export function presenceEvidenceCursor(squareState: SquareState, name: string, l
       evidence = act.index;
     }
   }
-  return evidence;
-}
-
-/** The last public act the participant was verifiably present for, or -1 when there is no evidence. */
-export function presenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
-  const recipient = landed.resolveParticipant(name) ?? name;
-  const boundary = landed.lastJoinIndex(recipient) ?? -1;
-  if (boundary < 0) return -1;
-  const evidence = presenceEvidenceCursor(squareState, recipient, landed);
   for (let i = squareState.acts.length - 1; i >= 0; i--) {
     const event = squareState.acts[i];
     if (event.index <= boundary || event.index > evidence) continue;
@@ -216,13 +197,9 @@ export function presenceAnchor(squareState: SquareState, name: string, landed: L
 
 export function freshWatchLease(squareState: SquareState, name: string, at = Date.now()) {
   const key = canonicalRuntimeName(squareState, name);
-  const lease = watchLease(squareState, key);
+  const lease = squareState.runtime.leases[key];
   if (lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS) return undefined;
   return lease;
-}
-
-export function watchLease(squareState: SquareState, name: string): WatchLease | undefined {
-  return squareState.runtime.leases[canonicalRuntimeName(squareState, name)];
 }
 
 export function writeWatchLease(squareState: SquareState, name: string, lease: WatchLease): void {

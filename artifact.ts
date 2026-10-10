@@ -42,15 +42,11 @@ function isNotADatabase(error: unknown): boolean {
   return error instanceof Error && /not a database|file is not a database|SQLITE_NOTADB/i.test(error.message);
 }
 
-function existingDatabaseUri(squarePath: string): string {
+function openExistingDatabase(squarePath: string): DatabaseSync {
   const uri = pathToFileURL(path.resolve(squarePath));
   uri.searchParams.set('mode', 'rw');
-  return uri.href;
-}
-
-function openExistingDatabase(squarePath: string): DatabaseSync {
   try {
-    return new DatabaseSync(existingDatabaseUri(squarePath));
+    return new DatabaseSync(uri.href);
   } catch (error) {
     if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
     if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
@@ -116,10 +112,6 @@ function validateDatabase(database: DatabaseSync): SquareSnapshot {
   }
 }
 
-function configureDatabase(database: DatabaseSync): void {
-  database.exec('PRAGMA busy_timeout = 0; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;');
-}
-
 /** Opens an existing artifact without permitting SQLite to create a missing path. */
 function readExistingArtifact<T>(squarePath: string, read: (database: DatabaseSync) => T): T {
   requireSquareExtension(squarePath);
@@ -139,14 +131,6 @@ function readExistingArtifact<T>(squarePath: string, read: (database: DatabaseSy
 
 function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
   return readExistingArtifact(squarePath, validateDatabase);
-}
-
-function readSquareRevisionOnce(squarePath: string): number {
-  return readExistingArtifact(squarePath, (database) => {
-    validateDatabaseHeader(database);
-    const rows = database.prepare(`SELECT id, revision FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown }[];
-    return validateSnapshotRevision(rows);
-  });
 }
 
 async function createTemporaryArtifact(squarePath: string): Promise<string> {
@@ -173,10 +157,6 @@ async function syncTemporaryArtifact(temporary: string): Promise<void> {
   } finally {
     await handle.close();
   }
-}
-
-async function removeTemporaryArtifact(temporary: string): Promise<void> {
-  try { await fs.promises.unlink(temporary); } catch { /* cleanup cannot invalidate a published artifact */ }
 }
 
 function initializeDatabase(squarePath: string, state: SquareState): void {
@@ -211,7 +191,7 @@ export async function createSquareFile(squarePath: string, state: SquareState): 
       throw error;
     }
   } finally {
-    await removeTemporaryArtifact(temporary);
+    try { await fs.promises.unlink(temporary); } catch { /* cleanup cannot invalidate a published artifact */ }
   }
 }
 
@@ -252,7 +232,11 @@ export function readSquareSnapshot(squarePath: string, signal?: AbortSignal): Pr
 
 /** Check the artifact revision without loading or parsing the historical state. */
 export function readSquareRevision(squarePath: string, signal?: AbortSignal): Promise<number> {
-  return readWithBusyRetry(() => readSquareRevisionOnce(squarePath), signal);
+  return readWithBusyRetry(() => readExistingArtifact(squarePath, (database) => {
+    validateDatabaseHeader(database);
+    const rows = database.prepare(`SELECT id, revision FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown }[];
+    return validateSnapshotRevision(rows);
+  }), signal);
 }
 
 /** One reference-counted revision detector per canonical artifact in this process. */
@@ -302,7 +286,7 @@ export async function transactSquareSnapshot<R>(
     while (true) {
       if (signal?.aborted) throw signal.reason ?? closedError();
       try {
-        configureDatabase(database);
+        database.exec('PRAGMA busy_timeout = 0; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;');
         database.exec('BEGIN IMMEDIATE;');
         begun = true;
         break;

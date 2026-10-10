@@ -7,7 +7,8 @@ import test from 'node:test';
 import { Square, SquareError } from '../dist/index.js';
 import { loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { ROUTE_FRESH_MS, upsertWakeRoute } from '../dist/routes.js';
+import { ROUTE_FRESH_MS } from '../dist/routes.js';
+import { upsertWakeRoute } from './wake-routes.js';
 
 test('fixed facade builds, opens, and exposes participant activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));

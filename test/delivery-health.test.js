@@ -10,13 +10,6 @@ test('delivery evidence writers and health labels stay inside their owning modul
   const sources = fs.readdirSync(ROOT)
     .filter((name) => name.endsWith('.ts'))
     .map((name) => [name, fs.readFileSync(path.join(ROOT, name), 'utf8')]);
-  const externalUsers = (symbol, owner) => sources
-    .filter(([name, source]) => name !== owner && source.includes(`${symbol}(`))
-    .map(([name]) => name)
-    .sort();
-
-  assert.deepEqual(externalUsers('markSeenNotifications', 'delivery.ts'), []);
-
   const labels = ['wake-accepted', 'wake-unknown', 'presented-not-delivered', 'unreachable'];
   for (const [name, source] of sources) {
     if (name === 'delivery-health.ts') continue;

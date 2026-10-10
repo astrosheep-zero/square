@@ -48,13 +48,11 @@ async function write<T>(file: string, rows: readonly T[], signal?: AbortSignal):
   }
 }
 function k(v:{location:string;participant:string;session:string;channel?:string;activity?:string;kind?:string}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.channel,v.activity,v.kind])}
-function evidenceKey(v:{location:string;participant:string;session:string;activity:string;kind:string;attemptN?:number}){return JSON.stringify([v.location,nameKey(v.participant),v.session,v.activity,v.kind,v.attemptN??null])}
 type WakeRow = EvidenceRecord & { v: 1 };
 function durableWake(record: object): boolean {
   const row = record as { kind?: string; outcome?: string };
   return row.kind === 'wake' && (row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'dispatching');
 }
-/** Old persisted unknowns lacked an explicit recovery source. */
 function decodeWakeRecord<T extends EvidenceRecord>(row: T): T {
   return row.kind === 'wake' && row.outcome === 'unknown' && row.unknownSource === undefined
     ? { ...row, unknownSource: row.signature === 'worker_interrupted_during_dispatch' ? 'interrupted' : 'transport' } : row;
@@ -260,8 +258,7 @@ async claimEvidence(i:EvidenceClaim):Promise<ClaimResult>{if((i.kind as string)=
       const dispatching = all.findLast((x) => same(x) && x.outcome === 'dispatching');
       const source = dispatching?.claimToken === token ? dispatching : undefined;
       if (source === undefined) return;
-      const terminalKey = (x: any) => same(x) && x.attemptN === r.attemptN && x.outcome !== 'dispatching' && x.outcome !== 'released';
-      await write(f, [...all.filter((x) => x !== source && !terminalKey(x)), { ...r, ...(source.nativeDelivery === undefined ? {} : { nativeDelivery: source.nativeDelivery }) }]);
+      await write(f, [...all.filter((x) => x !== source && !(same(x) && x.attemptN === r.attemptN && x.outcome !== 'dispatching' && x.outcome !== 'released')), { ...r, ...(source.nativeDelivery === undefined ? {} : { nativeDelivery: source.nativeDelivery }) }]);
     });
   }
 async listEvidence(i:EvidenceLookup={}):Promise<readonly EvidenceRecord[]>{const loc=i.location===undefined?undefined:await canonicalPath(i.location);return(await read<any>(this.file('evidence'),i.now??this.clock())).filter(r=>(i.includeReleased===true||r.outcome!=='released')&&(!loc||r.location===loc)&&(!i.participant||nameKey(r.participant)===nameKey(i.participant))&&(!i.session||r.session===i.session)&&(!i.activity||r.activity===i.activity)&&(!i.kind||r.kind===i.kind))}

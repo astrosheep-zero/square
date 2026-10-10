@@ -26,10 +26,6 @@ const PARTICIPANT_PREVIEW_COUNT = 3;
 const DISPLAY_CHARACTER_LIMIT = 160;
 const LIST_SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 
-function contextLines(lines: string[]): string[] {
-  return lines.map((line) => line.trim()).filter(Boolean);
-}
-
 async function readSquareListItem(filePath: string, root: string): Promise<SquareListItem | null> {
   let stat: fs.Stats;
   try {
@@ -46,7 +42,7 @@ async function readSquareListItem(filePath: string, root: string): Promise<Squar
   return {
     path: relative,
     lastActiveAt: stat.mtimeMs,
-    context: contextLines([...projection.context]),
+    context: [...projection.context].map((line) => line.trim()).filter(Boolean),
     participants: [...projection.participants],
     activities: projection.activities,
   };

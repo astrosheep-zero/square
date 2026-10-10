@@ -210,14 +210,6 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions,
   }
 }
 
-async function countParticipants(square: OpenSquare): Promise<number | undefined> {
-  try {
-    return inSquareCount((await square.artifact.read()).state);
-  } catch {
-    return undefined;
-  }
-}
-
 /** `false` is reserved for a quiet --now; idle completion preserves its existing sweep boundary. */
 export async function cmdWatch(squarePath: string, name: string, opts: WatchOptions, caller: WatchCallerContext = { cwd: process.cwd(), env: { ...process.env } }): Promise<boolean | undefined> {
   let square: OpenSquare;
@@ -242,7 +234,8 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
       opts = { ...opts, participants: await Promise.all(opts.participants.map(async (participant) => (await resolveParticipant(square, participant)).name)) };
     }
   } catch (err) {
-    const participantCount = await countParticipants(square);
+    let participantCount: number | undefined;
+    try { participantCount = inSquareCount((await square.artifact.read()).state); } catch { /* the header count is best effort */ }
     await closeOpenSquare(square).catch(() => undefined);
     if (isSquareError(err)) {
       const bodyLines = [err.message];
