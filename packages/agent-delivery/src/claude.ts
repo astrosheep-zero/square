@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { deadline, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError, DeliveryError } from './errors.js'
+import { isIdentity, isRecord } from './guards.js'
 import { parseLocalEndpoint, type LocalEndpoint } from './local-endpoint.js'
 import { writeClaudeNative } from './claude-native.js'
 import { resolveClaudeToken } from './claude-auth.js'
@@ -18,10 +19,6 @@ export interface ClaudeConnectExistingOptions {
 
 interface ClaudeCoordinate { readonly endpoint: string; readonly token?: string; readonly claudeHome?: string }
 const coordinates = new WeakMap<ClaudeTarget, ClaudeCoordinate>()
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
-const isIdentity = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
-
-const supported = (platform: NodeJS.Platform) => platform === 'darwin' || platform === 'linux' || platform === 'win32'
 
 /** Resolve an explicitly identified existing Claude native inbox; never discovers or starts one. */
 export async function connectExisting(options: ClaudeConnectExistingOptions): Promise<ClaudeTarget> {
@@ -30,7 +27,7 @@ export async function connectExisting(options: ClaudeConnectExistingOptions): Pr
     !validTimeout(options.timeoutMs) || !validSignal(options.signal)) throw new ConnectionError('invalid_arguments')
   let endpoint: LocalEndpoint
   try { endpoint = parseLocalEndpoint(options.endpoint) } catch { throw new ConnectionError('invalid_arguments') }
-  if (!supported(process.platform)) throw new ConnectionError('unsupported_platform')
+  if (!(process.platform === 'darwin' || process.platform === 'linux' || process.platform === 'win32')) throw new ConnectionError('unsupported_platform')
   if (process.platform === 'win32' ? endpoint.kind !== 'pipe' : endpoint.kind !== 'unix') throw new ConnectionError('invalid_arguments')
   const scope = deadline(options.timeoutMs, options.signal)
   try {

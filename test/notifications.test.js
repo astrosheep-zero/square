@@ -8,7 +8,7 @@ import { createWakeTransport, processActNotificationsOnce, sweepPrivilegedPendin
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { upsertWakeRoute } from '../dist/routes.js';
-import { PaseoWakeSendError } from '../dist/wake-sink.js';
+import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 import { readWakeReleaseDiagnostics } from '../dist/wake-attempts.js';
 import { readWakeAttempts } from './wake-attempt-fixtures.js';
 import { doctorDeliveryHealth } from '../dist/delivery-health.js';
@@ -309,11 +309,11 @@ test('PaseoAdapter records transport certainty without leaking retry policy', as
   };
   const failed = await withRegistry(item.env, () => new PaseoAdapter({
     ...base,
-    sendWake: () => { throw new PaseoWakeSendError('refused', 'transient'); },
+    sendWake: () => { throw new DeliveryError('unavailable', false); },
   }).dispatch(registered.address, payload, async () => true));
   const unknown = await withRegistry(item.env, () => new PaseoAdapter({
     ...base,
-    sendWake: () => { throw new PaseoWakeSendError('timeout', 'unknown'); },
+    sendWake: () => { throw new DeliveryError('transport', true); },
   }).dispatch(registered.address, payload, async () => true));
   assert.deepEqual(failed.outcome, 'failed');
   assert.deepEqual(failed.signature, 'send_pre_accept_transient');

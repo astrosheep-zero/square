@@ -3,15 +3,15 @@ import {
   type WakeAdapterResult,
   type WakeDispatchContext,
 } from './delivery.js';
-import { paseoDaemonHosts, resolvePaseoDaemonTarget } from './paseo-connection.js';
+import { DeliveryError } from './packages/agent-delivery/src/index.js';
+import { resolvePaseoDaemon } from './packages/agent-delivery/src/paseo-native.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
-import { PaseoWakeSendError, sendPaseoWake } from './wake-sink.js';
+import { sendPaseoWake } from './wake-sink.js';
 
-function endpoint(): string {
-  try { return resolvePaseoDaemonTarget(paseoDaemonHosts()[0]).url; }
-  catch { return 'unresolved'; }
-}
+/** How a failed wake reads to the retry layer. `unknown` is never retried. */
+type WakeFailureKind = 'transient' | 'rejected' | 'unknown';
 
+/** Every send failure is a DeliveryError; only its code and certainty decide retry. */
 function diagnostic(
   phase: 'discovery' | 'selection' | 'boundary' | 'send',
   address: Readonly<Record<string, string>>,
@@ -22,15 +22,10 @@ function diagnostic(
     code,
     // Only discovery still runs a Paseo CLI; a wake is a capability call on the shared entry.
     ...(phase === 'discovery' ? { command: 'paseo ls --global --json' } : {}),
-    endpoint: endpoint(),
+    endpoint: resolvePaseoDaemon(undefined)?.url ?? 'unresolved',
     paseoAgentIds: [address.agentId].filter(Boolean),
     passwordPresent: Boolean(process.env.PASEO_PASSWORD),
   };
-}
-
-function discoveryRetryable(message: string): boolean {
-  if (/password|auth|unauthori[sz]ed/i.test(message)) return false;
-  return /DAEMON_NOT_RUNNING|ECONNREFUSED|ENOENT|not found.*executable|ETIMEDOUT|timed out|timeout/i.test(message);
 }
 
 export interface PaseoAdapterOptions {
@@ -79,7 +74,10 @@ export class PaseoAdapter implements WakeAdapter {
       return {
         outcome: 'failed',
         unavailable: true,
-        signature: discoveryRetryable(discovery.error) ? 'discovery_transient' : 'discovery_rejected',
+        // A credential or authorization refusal is proven; anything else may be transient.
+        signature: /password|auth|unauthori[sz]ed/i.test(discovery.error) ? 'discovery_rejected'
+          : /DAEMON_NOT_RUNNING|ECONNREFUSED|ENOENT|not found.*executable|ETIMEDOUT|timed out|timeout/i.test(discovery.error)
+            ? 'discovery_transient' : 'discovery_rejected',
         message: `Paseo unavailable: ${discovery.error}`,
         diagnostic: diagnostic('discovery', address, 'unavailable'),
         retainRoute: true,
@@ -126,7 +124,10 @@ export class PaseoAdapter implements WakeAdapter {
       return { outcome: 'accepted' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const kind = error instanceof PaseoWakeSendError ? error.kind : 'unknown';
+      const kind: WakeFailureKind = !(error instanceof DeliveryError) || error.maybeDelivered ? 'unknown'
+        : error.code === 'unavailable' ? 'transient'
+          : ['authentication_failed', 'session_not_found', 'rejected', 'invalid_arguments'].includes(error.code) ? 'rejected'
+            : 'unknown';
       const details = { ...diagnostic('send', address, 'failed'), outcome: kind };
       if (kind === 'unknown') return { outcome: 'unknown', signature: 'send_unknown', message, diagnostic: details };
       return {

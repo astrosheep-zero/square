@@ -1,9 +1,10 @@
 import { ConnectionError, DeliveryError, type DeliveryErrorCode } from './errors.js'
+import { isRecord } from './guards.js'
 import type { OpenCodeConnectExistingOptions } from './opencode.js'
 import type { ClaudeConnectExistingOptions } from './claude.js'
 import type { PiConnectExistingOptions } from './pi-client.js'
 import type { PaseoConnectExistingOptions } from './paseo.js'
-import type { OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, PaseoDeliveryResult } from './types.js'
+import type { OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, OpenCodeSendTextOptions, ClaudeSendTextOptions, PiSendTextOptions, PaseoSendTextOptions } from './types.js'
 
 export interface SendOptions { readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface KeyedSendOptions extends SendOptions { readonly id?: string }
@@ -52,8 +53,6 @@ export type PiAgent = Steerable & Queueable & { readonly harness: 'pi'; readonly
 export type PaseoAgent = Steerable<KeyedSendOptions> & { readonly harness: 'paseo'; readonly agentId: string }
 export type Agent = OpenCodeAgent | ClaudeAgent | PiAgent | PaseoAgent
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
-
 const codes: Record<string, DeliveryErrorCode> = {
   invalid_arguments: 'invalid_arguments', unsupported_platform: 'unsupported_platform',
   service_unavailable: 'unavailable', authentication_failed: 'authentication_failed',
@@ -61,123 +60,90 @@ const codes: Record<string, DeliveryErrorCode> = {
   unsupported_version: 'unsupported_version', invalid_response: 'invalid_response',
   timeout: 'timeout', aborted: 'aborted', transport: 'transport',
 }
-const codeOf = (code: string): DeliveryErrorCode => codes[code] ?? 'transport'
-
-/** Connect writes nothing, so every connect failure is known not delivered. */
-function connectFailure(error: unknown): DeliveryError {
-  if (error instanceof DeliveryError) return error
-  if (error instanceof ConnectionError) return new DeliveryError(codeOf(error.code), false, undefined, error.status)
-  return new DeliveryError(error instanceof TypeError ? 'invalid_arguments' : 'transport', false)
-}
-
-/** Past the send precondition, an unclassified failure may have reached the receiver. */
-function sendFailure(error: unknown, id?: string): DeliveryError {
-  if (error instanceof DeliveryError) return error
-  if (error instanceof ConnectionError) return new DeliveryError(codeOf(error.code), false, id, error.status)
-  return new DeliveryError(error instanceof TypeError ? 'invalid_arguments' : 'transport', !(error instanceof TypeError), id)
-}
 
 interface Attempt { readonly state: string; readonly code?: string; readonly status?: number; readonly inputId?: string }
 
-function attemptFailure(result: Attempt, id?: string): never {
-  const code: DeliveryErrorCode = result.state === 'unavailable'
-    ? result.code === 'aborted' ? 'aborted' : result.code === 'timeout' ? 'timeout'
-      : result.code === 'authentication_failed' ? 'authentication_failed' : 'unavailable'
-    : result.state === 'rejected' ? 'rejected'
-      : codeOf(result.code ?? 'transport')
-  throw new DeliveryError(code, result.state === 'unknown', id ?? result.inputId, result.status)
+/**
+ * One classification path for a connection failure, a send failure and the
+ * harness's own attempt state. Past the send precondition an unclassified
+ * failure may have reached the receiver.
+ */
+function failure(error: unknown, phase: 'connect' | 'send', id?: string): DeliveryError {
+  if (error instanceof DeliveryError) return error
+  if (error instanceof ConnectionError) return new DeliveryError(codes[error.code] ?? 'transport', false, id, error.status)
+  if (error instanceof TypeError) return new DeliveryError('invalid_arguments', false, id)
+  const attempt = error as Partial<Attempt>
+  if (typeof attempt?.state !== 'string') return new DeliveryError('transport', phase === 'send', id)
+  const code: DeliveryErrorCode = attempt.state === 'unavailable'
+    ? attempt.code === 'aborted' ? 'aborted' : attempt.code === 'timeout' ? 'timeout'
+      : attempt.code === 'authentication_failed' ? 'authentication_failed' : 'unavailable'
+    : attempt.state === 'rejected' ? attempt.code === 'not_found' ? 'session_not_found' : 'rejected'
+      : codes[attempt.code ?? 'transport'] ?? 'transport'
+  return new DeliveryError(code, attempt.state === 'unknown', id ?? attempt.inputId, attempt.status)
 }
 
-function sendOptions(value: unknown): Record<string, unknown> {
-  if (value === undefined) return {}
-  if (!isRecord(value)) throw new DeliveryError('invalid_arguments')
-  return value
+interface NativeSend {
+  readonly state: string
+  readonly code?: string
+  readonly status?: number
+  readonly inputId?: string
+  readonly messageId?: string
 }
 
-/** A Paseo refusal is the daemon's answer, never an uncertain delivery. */
-function paseoFailure(result: Exclude<PaseoDeliveryResult, { readonly state: 'admitted' }>, id: string): never {
-  if (result.state === 'rejected') {
-    throw new DeliveryError(result.code === 'not_found' ? 'session_not_found' : 'rejected', false, id)
-  }
-  if (result.state === 'unavailable') {
-    throw new DeliveryError(result.code === 'transport' ? 'unavailable' : result.code, false, id)
-  }
-  throw new DeliveryError(result.code, true, id)
+/** Everything that differs between the four native transports, as data. */
+interface Harness {
+  readonly harness: 'opencode' | 'claude' | 'pi' | 'paseo'
+  readonly proof: Receipt['proof']
+  readonly accepted: string
+  readonly coordinate: 'sessionId' | 'agentId'
+  /** Whether this transport claims a caller's own idempotency id. */
+  readonly keyed: boolean
+  readonly queue: boolean
+  readonly id: (result: NativeSend) => string
+  /** Load one native module and address one existing target. */
+  readonly open: (options: unknown) => Promise<{
+    readonly coordinate: string
+    readonly send: (text: string, value: Record<string, unknown>) => Promise<NativeSend>
+  }>
 }
 
-async function openCode(options: OpenCodeConnectOptions): Promise<OpenCodeAgent> {
-  const { connectExisting, sendText } = await import('./opencode.js')
-  let target: OpenCodeTarget
-  try { target = await connectExisting(options as OpenCodeConnectExistingOptions) }
-  catch (error) { throw connectFailure(error) }
-  const send = async (text: string, value: unknown, delivery: 'steer' | 'queue'): Promise<Receipt> => {
-    const options = sendOptions(value)
-    // An unusable caller id is an argument precondition; the native sender rejects it.
-    const id = options.id as string | undefined
-    try {
-      const result = await sendText(target, text, { delivery, inputId: id,
-        timeoutMs: options.timeoutMs as number | undefined, signal: options.signal as AbortSignal | undefined })
-      if (result.state !== 'accepted') attemptFailure(result, id)
-      return { id: result.inputId, proof: 'admitted' }
-    } catch (error) { throw sendFailure(error, id) }
-  }
-  return Object.freeze({ harness: 'opencode' as const, sessionId: target.sessionId,
-    steer: (text: string, value?: KeyedSendOptions) => send(text, value, 'steer'),
-    queue: (text: string, value?: KeyedSendOptions) => send(text, value, 'queue') })
-}
-
-async function claude(options: ClaudeConnectOptions): Promise<ClaudeAgent> {
-  const { connectExisting, sendText } = await import('./claude.js')
-  let target: ClaudeTarget
-  try { target = await connectExisting(options as ClaudeConnectExistingOptions) }
-  catch (error) { throw connectFailure(error) }
-  const steer = async (text: string, value?: SendOptions): Promise<Receipt> => {
-    const options = sendOptions(value)
-    try {
-      const result = await sendText(target, text, { delivery: 'steer',
-        timeoutMs: options.timeoutMs as number | undefined, signal: options.signal as AbortSignal | undefined })
-      if (result.state !== 'written') attemptFailure(result)
-      return { id: result.messageId, proof: 'written' }
-    } catch (error) { throw sendFailure(error) }
-  }
-  return Object.freeze({ harness: 'claude' as const, sessionId: target.sessionId, steer })
-}
-
-async function pi(options: PiConnectOptions): Promise<PiAgent> {
-  const { connectPi, sendPiText } = await import('./pi-client.js')
-  let target: PiTarget
-  try { target = await connectPi(options as PiConnectExistingOptions) }
-  catch (error) { throw connectFailure(error) }
-  const send = async (text: string, value: unknown, delivery: 'steer' | 'queue'): Promise<Receipt> => {
-    const options = sendOptions(value)
-    try {
-      const result = await sendPiText(target, text, { delivery,
-        timeoutMs: options.timeoutMs as number | undefined, signal: options.signal as AbortSignal | undefined })
-      if (result.state !== 'observed') attemptFailure(result)
-      return { id: result.inputId, proof: 'observed' }
-    } catch (error) { throw sendFailure(error) }
-  }
-  return Object.freeze({ harness: 'pi' as const, sessionId: target.sessionId,
-    steer: (text: string, value?: SendOptions) => send(text, value, 'steer'),
-    queue: (text: string, value?: SendOptions) => send(text, value, 'queue') })
-}
-
-async function paseo(options: PaseoConnectOptions): Promise<PaseoAgent> {
-  const { connectPaseo, sendPaseoText } = await import('./paseo.js')
-  let target: PaseoTarget
-  try { target = await connectPaseo(options as PaseoConnectExistingOptions) }
-  catch (error) { throw connectFailure(error) }
-  const steer = async (text: string, value?: KeyedSendOptions): Promise<Receipt> => {
-    const options = sendOptions(value)
-    const id = options.id as string | undefined
-    try {
-      const result = await sendPaseoText(target, text, { delivery: 'steer', inputId: id,
-        timeoutMs: options.timeoutMs as number | undefined, signal: options.signal as AbortSignal | undefined })
-      if (result.state !== 'admitted') paseoFailure(result, result.inputId)
-      return { id: result.inputId, proof: 'admitted' }
-    } catch (error) { throw sendFailure(error, id) }
-  }
-  return Object.freeze({ harness: 'paseo' as const, agentId: target.agentId, steer })
+const harnesses: Record<string, Harness> = {
+  opencode: {
+    harness: 'opencode', proof: 'admitted', accepted: 'accepted', coordinate: 'sessionId', keyed: true, queue: true,
+    id: (result) => result.inputId!,
+    open: async (options) => {
+      const { connectExisting, sendText } = await import('./opencode.js')
+      const target = await connectExisting(options as OpenCodeConnectExistingOptions)
+      return { coordinate: target.sessionId, send: (text, value) => sendText(target, text, value as OpenCodeSendTextOptions) }
+    },
+  },
+  claude: {
+    harness: 'claude', proof: 'written', accepted: 'written', coordinate: 'sessionId', keyed: false, queue: false,
+    id: (result) => result.messageId!,
+    open: async (options) => {
+      const { connectExisting, sendText } = await import('./claude.js')
+      const target = await connectExisting(options as ClaudeConnectExistingOptions)
+      return { coordinate: target.sessionId, send: (text, value) => sendText(target, text, value as ClaudeSendTextOptions) }
+    },
+  },
+  pi: {
+    harness: 'pi', proof: 'observed', accepted: 'observed', coordinate: 'sessionId', keyed: false, queue: true,
+    id: (result) => result.inputId!,
+    open: async (options) => {
+      const { connectPi, sendPiText } = await import('./pi-client.js')
+      const target = await connectPi(options as PiConnectExistingOptions)
+      return { coordinate: target.sessionId, send: (text, value) => sendPiText(target, text, value as PiSendTextOptions) }
+    },
+  },
+  paseo: {
+    harness: 'paseo', proof: 'admitted', accepted: 'admitted', coordinate: 'agentId', keyed: true, queue: false,
+    id: (result) => result.inputId!,
+    open: async (options) => {
+      const { connectPaseo, sendPaseoText } = await import('./paseo.js')
+      const target = await connectPaseo(options as PaseoConnectExistingOptions)
+      return { coordinate: target.agentId, send: (text, value) => sendPaseoText(target, text, value as PaseoSendTextOptions) }
+    },
+  },
 }
 
 export function connect(options: OpenCodeConnectOptions): Promise<OpenCodeAgent>
@@ -185,11 +151,33 @@ export function connect(options: ClaudeConnectOptions): Promise<ClaudeAgent>
 export function connect(options: PiConnectOptions): Promise<PiAgent>
 export function connect(options: PaseoConnectOptions): Promise<PaseoAgent>
 export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOptions | PiConnectOptions | PaseoConnectOptions): Promise<Agent> {
-  if (isRecord(options) && options.harness === 'opencode') return openCode(options as OpenCodeConnectOptions)
-  if (isRecord(options) && options.harness === 'claude') return claude(options as ClaudeConnectOptions)
-  if (isRecord(options) && options.harness === 'pi') return pi(options as PiConnectOptions)
-  if (isRecord(options) && options.harness === 'paseo') return paseo(options as PaseoConnectOptions)
-  throw new DeliveryError('invalid_arguments')
+  const harness = isRecord(options) && typeof options.harness === 'string' ? options.harness : undefined
+  // An own-key check keeps Object.prototype names out of the transport table.
+  const spec = harness !== undefined && Object.hasOwn(harnesses, harness) ? harnesses[harness] : undefined
+  if (spec === undefined) throw new DeliveryError('invalid_arguments')
+  let opened
+  try { opened = await spec.open(options) }
+  catch (error) { throw failure(error, 'connect') }
+  const send = async (text: string, value: unknown, delivery: 'steer' | 'queue'): Promise<Receipt> => {
+    const options = value === undefined ? {} : value
+    if (!isRecord(options)) throw new DeliveryError('invalid_arguments')
+    // An unusable caller id is an argument precondition; the native sender rejects it.
+    const id = options.id as string | undefined
+    try {
+      const result = await opened.send(text, spec.keyed
+        ? { delivery, inputId: id, timeoutMs: options.timeoutMs, signal: options.signal }
+        : { delivery, timeoutMs: options.timeoutMs, signal: options.signal })
+      if (result.state !== spec.accepted) throw failure(result, 'send', id)
+      return { id: spec.id(result), proof: spec.proof }
+    } catch (error) { throw failure(error, 'send', id) }
+  }
+  const agent: Record<string, unknown> = {
+    harness: spec.harness,
+    [spec.coordinate]: opened.coordinate,
+    steer: (text: string, value?: SendOptions) => send(text, value, 'steer'),
+  }
+  if (spec.queue) agent.queue = (text: string, value?: SendOptions) => send(text, value, 'queue')
+  return Object.freeze(agent) as unknown as Agent
 }
 
 export { DeliveryError }

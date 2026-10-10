@@ -168,6 +168,27 @@ test('an unanswered send is a timeout and a dropped connection is transport', as
   })
 })
 
+test('an endpoint password follows an explicit one and leads the local credential and PASEO_PASSWORD', async (t) => {
+  environment(t, { PASEO_PASSWORD: 'environment-password' })
+  const paseoHome = await home('endpoint-home-')
+  await writeFile(join(paseoHome, 'local-credential'), `${LOCAL_CREDENTIAL}\n`)
+
+  const { state, endpoint } = await daemon(t, { onSend: accepted })
+  const withPassword = `${endpoint}?password=uri-secret`
+  const agent = await connect({ harness: 'paseo', agentId: 'agent-one', endpoint: withPassword, paseoHome })
+  assert.deepEqual(state.hellos[0].auth, { kind: 'password', password: 'uri-secret' })
+  assert.deepEqual(await agent.steer('text'), { id: state.sends[0].messageId, proof: 'admitted' })
+  assert.deepEqual(state.hellos[1].auth, { kind: 'password', password: 'uri-secret' })
+
+  const explicit = await daemon(t, { onSend: accepted })
+  await connect({ harness: 'paseo', agentId: 'agent-one', endpoint: `${explicit.endpoint}?password=uri-secret`, paseoHome, password: 'explicit-password' })
+  assert.deepEqual(explicit.state.hellos[0].auth, { kind: 'password', password: 'explicit-password' })
+
+  const local = await daemon(t, { onSend: accepted })
+  await connect({ harness: 'paseo', agentId: 'agent-one', endpoint: local.endpoint, paseoHome })
+  assert.deepEqual(local.state.hellos[0].auth, { kind: 'localCredential', token: LOCAL_CREDENTIAL })
+})
+
 test('an explicit credential wins, then the daemon local credential, then PASEO_PASSWORD', async (t) => {
   environment(t)
   const paseoHome = await home('paseo-home-')

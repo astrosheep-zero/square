@@ -1,6 +1,11 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { connectPaseoDaemon } from './paseo-connection.js';
+import {
+  daemonCredential,
+  openPaseoClient,
+  resolvePaseoDaemon,
+  type PaseoClient,
+} from './packages/agent-delivery/src/paseo-native.js';
 
 export type PaseoToolStatus = 'running' | 'completed' | 'failed';
 export interface PaseoToolCallSnapshot { callId: string; status: PaseoToolStatus; }
@@ -32,37 +37,39 @@ async function waitSnapshots(agentId: string, read: (id: string) => Promise<Pase
   return false;
 }
 
-function snapshotFromPayload(payload: Awaited<ReturnType<Awaited<ReturnType<typeof connectPaseoDaemon>>['fetchAgentTimeline']>>): PaseoTimelineSnapshot {
-  const tools = new Map<string, PaseoToolStatus>();
-  for (const entry of payload.entries ?? []) {
-    const item = entry.item;
-    if (item.type === 'tool_call' && ['running', 'completed', 'failed'].includes(item.status)) {
-      tools.set(item.callId, item.status as PaseoToolStatus);
-    }
-  }
-  return {
-    agentStatus: payload.agent?.status ?? 'unknown',
-    toolCalls: [...tools].map(([callId, status]) => ({ callId, status })),
-  };
-}
-
 export async function waitForPaseoToolBoundary(agentId: string, opts: WaitForPaseoToolBoundaryOptions = {}): Promise<boolean> {
   if (opts.readSnapshot !== undefined) {
     try { return await waitSnapshots(agentId, opts.readSnapshot, opts); }
     catch { return false; }
   }
 
-  let client: Awaited<ReturnType<typeof connectPaseoDaemon>> | undefined;
+  const target = resolvePaseoDaemon(undefined);
+  if (target === undefined) return false;
+  let client: PaseoClient | undefined;
   try {
-    client = await connectPaseoDaemon();
+    client = await openPaseoClient(target, daemonCredential({ endpointPassword: target.password }), 3_000);
     return await waitSnapshots(
       agentId,
-      async (id) => snapshotFromPayload(await client!.fetchAgentTimeline(id, {
-        direction: 'tail',
-        limit: 200,
-        projection: 'projected',
-        timeout: 3_000,
-      })),
+      async (id) => {
+        const payload = await client!.fetchAgentTimeline(id, {
+          direction: 'tail',
+          limit: 200,
+          projection: 'projected',
+          timeout: 3_000,
+        });
+        const tools = new Map<string, PaseoToolStatus>();
+        for (const entry of payload.entries ?? []) {
+          const { type, callId, status } = entry.item;
+          if (type === 'tool_call' && callId !== undefined &&
+            (status === 'running' || status === 'completed' || status === 'failed')) {
+            tools.set(callId, status);
+          }
+        }
+        return {
+          agentStatus: payload.agent?.status ?? 'unknown',
+          toolCalls: [...tools].map(([callId, status]) => ({ callId, status })),
+        };
+      },
       opts
     );
   } catch {

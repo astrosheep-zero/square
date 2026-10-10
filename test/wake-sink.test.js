@@ -8,7 +8,8 @@ import test from 'node:test';
 import { WebSocketServer } from 'ws';
 
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
-import { PaseoWakeSendError, sendPaseoWake } from '../dist/wake-sink.js';
+import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
+import { sendPaseoWake } from '../dist/wake-sink.js';
 
 const CONTROLLED = ['PASEO_HOST', 'PASEO_HOME', 'PASEO_PASSWORD'];
 
@@ -75,12 +76,13 @@ async function deadEndpoint() {
   return endpoint;
 }
 
-async function failureKind(promise) {
+/** The wake failure itself: one DeliveryError, classified by code and certainty. */
+async function failure(promise) {
   try {
     await promise;
   } catch (error) {
-    assert.ok(error instanceof PaseoWakeSendError, `expected a PaseoWakeSendError, got ${error}`);
-    return error.kind;
+    assert.ok(error instanceof DeliveryError, `expected a DeliveryError, got ${error}`);
+    return error;
   }
   assert.fail('Expected the Paseo wake to fail.');
 }
@@ -121,28 +123,35 @@ test('a refused Paseo wake is a proven pre-accept rejection', async (t) => {
   await environment(t);
   const { endpoint } = await daemon(t, { onSend: (message) => refused(message, 'Agent not found: agent-one') });
   process.env.PASEO_HOST = endpoint;
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 })), 'rejected');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 }));
+  assert.equal(error.code, 'session_not_found');
+  assert.equal(error.maybeDelivered, false);
 });
 
 test('a refused Paseo credential is a pre-accept rejection', async (t) => {
   await environment(t);
   const { state, endpoint } = await daemon(t, { onHello: (socket) => socket.close(4401, 'Incorrect password') });
   process.env.PASEO_HOST = endpoint;
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 })), 'rejected');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 }));
+  assert.equal(error.code, 'authentication_failed');
+  assert.equal(error.maybeDelivered, false);
   assert.deepEqual(state.sends, []);
 });
 
 test('an unreachable Paseo daemon is a transient pre-accept failure', async (t) => {
   await environment(t);
   process.env.PASEO_HOST = await deadEndpoint();
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 })), 'transient');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 }));
+  assert.equal(error.code, 'unavailable');
+  assert.equal(error.maybeDelivered, false);
 });
 
 test('a Paseo send dropped after the connection is unknown, never a retry', async (t) => {
   await environment(t);
   const { endpoint } = await daemon(t, { onSend: (_message, socket) => { socket.terminate(); } });
   process.env.PASEO_HOST = endpoint;
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 })), 'unknown');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 2000 }));
+  assert.equal(error.maybeDelivered, true);
 });
 
 test('a daemon that never answers the send fails inside the dispatch budget', async (t) => {
@@ -150,7 +159,8 @@ test('a daemon that never answers the send fails inside the dispatch budget', as
   const { state, endpoint } = await daemon(t, { onSend: () => undefined });
   process.env.PASEO_HOST = endpoint;
   const started = Date.now();
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 200 })), 'unknown');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 200 }));
+  assert.equal(error.maybeDelivered, true);
   const elapsed = Date.now() - started;
   assert.equal(state.sends.length, 1);
   assert.ok(elapsed < 1_000, `one wake spent more than its dispatch budget: ${elapsed}ms`);
@@ -160,6 +170,8 @@ test('unusable Paseo wake arguments fail before anything is sent', async (t) => 
   await environment(t);
   const { state, endpoint } = await daemon(t, { onSend: accepted });
   process.env.PASEO_HOST = endpoint;
-  assert.equal(await failureKind(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 0 })), 'rejected');
+  const error = await failure(sendPaseoWake({ ...attempt, ...coordinates }, { timeoutMs: 0 }));
+  assert.equal(error.code, 'invalid_arguments');
+  assert.equal(error.maybeDelivered, false);
   assert.deepEqual(state.sends, []);
 });

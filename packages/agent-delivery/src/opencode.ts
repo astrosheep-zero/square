@@ -3,6 +3,7 @@ import { OpenCode } from '@opencode/client'
 import { Service, type Endpoint } from '@opencode/client/service'
 import { deadline, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError } from './errors.js'
+import { isIdentity, isRecord } from './guards.js'
 import { isNativeSession, sendNativeText } from './opencode-native.js'
 import type { OpenCodeDeliveryResult, OpenCodeTarget, OpenCodeSendTextOptions } from './types.js'
 
@@ -16,10 +17,6 @@ export interface OpenCodeConnectExistingOptions {
 }
 
 const endpoints = new WeakMap<OpenCodeTarget, Endpoint>()
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
-const isIdentity = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0
 const isV2 = (version: string) => /^2\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)
 
 function endpointValid(value: unknown): value is Endpoint {

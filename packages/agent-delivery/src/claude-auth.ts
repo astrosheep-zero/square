@@ -17,16 +17,13 @@ export interface ClaudeAuthOptions {
 }
 
 function validToken(value: unknown): value is string { return typeof value === 'string' && TOKEN.test(value) }
-function endpointValue(value: LocalEndpoint | string): LocalEndpoint {
-  return typeof value === 'string' ? parseLocalEndpoint(value) : value
-}
 
 /**
  * Explicit token, then the environment token bound to this exact endpoint, then
  * the newest readable peer key for it. Windows requires a token; POSIX does not.
  */
 export async function resolveClaudeToken(options: ClaudeAuthOptions): Promise<string | undefined> {
-  const endpoint = endpointValue(options.endpoint)
+  const endpoint = typeof options.endpoint === 'string' ? parseLocalEndpoint(options.endpoint) : options.endpoint
   const platform = options.platform ?? process.platform
   const env = options.env ?? process.env
   if (options.token !== undefined) {

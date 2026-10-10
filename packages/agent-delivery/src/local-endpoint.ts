@@ -23,15 +23,11 @@ export function parseLocalEndpoint(raw: unknown): LocalEndpoint {
     const canonical = `\\\\.\\pipe\\${pipe[2]!.toLowerCase()}`
     return { kind: 'pipe', path: canonical, canonical }
   }
-  if (!isAbsolutePath(raw)) throw new Error('Invalid local endpoint.')
+  if (!(process.platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(raw) : raw.startsWith('/'))) throw new Error('Invalid local endpoint.')
   const limit = process.platform === 'darwin' ? 103 : process.platform === 'linux' ? 107 : undefined
   if (limit !== undefined && Buffer.byteLength(raw) > limit) throw new Error('Invalid local endpoint.')
   const canonical = resolve(raw)
   return { kind: 'unix', path: canonical, canonical }
-}
-
-function isAbsolutePath(value: string): boolean {
-  return process.platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(value) : value.startsWith('/')
 }
 
 export class LocalEndpointError extends Error {
@@ -47,7 +43,8 @@ export class LocalEndpointError extends Error {
 }
 
 function errnoCode(error: unknown): LocalEndpointError['code'] {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  let code: string | undefined
+  if (typeof error === 'object' && error !== null) code = (error as NodeJS.ErrnoException).code
   if (code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'EPIPE' || code === 'EBUSY' || code === 'EACCES') return 'unavailable'
   return 'transport'
 }
@@ -63,26 +60,22 @@ export function connectLocal(endpoint: LocalEndpoint, scope: LocalConnectScope =
     const socket = new net.Socket()
     let settled = false
     const timeout = scope.timeoutMs === undefined ? undefined : setTimeout(() => finish(new LocalEndpointError('timeout')), scope.timeoutMs)
-    const cleanup = () => {
-      if (timeout !== undefined) clearTimeout(timeout)
-      scope.signal?.removeEventListener('abort', aborted)
-      socket.removeListener('connect', connected)
-    }
     // Error/close handlers stay attached past settling: an already scheduled I/O
     // failure must not become an unhandled event once this promise is done.
     const finish = (error?: LocalEndpointError) => {
       if (settled) return
       settled = true
-      cleanup()
+      if (timeout !== undefined) clearTimeout(timeout)
+      scope.signal?.removeEventListener('abort', aborted)
+      socket.removeListener('connect', connected)
       if (error) { socket.destroy(); reject(error) } else resolveSocket(socket)
     }
     const aborted = () => finish(new LocalEndpointError('aborted'))
     const connected = () => finish()
     const failed = (error: Error) => finish(new LocalEndpointError(errnoCode(error)))
-    const closed = () => { if (!settled) finish(new LocalEndpointError('unavailable')) }
     socket.once('connect', connected)
     socket.once('error', failed)
-    socket.once('close', closed)
+    socket.once('close', () => { if (!settled) finish(new LocalEndpointError('unavailable')) })
     scope.signal?.addEventListener('abort', aborted, { once: true })
     if (scope.signal?.aborted) { aborted(); return }
     try { socket.connect(endpoint.path) } catch (error) { failed(error as Error) }
@@ -103,9 +96,8 @@ export function writeFrames(socket: net.Socket, frames: object[]): Promise<void>
       resolveWrite()
     }
     const failed = (error: Error) => finish(new LocalEndpointError(errnoCode(error), true))
-    const closed = () => finish(new LocalEndpointError('transport', true))
     socket.once('error', failed)
-    socket.once('close', closed)
+    socket.once('close', () => finish(new LocalEndpointError('transport', true)))
     socket.end(payload, 'utf8', (error?: Error | null) => {
       if (error) { failed(error); return }
       finish()
