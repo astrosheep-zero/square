@@ -1,6 +1,7 @@
 import {
   type WakeAdapter,
   type WakeAdapterResult,
+  type WakeDispatchContext,
 } from './delivery.js';
 import { paseoDaemonHosts, resolvePaseoDaemonTarget } from './paseo-connection.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
@@ -19,7 +20,8 @@ function diagnostic(
   return {
     phase,
     code,
-    command: phase === 'discovery' ? 'paseo ls --global --json' : 'paseo send <agent-id> --prompt <prompt> --no-wait --json',
+    // Only discovery still runs a Paseo CLI; a wake is a capability call on the shared entry.
+    ...(phase === 'discovery' ? { command: 'paseo ls --global --json' } : {}),
     endpoint: endpoint(),
     paseoAgentIds: [address.agentId].filter(Boolean),
     passwordPresent: Boolean(process.env.PASEO_PASSWORD),
@@ -47,6 +49,7 @@ export class PaseoAdapter implements WakeAdapter {
     payload: string,
     beforeSend: () => Promise<boolean>,
     timeoutMs = 5000,
+    context?: WakeDispatchContext,
   ): Promise<WakeAdapterResult> {
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(0, deadline - Date.now());
@@ -112,7 +115,14 @@ export class PaseoAdapter implements WakeAdapter {
     if (remaining === 0) return budgetUnavailable();
 
     try {
-      (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: payload }, { timeoutMs: remaining });
+      await (this.opts.sendWake ?? sendPaseoWake)({
+        agentId,
+        prompt: payload,
+        location: context?.location ?? '',
+        participant: context?.participant ?? '',
+        activity: context?.activity ?? '',
+        ...(context?.attemptN === undefined ? {} : { attemptN: context.attemptN }),
+      }, { timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

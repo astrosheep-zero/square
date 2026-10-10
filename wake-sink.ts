@@ -1,6 +1,16 @@
-import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
-export interface PaseoWakeRequest { agentId: string; prompt: string; }
+import { DeliveryError, connect } from './packages/agent-delivery/src/index.js';
+
+/** One Paseo wake attempt: where it goes, what it says, and what identifies it. */
+export interface PaseoWakeRequest {
+  agentId: string;
+  prompt: string;
+  location: string;
+  participant: string;
+  activity: string;
+  attemptN?: number;
+}
 
 export type PaseoWakeFailureKind = 'transient' | 'rejected' | 'unknown';
 
@@ -11,60 +21,58 @@ export class PaseoWakeSendError extends Error {
   }
 }
 
-interface PaseoCommandError {
-  error?: { code?: unknown; message?: unknown; details?: unknown };
+/**
+ * The daemon's own dedup key for one attempt. Every retry of the same attempt
+ * derives the same id; a later attempt of the same attention derives a new one.
+ */
+export function paseoWakeMessageId(request: Pick<PaseoWakeRequest, 'location' | 'participant' | 'activity' | 'attemptN'>): string {
+  const digest = createHash('sha256')
+    .update([request.location, request.participant, request.activity, request.attemptN ?? 0].join('|'))
+    .digest('hex');
+  return `square-${digest.slice(0, 32)}`;
 }
 
-function commandError(output: string): { code?: string; message: string } | undefined {
+function sendFailure(error: unknown): PaseoWakeSendError {
+  if (error instanceof PaseoWakeSendError) return error;
+  if (!(error instanceof DeliveryError)) {
+    return new PaseoWakeSendError(error instanceof Error ? error.message : String(error), 'unknown');
+  }
+  // The daemon's connection is the uncertainty boundary: past it nothing is proven absent.
+  if (error.maybeDelivered) return new PaseoWakeSendError(error.message, 'unknown');
+  if (error.code === 'unavailable') return new PaseoWakeSendError(error.message, 'transient');
+  if (error.code === 'authentication_failed' || error.code === 'session_not_found'
+    || error.code === 'rejected' || error.code === 'invalid_arguments') {
+    return new PaseoWakeSendError(error.message, 'rejected');
+  }
+  return new PaseoWakeSendError(error.message, 'unknown');
+}
+
+/** Steer one existing Paseo agent through the shared delivery entry. Never interrupts a turn. */
+export async function sendPaseoWake(
+  request: PaseoWakeRequest,
+  opts: { timeoutMs?: number } = {}
+): Promise<void> {
+  const budgetMs = opts.timeoutMs;
+  // A usable budget becomes one deadline both phases share; anything else is an
+  // argument error, so it is handed to the entry untouched to classify.
+  const bounded = budgetMs !== undefined && Number.isFinite(budgetMs) && budgetMs > 0;
+  const deadline = bounded ? Date.now() + budgetMs : 0;
+  const left = (): number | undefined => (bounded ? Math.max(0, deadline - Date.now()) : budgetMs);
   try {
-    const parsed = JSON.parse(output) as PaseoCommandError;
-    if (parsed.error === undefined) return undefined;
-    return {
-      ...(typeof parsed.error.code === 'string' ? { code: parsed.error.code } : {}),
-      message: typeof parsed.error.message === 'string' ? parsed.error.message : output.trim(),
-    };
-  } catch {
-    return undefined;
+    const connectMs = left();
+    if (bounded && connectMs === 0) throw new PaseoWakeSendError('The Paseo wake dispatch budget elapsed before send.', 'transient');
+    const agent = await connect({
+      harness: 'paseo',
+      agentId: request.agentId,
+      ...(connectMs === undefined ? {} : { timeoutMs: connectMs }),
+    });
+    const steerMs = left();
+    if (bounded && steerMs === 0) throw new PaseoWakeSendError('The Paseo wake dispatch budget elapsed before the steer.', 'transient');
+    await agent.steer(request.prompt, {
+      id: paseoWakeMessageId(request),
+      ...(steerMs === undefined ? {} : { timeoutMs: steerMs }),
+    });
+  } catch (error) {
+    throw sendFailure(error);
   }
-}
-
-function classifyCommandFailure(code: string | undefined, message: string): PaseoWakeFailureKind {
-  if (code === 'DAEMON_NOT_RUNNING' || /ECONNREFUSED|ENOENT|not found.*executable/i.test(message)) return 'transient';
-  if (/password|auth|unauthori[sz]ed|agent not found|rejected/i.test(message)) return 'rejected';
-  return 'unknown';
-}
-
-function redactUriPassword(value: string): string {
-  return value.replace(/([?&]password=)[^&\s]+/gi, '$1[redacted]');
-}
-
-function configuredArguments(name: string): string[] {
-  try {
-    const parsed = JSON.parse(process.env[name] ?? '[]') as unknown;
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-export function sendPaseoWake(
-  { agentId, prompt }: PaseoWakeRequest,
-  opts: { args?: string[]; bin?: string; timeoutMs?: number } = {}
-): void {
-  const result = spawnSync(
-    opts.bin ?? process.env.SQUARE_PASEO_BIN ?? 'paseo',
-    [...(opts.args ?? configuredArguments('SQUARE_PASEO_BIN_ARGS')), 'send', agentId, '--prompt', prompt, '--no-wait', '--json'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env: process.env }
-  );
-  if (result.error) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    const kind: PaseoWakeFailureKind = code === 'ENOENT' || code === 'ECONNREFUSED' ? 'transient' : 'unknown';
-    throw new PaseoWakeSendError(result.error.message, kind);
-  }
-  if (result.status === 0) return;
-
-  const output = `${result.stderr ?? ''}${result.stdout ?? ''}`;
-  const failure = commandError(output);
-  const message = redactUriPassword(failure?.message || output.trim() || `paseo send exited with ${result.status ?? 'no status'}`);
-  throw new PaseoWakeSendError(message, classifyCommandFailure(failure?.code, message));
 }

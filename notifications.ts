@@ -129,7 +129,7 @@ export function createWakeTransport(
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), finalGate, timeoutMs);
+        const result = await adapter.dispatch(request.route.address, renderWakePayload(request), finalGate, timeoutMs, request);
         if (result.outcome !== 'gate-rejected') return result;
         if (revalidation !== undefined && !revalidation.current) {
           return {

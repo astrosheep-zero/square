@@ -9,17 +9,35 @@ import { presentPending } from './presentation-operations.js';
 import { type WakeRoute } from './model.js';
 import { canonicalPath } from './canonical-path.js';
 import { parseActivityId } from './square-core.js';
-import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
+import { DeliveryError, connect } from './packages/agent-delivery/src/index.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map((match) => match[1]!); }
 export function nativePayload(token: string, preview: string): string { return `[square-inbox:${token}]\n${preview}\n[/square-inbox:${token}]`; }
-function nativeSupported(route: WakeRoute): boolean { return process.platform === 'darwin' && route.address.version === '2.1.295' && route.address.platform === 'darwin' && route.address.loaded === 'true' && !!route.address.endpoint; }
+function nativeSupported(route: WakeRoute): boolean { return route.address.version === '2.1.295' && route.address.loaded === 'true' && !!route.address.endpoint; }
+
+/**
+ * The shared entry owns platform policy, token resolution and frame shape; Square
+ * owns the payload, the correlation and the evidence. A local write is never proof
+ * of native admission.
+ */
+async function writeClaudeWake(sessionId: string, endpoint: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
+  try {
+    const agent = await connect({ harness: 'claude', sessionId, endpoint, timeoutMs });
+    await agent.steer(payload, { signal });
+    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: 'Claude accepted the local write; native admission is unconfirmed.' };
+  } catch (error) {
+    if (error instanceof DeliveryError && !error.maybeDelivered) {
+      return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: error.message };
+    }
+    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 export function createClaudeWakeTransport(hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
   return {
     async probe(route) {
-      if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: macOS 2.1.295 loaded mod required.' };
+      if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: Claude 2.1.295 with a loaded interactive Square mod required.' };
       try { return (await stat(route.address.endpoint!)).isSocket() || { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint is not a socket.' }; }
       catch { return { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint unavailable.' }; }
     },
@@ -45,9 +63,8 @@ async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) 
 /** Square owns rendering, correlation and evidence; socket transport owns none of them. */
 async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
   request = { ...request, location: await canonicalPath(request.location) };
-  const deadline = Date.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
-  if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires macOS Claude 2.1.295 and a loaded interactive Square mod.' };
+  if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires Claude 2.1.295 and a loaded interactive Square mod.' };
   return hostLedger.withClaimLock(async () => {
     if (signal.aborted) return { outcome: 'not-capable', diagnostic: 'Native dispatch deadline elapsed before send.' };
     if (!request.claimToken || !await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'unknown', signature: 'native_send_suppressed' };
@@ -66,9 +83,7 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
     const row = { location: request.location, participant: request.participant, session: request.route.sessionId, activity: request.activity, kind: 'wake' as const, outcome: 'dispatching', routeKind: 'claude-native' as const, attemptN: request.attemptN, claimToken: request.claimToken, nativeDelivery: native };
     if (!await currentDelivery(row, hostLedger) || !await hostLedger.prepareNativeWake(row)) return { outcome: 'not-capable', diagnostic: 'Native delivery is no longer current.' };
     if (!await (beforeSend?.() ?? Promise.resolve(true)) || !await currentDelivery(row, hostLedger)) return { outcome: 'not-capable', diagnostic: 'Catch, cancellation or consumption won before native write.' };
-    const result = await writeClaudeNative({ sessionId: row.session, endpoint: native.endpoint }, payload, { deadline, signal });
-    if (result.outcome === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: result.message };
-    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: result.message };
+    return writeClaudeWake(row.session, native.endpoint, payload, timeoutMs, signal);
   }, signal);
 }
 

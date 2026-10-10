@@ -31,6 +31,18 @@ export type WakeAdapterResult =
   | Exclude<WakeOutcome, { outcome: 'not-capable' }>
   | { outcome: 'gate-rejected' };
 
+/**
+ * The coordinates of one wake attempt. An adapter that must hand the receiver a
+ * stable dedup key derives it from these, so a retry of the same attempt reuses
+ * the same key and a later attempt gets a new one.
+ */
+export interface WakeDispatchContext {
+  readonly location: string;
+  readonly participant: string;
+  readonly activity: string;
+  readonly attemptN?: number;
+}
+
 export interface WakeAdapter {
   readonly kind: WakeRouteKind;
   dispatch(
@@ -38,6 +50,7 @@ export interface WakeAdapter {
     payload: string,
     beforeSend: () => Promise<boolean>,
     timeoutMs?: number,
+    context?: WakeDispatchContext,
   ): Promise<WakeAdapterResult>;
 }
 

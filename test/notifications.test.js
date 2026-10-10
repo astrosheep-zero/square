@@ -248,6 +248,10 @@ test('the notification worker records an accepted wake through the real Paseo ad
     })],
   }));
   assert.equal(sent.agentId, 'integrated-agent');
+  assert.equal(sent.location, item.squarePath);
+  assert.equal(sent.participant, 'Bob');
+  assert.equal(sent.activity, 'act/2');
+  assert.equal(sent.attemptN, 1);
   assert.match(sent.prompt, /<system-reminder source="square" wake="paseo">/);
   assert.doesNotMatch(sent.prompt, /native adapter presented/);
   assert.match(sent.prompt, new RegExp(`square: ${item.squarePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
@@ -367,6 +371,9 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
     })],
   }));
   assert.equal(sent.agentId, 'gone-agent');
+  assert.equal(sent.participant, 'Bob');
+  assert.equal(sent.activity, 'act/2');
+  assert.equal(typeof sent.attemptN, 'number');
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.['act/2'], undefined);
   fs.rmSync(item.root, { recursive: true, force: true });
