@@ -127,7 +127,7 @@ test("owned claim cleanup never removes rightful ownership", async () => {
   const ledger = new FileHostLedgerPort({ rootPath: root });
   const first = await claimSessionParticipant(location, "Owner", ledger, env);
   const second = await claimSessionParticipant(location, "Owner", ledger, env);
-  await releaseSessionParticipantClaim(location, "Owner", ledger, second);
+  await releaseSessionParticipantClaim(ledger, second);
   const rows = await ledger.listPresence({ location, participant: "Owner" });
   assert.equal(rows.length, 1);
   assert.equal(first?.status, "acquired");

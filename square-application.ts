@@ -9,7 +9,7 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { catchUp, express, ignore, listen, listening } from './square-actions.js';
 import { participantHistory, resolveParticipant, statusPresentation, participantsPresentation } from './views.js';
-import { hostLedgerForEnv, localParticipantName, localSessionIdentities, readParticipantOwner } from './registry.js';
+import { hostLedgerForEnv, localParticipantName, localSessionIdentities, presenceEpoch, readParticipantOwner } from './registry.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, Participant, ParticipantStatus, PerceivedActivity, OperationControl } from './square-facade.js';
 
 /** Final control coordinate shared by facade, actions, and application adapters. */
@@ -108,7 +108,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         const standing = before.participants.some((item) => item.name.toLocaleLowerCase() === participantName.toLocaleLowerCase() && item.state === 'joined');
         const identity = localSessionIdentities(env)[0];
         const owner = standing ? await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined) : undefined;
-        const reconnect = standing && identity !== undefined && owner?.sessionId === identity.sessionId;
+        const reconnect = standing && identity !== undefined && owner?.session === identity.sessionId;
         if (standing && owner !== undefined && identity !== undefined && !options.takeover && !reconnect) {
           throw new SquareError('already_joined', `✕ ${participantName} already stands here — another session holds the name`, { pending: before.participants.length });
         }
@@ -174,9 +174,9 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const participantName = await requireParticipant(context, squarePath, hostLedger, env);
       const identity = localSessionIdentities(env)[0];
       const owner = identity === undefined ? undefined : await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined);
-      if (identity !== undefined && owner?.sessionId === identity.sessionId && owner.epoch > 0) {
+      if (identity !== undefined && owner?.session === identity.sessionId && presenceEpoch(owner) > 0) {
         const square = await open();
-        try { return await square.doneOwnedSession(participantName, body ?? '', owner.epoch, control); }
+        try { return await square.doneOwnedSession(participantName, body ?? '', presenceEpoch(owner), control); }
         finally { await square.close(); }
       }
       return joined((participant) => participant.done(body, control), control);

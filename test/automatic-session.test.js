@@ -127,9 +127,9 @@ test('automatic session end preserves a replacement owner after committed cleanu
         return square;
       };
       await automaticSessionEnd('pi', 'old-session', item.cwd, env);
-      assert.equal(ownerBeforeOldCleanup?.sessionId, 'new-session');
+      assert.equal(ownerBeforeOldCleanup?.session, 'new-session');
       assert.equal(ownerBeforeOldCleanup?.epoch, 2);
-      assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.sessionId, 'new-session');
+      assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.session, 'new-session');
     } finally { Square.at = originalAt; }
   });
 });
@@ -167,9 +167,9 @@ test('automatic session end preserves a same-session rejoin after committed clea
       };
       await automaticSessionEnd('codex', 'rejoin-session', item.cwd, env);
     } finally { Square.at = originalAt; }
-    assert.equal(ownerAfterRejoin?.sessionId, 'rejoin-session');
+    assert.equal(ownerAfterRejoin?.session, 'rejoin-session');
     assert.equal(ownerAfterRejoin?.epoch, 2);
-    assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.sessionId, 'rejoin-session');
+    assert.equal((await readParticipantOwner(item.publicPath, 'shared', hostLedgerForEnv(env)))?.session, 'rejoin-session');
     assert.deepEqual(routesAfterRejoin.map((route) => route.sessionId), ['rejoin-session']);
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.sessionId), ['rejoin-session']);
   });
@@ -552,7 +552,7 @@ test('done retires only its own route in a session that holds several participan
       await a.done();
     } finally { await square.close(); }
     assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.participant).sort(), ['b']);
-    assert.equal((await readParticipantOwner(item.publicPath, 'b', hostLedgerForEnv(env)))?.sessionId, 'dual-session');
+    assert.equal((await readParticipantOwner(item.publicPath, 'b', hostLedgerForEnv(env)))?.session, 'dual-session');
     assert.equal(await readParticipantOwner(item.publicPath, 'a', hostLedgerForEnv(env)), undefined);
   });
   assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'join', 'done']);

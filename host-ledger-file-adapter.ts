@@ -104,7 +104,7 @@ export class FileHostLedgerPort implements HostLedgerPort {
     const location = await canonicalPath(i.location);
     const record = { ...i, location, updatedAt: i.updatedAt ?? this.clock(), v: 1 as const };
     try {
-      return await withFileLock(path.join(this.root, 'presence-claim.lock'), { ...LOCK, signal }, async () => {
+      return await this.withClaimLock(async () => {
         const file = this.file('presence');
         // The authoritative read, ownership check, and write share the presence file lock:
         // a concurrent ensurePresence/removePresence between them must never be overwritten
@@ -116,7 +116,7 @@ export class FileHostLedgerPort implements HostLedgerPort {
           await write(file, [...rows, record], signal);
           return { status: 'acquired', record };
         });
-      });
+      }, signal);
     } catch (error) { return { status: 'degraded', record, error }; }
   }
   async ensurePresence(i: PresenceRecord): Promise<PresenceResult> {

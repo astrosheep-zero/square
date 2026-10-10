@@ -173,7 +173,7 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
       /lifecycle refused/,
     );
     assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-0');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'owner-0');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 1);
     assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
@@ -186,7 +186,7 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
       await closeOpenSquare(kicker);
     }
     assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-x');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'kicker-x');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
   } finally {
@@ -242,7 +242,7 @@ test('a stale takeover observation cannot append a lifecycle after a newer takeo
     assert.equal(stale.status === 'busy' ? stale.epoch : undefined, 2);
     assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-old' }), []);
     assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-a');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'kicker-a');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
   } finally {
@@ -286,7 +286,7 @@ test('self-takeover success leaves exactly one current owner', async () => {
     assert.equal(rows.length, 1, `expected exactly one owner row, got ${JSON.stringify(rows)}`);
     assert.equal(rows[0].session, 'owner-s');
     const ownerAfter = await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort());
-    assert.equal(ownerAfter?.sessionId, 'owner-s');
+    assert.equal(ownerAfter?.session, 'owner-s');
     assert.equal(ownerAfter?.epoch, 2);
     assert.equal((await createHostLedgerPort().listPresence({ session: 'owner-s', participant: 'Alice' })).length, 1);
 
@@ -343,7 +343,7 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
     assert.equal(rows.length, 1, `expected exactly one owner row, got ${JSON.stringify(rows)}`);
     assert.equal(rows[0].session, 'owner-s');
     const ownerAfter = await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort());
-    assert.equal(ownerAfter?.sessionId, 'owner-s');
+    assert.equal(ownerAfter?.session, 'owner-s');
     assert.equal(ownerAfter?.epoch, 1);
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
 
@@ -356,7 +356,7 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
     assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'foreign' }), []);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-s');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'owner-s');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();
@@ -409,7 +409,7 @@ test('a stale done paused across a completed takeover refuses and appends nothin
       await closeOpenSquare(oldSquare);
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'kicker-b');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'kicker-b');
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 2);
     assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'owner-a' }), []);
   } finally {
@@ -523,7 +523,7 @@ test('invalid takeover name performs no ownership mutation', async () => {
     assert.deepEqual(await createHostLedgerPort().listPresence({ location: squarePath, participant: 'bad/name/' }), []);
     assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
     assert.equal((await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' })).length, 1);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-0');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'owner-0');
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -563,7 +563,7 @@ test('takeover of a never-joined participant refuses before any ownership claim'
       await owner.close();
     }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.sessionId, 'owner-y');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'owner-y');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();

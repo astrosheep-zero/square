@@ -4,14 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareState, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
-import { hostLedgerForEnv } from '../dist/registry.js';
+import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { Square } from '../dist/square-wiring.js';
 
 /**
  * The injected in-memory host ledger: presence rows in a list, with one in-process
- * mutex standing in for the file ledger's presence-claim.lock. claimPresence takes
+ * mutex standing in for the file ledger's claim lock. claimPresence takes
  * that mutex itself and is never nested inside withClaimLock.
  */
 function memoryHostLedger() {
@@ -106,5 +106,30 @@ test('a concurrent second session is refused the name in the injected ledger', a
     const winner = results.findIndex((result) => result.status === 'fulfilled');
     assert.deepEqual((await f.ledger.listPresence({ location: f.location, participant: 'Alice' })).map((row) => row.session), [winner === 0 ? 'session-a' : 'session-b']);
     assert.deepEqual(await hostLedgerForEnv(f.env).listPresence({ location: f.location, participant: 'Alice' }), []);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a file square opened without a ledger binds the env ledger for join and done', async () => {
+  const f = await fixture();
+  try {
+    // No injected ledger: the square defaults to the host ledger its environment names.
+    const square = await Square.at({ path: f.location, env: { ...f.env, CODEX_THREAD_ID: 'env-session' } });
+    try {
+      const envLedger = hostLedgerForEnv(f.env);
+      const participant = await square.join('Alice');
+      const owner = await readParticipantOwner(f.location, 'Alice', envLedger);
+      assert.equal(owner?.session, 'env-session');
+      assert.equal(owner?.epoch, 1);
+      assert.deepEqual(
+        (await envLedger.listPresence({ location: f.location, participant: 'Alice' })).map((row) => [row.session, row.channel, row.epoch]),
+        [['env-session', 'codex', 1]],
+      );
+      assert.deepEqual(await f.ledger.listPresence({ location: f.location, participant: 'Alice' }), []);
+
+      await participant.done();
+      assert.equal(await readParticipantOwner(f.location, 'Alice', envLedger), undefined);
+      assert.deepEqual(await envLedger.listPresence({ location: f.location, participant: 'Alice' }), []);
+      assert.deepEqual((await loadSquare(f.location)).acts.map((act) => act.kind), ['join', 'done']);
+    } finally { await square.close(); }
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

@@ -90,7 +90,7 @@ export async function openSquare(
 
 export async function probeSquare(squarePath: string): Promise<OpenSquare | undefined> {
   const state = await probeSquareFile(squarePath);
-  return state === undefined ? undefined : { artifact: createMemoryCell(state), clock: Date.now, location: squarePath };
+  return state === undefined ? undefined : { artifact: createMemoryCell(state), clock: Date.now, location: squarePath, hostLedger: createHostLedgerPort({ rootPath: hostLedgerRoot(process.env) }) };
 }
 
 export async function buildSquare(squarePath: string, options: SquareBuildOptions): Promise<OpenSquare> {

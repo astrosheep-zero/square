@@ -105,8 +105,8 @@ test('distinct parent and child native Pi sessions resolve distinct participants
   const ledger = hostLedgerForEnv(parentEnv);
   await ledger.ensurePresence({ location, participant: parentName, session: 'pi-parent-session', channel: 'pi' });
   await ledger.ensurePresence({ location, participant: childName, session: 'pi-child-session', channel: 'pi' });
-  assert.equal((await readParticipantOwner(location, parentName, ledger))?.sessionId, 'pi-parent-session');
-  assert.equal((await readParticipantOwner(location, childName, ledger))?.sessionId, 'pi-child-session');
+  assert.equal((await readParticipantOwner(location, parentName, ledger))?.session, 'pi-parent-session');
+  assert.equal((await readParticipantOwner(location, childName, ledger))?.session, 'pi-child-session');
   assert.equal(await sessionOwnsParticipant(location, childName, 'pi-parent-session', ledger), false, 'the parent session must not be attributed to the child participant');
   fs.rmSync(item.root, { recursive: true, force: true });
 });

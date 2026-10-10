@@ -6,9 +6,9 @@ import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, OperationControl, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
 import { decideCatch, type CatchDecision, type CatchProjection } from './catch-decisions.js';
-import { claimSessionParticipant, claimSessionTakeover, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
+import { claimSessionParticipant, claimSessionTakeover, presenceEpoch, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
 import type { HostLedgerPort } from './host-ledger.js';
-import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, ownershipLedger, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
+import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
 import { applyWakeRouteToState, dropEndedSessionWakeRoutesFromState, dropParticipantWakeRoutesFromState, dropSessionWakeRoutesFromState, sessionCanEndParticipant } from './routes.js';
 import { parseRequiredActivityId, toPublicActivity } from './views.js';
 
@@ -87,7 +87,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
   // Rejected validation must not perform an ownership claim.
   throwIfAborted(control);
   validateName(name);
-  const hostLedger = ownershipLedger(square);
+  const hostLedger = square.hostLedger;
   const preview = await square.artifact.read(control?.signal);
   const previewDecision = decideJoin(preview.state, name, square.clock());
   if (previewDecision.joinAct === undefined) {
@@ -100,7 +100,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
       if (owner === undefined) {
         // Keep the claim path for an active artifact whose ledger owner is not
         // visible yet; concurrent callers must still serialize through CAS.
-      } else if (owner.sessionId !== identity.session) {
+      } else if (owner.session !== identity.session) {
         // Continue into the ownership claim below; it will produce the stable
         // already_joined error without mutating the artifact.
       } else {
@@ -133,7 +133,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
     return { state, result: { name: decision.joinedName, stored: committedActivity(storeActs(state, [decision.joinAct]), 'join') } };
   }, control?.signal);
   } catch (error) {
-    if (hostLedger !== undefined) await releaseSessionParticipantClaim(square.location!, name, hostLedger, ownershipClaim).catch(() => undefined);
+    if (hostLedger !== undefined) await releaseSessionParticipantClaim(hostLedger, ownershipClaim).catch(() => undefined);
     throw error;
   }
   await ensureLocalPresence(square, committed.name, epoch);
@@ -146,7 +146,7 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
   // Rejected validation must not perform an ownership claim.
   throwIfAborted(control);
   validateName(name);
-  const hostLedger = ownershipLedger(square);
+  const hostLedger = square.hostLedger;
   const commitLifecycle = async (): Promise<{ name: string; stored: readonly StoredAct[] }> => {
 
     throwIfAborted(control);
@@ -176,8 +176,8 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
     // The claim and the artifact lifecycle are one fenced critical section: a losing or refused
     // takeover never mutates the winner, and no second takeover can interleave mid-commit.
     const outcome = await claimSessionTakeover(square.location!, name, hostLedger, env, {
-      expectedEpoch: owner?.epoch ?? 0,
-      expectedSession: owner?.sessionId ?? '',
+      expectedEpoch: presenceEpoch(owner),
+      expectedSession: owner?.session ?? '',
     }, async (claim) => {
       throwIfAborted(control);
       const committed = await commitLifecycle();
@@ -290,7 +290,7 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
   // session's route retirement, and presence cleanup share one ownership critical section.
   // A takeover finalizing between validation and commit can never be completed by a stale
   // done, and no post-lock cleanup can remove a replacement owner's fresh rows.
-  const hostLedger = verb === 'done' ? ownershipLedger(square) : undefined;
+  const hostLedger = verb === 'done' ? square.hostLedger : undefined;
   const fenced = hostLedger !== undefined;
   const session = fenced ? processIdentity(square.env ?? process.env).session : undefined;
   const commitAndCleanup = async (): Promise<StoredAct> => {
@@ -354,7 +354,7 @@ async function readLiveClaimedParticipants(hostLedger: HostLedgerPort, location:
  */
 export async function endOwnedSession(square: OperationContext, name: string, sessionId: string, expectedEpoch?: number): Promise<ExpressResult | null> {
   const location = square.location;
-  const hostLedger = ownershipLedger(square);
+  const hostLedger = square.hostLedger;
   const run = async () => {
     const now = square.clock();
     let currentSessionId: string | undefined;
@@ -371,7 +371,7 @@ export async function endOwnedSession(square: OperationContext, name: string, se
         liveParticipants = liveClaimedParticipants(rows, sessionId);
         if (expectedEpoch !== undefined) {
           const owner = await readParticipantOwner(location, name, hostLedger);
-          ownerMatches = owner?.sessionId === sessionId && owner.epoch === expectedEpoch;
+          ownerMatches = owner !== undefined && owner.session === sessionId && presenceEpoch(owner) === expectedEpoch;
         }
       } catch { liveParticipants = undefined; /* unknown evidence preserves routes; artifact routes still fence ownership */ }
     }
@@ -408,7 +408,7 @@ export async function endOwnedSession(square: OperationContext, name: string, se
  */
 export async function retireEndedSessionRoutes(square: OperationContext, sessionId: string): Promise<void> {
   const location = square.location;
-  const hostLedger = ownershipLedger(square);
+  const hostLedger = square.hostLedger;
   if (location === undefined || hostLedger === undefined) return;
   await hostLedger.withClaimLock(async () => {
     const liveParticipants = await readLiveClaimedParticipants(hostLedger, location, sessionId, square.clock());
