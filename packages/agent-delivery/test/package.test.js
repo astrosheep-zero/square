@@ -15,128 +15,123 @@ const exec = promisify(execFile)
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const options = { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }
 
-test('packed package installs, typechecks, discovers and sends from a consumer outside Square', async (t) => {
+test('packed package installs, typechecks its capability API and delivers from a consumer outside Square', async (t) => {
   const consumer = await mkdtemp(join(sandbox, 'consumer-'))
   const packed = JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', consumer], {
     ...options, cwd: packageRoot,
   })).stdout)[0]
-  assert.ok(packed.files.some((file) => file.path === 'dist/index.js'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/index.d.ts'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/pi.js'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.js'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/claude-native.d.ts'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/opencode-native.js'))
-  assert.ok(packed.files.some((file) => file.path === 'dist/opencode-native.d.ts'))
-  assert.ok(packed.files.some((file) => file.path === 'README.md'))
-  assert.ok(packed.files.some((file) => file.path === 'LICENSE'))
-  assert.ok(packed.files.some((file) => file.path === 'VALIDATION.md'))
+  for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/pi.js', 'README.md', 'LICENSE', 'VALIDATION.md']) {
+    assert.ok(packed.files.some((entry) => entry.path === file), `missing ${file}`)
+  }
   assert.ok(packed.files.every((file) => /^(dist\/|README\.md$|VALIDATION\.md$|LICENSE$|package\.json$)/.test(file.path)))
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }))
   await exec('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(consumer, packed.filename)], {
     ...options, cwd: consumer,
   })
   const manifest = JSON.parse(await readFile(join(consumer, 'node_modules/@astrosheep/agent-delivery/package.json'), 'utf8'))
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './pi-receiver'])
   assert.deepEqual(manifest.dependencies, { '@opencode/client': '2.0.20' })
   const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'))
   assert.equal(lock.packages['node_modules/@opencode/client'].version, '2.0.20')
   assert.ok(Object.keys(lock.packages).every((path) => !path.includes('@astrosheep/square')))
-  const f = await fixture(t)
-  await f.register(join(process.env.XDG_STATE_HOME, 'opencode', 'service.json'))
-  const program = `import { connectExisting, sendText } from '@astrosheep/agent-delivery';
-const target = await connectExisting({ harness: 'opencode', sessionId: '${sessionId}' });
-const result = await sendText(target, 'independent consumer', { delivery: 'queue', inputId: 'msg_pack_consumer' });
-console.log(JSON.stringify(result));`
-  await writeFile(join(consumer, 'consumer.mjs'), program)
-  await writeFile(join(consumer, 'consumer.mts'), `import { connectExisting, sendText, type DeliveryResult } from '@astrosheep/agent-delivery';
-const target = await connectExisting({ harness: 'opencode', sessionId: 'ses_example' });
-const result: DeliveryResult = await sendText(target, 'text');
-if (result.state === 'accepted') { const id: string = result.inboxId; console.log(id); }
-import { createPiReceiver, sendPiMessage, type PiReceiverAPI } from '@astrosheep/agent-delivery/pi';
+
+  await writeFile(join(consumer, 'consumer.mts'), `import { connect, DeliveryError, type Agent, type ClaudeAgent, type OpenCodeAgent, type PiAgent, type Receipt } from '@astrosheep/agent-delivery';
+const opencodeAgent = await connect({ harness: 'opencode', sessionId: 'ses_example' });
+const claudeAgent: ClaudeAgent = await connect({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock' });
+const piAgent: PiAgent = await connect({ harness: 'pi', sessionId: 'native-id', endpoint: '/private/p.sock' });
+const agents: Agent[] = [opencodeAgent, claudeAgent, piAgent];
+const keyed: OpenCodeAgent = opencodeAgent;
+const admitted: Receipt = await keyed.steer('text', { id: 'msg_caller', timeoutMs: 1000 });
+const queued: Receipt = await opencodeAgent.queue('text');
+const written: Receipt = await claudeAgent.steer('text', { signal: AbortSignal.timeout(1000) });
+const observed: Receipt = await piAgent.steer('text');
+const proof: 'written' | 'admitted' | 'observed' = admitted.proof;
+if (proof === 'admitted') { const id: string = admitted.id; console.log(id, queued.id, written.id, observed.id, agents.length); }
+// @ts-expect-error Claude has no queue capability
+await claudeAgent.queue('text');
+// @ts-expect-error Claude has no caller idempotency id
+await claudeAgent.steer('text', { id: 'msg_caller' });
+// @ts-expect-error Pi has no caller idempotency id
+await piAgent.steer('text', { id: 'msg_caller' });
+// @ts-expect-error the public connect never takes an injected platform
+await connect({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock', platform: 'win32' });
+// @ts-expect-error the public connect never takes an injected environment
+await connect({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock', env: {} });
+const failure = new DeliveryError('rejected', false, 'msg_caller', 409);
+const code: string = failure.code;
+const delivered: boolean = failure.maybeDelivered;
+if (failure instanceof Error) { const name: 'DeliveryError' = failure.name as 'DeliveryError'; console.log(code, delivered, name); }
+import { createPiReceiver, sendPiMessage, type PiReceiverAPI } from '@astrosheep/agent-delivery/pi-receiver';
 const pi = {} as PiReceiverAPI;
 createPiReceiver(pi, { endpoint: '/private/p.sock' });
 sendPiMessage(pi, { customType: 'caller', content: 'exact', display: false }, { deliverAs: 'nextTurn' });
-const piTarget = await connectExisting({ harness: 'pi', sessionId: 'native-id', endpoint: '/private/p.sock' });
-const piResult = await sendText(piTarget, 'exact', { delivery: 'queue' });
-if (piResult.state === 'observed') { const evidence: 'message_end' = piResult.evidence; console.log(evidence); }
-// @ts-expect-error Pi does not support caller input IDs
-await sendText(piTarget, 'text', { inputId: 'caller' });
-const claude = await connectExisting({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock' });
-const written = await sendText(claude, 'text', { delivery: 'steer' });
-if (written.state === 'written') { const h: 'claude' = written.harness; }
-// @ts-expect-error Claude has no queue mode
-await sendText(claude, 'text', { delivery: 'queue' });
-// @ts-expect-error Claude has no caller input ID/reconciliation
-await sendText(claude, 'text', { inputId: 'msg_fake' });
-// @ts-expect-error Claude socket writes cannot be accepted inbox receipts
-const accepted: 'accepted' = written.state;
-import { writeClaudeNative, type ClaudeNativeControl } from '@astrosheep/agent-delivery/claude-native';
-const control: ClaudeNativeControl = { deadline: Date.now() + 1000 };
-await writeClaudeNative({ sessionId: 'uuid', endpoint: '/tmp/explicit.sock' }, 'text', control);
-import { connectNative, createNativeInputId, sendNativeText } from '@astrosheep/agent-delivery/opencode-native';
-const native = await connectNative({ sessionId: 'ses_explicit', session: {
-  async get() { return { id: 'ses_explicit' }; }, async prompt() { return {}; },
-} });
-await sendNativeText(native, 'exact', { inputId: createNativeInputId(), delivery: 'steer' });
 `)
   await exec(process.execPath, [join(packageRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2023',
     '--typeRoots', join(packageRoot, 'node_modules/@types'), 'consumer.mts'], { ...options, cwd: consumer })
-  const result = JSON.parse((await exec(process.execPath, ['consumer.mjs'], { ...options, cwd: consumer })).stdout)
-  assert.deepEqual(result, { harness: 'opencode', sessionId, inputId: 'msg_pack_consumer',
-    state: 'accepted', inboxId: 'msg_pack_consumer', delivery: 'queue' })
+
+  const f = await fixture(t)
+  await writeFile(join(consumer, 'consumer.mjs'), `import { connect, DeliveryError } from '@astrosheep/agent-delivery';
+const agent = await connect({ harness: 'opencode', sessionId: '${sessionId}', endpoint: JSON.parse(process.argv[2]) });
+try { console.log(JSON.stringify(await agent.steer('independent consumer', { id: 'msg_pack_consumer' }))); }
+catch (error) { console.log(JSON.stringify({ name: error.name, code: error.code, maybeDelivered: error.maybeDelivered })); }`)
+  const result = JSON.parse((await exec(process.execPath, ['consumer.mjs', JSON.stringify(f.endpoint)], { ...options, cwd: consumer })).stdout)
+  assert.deepEqual(result, { id: 'msg_pack_consumer', proof: 'admitted' })
   const prompt = f.requests.find((request) => request.method === 'POST')
   assert.equal(prompt.auth, authorization)
-  assert.deepEqual(prompt.body, { id: 'msg_pack_consumer', text: 'independent consumer', delivery: 'queue', resume: true })
-  // Block SDK module loading, not merely a request: both leaf and generic Claude
-  // imports must work without initializing OpenCode's runtime graph.
+  assert.deepEqual(prompt.body, { id: 'msg_pack_consumer', text: 'independent consumer', delivery: 'steer', resume: true })
+
+  await writeFile(join(consumer, 'exports.mjs'), `const paths = ['@astrosheep/agent-delivery/claude-native', '@astrosheep/agent-delivery/opencode-native'];
+const closed = [];
+for (const path of paths) await import(path).then(() => closed.push(path + ':open'), (error) => closed.push(path + ':' + error.code));
+console.log(JSON.stringify(closed));`)
+  assert.deepEqual(JSON.parse((await exec(process.execPath, ['exports.mjs'], { ...options, cwd: consumer })).stdout),
+    ['@astrosheep/agent-delivery/claude-native:ERR_PACKAGE_PATH_NOT_EXPORTED',
+      '@astrosheep/agent-delivery/opencode-native:ERR_PACKAGE_PATH_NOT_EXPORTED'])
+
+  // Block SDK module loading, not merely a request: the Claude capability must work
+  // without initializing OpenCode's runtime graph.
   await writeFile(join(consumer, 'no-sdk.mjs'), `export async function resolve(specifier, context, next) {
 if (specifier.includes('@opencode/') || context.parentURL?.includes('/@opencode/')) throw new Error('OpenCode SDK loaded');
 return next(specifier, context);
 }`)
   await writeFile(join(consumer, 'register.mjs'), `import { register } from 'node:module'; register('./no-sdk.mjs', import.meta.url);`)
-  await writeFile(join(consumer, 'native.mjs'), `import {connectNative, createNativeInputId, sendNativeText} from '@astrosheep/agent-delivery/opencode-native';
-let sent;
-const session = {async get({sessionID}) {return {id:sessionID}}, async prompt(input) {
-  sent=input; return {id:input.id, sessionID:input.sessionID, type:'user', delivery:input.delivery, payload:{text:input.text}, time:{created:Date.now()}};
-}};
-const target=await connectNative({sessionId:'native-packed',session});
-const result=await sendNativeText(target,'packed native 字',{inputId:createNativeInputId(),delivery:'steer'});
-console.log(JSON.stringify({result,sent}));`)
-  const native = JSON.parse((await exec(process.execPath, ['--import', './register.mjs', 'native.mjs'], { ...options, cwd: consumer })).stdout)
-  assert.equal(native.result.state, 'accepted')
-  assert.equal(native.result.inputId, native.sent.id)
-  assert.deepEqual(native.sent, { sessionID: 'native-packed', id: native.result.inputId, text: 'packed native 字', delivery: 'steer', resume: true })
-  const endpoint = join(consumer, 'in.sock')
+  const root = await mkdtemp(join(sandbox, 'c-'))
+  const endpoint = join(root, 'in.sock')
   const frames = []
   const sockets = new Set()
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
+    socket.on('error', () => {})
     let bytes = ''
-    socket.on('data', (part) => { bytes += part.toString('utf8'); if (bytes.endsWith('\n')) frames.push(JSON.parse(bytes)) })
+    socket.on('data', (part) => {
+      bytes += part.toString('utf8')
+      for (let index = bytes.indexOf('\n'); index >= 0; index = bytes.indexOf('\n')) {
+        frames.push(JSON.parse(bytes.slice(0, index)))
+        bytes = bytes.slice(index + 1)
+      }
+    })
   })
   server.listen(endpoint)
   await once(server, 'listening')
-  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise((resolve) => server.close(resolve)) })
-  await writeFile(join(consumer, 'claude.mjs'), `import { writeClaudeNative } from '@astrosheep/agent-delivery/claude-native';
-import { connectExisting, sendText } from '@astrosheep/agent-delivery';
-const target = { sessionId: 'external-claude', endpoint: ${JSON.stringify(endpoint)} };
-const leaf = await writeClaudeNative(target, 'packed leaf 字', { deadline: Date.now() + 1000 });
-let generic;
-if (process.platform === 'darwin') {
-  const handle = await connectExisting({ harness: 'claude', ...target });
-  generic = await sendText(handle, 'packed generic', { delivery: 'steer' });
-}
-console.log(JSON.stringify({ leaf, generic }));`)
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  await writeFile(join(consumer, 'claude.mjs'), `import { connect } from '@astrosheep/agent-delivery';
+const agent = await connect({ harness: 'claude', sessionId: 'external-claude', endpoint: ${JSON.stringify(endpoint)}, claudeHome: ${JSON.stringify(root)} });
+console.log(JSON.stringify({ keys: Object.keys(agent), receipt: await agent.steer('packed 字') }));`)
   const claude = JSON.parse((await exec(process.execPath, ['--import', './register.mjs', 'claude.mjs'], { ...options, cwd: consumer })).stdout)
-  assert.equal(claude.leaf.outcome, 'written')
-  assert.equal(frames[0].message.content, 'packed leaf 字')
-  if (process.platform === 'darwin') {
-    assert.deepEqual(claude.generic, { harness: 'claude', sessionId: 'external-claude', state: 'written' })
-    assert.equal(frames[1].message.content, 'packed generic')
-  }
-  assert.ok(frames.every((frame) => frame.session_id === 'external-claude' && frame.priority === 'next'))
+  assert.deepEqual(claude.keys, ['harness', 'sessionId', 'steer'])
+  assert.equal(claude.receipt.proof, 'written')
+  for (let i = 0; i < 200 && frames.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(frames, [{ msgV: 1, msg_id: claude.receipt.id, type: 'user', session_id: 'external-claude',
+    message: { role: 'user', content: 'packed 字' }, priority: 'next' }])
+
   // Core types must remain suitable for later leaf adapters without SDK dependencies.
   const types = await readFile(join(packageRoot, 'dist/types.d.ts'), 'utf8')
   assert.ok(!types.includes('@opencode'))
+  const indexTypes = await readFile(join(packageRoot, 'dist/index.d.ts'), 'utf8')
+  assert.ok(!indexTypes.includes('@opencode'))
 })

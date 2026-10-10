@@ -5,11 +5,17 @@ import { mkdtemp, lstat, chmod, unlink, writeFile, readFile, readdir } from 'nod
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
 import { once } from 'node:events'
-import { connectExisting, sendText, ConnectionError } from '../dist/index.js'
+import { connect, DeliveryError } from '../dist/index.js'
+import { connectPi, sendPiText } from '../dist/pi-client.js'
 import { createPiReceiver, sendPiMessage } from '../dist/pi.js'
 import { sandbox } from './sandbox-env.js'
 
 const mac = { skip: process.platform !== 'darwin' }
+const code = (expected) => (error) => {
+  assert.ok(error instanceof DeliveryError, `expected DeliveryError, got ${error}`)
+  assert.equal(error.code, expected)
+  return true
+}
 async function fixture(t) {
   const directory = await mkdtemp(join(sandbox, 'pi-'))
   const endpoint = join(directory, 'p.sock')
@@ -46,7 +52,7 @@ async function until(predicate) {
   }
   assert.fail('Expected native invocation')
 }
-const connect = (f, extra = {}) => connectExisting({ harness: 'pi', sessionId: 'pi-test-session', endpoint: f.endpoint, ...extra })
+const connectPiAgent = (f, extra = {}) => connect({ harness: 'pi', sessionId: 'pi-test-session', endpoint: f.endpoint, ...extra })
 
 test('native leaf preserves objects and options and has no scheduling or receipt behavior', () => {
   const message = { customType: 'custom', content: [{ type: 'text', text: 'unchanged' }], display: false, details: { a: 1 } }
@@ -61,12 +67,15 @@ test('receiver resolves endpoint lazily; identity and event correlation protect 
   const f = await fixture(t)
   assert.equal((await lstat(f.endpoint)).mode & 0o777, 0o600)
   await f.emit('session_start') // identical start does not reset receiver
-  await assert.rejects(connect(f, { sessionId: 'wrong' }), (e) => e instanceof ConnectionError && e.code === 'session_not_found')
-  const target = await connect(f)
-  assert.deepEqual(Object.keys(target), ['harness', 'sessionId'])
+  await assert.rejects(connectPiAgent(f, { sessionId: 'wrong' }), code('session_not_found'))
+  const agent = await connectPiAgent(f)
+  assert.equal(Object.isFrozen(agent), true)
+  assert.deepEqual(Object.keys(agent), ['harness', 'sessionId', 'steer', 'queue'])
+  assert.equal('steer' in agent, true)
+  assert.equal('queue' in agent, true)
   const text = ' /literal-command\n  中文🦈\u2028\u2029\t '
-  const a = sendText(target, text)
-  const b = sendText(target, text, { delivery: 'queue' })
+  const a = agent.steer(text)
+  const b = agent.queue(text)
   await until(() => f.sent.length === 2)
   assert.notEqual(f.sent[0].message.details.agentDelivery.deliveryId, f.sent[1].message.details.agentDelivery.deliveryId)
   assert.equal(f.sent[0].message.content, text)
@@ -82,31 +91,39 @@ test('receiver resolves endpoint lazily; identity and event correlation protect 
   await f.observe(f.sent[1].message)
   const receipts = await Promise.all([a, b])
   for (const [i, receipt] of receipts.entries()) {
-    assert.deepEqual(receipt, { harness: 'pi', sessionId: target.sessionId,
-      inputId: f.sent[i].message.details.agentDelivery.deliveryId, state: 'observed', evidence: 'message_end', delivery: i ? 'queue' : 'steer' })
-    assert.equal('entryId' in receipt, false)
+    assert.deepEqual(receipt, { id: f.sent[i].message.details.agentDelivery.deliveryId, proof: 'observed' })
   }
 })
 
 test('preabort and invalid requests never dispatch; postdispatch abort/timeout retire waits without retracting native custody', mac, async (t) => {
   const f = await fixture(t)
-  const target = await connect(f)
+  const agent = await connectPiAgent(f)
   const aborted = AbortSignal.abort('secret')
-  const pre = await sendText(target, 'not sent', { signal: aborted })
-  assert.equal(pre.state, 'unavailable'); assert.equal(pre.code, 'aborted')
+  await assert.rejects(agent.steer('not sent', { signal: aborted }), (error) => {
+    assert.equal(error.code, 'aborted')
+    assert.equal(error.maybeDelivered, false)
+    return true
+  })
+  const target = await connectPi({ harness: 'pi', sessionId: 'pi-test-session', endpoint: f.endpoint })
   for (const options of [{ inputId: 'caller-id' }, { timeoutMs: Infinity }, { timeoutMs: 30_001 }, { delivery: 'nextTurn' }]) {
-    await assert.rejects(sendText(target, 'invalid', options), TypeError)
+    await assert.rejects(sendPiText(target, 'invalid', options), TypeError)
   }
-  await assert.rejects(sendText({ ...target }, 'forged'), TypeError)
+  await assert.rejects(sendPiText({ ...target }, 'forged'), TypeError)
   assert.equal(f.sent.length, 0)
   const controller = new AbortController()
-  const sending = sendText(target, 'native may retain this', { signal: controller.signal })
+  const sending = agent.steer('native may retain this', { signal: controller.signal })
   await until(() => f.sent.length === 1)
   controller.abort('secret')
-  const post = await sending
-  assert.equal(post.state, 'unknown'); assert.equal(post.code, 'aborted')
-  const timeout = await sendText(target, 'late event', { timeoutMs: 25 })
-  assert.equal(timeout.state, 'unknown'); assert.equal(timeout.code, 'timeout')
+  await assert.rejects(sending, (error) => {
+    assert.equal(error.code, 'aborted')
+    assert.equal(error.maybeDelivered, true)
+    return true
+  })
+  await assert.rejects(agent.steer('late event', { timeoutMs: 25 }), (error) => {
+    assert.equal(error.code, 'timeout')
+    assert.equal(error.maybeDelivered, true)
+    return true
+  })
   assert.equal(f.sent.length, 2)
   await f.observe(f.sent[0].message)
   await f.observe(f.sent[1].message)
@@ -116,20 +133,22 @@ test('preabort and invalid requests never dispatch; postdispatch abort/timeout r
 
 test('replacement closes connections, rebinds identity and rejects stale targets; close is idempotent', mac, async (t) => {
   const f = await fixture(t)
-  const target = await connect(f)
-  const pending = sendText(target, 'old pending')
+  const agent = await connectPiAgent(f)
+  const pending = agent.steer('old pending').then(() => assert.fail('retired attempt must not observe'), (error) => error)
   await until(() => f.sent.length === 1)
   const oldCtx = f.ctx
   const newCtx = await f.replace('new-session')
-  assert.equal((await pending).state, 'unknown')
-  const stale = await sendText(target, 'must not dispatch')
-  assert.equal(stale.state, 'rejected'); assert.equal(stale.code, 'wrong_session')
-  const fresh = await connect(f, { sessionId: 'new-session' })
-  const sending = sendText(fresh, 'new pending')
+  const retired = await pending
+  assert.ok(retired instanceof DeliveryError)
+  assert.equal(retired.code, 'transport')
+  assert.equal(retired.maybeDelivered, true)
+  await assert.rejects(agent.steer('must not dispatch'), code('rejected'))
+  const fresh = await connectPiAgent(f, { sessionId: 'new-session' })
+  const sending = fresh.steer('new pending')
   await until(() => f.sent.length === 2)
   await f.observe(f.sent[0].message, oldCtx)
   await f.observe(f.sent[1].message, newCtx)
-  assert.equal((await sending).state, 'observed')
+  assert.deepEqual(await sending, { id: f.sent[1].message.details.agentDelivery.deliveryId, proof: 'observed' })
   // Closing must not delete a replacement file at the published endpoint.
   await unlink(f.endpoint)
   await writeFile(f.endpoint, 'replacement')
@@ -146,7 +165,7 @@ test('occupied endpoint fails closed, private parents and bounded malformed fram
   t.after(() => other.close())
   await assert.rejects(start({}, f.ctx), /listener unavailable/)
   assert.equal((await lstat(f.endpoint)).isSocket(), true)
-  await connect(f)
+  await connectPiAgent(f)
   const publicParent = await mkdtemp(join(sandbox, 'public-'))
   await chmod(publicParent, 0o755)
   let unsafeStart

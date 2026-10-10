@@ -1,19 +1,21 @@
 import './sandbox-env.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import net from 'node:net'
 import { once } from 'node:events'
-import { syncBuiltinESMExports } from 'node:module'
-import { connectExisting, sendText, ConnectionError } from '../dist/index.js'
+import { connect, DeliveryError } from '../dist/index.js'
 import { writeClaudeNative } from '../dist/claude-native.js'
 import { sandbox } from './sandbox-env.js'
+
+const deadline = () => Date.now() + 1_000
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 async function fixture(t, pause = false) {
   const root = await mkdtemp(join(sandbox, 'claude-'))
   const endpoint = join(root, 'in.sock')
+  const home = join(root, 'home')
   const sockets = new Set()
   const frames = []
   const server = net.createServer((socket) => {
@@ -21,10 +23,13 @@ async function fixture(t, pause = false) {
     socket.on('close', () => sockets.delete(socket))
     socket.on('error', () => {})
     if (pause) { socket.pause(); return }
-    let bytes = Buffer.alloc(0)
+    let bytes = ''
     socket.on('data', (part) => {
-      bytes = Buffer.concat([bytes, part])
-      if (bytes.at(-1) === 10) { frames.push(bytes); server.emit('frame', bytes) }
+      bytes += part.toString('utf8')
+      for (let index = bytes.indexOf('\n'); index >= 0; index = bytes.indexOf('\n')) {
+        frames.push(JSON.parse(bytes.slice(0, index)))
+        bytes = bytes.slice(index + 1)
+      }
     })
   })
   server.listen(endpoint)
@@ -33,90 +38,90 @@ async function fixture(t, pause = false) {
     for (const socket of sockets) socket.destroy()
     await new Promise((resolve) => server.close(resolve))
   })
-  return { endpoint, frames, server, root }
+  return { endpoint, home, frames, server, root }
 }
-const deadline = () => Date.now() + 1000
-const mac = { skip: process.platform !== 'darwin' }
-const code = (expected) => (error) => error instanceof ConnectionError && error.code === expected
 
-test('generic Claude sender and shared leaf send exact tokenless NDJSON once, never admission', mac, async (t) => {
+async function received(f, count) {
+  for (let i = 0; i < 200 && f.frames.length < count; i++) await new Promise((done) => setTimeout(done, 5))
+  assert.equal(f.frames.length, count)
+}
+
+const connectClaude = (f, extra = {}) => connect({ harness: 'claude', sessionId: 'explicit-session', endpoint: f.endpoint, claudeHome: f.home, ...extra })
+const code = (expected) => (error) => {
+  assert.ok(error instanceof DeliveryError, `expected DeliveryError, got ${error}`)
+  assert.equal(error.code, expected)
+  return true
+}
+
+test('connect exposes one capability: steer writes exactly one user frame and returns its message id', async (t) => {
   const f = await fixture(t)
-  const target = await connectExisting({ harness: 'claude', sessionId: 'explicit-session', endpoint: f.endpoint })
-  assert.deepEqual(Object.keys(target), ['harness', 'sessionId'])
-  assert.ok(Object.isFrozen(target))
+  const agent = await connectClaude(f)
+  assert.equal(Object.isFrozen(agent), true)
+  assert.deepEqual(Object.keys(agent), ['harness', 'sessionId', 'steer'])
+  assert.equal('queue' in agent, false)
+  assert.equal(agent.harness, 'claude')
+  assert.equal(agent.sessionId, 'explicit-session')
+
   const text = 'Unicode 字, newline\n"quoted" body'
-  const received = once(f.server, 'frame')
-  assert.deepEqual(await sendText(target, text), { harness: 'claude', sessionId: 'explicit-session', state: 'written' })
-  await received
-  const frame = JSON.parse(f.frames[0].toString('utf8'))
-  const { msg_id, ...body } = frame
-  assert.match(msg_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  const receipt = await agent.steer(text)
+  assert.equal(receipt.proof, 'written')
+  assert.match(receipt.id, uuid)
+  await received(f, 1)
+  const { msg_id, ...body } = f.frames[0]
+  assert.equal(msg_id, receipt.id)
   assert.deepEqual(body, { msgV: 1, type: 'user', session_id: 'explicit-session', message: { role: 'user', content: text }, priority: 'next' })
-  assert.equal(f.frames[0].filter((byte) => byte === 10).length, 1)
-  const receivedAgain = once(f.server, 'frame')
-  assert.equal((await writeClaudeNative({ sessionId: target.sessionId, endpoint: f.endpoint }, text, { deadline: deadline() })).outcome, 'written')
-  await receivedAgain
-  assert.notEqual(JSON.parse(f.frames[1].toString()).msg_id, msg_id)
-  assert.equal(f.frames.length, 2)
-  for (const options of [{ delivery: 'queue' }, { inputId: 'msg_id' }, { inputId: '00000000-0000-4000-8000-000000000000' }]) {
-    await assert.rejects(sendText(target, text, options), TypeError)
-  }
-  await assert.rejects(sendText({ ...target }, text), TypeError)
-  await assert.rejects(sendText(target, ''), TypeError)
-  assert.equal(f.frames.length, 2, 'unsupported options do not write')
-  const aborted = AbortSignal.abort('private reason')
-  assert.deepEqual(await sendText(target, text, { signal: aborted }), { harness: 'claude', sessionId: target.sessionId, state: 'unavailable', code: 'aborted' })
-  await new Promise((resolve) => f.server.close(resolve))
-  const result = await sendText(target, 'do not log this')
-  assert.deepEqual(result, { harness: 'claude', sessionId: target.sessionId, state: 'unavailable', code: 'endpoint_unavailable' })
-  assert.ok(!JSON.stringify(result).includes(f.endpoint))
+
+  const second = await agent.steer('again')
+  await received(f, 2)
+  assert.notEqual(second.id, receipt.id)
+  assert.equal(f.frames[1].msg_id, second.id)
 })
 
-test('connection checks explicit socket without sending; invalid, absent and non-socket coordinates fail closed', async (t) => {
+test('connect preconditions reject before any socket work', async (t) => {
   const f = await fixture(t)
-  const options = { harness: 'claude', sessionId: 'session', endpoint: f.endpoint }
-  for (const extra of [{ endpoint: 'relative' }, { endpoint: '/tmp/\0invalid' }, { sessionId: ' ' }, { timeoutMs: Infinity }, { signal: {} }]) {
-    await assert.rejects(connectExisting({ ...options, ...extra }), code('invalid_arguments'))
+  for (const extra of [{ endpoint: 'relative' }, { endpoint: '/tmp/\0invalid' }, { sessionId: ' ' },
+    { timeoutMs: Infinity }, { timeoutMs: 0 }, { signal: {} }, { endpoint: 42 }]) {
+    await assert.rejects(connectClaude(f, extra), code('invalid_arguments'))
   }
-  if (process.platform !== 'darwin') {
-    await assert.rejects(connectExisting(options), code('unsupported_platform'))
-    return
+  if (process.platform !== 'win32') {
+    // A named pipe is a Windows coordinate; this host has no platform injection to offer.
+    await assert.rejects(connectClaude(f, { endpoint: '\\\\.\\pipe\\claude-inbox' }), code('invalid_arguments'))
   }
-  await assert.rejects(connectExisting({ ...options, signal: AbortSignal.abort() }), code('aborted'))
-  await assert.rejects(connectExisting({ ...options, endpoint: join(f.root, 'dead') }), code('service_unavailable'))
-  const file = join(f.root, 'not-socket')
-  await writeFile(file, 'not a socket')
-  await assert.rejects(connectExisting({ ...options, endpoint: file }), code('service_unavailable'))
-  await connectExisting(options)
+  await assert.rejects(connect({ harness: 'claude' }), code('invalid_arguments'))
   assert.equal(f.frames.length, 0)
 })
 
-test('filesystem connection waiting is cancellable/bounded with no late target or socket attempt', mac, async (t) => {
+test('send failures are DeliveryErrors: unavailable endpoint, invalid arguments, abort before write', async (t) => {
   const f = await fixture(t)
-  const original = fs.promises.stat
-  let resolveStat
-  let calls = 0
-  fs.promises.stat = () => { calls++; return new Promise((resolve) => { resolveStat = resolve }) }
-  syncBuiltinESMExports()
-  t.after(() => { fs.promises.stat = original; syncBuiltinESMExports() })
-  const options = { harness: 'claude', sessionId: 'session', endpoint: f.endpoint }
-  await assert.rejects(connectExisting({ ...options, signal: AbortSignal.abort() }), code('aborted'))
-  assert.equal(calls, 0)
-  await assert.rejects(connectExisting({ ...options, timeoutMs: 30 }), code('timeout'))
-  resolveStat({ isSocket: () => true })
-  const controller = new AbortController()
-  const pending = connectExisting({ ...options, signal: controller.signal })
-  await new Promise((resolve) => setImmediate(resolve))
-  controller.abort()
-  await assert.rejects(pending, code('aborted'))
-  resolveStat({ isSocket: () => true })
-  assert.equal(calls, 2)
+  const agent = await connectClaude(f)
+  await assert.rejects(agent.steer(''), code('invalid_arguments'))
+  await assert.rejects(agent.steer('text', { timeoutMs: NaN }), code('invalid_arguments'))
+  await assert.rejects(agent.steer('text', { signal: {} }), code('invalid_arguments'))
+  await assert.rejects(agent.steer('text', 'nonsense'), code('invalid_arguments'))
+  const aborted = AbortSignal.abort('private reason')
+  await assert.rejects(agent.steer('never sent', { signal: aborted }), (error) => {
+    assert.equal(error.code, 'aborted')
+    assert.equal(error.maybeDelivered, false)
+    return true
+  })
+  assert.equal(f.frames.length, 0)
+
+  const absent = await connectClaude(f, { endpoint: join(f.root, 'dead.sock') })
+  await assert.rejects(absent.steer('nowhere'), (error) => {
+    assert.equal(error.code, 'unavailable')
+    assert.equal(error.maybeDelivered, false)
+    assert.ok(!error.message.includes(f.root))
+    return true
+  })
+  const file = join(f.root, 'not-a-socket')
+  await writeFile(file, 'not a socket')
+  await assert.rejects((await connectClaude(f, { endpoint: file })).steer('nowhere'), code('unavailable'))
   assert.equal(f.frames.length, 0)
 })
 
 test('native I/O distinguishes known-unsent from connected uncertainty and never retries stalled writes', async (t) => {
   const f = await fixture(t, true)
-  const target = { sessionId: 'session', endpoint: f.endpoint }
+  const target = { sessionId: 'session', endpoint: f.endpoint, claudeHome: f.home, env: {} }
   for (const control of [{ deadline: NaN }, { deadline: Infinity }, { deadline: Date.now() + 2_147_483_648 }]) {
     assert.equal((await writeClaudeNative(target, 'body', control)).code, 'invalid_arguments')
   }

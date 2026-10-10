@@ -33,7 +33,7 @@ await writeFile(join(consumer, 'package.json'), JSON.stringify({ type: 'module',
 await run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(root, deliveryPack.filename), join(root, squarePack.filename)], consumer)
 const packageRoot = join(consumer, 'node_modules/@astrosheep/agent-delivery')
 const squareRoot = join(consumer, 'node_modules/@astrosheep/square')
-const { connectExisting, sendText } = await import(pathToFileURL(join(packageRoot, 'dist/index.js')))
+const { connect, DeliveryError } = await import(pathToFileURL(join(packageRoot, 'dist/index.js')))
 const { Square } = await import(pathToFileURL(join(squareRoot, 'dist/index.js')))
 await mkdir(join(root, 'cwd/.square'))
 const squarePath = join(root, 'cwd/.square/PUBLIC.square')
@@ -54,10 +54,10 @@ export default function(pi) {
     JSON.stringify({message:e.message,sessionId:ctx.sessionManager.getSessionId()})+'\\n'));
 }`
 await writeFile(join(consumer, 'extension.js'), extension)
-await writeFile(join(consumer, 'external-client.mjs'), `import {connectExisting,sendText} from '@astrosheep/agent-delivery';
+await writeFile(join(consumer, 'external-client.mjs'), `import {connect} from '@astrosheep/agent-delivery';
 const {sessionId,endpoint,text}=JSON.parse(process.argv[2]);
-const target=await connectExisting({harness:'pi',sessionId,endpoint});
-console.log(JSON.stringify(await sendText(target,text)));`)
+const agent=await connect({harness:'pi',sessionId,endpoint});
+console.log(JSON.stringify(await agent.steer(text)));`)
 const checks = [], requests = [], records = [], held = new Map()
 const log = (data) => appendFileSync(join(root, 'runtime.jsonl'), JSON.stringify(data) + '\n')
 const texts = (item) => item.body.messages.filter((m) => m.role === 'user').flatMap((m) => typeof m.content === 'string'
@@ -126,29 +126,31 @@ try {
   const state = await rpc('get_state')
   await wait(() => existsSync(endpoint), 'socket')
   assert.equal((await stat(endpoint)).mode & 0o777, 0o600)
-  const target = await connectExisting({ harness: 'pi', sessionId: state.sessionId, endpoint })
-  await assert.rejects(connectExisting({ harness: 'pi', sessionId: 'wrong', endpoint }), (e) => e.code === 'session_not_found')
+  const agent = await connect({ harness: 'pi', sessionId: state.sessionId, endpoint })
+  await assert.rejects(connect({ harness: 'pi', sessionId: 'wrong', endpoint }),
+    (e) => e instanceof DeliveryError && e.code === 'session_not_found')
   let n = settled()
   const exact = '/not-a-command\n  exact 多字节 🦈\u2028line\u2029paragraph\n'
   const external = JSON.parse((await run(process.execPath, [join(consumer, 'external-client.mjs'),
     JSON.stringify({ sessionId: state.sessionId, endpoint, text: exact })], consumer)).stdout)
-  assert.equal(external.state, 'observed'); assert.equal(external.evidence, 'message_end')
+  assert.equal(external.proof, 'observed')
   await awaitSettled(n)
   assert.ok(requests.some((r) => contains(r, exact)))
-  assert.ok(!JSON.stringify(requests).includes(external.inputId))
+  assert.ok(!JSON.stringify(requests).includes(external.id))
   await writeFile(join(root, 'external-receipt.json'), JSON.stringify(external, null, 2))
   checks.push('fresh standalone tarball external process: exact idle steer, correlated message_end, metadata absent from model')
-  n = settled(); assert.equal((await sendText(target, 'IDLE_QUEUE', { delivery: 'queue' })).state, 'observed')
+  n = settled(); assert.equal((await agent.queue('IDLE_QUEUE')).proof, 'observed')
   await awaitSettled(n); assert.ok(requests.some((r) => contains(r, 'IDLE_QUEUE')))
   checks.push('idle queue wakes model work')
   for (const delivery of ['steer', 'queue']) {
     const marker = 'BUSY_' + delivery; n = settled(); const from = requests.length
     await rpc('prompt', { message: marker }); await wait(() => held.has(marker), 'held request')
     let finished = false
-    const sending = sendText(target, 'INJECT_' + delivery, { delivery }).then((r) => { finished = true; return r })
+    const sending = (delivery === 'steer' ? agent.steer('INJECT_' + delivery) : agent.queue('INJECT_' + delivery))
+      .then((r) => { finished = true; return r })
     await dispatched(); assert.equal(finished, false)
     held.get(marker).finish()
-    assert.equal((await sending).state, 'observed'); await awaitSettled(n)
+    assert.equal((await sending).proof, 'observed'); await awaitSettled(n)
     const batch = requests.slice(from)
     assert.equal(contains(batch[0], 'INJECT_' + delivery), false)
     assert.ok(batch[1].body.messages.some((m) => m.role === 'tool'))
@@ -165,29 +167,32 @@ try {
   assert.ok(nativeSquare); assert.equal(nativeSquare.message.display, false)
   assert.ok(requests.some((r) => texts(r).some((text) => text.includes('real shared Square leaf'))))
   checks.push('one packed actual Square extension handles both shared native activity and optional external receiver')
-  const pre = await sendText(target, 'NEVER_SENT', { signal: AbortSignal.abort() })
-  assert.equal(pre.state, 'unavailable')
+  const pre = await agent.steer('NEVER_SENT', { signal: AbortSignal.abort() })
+    .then(() => assert.fail('preabort must reject'), (error) => error)
+  assert.ok(pre instanceof DeliveryError); assert.equal(pre.code, 'aborted'); assert.equal(pre.maybeDelivered, false)
   for (const kind of ['abort', 'timeout']) {
     const marker = 'HOLD_' + kind; n = settled()
     await rpc('prompt', { message: marker }); await wait(() => held.has(marker), marker)
     const controller = new AbortController()
-    const pending = sendText(target, 'LATE_' + kind, { timeoutMs: kind === 'timeout' ? 70 : 5_000, signal: controller.signal })
+    const pending = agent.steer('LATE_' + kind, { timeoutMs: kind === 'timeout' ? 70 : 5_000, signal: controller.signal })
+      .then(() => assert.fail('late ' + kind + ' must reject'), (error) => error)
     await dispatched()
     if (kind === 'abort') controller.abort()
-    const result = await pending; assert.equal(result.state, 'unknown'); assert.equal(result.code, kind === 'abort' ? 'aborted' : 'timeout')
+    const result = await pending; assert.ok(result instanceof DeliveryError)
+    assert.equal(result.code, kind === 'abort' ? 'aborted' : 'timeout'); assert.equal(result.maybeDelivered, true)
     held.get(marker).finish(); await awaitSettled(n)
     assert.ok(requests.some((r) => contains(r, 'LATE_' + kind)))
   }
   checks.push('preabort never sends; postdispatch abort/timeout unknown without stopping model or retracting native text')
   await rpc('prompt', { message: 'HOLD_replace' }); await wait(() => held.has('HOLD_replace'), 'replacement hold')
-  const outgoing = sendText(target, 'OUTGOING_MUST_NOT_CROSS')
+  const outgoing = agent.steer('OUTGOING_MUST_NOT_CROSS').then(() => assert.fail('retired attempt must not observe'), (error) => error)
   await dispatched()
   await rpc('new_session')
-  assert.equal((await outgoing).state, 'unknown')
+  assert.ok((await outgoing) instanceof DeliveryError)
   const next = await rpc('get_state'); assert.notEqual(next.sessionId, state.sessionId)
-  assert.equal((await sendText(target, 'STALE')).state, 'rejected')
-  const fresh = await connectExisting({ harness: 'pi', sessionId: next.sessionId, endpoint })
-  n = settled(); assert.equal((await sendText(fresh, 'NEW_SESSION_TEXT')).state, 'observed'); await awaitSettled(n)
+  await assert.rejects(agent.steer('STALE'), (error) => error instanceof DeliveryError && error.code === 'rejected')
+  const fresh = await connect({ harness: 'pi', sessionId: next.sessionId, endpoint })
+  n = settled(); assert.equal((await fresh.steer('NEW_SESSION_TEXT')).proof, 'observed'); await awaitSettled(n)
   assert.ok(!requests.some((r) => contains(r, 'OUTGOING_MUST_NOT_CROSS')))
   checks.push('actual new_session retires waiting delivery, rebinds endpoint and rejects stale target')
   child.stdin.end(); await wait(() => child.exitCode !== null, 'shutdown')
