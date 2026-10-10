@@ -1,4 +1,4 @@
-import { audienceOf, formatActivityId, parseActivityId, type Perception } from './square-core.js';
+import { activityAuthors, audienceOf, formatActivityId, parseActivityId, type Perception } from './square-core.js';
 import { derivePerceptionProjection, type PerceptionProjection } from './perception-projection.js';
 import { recordObservation } from './runtime.js';
 import { matchesCatchSelection } from './catch-selection.js';
@@ -76,13 +76,15 @@ export function decideCatch(
     };
   }
   const filter = { participants: options.from, mention: options.mention === true ? viewer : undefined };
+  const authors = activityAuthors(state.acts);
   const delivered: StoredAct[] = [];
   const perceptions = new Map<number, Perception>();
 
   const matching: StoredAct[] = [];
   for (const activity of state.acts) {
     if (activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) continue;
-    if (!matchesCatchSelection(activity.actor, audienceOf(activity), filter)) continue;
+    const replyAuthor = activity.reply === undefined ? undefined : authors.get(activity.reply);
+    if (!matchesCatchSelection(activity.actor, audienceOf(activity), filter, replyAuthor)) continue;
     if (delivery.isSeen(viewer, activity.index)) continue;
     matching.push(activity);
   }

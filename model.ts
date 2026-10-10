@@ -111,7 +111,7 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
-export type DirectedNotificationRoute = 'mention' | 'attention' | 'bell';
+export type DirectedNotificationRoute = 'mention' | 'reply' | 'attention' | 'bell';
 
 export interface InboxNotification {
   actIndex: number;

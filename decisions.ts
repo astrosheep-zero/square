@@ -23,7 +23,7 @@ import {
   THROTTLE_WINDOW_MS,
 } from './runtime.js';
 import { actDelta, directedPeerSays } from './activity-feed.js';
-import { formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
+import { actorOf, formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
 import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
 import { compileSearchPattern } from './search.js';
 import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
@@ -118,6 +118,8 @@ export type ActDecision =
   | {
       type: 'sent';
       act: Act;
+      /** The replied-to author was not standing, so the reply landed without reaching them. */
+      replyAuthorNotHere?: string;
     }
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped'; count: number; hardCap: number }
@@ -233,6 +235,14 @@ export function decideAct(
       throw new SquareError('invalid_args', `Unknown reply activity: ${label}`);
     }
   }
+  // A non-standing author never rejects the activity: the reply still lands and the
+  // speaker is told the notification did not reach them.
+  const repliedTo = reply === undefined ? undefined : squareState.acts.find((act) => act.index === reply);
+  const repliedToAuthor = repliedTo === undefined ? undefined : actorOf(repliedTo);
+  const replyAuthorNotHere = repliedToAuthor === undefined || sameName(repliedToAuthor, name)
+    || state.participants.some((participant) => participant.joined && sameName(participant.name, repliedToAuthor))
+    ? undefined
+    : repliedToAuthor;
 
   const result = validate(
     state,
@@ -273,6 +283,7 @@ export function decideAct(
       ...(reach !== undefined ? { reach } : {}),
       ...(reply !== undefined ? { reply } : {}),
     },
+    ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }),
   };
 }
 

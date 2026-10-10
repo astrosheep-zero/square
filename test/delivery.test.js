@@ -44,6 +44,57 @@ test('every reach mode addresses exactly its eligible peers', () => {
   assert.deepEqual(plannedRecipients(delivery, square.acts[7]), []);
 });
 
+test('a reply reaches its author with route reply and the full body', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'say', actor: 'Bob', at: 4, body: 'question' },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'answer', reply: 3 },
+  ]);
+  const delivery = deriveDeliveryModel(square);
+
+  assert.deepEqual(plannedRecipients(delivery, square.acts[4]), ['Bob:reply']);
+  assert.deepEqual(delivery.pendingFor('Bob').map(({ item, route }) => `${item.index}:${route}`), ['4:reply']);
+  assert.equal(perceiveActivity(square, square.acts[4], 'Bob'), 'full');
+  assert.equal(perceiveActivity(square, square.acts[4], 'Cara'), 'presence');
+});
+
+test('reply attention combines with mentions and bells, and skips an absent or ignoring author', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'say', actor: 'Bob', at: 4, body: 'question' },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'answer @Cara', mentions: ['Cara'], reply: 3 },
+    { kind: 'say', actor: 'Alice', at: 6, body: 'answer @Bob', mentions: ['Bob'], reply: 3 },
+    { kind: 'say', actor: 'Alice', at: 7, body: 'answer everyone', reach: 'bell', reply: 3 },
+    { kind: 'say', actor: 'Alice', at: 8, body: 'note to self', reply: 4 },
+  ]);
+  const delivery = deriveDeliveryModel(square);
+
+  assert.deepEqual(plannedRecipients(delivery, square.acts[4]), ['Cara:mention', 'Bob:reply']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[5]), ['Bob:mention']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[6]), ['Bob:bell', 'Cara:bell']);
+  assert.deepEqual(plannedRecipients(delivery, square.acts[7]), []);
+
+  const absent = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'say', actor: 'Bob', at: 3, body: 'question' },
+    { kind: 'done', actor: 'Bob', at: 4 },
+    { kind: 'say', actor: 'Alice', at: 5, body: 'late answer', reply: 2 },
+    { kind: 'join', actor: 'Bob', at: 6 },
+    { kind: 'say', actor: 'Bob', at: 7, body: 'again' },
+    { kind: 'ignore', actor: 'Bob', target: 'Alice', at: 8 },
+    { kind: 'say', actor: 'Alice', at: 9, body: 'ignored answer', reply: 6 },
+  ]);
+  const absentDelivery = deriveDeliveryModel(absent);
+
+  assert.deepEqual(plannedRecipients(absentDelivery, absent.acts[4]), []);
+  assert.deepEqual(plannedRecipients(absentDelivery, absent.acts[8]), []);
+});
+
 test('pending attention is post-join, independent of the read cursor, and closes only with a receipt', () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, body: '' },
@@ -257,6 +308,25 @@ test('bells satisfy mention filtering but still require the catch sender filter'
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'] } }, notification), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['alice'], mention: 'bob' } }, notification), true);
   assert.deepEqual(decideCatch(square, 'BOB', { from: ['alice'], mention: true }, 12).delivered.map(({ index }) => index), [3]);
+});
+
+test('mention filtering matches a reply to the viewer like a mention', () => {
+  const square = squareState([
+    { kind: 'join', actor: 'Alice', at: 1 },
+    { kind: 'join', actor: 'Bob', at: 2 },
+    { kind: 'join', actor: 'Cara', at: 3 },
+    { kind: 'say', actor: 'Cara', body: 'question', at: 4 },
+    { kind: 'say', actor: 'Alice', body: 'answer to Cara', reply: 3, at: 5 },
+    { kind: 'say', actor: 'Bob', body: 'question', at: 6 },
+    { kind: 'say', actor: 'Alice', body: 'answer to Bob', reply: 5, at: 7 },
+  ]);
+  const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { mention: 'Bob' } };
+  const pending = deriveDeliveryModel(square).pendingFor('Bob');
+  assert.deepEqual(pending.map(({ item, route }) => `${item.index}:${route}`), ['6:reply']);
+  for (const { item, recipient, route } of pending) {
+    assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), true);
+  }
+  assert.deepEqual(decideCatch(square, 'Bob', { mention: true }, 11).delivered.map(({ index }) => index), [6]);
 });
 
 test('a catch lease owns all matching unread notifications beyond the current page', () => {

@@ -191,8 +191,11 @@ export async function cmdActivity(
             ? 'your gesture lands'
             : 'your words land'} — ${receiptId}${style('dim', capCount)}`;
     const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
+    const replyNotice = landed.replyAuthorNotHere === undefined
+      ? ''
+      : `\n○ ${participantIdentity(landed.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
     const reentry = reentered ? '● you stepped back into the square\n' : '';
-    process.stdout.write(withPathOutput(squarePath, reentry + withHint + pending, { participantCount: headerCount, held }));
+    process.stdout.write(withPathOutput(squarePath, reentry + withHint + replyNotice + pending, { participantCount: headerCount, held }));
   } catch (error) {
     // Save before any recovery read: even a broken artifact must not eat the body.
     const draftPath = saveActivityDraft(squarePath, name, rawInput);

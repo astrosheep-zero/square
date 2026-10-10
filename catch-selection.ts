@@ -6,9 +6,14 @@ export function matchesCatchSelection(
   actor: string,
   audience: Audience,
   filter: { readonly participants?: readonly string[]; readonly mention?: string },
+  replyAuthor?: string,
 ): boolean {
   if (filter.participants !== undefined && !filter.participants.some((participant) => sameName(participant, actor))) {
     return false;
   }
-  return filter.mention === undefined || audienceIncludes(audience, filter.mention);
+  if (filter.mention === undefined) return true;
+  // A reply is directed attention in its own right: the viewer is reached as the
+  // author of the activity they answered, exactly like a mention.
+  return audienceIncludes(audience, filter.mention)
+    || (replyAuthor !== undefined && sameName(replyAuthor, filter.mention));
 }

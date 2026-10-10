@@ -34,6 +34,7 @@ export function displayAttentionPath(squarePath: string): string {
 export function renderAttentionDescription({ actor, recipient, route }: Pick<AttentionPreview, 'actor' | 'recipient' | 'route'>): string {
   switch (route) {
     case 'mention': return `${actor} addressed you (${recipient})`;
+    case 'reply': return `${actor} replied to you (${recipient})`;
     case 'attention': return `${actor} spoke · you’re listening to ${actor}`;
     case 'bell': return `${actor} rang the bell · everyone’s attention`;
   }

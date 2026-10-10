@@ -143,12 +143,28 @@ export function isIgnored(state: FoldedSquareState, listener: string, sender: st
   return (state.ignored.get(nameKey(listener)) ?? []).some((target) => sameName(target, sender));
 }
 
-function recipientsAtLanding(before: FoldedSquareState, say: Extract<Act, { kind: 'say' }>): string[] {
+/** The author of every landed activity, keyed by index; a reply audience derives from this. */
+export function activityAuthors(acts: readonly Act[]): Map<number, Participant> {
+  const authors = new Map<number, Participant>();
+  for (const act of acts) {
+    const actor = actorOf(act);
+    if (actor === undefined || !('index' in act) || typeof act.index !== 'number') continue;
+    authors.set(act.index, actor);
+  }
+  return authors;
+}
+
+function recipientsAtLanding(before: FoldedSquareState, say: Extract<Act, { kind: 'say' }>, authors: ReadonlyMap<number, Participant>): string[] {
   const audience = audienceOf(say);
-  const mentionTargets = resolveAudience(audience, before.participants.filter((participant) => participant.joined).map((participant) => participant.name));
+  const standing = before.participants.filter((participant) => participant.joined).map((participant) => participant.name);
+  const mentionTargets = resolveAudience(audience, standing);
+  // A reply is directed attention in its own right: it reaches the author of the
+  // replied-to activity under the same standing and ignore rules as a mention.
+  const replyAuthor = say.reply === undefined ? undefined : authors.get(say.reply);
+  const replyTargets = replyAuthor === undefined ? [] : resolveAudience({ kind: 'mentions', names: [replyAuthor] }, standing);
   const listeners = activeListeners(before, say.actor);
   const recipients: string[] = [];
-  for (const name of [...mentionTargets, ...listeners]) {
+  for (const name of [...mentionTargets, ...replyTargets, ...listeners]) {
     if (sameName(name, say.actor) || recipients.some((existing) => sameName(existing, name))) continue;
     if (audience.kind !== 'bell' && isIgnored(before, name, say.actor)) continue;
     recipients.push(name);
@@ -164,7 +180,7 @@ export function isListening(state: FoldedSquareState, listener: string, sender: 
   return listeningTo(state, listener).some((target) => sameName(target, sender));
 }
 
-function actorOf(act: Act): Participant | undefined {
+export function actorOf(act: Act): Participant | undefined {
   if ('actor' in act && typeof act.actor === 'string') return act.actor;
   return undefined;
 }
@@ -328,10 +344,11 @@ export function replayLandedAudiences(acts: readonly Act[]): LandedAudienceRepla
   const byActivity = new Map<Act, readonly Participant[]>();
   const byIndex = new Map<number, readonly Participant[]>();
   const lastJoinByKey = new Map<string, number>();
+  const authors = activityAuthors(acts);
 
   for (const act of acts) {
     if (act.kind === 'say') {
-      const recipients = recipientsAtLanding(accumulator.state, act);
+      const recipients = recipientsAtLanding(accumulator.state, act, authors);
       byActivity.set(act, recipients);
       const index = 'index' in act ? act.index : undefined;
       if (typeof index === 'number') byIndex.set(index, recipients);

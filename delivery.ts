@@ -6,8 +6,9 @@ import {
   type WakeRoute,
   type WakeRouteKind,
   findParticipantName,
+  sameName,
 } from './model.js';
-import { audienceOf, replayLandedAudiences, type Perception } from './square-core.js';
+import { activityAuthors, audienceOf, replayLandedAudiences, type Perception } from './square-core.js';
 import { derivePerceptionProjection } from './perception-projection.js';
 import { matchesMentionTarget, recordObservation } from './runtime.js';
 import { matchesCatchSelection } from './catch-selection.js';
@@ -83,6 +84,7 @@ export function isActivitySeen(squareState: SquareState, name: string, actOrInde
  */
 export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
   const landed = replayLandedAudiences(squareState.acts);
+  const authors = activityAuthors(squareState.acts);
   const perception = derivePerceptionProjection(squareState, landed);
   const roster = [...landed.joined];
   const plannedByIndex = new Map<number, PlannedNotification[]>();
@@ -100,10 +102,13 @@ export function deriveDeliveryModel(squareState: SquareState): DeliveryModel {
     const sayItem = item as SayItem;
     const audience = audienceOf(sayItem);
     const recipients = landed.recipientsFor(sayItem);
+    const replyAuthor = sayItem.reply === undefined ? undefined : authors.get(sayItem.reply);
     const planned = recipients.map((recipient) => {
       const route: DirectedNotificationRoute = audience.kind === 'bell'
         ? 'bell'
-        : matchesMentionTarget(sayItem, recipient) ? 'mention' : 'attention';
+        : matchesMentionTarget(sayItem, recipient) ? 'mention'
+          : replyAuthor !== undefined && sameName(replyAuthor, recipient) ? 'reply'
+            : 'attention';
       return { item: sayItem, recipient, route };
     });
     plannedByIndex.set(item.index, planned);
@@ -167,5 +172,7 @@ export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNot
       ? { kind: 'bell' }
       : { kind: 'mentions', names: notification.route === 'mention' ? [notification.recipient] : [] },
     lease.filter ?? {},
+    // A reply reaches the recipient as the author of the activity it answers.
+    notification.route === 'reply' ? notification.recipient : undefined,
   );
 }

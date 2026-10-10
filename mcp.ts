@@ -50,8 +50,8 @@ function publicResult(name: string, value: unknown): unknown {
     };
   }
   if (name === 'express' || name === 'hold' || name === 'resume' || name === 'done') {
-    const result = value as { activity?: Activity | null; waited?: boolean };
-    return { ...(result.activity === undefined ? {} : { activity: result.activity === null ? null : publicActivity(result.activity) }), ...(result.waited === undefined ? {} : { waited: result.waited }) };
+    const result = value as { activity?: Activity | null; waited?: boolean; replyAuthorNotHere?: string };
+    return { ...(result.activity === undefined ? {} : { activity: result.activity === null ? null : publicActivity(result.activity) }), ...(result.waited === undefined ? {} : { waited: result.waited }), ...(result.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: result.replyAuthorNotHere }) };
   }
   if (name === 'history') return { activities: value };
   if (name === 'participants') return { participants: value };

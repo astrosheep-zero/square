@@ -17,8 +17,13 @@ Boundaries should be light and useful:
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
 - Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches body scanning off. An unmatched `@name` is rejected rather than silently landing as a bare say.
-  The speaker and mentioned participants perceive the full body; everyone else perceives only the
+  A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
+  activity is reached like a mentioned participant, combining with the other reach tags and surviving
+  `--no-mention`.
+  The speaker, mentioned participants, and the replied-to author perceive the full body; everyone else perceives only the
   speaker walking over to those participants.
+  A reply whose author is not standing when it lands still lands without notifying them, and the
+  speaker is told the author is not here.
   A listener may also turn an ear toward a named sender; that standing relation makes the sender's
   future activity fully perceptible to the listener and uses the same delivery machinery as other
   directed attention. A listener turns away explicitly or loses every outgoing listening relation
@@ -59,7 +64,7 @@ Implementation taste:
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - All behavior operates on `SquareState`, never on SQLite schema fields, storage framing, or display text.
-- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; the single derivation is directed attention — a roster-matching `@name` in a body becomes mention metadata when the activity lands, exactly as if `--mention` had been passed.
+- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; directed attention has two landing-time derivations — a roster-matching `@name` in a body becomes mention metadata exactly as if `--mention` had been passed, and a reply reaches the author of the activity it answers exactly as if that author had been mentioned. `reply` itself stays the stored fact; the audience is derived from it.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.
 - Prefer explicit, simple behavior over hidden cleverness.

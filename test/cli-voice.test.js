@@ -135,6 +135,20 @@ test('express receipts name the act: words, gesture, walk-over, and the bell', a
   assert.match(bell.stdout, /● you ring the bell — everyone turns · act\/\d+/);
 });
 
+test('a reply to an author who stepped out says the reply did not reach them', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('question', { force: true, noMention: true });
+    await bob.done();
+  });
+
+  const result = run(withName(file, 'Alice', ['express', '--force', '--reply', 'act/2', 'answer']));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /● your words land — act\/4/);
+  assert.match(result.stdout, /○ @Bob isn't in the square right now — the reply landed without reaching them/);
+});
+
 test('unread activity appended to a receipt is led by the ▲ line', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');

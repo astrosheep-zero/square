@@ -367,6 +367,28 @@ test('express reply preserves one causal activity reference', async () => {
   await closeSquare(square);
 });
 
+test('a reply to an author who left lands and reports the author is not here', async () => {
+  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  const question = await bob.express('question', { force: true, noMention: true });
+
+  const answer = await alice.express('answer', { force: true, noMention: true, reply: question.activity.id });
+  assert.equal(answer.activity.reply, question.activity.id);
+  assert.deepEqual(answer.activity.mentions, []);
+  assert.equal(answer.replyAuthorNotHere, undefined);
+
+  const selfReply = await alice.express('note to self', { force: true, noMention: true, reply: answer.activity.id });
+  assert.equal(selfReply.activity.body, 'note to self');
+  assert.equal(selfReply.replyAuthorNotHere, undefined);
+
+  await bob.done();
+  const late = await alice.express('late answer', { force: true, noMention: true, reply: question.activity.id });
+  assert.equal(late.activity.body, 'late answer');
+  assert.equal(late.replyAuthorNotHere, 'Bob');
+  await closeSquare(square);
+});
+
 test('snapshot counts only people still in the square and tracks done participants', async () => {
   const square = Square.inMemory({ markdown: 'context', hardCap: 100, clock: tickingClock().tick });
   const alice = await square.join('Alice');

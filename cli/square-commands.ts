@@ -267,8 +267,8 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const body = await resolveBody(intent.activity);
-    if (intent.reach === undefined && !intent.noMention && intent.mentions.length === 0 && scanMentionCandidates(body).length === 0) {
-      fail('✕ express needs --mention <name>, --no-mention, --bell, or an @name in the body\nsquare express --help');
+    if (intent.reach === undefined && !intent.noMention && intent.mentions.length === 0 && intent.reply === undefined && scanMentionCandidates(body).length === 0) {
+      fail("✕ express needs --mention <name>, --no-mention, --bell, or an @name in the body\n  · --reply <activity-id> also reaches the author it answers\nsquare express --help");
     }
     await cmdActivity(squarePath, intent.name, body, (value) => value, {
       force: intent.force,

@@ -254,7 +254,7 @@ export async function express(square: OperationContext, name: string, body: stri
       return decision;
     });
     const stored = committedActivity(storeActs(state, [decision.act]), 'express');
-    return { state, result: { stored } };
+    return { state, result: { stored, ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }) } };
   }, control?.signal);
   await ensureLocalPresence(square, name);
   await publishIdentityRoute(square, name);
@@ -264,7 +264,7 @@ export async function express(square: OperationContext, name: string, body: stri
   } else {
     delivery = { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
   }
-  return { activity: toPublicActivity(committed.stored), delivery };
+  return { activity: toPublicActivity(committed.stored), delivery, ...(committed.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: committed.replyAuthorNotHere }) };
 }
 
 export interface ListenerChangeResult { readonly activity: Activity | null }
