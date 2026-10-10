@@ -2,7 +2,8 @@ import { ConnectionError, DeliveryError, type DeliveryErrorCode } from './errors
 import type { OpenCodeConnectExistingOptions } from './opencode.js'
 import type { ClaudeConnectExistingOptions } from './claude.js'
 import type { PiConnectExistingOptions } from './pi-client.js'
-import type { OpenCodeTarget, ClaudeTarget, PiTarget } from './types.js'
+import type { PaseoConnectExistingOptions } from './paseo.js'
+import type { OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, PaseoDeliveryResult } from './types.js'
 
 export interface SendOptions { readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface KeyedSendOptions extends SendOptions { readonly id?: string }
@@ -34,10 +35,22 @@ export interface PiConnectOptions {
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
 }
+export interface PaseoConnectOptions {
+  readonly harness: 'paseo'
+  readonly agentId: string
+  readonly endpoint?: string
+  readonly password?: string
+  readonly authHeader?: string
+  readonly localCredential?: string
+  readonly paseoHome?: string
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}
 export type OpenCodeAgent = Steerable<KeyedSendOptions> & Queueable<KeyedSendOptions> & { readonly harness: 'opencode'; readonly sessionId: string }
 export type ClaudeAgent = Steerable & { readonly harness: 'claude'; readonly sessionId: string }
 export type PiAgent = Steerable & Queueable & { readonly harness: 'pi'; readonly sessionId: string }
-export type Agent = OpenCodeAgent | ClaudeAgent | PiAgent
+export type PaseoAgent = Steerable<KeyedSendOptions> & { readonly harness: 'paseo'; readonly agentId: string }
+export type Agent = OpenCodeAgent | ClaudeAgent | PiAgent | PaseoAgent
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
@@ -79,6 +92,17 @@ function sendOptions(value: unknown): Record<string, unknown> {
   if (value === undefined) return {}
   if (!isRecord(value)) throw new DeliveryError('invalid_arguments')
   return value
+}
+
+/** A Paseo refusal is the daemon's answer, never an uncertain delivery. */
+function paseoFailure(result: Exclude<PaseoDeliveryResult, { readonly state: 'admitted' }>, id: string): never {
+  if (result.state === 'rejected') {
+    throw new DeliveryError(result.code === 'not_found' ? 'session_not_found' : 'rejected', false, id)
+  }
+  if (result.state === 'unavailable') {
+    throw new DeliveryError(result.code === 'transport' ? 'unavailable' : result.code, false, id)
+  }
+  throw new DeliveryError(result.code, true, id)
 }
 
 async function openCode(options: OpenCodeConnectOptions): Promise<OpenCodeAgent> {
@@ -138,13 +162,33 @@ async function pi(options: PiConnectOptions): Promise<PiAgent> {
     queue: (text: string, value?: SendOptions) => send(text, value, 'queue') })
 }
 
+async function paseo(options: PaseoConnectOptions): Promise<PaseoAgent> {
+  const { connectPaseo, sendPaseoText } = await import('./paseo.js')
+  let target: PaseoTarget
+  try { target = await connectPaseo(options as PaseoConnectExistingOptions) }
+  catch (error) { throw connectFailure(error) }
+  const steer = async (text: string, value?: KeyedSendOptions): Promise<Receipt> => {
+    const options = sendOptions(value)
+    const id = options.id as string | undefined
+    try {
+      const result = await sendPaseoText(target, text, { delivery: 'steer', inputId: id,
+        timeoutMs: options.timeoutMs as number | undefined, signal: options.signal as AbortSignal | undefined })
+      if (result.state !== 'admitted') paseoFailure(result, result.inputId)
+      return { id: result.inputId, proof: 'admitted' }
+    } catch (error) { throw sendFailure(error, id) }
+  }
+  return Object.freeze({ harness: 'paseo' as const, agentId: target.agentId, steer })
+}
+
 export function connect(options: OpenCodeConnectOptions): Promise<OpenCodeAgent>
 export function connect(options: ClaudeConnectOptions): Promise<ClaudeAgent>
 export function connect(options: PiConnectOptions): Promise<PiAgent>
-export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOptions | PiConnectOptions): Promise<Agent> {
+export function connect(options: PaseoConnectOptions): Promise<PaseoAgent>
+export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOptions | PiConnectOptions | PaseoConnectOptions): Promise<Agent> {
   if (isRecord(options) && options.harness === 'opencode') return openCode(options as OpenCodeConnectOptions)
   if (isRecord(options) && options.harness === 'claude') return claude(options as ClaudeConnectOptions)
   if (isRecord(options) && options.harness === 'pi') return pi(options as PiConnectOptions)
+  if (isRecord(options) && options.harness === 'paseo') return paseo(options as PaseoConnectOptions)
   throw new DeliveryError('invalid_arguments')
 }
 

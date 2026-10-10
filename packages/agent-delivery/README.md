@@ -8,10 +8,16 @@ completion or status checks, no automatic retry, no service startup.
 | OpenCode | yes | yes | yes (`id`) | `admitted` — durable inbox admission | any |
 | Claude | yes | — | — | `written` — local socket bytes | darwin, linux, win32 |
 | Pi | yes | yes | — | `observed` — correlated `message_end` | darwin |
+| Paseo | yes | — | yes (`id`) | `admitted` — daemon admitted the message | darwin, linux, win32 |
 
-A capability is a method: `'queue' in agent` is `false` for Claude. Receipts do
-not prove model consumption, completion or human display, and an unconfirmed
-attempt may still arrive. See [VALIDATION.md](VALIDATION.md) for tested versions.
+A capability is a method: `'queue' in agent` is `false` for Claude and Paseo.
+Receipts do not prove model consumption, completion or human display, and an
+unconfirmed attempt may still arrive. See [VALIDATION.md](VALIDATION.md) for
+tested versions.
+
+A Paseo steer always asks the daemon to steer the active turn and never to
+interrupt it. A provider that cannot steer an active turn may replace it
+instead; both outcomes are reported as `admitted`.
 
 ## Install and connect
 
@@ -52,12 +58,24 @@ await claude.steer('Plain text for the next boundary.')
 // Pi: an explicit session id and extension socket.
 const pi = await connect({ harness: 'pi', sessionId: 'actual-existing-id', endpoint: '/private/delivery/p.sock' })
 await pi.steer('/literal text\n  unchanged 🦈')
+
+// Paseo: a running daemon and an existing agent.
+const paseo = await connect({
+  harness: 'paseo',
+  agentId: 'existing-agent-id',
+  // Optional; otherwise PASEO_HOST and then the daemon's own address.
+  endpoint: 'tcp://127.0.0.1:6767',
+  // Optional; otherwise the local credential file and then PASEO_PASSWORD.
+  password: process.env.PASEO_PASSWORD,
+})
+const steered = await paseo.steer('Exact plain text', { id: 'msg_stable_id' })
 ```
 
 Every successful send resolves `{ id, proof }`. `id` is the caller id or the
-generated `msg_<uuid>` (OpenCode), the frame `msg_id` (Claude), or the attempt id
-(Pi). Agents are frozen plain objects; `steer`/`queue` take `{ timeoutMs, signal }`,
-and OpenCode additionally takes a caller `id`.
+generated `msg_<uuid>` (OpenCode), the frame `msg_id` (Claude), the attempt id
+(Pi), or the caller id or the generated UUID (Paseo). Agents are frozen plain
+objects; `steer`/`queue` take `{ timeoutMs, signal }`, and OpenCode and Paseo
+additionally take a caller `id`.
 
 ### OpenCode
 
@@ -100,6 +118,20 @@ The endpoint must be an absolute Unix socket under a caller-owned `0700`
 directory. Socket mode is `0600`; occupied paths fail closed; replacement
 retires connections and old targets. Steer maps to native steer, queue to
 `followUp`, both with `triggerTurn: true`; text is passed unchanged.
+
+### Paseo
+
+`agentId` may be a full id, a unique prefix or an exact title. `endpoint` accepts
+the daemon spellings the Paseo CLI accepts (`unix://`, `pipe://`, `tcp://`,
+`\\.\pipe\…`, a bare port, `host:port`); otherwise `PASEO_HOST` and then the
+daemon's own recorded listen address are used, falling back to
+`127.0.0.1:6767`. Credentials resolve in order: an explicit `authHeader`,
+`password` or `localCredential`; the readable
+`<paseoHome ?? PASEO_HOME ?? ~/.paseo>/local-credential`; `PASEO_PASSWORD`; then
+an unauthenticated attempt. Every send carries the caller `id` as the daemon's
+`messageId` and always asks for `steer`. Each call opens and closes its own
+daemon connection, so a one-shot caller's process is free to exit as soon as it
+is done.
 
 ## Errors
 

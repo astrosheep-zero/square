@@ -20,7 +20,7 @@ test('packed package installs, typechecks its capability API and delivers from a
   const packed = JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', consumer], {
     ...options, cwd: packageRoot,
   })).stdout)[0]
-  for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/pi.js', 'README.md', 'LICENSE', 'VALIDATION.md']) {
+  for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/paseo.js', 'dist/pi.js', 'README.md', 'LICENSE', 'VALIDATION.md']) {
     assert.ok(packed.files.some((entry) => entry.path === file), `missing ${file}`)
   }
   assert.ok(packed.files.every((file) => /^(dist\/|README\.md$|VALIDATION\.md$|LICENSE$|package\.json$)/.test(file.path)))
@@ -30,25 +30,31 @@ test('packed package installs, typechecks its capability API and delivers from a
   })
   const manifest = JSON.parse(await readFile(join(consumer, 'node_modules/@astrosheep/agent-delivery/package.json'), 'utf8'))
   assert.deepEqual(Object.keys(manifest.exports), ['.', './pi-receiver'])
-  assert.deepEqual(manifest.dependencies, { '@opencode/client': '2.0.20' })
+  assert.deepEqual(manifest.dependencies, { '@getpaseo/client': '0.11.2', '@opencode/client': '2.0.20', ws: '8.22.0' })
   const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'))
   assert.equal(lock.packages['node_modules/@opencode/client'].version, '2.0.20')
+  assert.equal(lock.packages['node_modules/@getpaseo/client'].version, '0.11.2')
+  assert.match(lock.packages['node_modules/ws'].version, /^8\./)
   assert.ok(Object.keys(lock.packages).every((path) => !path.includes('@astrosheep/square')))
 
-  await writeFile(join(consumer, 'consumer.mts'), `import { connect, DeliveryError, type Agent, type ClaudeAgent, type OpenCodeAgent, type PiAgent, type Receipt } from '@astrosheep/agent-delivery';
+  await writeFile(join(consumer, 'consumer.mts'), `import { connect, DeliveryError, type Agent, type ClaudeAgent, type OpenCodeAgent, type PaseoAgent, type PiAgent, type Receipt } from '@astrosheep/agent-delivery';
 const opencodeAgent = await connect({ harness: 'opencode', sessionId: 'ses_example' });
 const claudeAgent: ClaudeAgent = await connect({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock' });
 const piAgent: PiAgent = await connect({ harness: 'pi', sessionId: 'native-id', endpoint: '/private/p.sock' });
-const agents: Agent[] = [opencodeAgent, claudeAgent, piAgent];
+const paseoAgent: PaseoAgent = await connect({ harness: 'paseo', agentId: 'agent-uuid' });
+const agents: Agent[] = [opencodeAgent, claudeAgent, piAgent, paseoAgent];
 const keyed: OpenCodeAgent = opencodeAgent;
 const admitted: Receipt = await keyed.steer('text', { id: 'msg_caller', timeoutMs: 1000 });
 const queued: Receipt = await opencodeAgent.queue('text');
 const written: Receipt = await claudeAgent.steer('text', { signal: AbortSignal.timeout(1000) });
 const observed: Receipt = await piAgent.steer('text');
+const steered: Receipt = await paseoAgent.steer('text', { id: 'msg_paseo', timeoutMs: 1000 });
 const proof: 'written' | 'admitted' | 'observed' = admitted.proof;
-if (proof === 'admitted') { const id: string = admitted.id; console.log(id, queued.id, written.id, observed.id, agents.length); }
+if (proof === 'admitted') { const id: string = admitted.id; console.log(id, queued.id, written.id, observed.id, steered.id, agents.length); }
 // @ts-expect-error Claude has no queue capability
 await claudeAgent.queue('text');
+// @ts-expect-error Paseo has no queue capability
+await paseoAgent.queue('text');
 // @ts-expect-error Claude has no caller idempotency id
 await claudeAgent.steer('text', { id: 'msg_caller' });
 // @ts-expect-error Pi has no caller idempotency id
@@ -92,7 +98,7 @@ console.log(JSON.stringify(closed));`)
   // Block SDK module loading, not merely a request: the Claude capability must work
   // without initializing OpenCode's runtime graph.
   await writeFile(join(consumer, 'no-sdk.mjs'), `export async function resolve(specifier, context, next) {
-if (specifier.includes('@opencode/') || context.parentURL?.includes('/@opencode/')) throw new Error('OpenCode SDK loaded');
+if (specifier.includes('@opencode/') || specifier.includes('@getpaseo/') || context.parentURL?.includes('/@opencode/') || context.parentURL?.includes('/@getpaseo/')) throw new Error('Agent SDK loaded');
 return next(specifier, context);
 }`)
   await writeFile(join(consumer, 'register.mjs'), `import { register } from 'node:module'; register('./no-sdk.mjs', import.meta.url);`)
@@ -132,6 +138,8 @@ console.log(JSON.stringify({ keys: Object.keys(agent), receipt: await agent.stee
   // Core types must remain suitable for later leaf adapters without SDK dependencies.
   const types = await readFile(join(packageRoot, 'dist/types.d.ts'), 'utf8')
   assert.ok(!types.includes('@opencode'))
+  assert.ok(!types.includes('@getpaseo'))
   const indexTypes = await readFile(join(packageRoot, 'dist/index.d.ts'), 'utf8')
   assert.ok(!indexTypes.includes('@opencode'))
+  assert.ok(!indexTypes.includes('@getpaseo'))
 })
