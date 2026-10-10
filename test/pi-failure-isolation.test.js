@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
@@ -18,6 +19,137 @@ async function waitUntil(predicate, message) {
   }
   assert.fail(message);
 }
+
+test('Pi lifecycle awaits watcher retirement after cancellation and replacement', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-retire-'));
+  const previous = process.env.SQUARE_HOST_LEDGER_ROOT;
+  process.env.SQUARE_HOST_LEDGER_ROOT = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SQUARE_HOST_LEDGER_ROOT;
+    else process.env.SQUARE_HOST_LEDGER_ROOT = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  let opened = 0;
+  let closed = 0;
+  t.mock.method(fs, 'watch', () => {
+    opened++;
+    const watcher = new EventEmitter();
+    watcher.close = () => { closed++; };
+    return watcher;
+  });
+  const handlers = new Map();
+  squarePiExtension({
+    registerFlag() {}, getFlag() {}, sendMessage() {},
+    on(event, handler) {
+      const prior = handlers.get(event);
+      handlers.set(event, async (...args) => { await prior?.(...args); await handler(...args); });
+    },
+  });
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => 'retirement-test' } };
+  t.after(() => handlers.get('session_shutdown')({}, ctx));
+  await handlers.get('session_start')({}, ctx);
+  await waitUntil(() => opened > 0, 'watcher not created');
+  const first = opened;
+  const run = new AbortController();
+  await handlers.get('agent_start')({}, { ...ctx, mode: 'tui', signal: run.signal });
+  run.abort();
+  await handlers.get('agent_settled')();
+  assert.equal(closed, first);
+  await waitUntil(() => opened > first, 'watcher not restarted');
+  const restarted = opened;
+  await handlers.get('session_start')({}, ctx);
+  assert.equal(closed, restarted);
+  await waitUntil(() => opened > restarted, 'replacement watcher not created');
+  await handlers.get('session_shutdown')({}, ctx);
+  assert.equal(closed, opened, 'shutdown returned with owned watchers still open');
+
+  let releaseStartup;
+  const startup = new Promise((resolve) => { releaseStartup = resolve; });
+  const access = fs.promises.access.bind(fs.promises);
+  t.mock.method(fs.promises, 'access', async (...args) => {
+    await startup;
+    return access(...args);
+  });
+  await handlers.get('session_start')({}, ctx);
+  let ended = false;
+  const shutdown = handlers.get('session_shutdown')({}, ctx).then(() => { ended = true; });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ended, false, 'shutdown overtook in-flight automatic session startup');
+  } finally {
+    releaseStartup();
+    await shutdown;
+  }
+  assert.equal(closed, opened);
+});
+
+test('a retiring watcher cannot suppress an unsent notification in its replacement', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-replace-'));
+  const previous = process.env.SQUARE_HOST_LEDGER_ROOT;
+  process.env.SQUARE_HOST_LEDGER_ROOT = root;
+  const squarePath = path.join(root, 'SQUARE.square');
+  const sessionId = 'pi-replacement-race';
+  await writeSquareFile(squarePath, {
+    hardCap: null, preamble: [], warmup: [],
+    acts: [
+      { kind: 'join', actor: 'Alice', at: 1, index: 0 },
+      { kind: 'join', actor: 'Bob', at: 2, index: 1 },
+      { kind: 'say', actor: 'Alice', at: 3, index: 2, body: 'original pending', mentions: ['Bob'] },
+    ],
+    runtime: emptyRuntimeState(3),
+  });
+  await hostLedgerForEnv().ensurePresence({ location: squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
+  let enter;
+  let release;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let presenting = false;
+  let blocked = false;
+  const exec = DatabaseSync.prototype.exec;
+  t.mock.method(DatabaseSync.prototype, 'exec', function (...args) {
+    const result = exec.apply(this, args);
+    if (path.basename(this.location()).startsWith('presentation-boundary-')) presenting = true;
+    return result;
+  });
+  const readFile = fs.promises.readFile.bind(fs.promises);
+  t.mock.method(fs.promises, 'readFile', async (...args) => {
+    if (presenting && !blocked && path.basename(String(args[0])) === 'presence.ndjsonl') {
+      blocked = true;
+      enter();
+      await gate;
+    }
+    return readFile(...args);
+  });
+  const handlers = new Map();
+  const sent = [];
+  squarePiExtension({
+    registerFlag() {}, getFlag() {},
+    on(event, handler) {
+      const prior = handlers.get(event);
+      handlers.set(event, async (...args) => { await prior?.(...args); await handler(...args); });
+    },
+    sendMessage(message) { sent.push(message.content); },
+  });
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId } };
+  try {
+    await handlers.get('session_start')({}, ctx);
+    await entered;
+    const replacement = handlers.get('session_start')({}, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sent.length, 0);
+    release();
+    await replacement;
+    await waitUntil(() => sent.length > 0, 'replacement suppressed an unsent original notification');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0], /original pending/);
+  } finally {
+    release();
+    await handlers.get('session_shutdown')({}, ctx);
+    if (previous === undefined) delete process.env.SQUARE_HOST_LEDGER_ROOT;
+    else process.env.SQUARE_HOST_LEDGER_ROOT = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('Pi watcher survives an unreadable bound artifact without changing it', { timeout: 5_000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-failure-'));

@@ -26,8 +26,14 @@ cross-extension transform compatibility is promised.
 
 Standalone extensions can register `createPiReceiver` from the package's `./pi`
 subpath and use `sendPiMessage` directly. Factory registration creates no
-resources; start/shutdown own them. Raw SDK `dispose()` callers must explicitly
-close the receiver if their host does not emit `session_shutdown`.
+resources; start/shutdown own them. Session replacement and shutdown await the
+pending observer's retirement, including cleanup already begun by run cancellation.
+Cancellation releases native landing waits; it does not leave the observer running
+behind a completed lifecycle hook. Restart after cancellation waits for the old
+observer before opening its successor. Shutdown waits for in-flight automatic
+startup before ending that session, and awaits the session-end work. Raw SDK hosts
+must emit and await `session_shutdown` before `dispose()`;
+disposal alone does not retire extension-owned observers or receivers.
 
 Transport frame/key constraints, client
 `connectExisting`/`sendText` usage, receipt states, bounds and the exact validated

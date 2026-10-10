@@ -120,12 +120,12 @@ export default function squarePiExtension(pi) {
   // Pi owns PI_SESSION_ID and several SDK sessions may coexist in one process.
   const sessionEnv = (id) => ({ ...process.env, ...(id === undefined ? {} : { PI_SESSION_ID: id }) });
 
-  // A transport may keep its promise pending while Pi is shutting down or
-  // replacing a session. Never make a lifecycle hook wait for that transport.
+  // Aborting releases native landing waits; retain cleanup until the observer
+  // has closed, including when cancellation precedes a lifecycle hook.
   const stopWatcher = () => {
     watcherAbort?.abort();
-    watcher = undefined;
     watcherAbort = undefined;
+    return watcher;
   };
 
   const pause = (signal, delayMs) => new Promise((resolve) => {
@@ -229,6 +229,7 @@ export default function squarePiExtension(pi) {
             env,
             signal,
           );
+          if (signal.aborted || token !== generation) return;
           for (const key of keys) handledPending.add(key);
         } catch (error) {
           if (signal.aborted || token !== generation) return;
@@ -252,7 +253,7 @@ export default function squarePiExtension(pi) {
     cancelledRun = false;
     generation += 1;
     failAcks(new Error('Pi session replaced'));
-    stopWatcher();
+    const stopped = stopWatcher();
     handledPending.clear();
     observedPending.clear();
     retryAfterChange = false;
@@ -264,9 +265,11 @@ export default function squarePiExtension(pi) {
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     const token = generation;
+    await stopped;
+    if (token !== generation) return;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
-    void automaticSessionStart('pi', sessionId, sessionCwd, sessionEnv(sessionId)).then((context) => {
+    const startup = automaticSessionStart('pi', sessionId, sessionCwd, sessionEnv(sessionId)).then((context) => {
       if (context === undefined || sessionId === undefined || token !== generation) return;
       const messageContent = framePiMessage(context);
       const landing = waitForLanding(messageContent, signal, 'nextTurn');
@@ -281,7 +284,7 @@ export default function squarePiExtension(pi) {
       }
       void landing.promise.catch(() => undefined);
     }).catch(() => undefined);
-    watcher = wake(token, signal).catch(() => undefined);
+    watcher = Promise.allSettled([startup, wake(token, signal)]).then(() => undefined);
   });
 
   pi.on('agent_start', async (_event, ctx) => {
@@ -334,6 +337,8 @@ export default function squarePiExtension(pi) {
     const token = generation;
     // Cancel the entire pending batch, including entries not yet sent to Pi.
     // This is local suppression, never evidence that the model saw the activity.
+    await stopWatcher();
+    if (token !== generation || sessionId === undefined) return;
     const cancelled = await sessionInbox(sessionId, sessionEnv(sessionId));
     if (token !== generation || sessionId === undefined) return;
     for (const key of inboxKeys(cancelled)) handledPending.add(key);
@@ -348,13 +353,17 @@ export default function squarePiExtension(pi) {
     cancelledRun = false;
     generation += 1;
     failAcks(new Error('Pi session ended'));
-    stopWatcher();
+    const stopped = stopWatcher();
     ui = undefined;
-    if (sessionId && sessionCwd) void automaticSessionEnd('pi', sessionId, sessionCwd, sessionEnv(sessionId)).catch(() => undefined);
+    const endedId = sessionId;
+    const endedCwd = sessionCwd;
+    const endedEnv = sessionEnv(endedId);
     sessionId = undefined;
     sessionCwd = undefined;
     retryWait = undefined;
     activeTurn = undefined;
     currentRunSignal = undefined;
+    await stopped;
+    if (endedId && endedCwd) await automaticSessionEnd('pi', endedId, endedCwd, endedEnv).catch(() => undefined);
   });
 }
