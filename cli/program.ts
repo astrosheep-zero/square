@@ -1,6 +1,6 @@
 import { helpRequest } from '../help.js';
 import { isSquareError } from '../model.js';
-import { formatRefusal, joinRecoveryCommand, participantsRecoveryCommand, takeoverRecoveryLines } from '../presentation.js';
+import { commandPrefix, formatRefusal, joinRecoveryCommand, participantsRecoveryCommand, takeoverRecoveryLines } from '../presentation.js';
 import { inSquareCount, nowMs } from '../runtime.js';
 import { openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
@@ -32,6 +32,11 @@ async function handleSquareError(error: unknown, squarePath?: string, name?: str
       else existing.push(participantsRecoveryCommand(squarePath));
     } else if (squarePath !== undefined && error.facts?.reason === 'not_standing') {
       existing.push(participantsRecoveryCommand(squarePath));
+    } else if (squarePath !== undefined && error.facts?.reason === 'not_addressed' && typeof error.facts.activityId === 'string') {
+      // An anchor only works for an activity the artifact actually holds.
+      existing.push(error.facts.activityExists === true
+        ? `${commandPrefix(squarePath)} history --at ${error.facts.activityId} -C 2`
+        : `${commandPrefix(squarePath)} history --limit 10`);
     }
     if (squarePath === undefined) {
       process.stderr.write(`${existing.join('\n')}\n`);

@@ -57,7 +57,11 @@ export function decideCatch(
     if (index === undefined) throw new SquareError('invalid_args', 'Invalid catch id: expected an activity id like act/12.');
     const activity = state.acts.find((item) => item.index === index);
     if (activity === undefined || activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) {
-      throw new SquareError('invalid_args', 'That activity is not available to catch.');
+      throw new SquareError('invalid_args', `✕ ${formatActivityId(index)} isn't addressed to you`, {
+        reason: 'not_addressed',
+        activityId: formatActivityId(index),
+        activityExists: activity !== undefined,
+      });
     }
     const perception = delivery.perceive(activity, viewer);
     const changed = recordObservation(state, viewer, index, 'seen', at);

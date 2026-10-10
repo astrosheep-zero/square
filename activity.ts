@@ -84,6 +84,22 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
   return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${reply} -`;
 }
 
+/**
+ * A recipient conflict is the speaker's to edit: the printed recovery drops every
+ * mention flag (or keeps the bell) so the retry never repeats the rejected target.
+ */
+function mentionRepairCommand(squarePath: string, name: string, opts: ActivityOptions, bell: boolean): string {
+  const replyIndex = opts.reply === undefined ? undefined : parseActivityId(opts.reply);
+  const reply = opts.reply === undefined ? '' : ` --reply ${replyIndex === undefined ? quoteShell(opts.reply) : formatActivityId(replyIndex)}`;
+  const reach = bell ? ' --bell' : ' --no-mention';
+  return `${participantCommandPrefix(squarePath, name)} express${opts.force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${reply} -`;
+}
+
+/** A body that is nothing but *gestures* reads as an action, not as speech. */
+function isGestureOnly(body: string): boolean {
+  return /\*[^*]*\*/.test(body) && body.replace(/\*[^*]*\*/g, '').trim() === '';
+}
+
 export async function cmdActivity(
   squarePath: string,
   name: string,
@@ -159,14 +175,21 @@ export async function cmdActivity(
     const held = fresh.held;
     const ownActCount = fresh.ownActivityCount;
     const hasPending = pendingPublic.length > 0;
-    const pending = hasPending ? `\n\n${renderPendingFeed([...fresh.activities], [...pendingPublic], knownName, fresh.state)}` : '';
+    const pendingSpeaker = pendingPublic[0]?.actor;
+    const pendingLead = pendingSpeaker === undefined
+      ? ''
+      : `▲ while you spoke, ${participantIdentity(pendingSpeaker)} said something behind you\n\n`;
+    const pending = hasPending ? `\n\n${pendingLead}${renderPendingFeed([...fresh.activities], [...pendingPublic], knownName, fresh.state)}` : '';
     const hint = expressHintLine(ownActCount);
-    const reachEcho = landed.activity.reach === 'bell'
-      ? ' · to everyone (bell)'
-      : landed.activity.mentions.length > 0
-        ? ` · to ${landed.activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
-        : '';
-    const confirmation = `● your activity lands${style('dim', ` — #${ownActCount} · ${landed.activity.id}${reachEcho}`)}`;
+    const receiptId = landed.activity.id;
+    const capCount = fresh.hardCap === null ? '' : ` · ${ownActCount}/${fresh.hardCap}`;
+    const confirmation = landed.activity.reach === 'bell'
+      ? `● you ring the bell — everyone turns · ${receiptId}${style('dim', capCount)}`
+      : `● ${landed.activity.mentions.length > 0
+          ? `you walk over to ${landed.activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
+          : isGestureOnly(landed.activity.body ?? '')
+            ? 'your gesture lands'
+            : 'your words land'} — ${receiptId}${style('dim', capCount)}`;
     const withHint = hint ? `${confirmation}\n${style('dim', hint)}` : confirmation;
     const reentry = reentered ? '● you stepped back into the square\n' : '';
     process.stdout.write(withPathOutput(squarePath, reentry + withHint + pending, { participantCount: headerCount, held }));
@@ -206,7 +229,8 @@ export async function cmdActivity(
           ...output,
           reason: error.code,
           delayMs: error.facts?.retryAfterMs ?? SLEEP_MS,
-          holdReason: fresh.holdReason,
+          ...(error.facts?.holder === undefined ? {} : { holder: error.facts.holder }),
+          ...(error.facts?.holdReason === undefined ? {} : { holdReason: error.facts.holdReason }),
           retryCommand,
         }));
         process.exit(1);
@@ -225,15 +249,30 @@ export async function cmdActivity(
       }
     }
     const lines = [error instanceof Error ? error.message : String(error), `· draft kept: ${draftPath}`];
+    const reason = isSquareError(error) ? error.facts?.reason : undefined;
+    // `not_standing` is a flag mention; the body-scan and bell conflicts carry an @name in the draft.
+    const mentionRepair = reason === 'bell_mention_conflict' ? { bell: true, fromBody: true }
+      : reason === 'unmatched_mention' ? { bell: false, fromBody: true }
+        : reason === 'not_standing' ? { bell: false, fromBody: false }
+          : undefined;
     if (isSquareError(error)) {
       if (callerMissing || error.code === 'unknown_participant' || error.code === 'not_joined') lines.push(joinRecoveryCommand(squarePath, name));
       if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name));
-      if (error.code === 'invalid_args' || error.code === 'invalid_name') {
+      if (mentionRepair !== undefined) {
+        // The draft stays, but the retry no longer carries the target that was refused.
+        lines.push(participantsRecoveryCommand(squarePath));
+        lines.push(mentionRepair.fromBody
+          ? "  · edit the draft first — the body's @name must be removed or wrapped in backticks:"
+          : '  · pick someone standing here, or land it bare:');
+        lines.push(`${mentionRepairCommand(squarePath, name, opts, mentionRepair.bell)} < ${quoteShell(draftPath)}`);
+      } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
         if (opts.reply !== undefined) lines.push(`${commandPrefix(squarePath)} history --limit 10`);
       }
     }
-    lines.push('  · correct the problem above before retrying; keep your intended recipients and reply:', `${retryCommand} < ${quoteShell(draftPath)}`);
+    if (mentionRepair === undefined) {
+      lines.push('  · correct the problem above before retrying; keep your intended recipients and reply:', `${retryCommand} < ${quoteShell(draftPath)}`);
+    }
     process.stderr.write(formatRefusal(squarePath, lines, output));
     process.exit(2);
   }

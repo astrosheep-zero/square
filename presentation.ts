@@ -52,6 +52,7 @@ interface ExpressNoWaitOptions extends ParticipantOutputOptions {
   reason: 'throttled' | 'held';
   retryCommand: string;
   delayMs?: number;
+  holder?: string;
   holdReason?: string;
   draftPath?: string;
 }
@@ -61,6 +62,8 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
   idleMs?: number;
   presence?: { participants: ParticipantStatus[]; now: number };
   showCatchHint?: boolean;
+  ownActivityCount?: number;
+  hardCap?: number | null;
 }
 
 function headerLine(squarePath: string, opts: HeaderOptions = {}): string {
@@ -159,10 +162,10 @@ function presenceText(participant: ParticipantStatus, now: number): string {
   }
   if (participant.presence === 'watching') {
     const at = participant.lastActiveAt;
-    return at === undefined ? 'catching' : `catching · ${formatRelativeTime(at, now)}`;
+    return at === undefined ? 'is nearby · catching' : `is nearby · catching · ${formatRelativeTime(at, now)}`;
   }
-  if (participant.lastActiveAt === undefined) return 'quiet';
-  return participant.activityCount > 0 ? `${formatRelativeTime(participant.lastActiveAt, now)}` : `quiet · ${formatRelativeTime(participant.lastActiveAt, now)}`;
+  if (participant.lastActiveAt === undefined) return 'is nearby · quiet';
+  return participant.activityCount > 0 ? `is nearby · ${formatRelativeTime(participant.lastActiveAt, now)}` : `is nearby · quiet · ${formatRelativeTime(participant.lastActiveAt, now)}`;
 }
 
 export function renderPresenceLines(participants: ParticipantStatus[], now: number, limit = 5): string[] {
@@ -173,16 +176,16 @@ export function renderPresenceLines(participants: ParticipantStatus[], now: numb
   const shown = recent.slice(0, limit);
   if (shown.length === 0) return [style('dim', '  ○ nobody nearby')];
 
-  const lines = shown.map((p) => `  ${styledPresenceGlyph(p)} ${participantIdentity(p.name)}${style('dim', ` · ${presenceText(p, now)}`)}`);
+  const lines = shown.map((p) => `  ${styledPresenceGlyph(p)} ${participantIdentity(p.name)}${style('dim', ` ${presenceText(p, now)}`)}`);
   const remaining = recent.length - shown.length;
   if (remaining > 0) lines.push(style('dim', `  ○ … ${remaining} more nearby`));
   return lines;
 }
 
 const EXPRESS_HINTS = [
-  '*asterisks* are your body — *slams table*, *sketches in the air*, *shrugs*',
-  "you're standing in a square — words and gestures both land",
-  'the square runs on conversation — say things that move it, not nods that fill it',
+  '*asterisks* are your body — slam a table, shrug, sketch in the air',
+  "answer someone's actual words — they're standing right there",
+  "say the half-shaped thing — that's what the square is for",
 ];
 
 export function expressHintLine(ownActivityCount: number): string | undefined {
@@ -241,9 +244,9 @@ export function renderRoomChangeText(event: RoomChangeAct): string {
     case 'resume':
       return `${identity} lowered the hand`;
     case 'listen':
-      return `${identity} turns an ear toward ${participantIdentity(event.target)}`;
+      return `${identity} turned an ear toward ${participantIdentity(event.target)}`;
     case 'ignore':
-      return `${identity} turns away from ${participantIdentity(event.target)}`;
+      return `${identity} turned away from ${participantIdentity(event.target)}`;
   }
 }
 
@@ -428,18 +431,29 @@ export function renderActivityUncertain(opts: ParticipantOutputOptions & { draft
   ], opts);
 }
 
+/** A blank or whitespace hold reason is absent, never an empty sensory line. */
+function holdReasonLines(reason: string | undefined): string[] {
+  const text = reason?.trim() ?? '';
+  return text === '' ? [] : [style('dim', `  · ${text}`)];
+}
+
+function heldMainLine(holder: string | undefined, styled: boolean): string {
+  const glyph = styled ? style('blocked', '✕') : '✕';
+  const who = holder === undefined ? 'a hand is raised' : `${participantIdentity(holder)} has a hand raised`;
+  return `${glyph} ${who} — voices drop, yours too`;
+}
+
 export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
   if (opts.reason === 'throttled') {
     return [
-      '✕ the square is packed',
-      `  · your activity is waiting · next opening in ${formatDuration(opts.delayMs)}`,
+      '✕ the square is packed — shoulder to shoulder',
+      `  · a lull opens in ${formatDuration(opts.delayMs)}`,
       '  · --no-wait saves a draft and returns now',
     ].join('\n');
   }
-  const holder = opts.holder === undefined ? 'a hand is raised' : `${participantIdentity(opts.holder)} raised a hand`;
   return [
-    `✕ your activity doesn't land — ${holder}`,
-    ...(opts.holdReason === undefined ? [] : [`  · ${opts.holdReason}`]),
+    heldMainLine(opts.holder, false),
+    ...holdReasonLines(opts.holdReason),
     `  · your activity is waiting — after ${formatDuration(HELD_WAIT_BUDGET_MS)} it saves a draft and stops`,
     '  · --no-wait saves a draft and returns now',
   ].join('\n');
@@ -450,14 +464,14 @@ export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
   const lines =
     opts.reason === 'throttled'
       ? [
-          `${style('blocked', '✕')} the square is packed`,
-          `  · next opening in ${formatDuration(opts.delayMs)}`,
+          `${style('blocked', '✕')} the square is packed — shoulder to shoulder`,
+          `  · a lull opens in ${formatDuration(opts.delayMs)}`,
           ...draftSavedLines(opts.draftPath),
           `${withDraftInput(retryCommand, opts.draftPath)}`,
         ]
       : [
-          `${style('blocked', '✕')} your activity doesn't land — a hand is raised`,
-          style('dim', `  · ${opts.holdReason ?? 'the square holds its breath'}`),
+          heldMainLine(opts.holder, true),
+          ...holdReasonLines(opts.holdReason),
           ...draftSavedLines(opts.draftPath),
           `${withDraftInput(retryCommand, opts.draftPath)}`,
         ];
@@ -531,10 +545,11 @@ export function renderGrepActivitiesView(
 }
 
 function renderActivityLimitBody(opts: ActivityLimitOptions): string {
-  const countText = opts.count !== undefined && opts.hardCap !== undefined ? ` (${opts.count}/${opts.hardCap})` : '';
+  // The cap wording lives inside the count: the speaker is simply spent.
+  const spoken = opts.count !== undefined && opts.hardCap !== undefined ? ` — ${opts.count}/${opts.hardCap} spoken` : '';
   const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done`;
   return [
-    `${style('blocked', '✕')} your activity doesn't land — the cap is reached${countText}`,
+    `${style('blocked', '✕')} nothing left in you${spoken}`,
     ...draftSavedLines(opts.draftPath),
     '  · your draft stays unsent; done only steps out',
     doneCommand,
@@ -579,21 +594,29 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
     case 'stale':
     case 'empty-now': {
       const prefix = participantCommandPrefix(opts.squarePath, opts.name);
-      const quiet = opts.status === 'stale' && opts.idleMs !== undefined
-        ? style('dim', `○ ${formatDuration(opts.idleMs)} of quiet — nothing new for you`)
-        : style('dim', '○ only footsteps in the square — nothing new for you');
+      // Quiet graduates with the idle length; an empty catch has no idle budget to report.
+      const idleMs = opts.idleMs;
+      const quiet = idleMs !== undefined && idleMs >= 60 * 60 * 1000
+        ? style('dim', `○ dust lies thick — ${formatDuration(idleMs)} of quiet`)
+        : idleMs !== undefined && idleMs >= 60 * 1000
+          ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
+          : style('dim', '○ only footsteps in the square — nothing new for you');
+      // The quiet report never repeats the catch just run.
+      const hints = [`${prefix} catch --idle 30m`];
       return [
         quiet,
-        ...(opts.showCatchHint === false
-          ? []
-          : [`${prefix} catch --idle 30m`, `  glance: ${prefix} catch --now`]),
+        ...(opts.showCatchHint === false ? [] : hints),
         ...presenceLines,
       ].join('\n');
     }
     case 'quorum':
       return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
-    case 'capped':
-      return [`${style('blocked', '✕')} nothing left in you — the cap is reached`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
+    case 'capped': {
+      const spoken = opts.hardCap === undefined || opts.hardCap === null
+        ? ''
+        : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
+      return [`${style('blocked', '✕')} nothing left in you${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
+    }
   }
 }
 

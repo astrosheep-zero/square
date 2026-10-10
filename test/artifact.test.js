@@ -451,7 +451,7 @@ test('createSquareState still creates a model without persistence framing', asyn
   assert.equal(squareState.hardCap, null);
   assert.equal(squareState.throttlePerMinute, 4);
   assert.deepEqual(squareState.preamble, ['## Topic', '', 'Host context']);
-  assert.ok(squareState.warmup.some((line) => line.includes('stepped into the square')));
+  assert.ok(squareState.warmup.some((line) => line.includes('It is an agora')));
   assert.deepEqual(squareState.acts, []);
   assert.deepEqual(squareState.runtime, emptyRuntimeState());
 });

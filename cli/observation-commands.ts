@@ -356,6 +356,8 @@ function renderHistoryProjection(
   const shown = visible.filter(isArchiveActivity);
   const preview = noTruncate || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
+  // Presence anchors collect into one closing line instead of interrupting the page.
+  const anchored: string[] = [];
   for (const activity of shown) {
     const options = {
       preview,
@@ -363,13 +365,15 @@ function renderHistoryProjection(
     };
     const rendered = renderEventCli(activity, options);
     if (rendered !== '') chunks.push(rendered);
-    const participants = projection.presenceAnchors[activity.index];
-    if (participants !== undefined) chunks.push(renderPresenceAnchor(participants));
+    for (const participant of projection.presenceAnchors[activity.index] ?? []) {
+      if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
+    }
   }
   if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
     chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
   }
+  if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
   return chunks.join('\n\n');
 }
 
@@ -507,10 +511,10 @@ export const statusCommand: CommandSpec<undefined, string> = {
           ? '◎'
           : participant.activityCount > 0 ? '●' : '○';
         const summary = participant.presence === 'watching'
-          ? 'catching'
+          ? 'is nearby · catching'
           : participant.activityCount > 0
-            ? formatRelativeTime(participant.lastActiveAt ?? result.now, result.now)
-            : `quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, result.now)}`;
+            ? `is nearby · ${formatRelativeTime(participant.lastActiveAt ?? result.now, result.now)}`
+            : `is nearby · quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, result.now)}`;
         const showAttention = context.name === undefined || sameName(participant.name, context.name);
         const attention = !showAttention
           ? ''
@@ -519,7 +523,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
             : participant.unreadActivityCount > 0
               ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
               : 'caught up';
-        return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` · ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
+        return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
       }));
       const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
       if (orderedHere.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {

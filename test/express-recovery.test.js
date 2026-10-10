@@ -35,19 +35,43 @@ async function says(file) {
   finally { await square.close(); }
 }
 
-test('recipient and reply rejections keep exact stdin and intended metadata without choosing a different target', async () => {
+test('a refused recipient is dropped from the printed retry instead of being suggested again', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
-  for (const [target, reply] of [['Bobb', 'act/0'], ['Bob!', 'act/0'], ['Bob', 'act/999'], ['Bob', 'not-an-id']]) {
+  // Both are valid names that simply stand nowhere; an invalid name is a different refusal.
+  for (const target of ['Bobb', 'Ghost']) {
     const body = `first line for ${target}\r\nsecond line with 'quotes'\r\n`;
-    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', target, '--reply', reply, '-']), { input: body });
+    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', target, '--reply', 'act/0', '-']), { input: body });
+    assert.equal(result.status, 2, result.stderr);
+    const saved = recovery(result, body);
+    assert.equal(saved.commands.length, 1);
+    assert.match(saved.commands[0], /express --no-wait --no-mention --reply act\/0 - </);
+    assert.doesNotMatch(saved.commands[0], /--mention/);
+    assert.doesNotMatch(saved.commands[0], /--force/);
+    assert.match(saved.output, /participants/);
+    // The refused name came from a flag, so the body carries no @name to edit.
+    assert.match(saved.output, /pick someone standing here, or land it bare/);
+    assert.doesNotMatch(saved.output, /must be removed or wrapped in backticks/);
+    assert.doesNotMatch(saved.output, /keep your intended recipients/);
+    assert.equal((await says(file)).length, 0);
+  }
+});
+
+test('a rejected reply keeps the recipient, the exact stdin, and points at history', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+  });
+  for (const reply of ['act/999', 'not-an-id']) {
+    const body = `reply body \r\nwith 'quotes'\r\n`;
+    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
     assert.equal(result.status, 2, result.stderr);
     const saved = recovery(result, body);
     assert.equal(saved.commands.length, 1);
     assert.match(saved.commands[0], /express --no-wait/);
-    assert.ok(saved.commands[0].includes(`--mention '${target}'`));
+    assert.ok(saved.commands[0].includes("--mention 'Bob'"));
     assert.ok(saved.commands[0].includes(`--reply ${reply === 'not-an-id' ? "'not-an-id'" : reply}`));
     assert.doesNotMatch(saved.commands[0], /--force/);
     assert.match(saved.output, /participants/);

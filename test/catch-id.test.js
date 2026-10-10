@@ -40,7 +40,8 @@ test('exact catch refuses unavailable activities and incompatible library option
   for (const id of ['act/9999', 'act/0', bare.activity.id]) {
     await assert.rejects(bob.catch({ id }), (error) => { errors.push(error.message); return error.code === 'invalid_args'; });
   }
-  assert.equal(new Set(errors).size, 1);
+  // Each refusal names the activity it cannot hand over, and never the raw generic sentence.
+  assert.deepEqual(errors, ['act/9999', 'act/0', bare.activity.id].map((id) => `✕ ${id} isn't addressed to you`));
   for (const extra of [{ idle: 0 }, { from: [] }, { mention: false }, { limit: 1 }, { limit: undefined }]) {
     await assert.rejects(bob.catch({ id: second.id, ...extra }), { code: 'invalid_args' });
   }

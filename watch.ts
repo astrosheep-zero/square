@@ -5,6 +5,7 @@ import {
 import {
   STALE_MS,
   WATCH_HEARTBEAT_MS,
+  countSays,
   inSquareCount,
   nowMs,
 } from './runtime.js';
@@ -118,6 +119,8 @@ function writeWatchTerminal(squarePath: string, name: string, presentation: Watc
         ...(idleMs === undefined ? {} : { idleMs }),
         presence: presentation.presence,
         showCatchHint: !hasAutomaticDeliveryIdentity(),
+        ownActivityCount: countSays(presentation.state.acts, name),
+        hardCap: presentation.state.hardCap,
       }),
       { participantCount: presentation.participantCount }
     )

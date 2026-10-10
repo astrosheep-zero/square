@@ -49,8 +49,13 @@ export type InternalSquareErrorCode = SquareErrorCode
 export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
-  /** Why a name could not be resolved: never in the roster, or no longer standing in it. */
-  reason?: 'never_joined' | 'not_standing';
+  /** Why a name could not be resolved: never in the roster, no longer standing in it, a bell
+   * colliding with a mention, an @name that matches nobody, or an activity catch cannot address. */
+  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'unmatched_mention' | 'not_addressed';
+  /** The activity id a `catch --id` refusal named. */
+  activityId?: string;
+  /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
+  activityExists?: boolean;
   pending?: number;
   holder?: string;
   holdReason?: string;

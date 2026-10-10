@@ -220,11 +220,11 @@ export function decideAct(
         lines.push(`✕ ${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
       }
       lines.push('  · wrap literal @text in backticks, or pass --no-mention to land bare');
-      throw new SquareError('invalid_args', lines.join('\n'));
+      throw new SquareError('invalid_args', lines.join('\n'), { reason: 'unmatched_mention' });
     }
   }
   if (reach === 'bell' && mentionNames.length > 0) {
-    throw new SquareError('invalid_args', 'A bell cannot be combined with a mention — remove --mention or the @name in the body.');
+    throw new SquareError('invalid_args', '✕ a bell cannot be combined with a mention — remove --mention or the @name in the body.', { reason: 'bell_mention_conflict' });
   }
   const reply = input.reply;
   if (reply !== undefined) {

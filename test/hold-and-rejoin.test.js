@@ -17,7 +17,7 @@ test('a held express announces the holder, waits within a budget, then keeps a d
   const held = run(withName(file, 'Alice', ['express', '--mention', 'Bob', 'are you there @Bob']), { env: HELD_BUDGET_ENV });
   const elapsed = Date.now() - started;
   assert.equal(held.status, 1, held.stderr);
-  assert.match(held.stdout, /✕ your activity doesn't land — @Bob raised a hand/);
+  assert.match(held.stdout, /✕ @Bob has a hand raised — voices drop, yours too/);
   assert.match(held.stdout, /· pause for thought/);
   assert.match(held.stdout, /your activity is waiting — after .* it saves a draft and stops/);
   assert.match(held.stdout, /--no-wait saves a draft and returns now/);
@@ -44,7 +44,7 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
   const landed = await waiting;
   assert.equal(landed.status, 0, landed.stderr);
   assert.match(landed.stdout, /your activity is waiting/);
-  assert.match(landed.stdout, /your activity lands/);
+  assert.match(landed.stdout, /your words land/);
   assert.equal((await loadSquare(file)).acts.at(-1).kind, 'say');
 });
 
@@ -58,7 +58,7 @@ test('express after done announces the return; a standing participant sees none'
   const returned = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
   assert.equal(returned.status, 0, returned.stderr);
   assert.match(returned.stdout, /● you stepped back into the square/);
-  assert.match(returned.stdout, /your activity lands/);
+  assert.match(returned.stdout, /your words land/);
 
   const standing = run(withName(file, 'Alice', ['express', '--no-mention', 'still here']));
   assert.equal(standing.status, 0, standing.stderr);

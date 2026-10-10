@@ -174,7 +174,7 @@ test('the CLI lands a body @name with a reach echo and rejects unknown names', a
 
   const directed = run(withName(file, 'Alice', ['express', 'hey @Bob']));
   assert.equal(directed.status, 0, directed.stderr);
-  assert.match(directed.stdout, /your activity lands — #1 · act\/\d+ · to @Bob/);
+  assert.match(directed.stdout, /● you walk over to @Bob — act\/\d+/);
   let acts = (await loadSquare(file)).acts;
   assert.deepEqual(acts.at(-1).mentions, ['Bob']);
 
@@ -189,7 +189,7 @@ test('the CLI lands a body @name with a reach echo and rejects unknown names', a
 
   const piped = run(withName(file, 'Alice', ['express', '-']), { input: 'piped @Bob' });
   assert.equal(piped.status, 0, piped.stderr);
-  assert.match(piped.stdout, /· to @Bob/);
+  assert.match(piped.stdout, /● you walk over to @Bob — act\/\d+/);
 
   const pipedBare = run(withName(file, 'Alice', ['express', '-']), { input: 'no audience here' });
   assert.equal(pipedBare.status, 2);

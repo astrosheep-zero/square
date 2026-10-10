@@ -7,6 +7,7 @@ import {
   type Reach,
   type RoomChangeAct,
   formatHardCap,
+  sameName,
 } from '../model.js';
 import {
   formatRefusal,
@@ -129,7 +130,7 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
     const throttle = intent.options.throttlePerMinute === undefined ? [] : [`  · throttle ${intent.options.throttlePerMinute}/min`];
     return withPathOutput(
       squarePath,
-      ['✓ the square is open', `  · cap ${cap}`, ...throttle, '  · nobody here yet — the first join steps in'].join('\n'),
+      ['· the square stands ready', `  · cap ${cap}`, ...throttle].join('\n'),
       { participantCount: 0 }
     );
   },
@@ -206,11 +207,15 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           : `✓ you banished the original ${participantIdentity(joinedName)} — the name is yours`;
       const isRejoin = joinKind !== 'joined';
       const reconnect = joinKind === 'reconnected';
+      // The long scene belongs to a name's first join here; a return reads its own line.
+      const joinedBefore = after.state.acts.filter((act) => act.kind === 'join' && sameName(act.actor, joinedName)).length > 1;
+      const rejoinScene = '*the flagstones are where you left them. so is your shadow.*';
+      const entryScene = joinKind !== 'joined' ? '' : joinedBefore ? rejoinScene : scene;
       const output = [
         entryLine,
         '',
         "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
-        ...(reconnect || scene === '' ? [] : ['', scene]),
+        ...(reconnect || entryScene === '' ? [] : ['', entryScene]),
         ...(isRejoin || contextText === '' ? [] : ['', style('dim', 'context'), contextText]),
         ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
         ...fallback,
@@ -378,7 +383,7 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     const name = result.activity.actor;
     const presentation = await openSquare(squarePath, { clock: nowMs, env: context.env, hostLedger: hostLedgerForEnv(context.env) });
     const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
-    return withPathOutput(squarePath, `○ ${participantIdentity(name)} steps out of the square — done · ${result.activity.id} · just now`, { participantCount });
+    return withPathOutput(squarePath, `○ you stepped out — your footsteps fade · ${result.activity.id}`, { participantCount });
   },
   present: (result) => process.stdout.write(result),
 };
