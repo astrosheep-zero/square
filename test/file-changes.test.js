@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { observeFileVersion, observeFileMetadata } from '../dist/file-changes.js';
-import { createSquareState, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, writeSquareFile, observeSquareRevision, readSquareRevision } from '../dist/artifact.js';
 import { createFileCell } from '../dist/square-storage.js';
 
 function fixture(t) {
@@ -103,6 +103,32 @@ test('a healthy watcher that loses an event still reconciles, without speculativ
   await sleep(30);
   fs.writeFileSync(file, 'different, but no event is emitted');
   assert.equal(await changed, true);
+});
+
+test('missing revisions stay quiet across reconciliation and wake on return', async (t) => {
+  const file = fixture(t);
+  const watcher = fakeWatch(t);
+  const observer = await observeSquareRevision(file);
+  t.after(() => observer.close());
+  assert.equal(await observer.read(), null);
+  await assert.rejects(readSquareRevision(file), { code: 'not_found' });
+  const quiet = observer.changed(null, 2_200);
+  watcher.callbacks[0]('rename', path.basename(file));
+  assert.equal(await quiet, false);
+
+  const appeared = observer.changed(null, 4_000);
+  await writeSquareFile(file, createSquareState({ force: true, hardCap: null }, 'returned'));
+  assert.equal(await appeared, true);
+  assert.equal(await observer.read(), 0);
+  const removed = observer.changed(0, 1_000);
+  fs.unlinkSync(file);
+  watcher.callbacks[0]('rename', path.basename(file));
+  assert.equal(await removed, true);
+  assert.equal(await observer.read(), null);
+
+  fs.writeFileSync(file, 'not a database');
+  watcher.callbacks[0]('change', path.basename(file));
+  await assert.rejects(observer.read(), { code: 'invalid_args' });
 });
 
 test('directory observation survives atomic replacement and ignores unrelated filenames', async (t) => {

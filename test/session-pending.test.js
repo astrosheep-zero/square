@@ -83,6 +83,26 @@ test('presentation-only evidence invalidates eligibility; failed evidence cannot
   assert.equal((await retry.pending)[0].notifications[0].actIndex, 2);
 });
 
+test('a stale binding does not rescan the ledger on missing-artifact reconciliation', async (t) => {
+  const item = await fixture(t);
+  await item.bind();
+  const saved = fs.readFileSync(item.file);
+  fs.unlinkSync(item.file);
+  let reads = 0;
+  const readFile = fs.promises.readFile.bind(fs.promises);
+  t.mock.method(fs.promises, 'readFile', (...args) => {
+    if (String(args[0]).startsWith(item.ledgerRoot)) reads++;
+    return readFile(...args);
+  });
+  const waiting = armedWait(item.observer);
+  await waiting.ready;
+  const baseline = reads;
+  await sleep(2_200);
+  assert.equal(reads, baseline);
+  fs.writeFileSync(item.file, saved);
+  assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
+});
+
 test('one session cancellation cannot close a shared monitor or suppress another session', async (t) => {
   const item = await fixture(t);
   const other = await observeSessionPending('two', { SQUARE_HOST_LEDGER_ROOT: item.ledgerRoot });

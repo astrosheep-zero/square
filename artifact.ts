@@ -240,8 +240,15 @@ export function readSquareRevision(squarePath: string, signal?: AbortSignal): Pr
 }
 
 /** One reference-counted revision detector per canonical artifact in this process. */
-export function observeSquareRevision(squarePath: string): Promise<import('./file-changes.js').VersionObserver<number>> {
-  return observeFileVersion(squarePath, 'square-revision', readSquareRevision);
+export function observeSquareRevision(squarePath: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+  return observeFileVersion(squarePath, 'square-revision', async (file, signal) => {
+    try { return await readSquareRevision(file, signal); }
+    catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      if (error instanceof InternalSquareError && error.code === 'not_found') return null;
+      throw error;
+    }
+  });
 }
 
 async function readWithBusyRetry<T>(read: () => T, signal?: AbortSignal): Promise<T> {

@@ -65,7 +65,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
   const env = { ...suppliedEnv };
   const hostLedger = hostLedgerForEnv(env);
   const ledger = await hostLedger.observeChanges();
-  const artifacts = new Map<string, VersionObserver<number>>();
+  const artifacts = new Map<string, VersionObserver<number | null>>();
   const lifetime = new AbortController();
   return {
     async wait(timeoutMs, options = {}) {
