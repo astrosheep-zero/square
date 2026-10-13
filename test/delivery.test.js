@@ -170,24 +170,27 @@ test('ignore blocks future mentions and bare delivery until listen clears it', (
   assert.deepEqual(plannedRecipients(delivery, square.acts[6]), ['Bob:mention']);
 });
 
-test('attention preview distinguishes being addressed, listening, and everyone’s attention', () => {
+test('attention preview distinguishes mention, reply, listening, and everyone’s attention', () => {
   const square = squareState([
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 3 },
-    { kind: 'say', actor: 'Alice', body: 'bare thought', at: 4 },
-    { kind: 'say', actor: 'Alice', body: 'direct thought', mentions: ['Bob'], at: 5 },
-    { kind: 'say', actor: 'Alice', body: 'everyone listen', reach: 'bell', at: 6 },
+    { kind: 'say', actor: 'Bob', body: 'a question', at: 3 },
+    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 4 },
+    { kind: 'say', actor: 'Alice', body: 'bare thought', at: 5 },
+    { kind: 'say', actor: 'Alice', body: 'direct thought', mentions: ['Bob'], at: 6 },
+    { kind: 'say', actor: 'Alice', body: 'everyone listen', reach: 'bell', at: 7 },
+    { kind: 'say', actor: 'Alice', body: 'an answer', reply: 2, at: 8 },
   ]);
   const delivery = deriveDeliveryModel(square);
-  const descriptions = square.acts.slice(3).map((act) => {
+  const descriptions = square.acts.slice(4).map((act) => {
     const [{ route, recipient }] = delivery.plan(act);
     return renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: act.index, recipient, actor: act.actor, route, body: act.body }).split('\n')[2];
   });
   assert.deepEqual(descriptions, [
     '● Alice spoke · you’re listening to Alice',
-    '● Alice addressed you (Bob)',
+    '● Alice spoke your name (Bob)',
     '● Alice rang the bell · everyone’s attention',
+    '● Alice answered you (Bob)',
   ]);
 });
 

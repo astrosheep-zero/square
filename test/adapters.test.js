@@ -472,7 +472,7 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(context, /^\n```square-activity/);
   assert.match(context, /· \/tmp\/SQUARE\.square · act\/7/);
-  assert.match(context, /● Alice addressed you \(Bob\)/);
+  assert.match(context, /● Alice spoke your name \(Bob\)/);
   assert.doesNotMatch(context, /^>$/m);
   assert.match(context, /```\n$/);
   assert.doesNotMatch(context, /catch --now/);
@@ -483,7 +483,7 @@ test('Pi notify summary distinguishes being addressed, listening, and everyone�
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   assert.equal(
     summarizePendingForNotify([membership([note()])]),
-    '■ square · Alice addressed you (Bob) — hello @Bob',
+    '■ square · Alice spoke your name (Bob) — hello @Bob',
   );
   assert.equal(
     summarizePendingForNotify([membership([note({ route: 'attention' })])]),
@@ -644,7 +644,7 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, false, 'the activity stays out of the TUI stream; the notify carries the human-facing summary');
-      assert.deepEqual(notified, [{ message: '■ square · Alice addressed you (Bob) — hello @Bob', level: 'info' }]);
+      assert.deepEqual(notified, [{ message: '■ square · Alice spoke your name (Bob) — hello @Bob', level: 'info' }]);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),
