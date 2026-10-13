@@ -101,8 +101,9 @@ function runOpenCode(homeDir: string, args: string[]): { status: number; stdout:
 }
 
 export function installOpenCodePlugin(homeDir: string, force = false, run: OpenCodeCommandRunner = runOpenCode): string[] {
-  const args = ['plugin', SQUARE_IDENTITY.packageName, '--global'];
-  if (force) args.push('--force');
+  // OpenCode v2's `plugin add` is idempotent and has no --global/--force flags.
+  void force;
+  const args = ['plugin', 'add', SQUARE_IDENTITY.packageName];
   const result = run(homeDir, args);
   if (result.status !== 0) throw new Error(`OpenCode plugin install failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
   return [SQUARE_IDENTITY.packageName];

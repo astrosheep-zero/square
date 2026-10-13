@@ -219,11 +219,17 @@ test('OpenCode runtime doctor bounds stderr, stdout, and thrown diagnostics', ()
 
 test('OpenCode installation delegates plugin ownership to OpenCode npm config', () => {
   const calls = [];
-  const result = installOpenCodePlugin('/tmp/square-opencode', true, (_home, args) => {
+  const run = (_home, args) => {
     calls.push(args);
     return { status: 0, stdout: '', stderr: '' };
-  });
-  assert.deepEqual(calls, [['plugin', '@astrosheep/square', '--global', '--force']]);
+  };
+  const result = installOpenCodePlugin('/tmp/square-opencode', true, run);
+  installOpenCodePlugin('/tmp/square-opencode', false, run);
+  // `plugin add` is idempotent and takes no --global/--force flags, so force does not change argv.
+  assert.deepEqual(calls, [
+    ['plugin', 'add', '@astrosheep/square'],
+    ['plugin', 'add', '@astrosheep/square']
+  ]);
   assert.deepEqual(result, ['@astrosheep/square']);
 });
 
