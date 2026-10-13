@@ -69,8 +69,8 @@ export class Square {
     this.context = { ...square, location };
   }
 
-  static async at(input: SquareAtInput): Promise<Square> {
-    return new Square(input.path, await openSquare(input.path, input));
+  static async at(input: SquareAtInput, control?: OperationControl): Promise<Square> {
+    return new Square(input.path, await openSquare(input.path, input, control));
   }
 
   static async build(input: SquareBuildInput): Promise<Square> {
@@ -112,7 +112,7 @@ export class Square {
   }
 
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
-  snapshot(): Promise<SquareSnapshot> { return snapshot(this.square); }
+  snapshot(control?: OperationControl): Promise<SquareSnapshot> { return snapshot(this.square, control); }
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return history(this.square, query, control); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
     if (this.square.hostLedger === undefined) return null;

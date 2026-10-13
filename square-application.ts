@@ -79,21 +79,21 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
   const env = { ...context.env };
   const location = () => requireLocation({ ...context, env });
   const hostLedger = context.hostLedger ?? hostLedgerForEnv(env);
-  const open = () => Square.at({ path: location(), clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });
+  const open = (control?: OperationControl) => Square.at({ path: location(), clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport }, control);
   async function existing<T>(operation: (square: OpenSquare, name: string) => Promise<T>, control?: OperationControl): Promise<T> {
     checkControl(control);
     const squarePath = location();
     const participantName = await requireParticipant(context, squarePath, hostLedger, env);
-    const square = await openSquare(squarePath, { clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });
+    const square = await openSquare(squarePath, { clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport }, control);
     try {
-      const { name } = await resolveParticipant(square, participantName);
+      const { name } = await resolveParticipant(square, participantName, control);
       checkControl(control);
       return await operation(square, name);
     } finally { await closeOpenSquare(square); }
   }
   async function joined<T>(operation: (participant: Participant) => Promise<T>, control?: OperationControl): Promise<T> {
     checkControl(control);
-    const square = await open();
+    const square = await open(control);
     try { return await operation(await square.join(await requireParticipant(context, square.location, hostLedger, env), control)); }
     finally { await square.close(); }
   }
@@ -101,10 +101,10 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     async join(options = {}, control = {}) {
       checkControl(control);
       const squarePath = location();
-      const square = await open();
+      const square = await open(control);
       try {
         const participantName = await requireParticipant(context, squarePath, hostLedger, env);
-        const before = await square.snapshot();
+        const before = await square.snapshot(control);
         const standing = before.participants.some((item) => item.name.toLocaleLowerCase() === participantName.toLocaleLowerCase() && item.state === 'joined');
         const identity = localSessionIdentities(env)[0];
         const owner = standing ? await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined) : undefined;
@@ -146,7 +146,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
             await sleep(error.facts?.retryAfterMs ?? 1, undefined, { signal: control.signal });
           } else {
             const waitStarted = Date.now();
-            const square = await openSquare(location(), { clock: context.clock, env, hostLedger, signal: control.signal });
+            const square = await openSquare(location(), { clock: context.clock, env, hostLedger }, control);
             try {
               const snapshot = await square.artifact.read(control.signal);
               if (currentHold(snapshot.state.acts).active) await square.artifact.changed(snapshot.version, Math.max(1, HELD_WAIT_BUDGET_MS - heldWaitedMs), control.signal);
@@ -160,7 +160,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     async history(query, control) {
       checkControl(control);
       if (context.participant !== undefined || env.SQUARE_PARTICIPANT_NAME !== undefined) return existing((square, name) => participantHistory(square, name, query, control), control);
-      const square = await open();
+      const square = await open(control);
       try { checkControl(control); return await square.history(query, control); } finally { await square.close(); }
     },
     listen(target, control) { return existing((square, name) => listen(square, name, target, control), control); },
@@ -175,7 +175,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const identity = localSessionIdentities(env)[0];
       const owner = identity === undefined ? undefined : await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined);
       if (identity !== undefined && owner?.session === identity.sessionId && presenceEpoch(owner) > 0) {
-        const square = await open();
+        const square = await open(control);
         try { return await square.doneOwnedSession(participantName, body ?? '', presenceEpoch(owner), control); }
         finally { await square.close(); }
       }

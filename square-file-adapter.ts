@@ -18,6 +18,7 @@ import {
   type SquareState,
 } from './model.js';
 import type { OpenSquare } from './open-square.js';
+import type { OperationControl } from './square-facade.js';
 import type { HostLedgerPort, SquareArtifactPort } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
@@ -63,12 +64,13 @@ function validateBuildOptions(options: SquareBuildOptions): void {
 export async function openSquare(
   squarePath: string,
   options: Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env' | 'signal'> = {},
+  control?: OperationControl,
 ): Promise<OpenSquare> {
   const env = options.env ?? process.env;
   const ledgerRoot = hostLedgerRoot(env);
   const artifact = openSquareArtifact(squarePath, options.signal);
   try {
-    await artifact.read();
+    await artifact.read(control?.signal);
     return {
       artifact,
       clock: options.clock ?? Date.now,

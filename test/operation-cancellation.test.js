@@ -3,7 +3,8 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { Square } from "../dist/index.js";
 import { createMemoryCell } from "../dist/square-storage.js";
-import { createSquareState } from "../dist/artifact.js";
+import { createSquareState, readSquareSnapshot } from "../dist/artifact.js";
+import { createSquareApplication } from "../dist/square-application.js";
 
 function aborted() {
   const controller = new AbortController();
@@ -18,6 +19,48 @@ test("pre-aborted lifecycle operations do not mutate the artifact", async () => 
   await assert.rejects(() => square.implicitJoin("Bob", { signal: aborted().signal }), /cancelled/);
   assert.equal((await square.snapshot()).actCount, before.actCount);
   await square.close();
+});
+
+test("application opens abort under an exclusive lock without deferred mutation", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-application-cancel-"));
+  const location = path.join(root, "SQUARE.square");
+  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
+  const square = await Square.build({ path: location, markdown: "context", env });
+  const writer = await square.join("Writer");
+  await square.join("Reader");
+  await writer.express("unread", { force: true, mentions: ["Reader"] });
+  await square.close();
+  const before = await readSquareSnapshot(location);
+  const reader = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Reader" });
+  const speaker = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Writer" });
+  const newcomer = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Newcomer" });
+  const database = new DatabaseSync(location);
+  database.exec("BEGIN EXCLUSIVE");
+  const controller = new AbortController();
+  const pending = [
+    reader.catch({}, { signal: controller.signal }),
+    speaker.express("cancelled", { force: true, mentions: ["Reader"] }, { signal: controller.signal }),
+    newcomer.join({}, { signal: controller.signal }),
+  ];
+  const abort = setTimeout(() => controller.abort(new Error("cancelled")), 50);
+  let deadline;
+  try {
+    await Promise.race([
+      Promise.all(pending.map((operation) => assert.rejects(operation, /cancelled/))),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("cancellation waited for the artifact lock")), 1000); }),
+    ]);
+  } finally {
+    clearTimeout(abort);
+    clearTimeout(deadline);
+    database.exec("ROLLBACK");
+    database.close();
+    await Promise.allSettled(pending);
+    try { assert.deepEqual(await readSquareSnapshot(location), before); }
+    finally { await fs.rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("idle catch aborts without consuming activity added later", async () => {
