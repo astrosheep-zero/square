@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -89,6 +90,15 @@ async function failure(promise) {
 
 const attempt = { agentId: 'agent-one', prompt: '<system-reminder source="square">awareness</system-reminder>' };
 const coordinates = { location: '/squares/PUBLIC.square', participant: 'Faye', activity: 'act/7', attemptN: 1 };
+
+test('the Paseo fixture uses the SDK version pinned by the repository', async () => {
+  const require = createRequire(import.meta.url);
+  const client = require.resolve('@getpaseo/client/internal/daemon-client');
+  const installed = JSON.parse(await readFile(path.join(path.dirname(client), '..', 'package.json'), 'utf8'));
+  const declared = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(installed.version, declared.devDependencies['@getpaseo/client'],
+    'Paseo SDK differs from the repository pin; run npm ci before testing.');
+});
 
 test('a Square Paseo wake steers with one stable id per attempt', async (t) => {
   await environment(t);
