@@ -1,4 +1,4 @@
-// Claude Code 2.1.295 mod. No Node imports, shell interpolation, or child credentials.
+// Claude Code mod. No Node imports, shell interpolation, or child credentials.
 const hasToken = (text) => typeof text === 'string' && /(?:^|\n)\[square-inbox:[a-zA-Z0-9-]+\](?:\n|$)/.test(text);
 
 async function coordinate($) {
@@ -55,12 +55,15 @@ async function cancel($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    await $.tool.register({
-      name: 'square',
-      description: "Run the square CLI. args are exactly the words after `square` in the square skill's commands.",
-      inputSchema: { type: 'object', properties: { args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } }, required: ['args'] },
-      isDeferred: false,
-    });
+    // Claude refuses plugin tools in sessions started without built-in tools; the inbox must still reconcile.
+    try {
+      await $.tool.register({
+        name: 'square',
+        description: "Run the square CLI. args are exactly the words after `square` in the square skill's commands.",
+        inputSchema: { type: 'object', properties: { args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } }, required: ['args'] },
+        isDeferred: false,
+      });
+    } catch (error) { await $.ui.log(`Square tool unavailable: ${error?.message ?? error}`); }
     await reconcile($).catch(() => undefined);
     return next(e);
   });

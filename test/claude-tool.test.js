@@ -2,20 +2,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { register } from '../claude-plugin/hooks/register.js';
 
-function fixture() {
+function fixture({ refuseTool = false } = {}) {
   const handlers = new Map();
   const registrations = [];
   const calls = [];
+  const bridged = [];
+  const logs = [];
   const coordinate = { id: 'initial-session', cwd: '/initial' };
   let output = { stdout: 'CLI output\n', stderr: '', exitCode: 0 };
   const $ = {
     session: { id: async () => coordinate.id, cwd: async () => coordinate.cwd, version: async () => ({ version: '2.1.296' }) },
     env: { get: async () => undefined },
     state: { get: async () => ({ version: 0 }), set: async () => ({ isSet: true, version: 1 }) },
-    ui: { log: async () => undefined },
-    tool: { register: async (spec) => { registrations.push(spec); return { tool: 'mcp__square__square' }; } },
+    ui: { log: async (text) => { logs.push(text); } },
+    tool: { register: async (spec) => { if (refuseTool) throw new Error('refused: no built-in tools'); registrations.push(spec); return { tool: 'mcp__square__square' }; } },
     process: { run: async (argv, options) => {
-      if (argv.length === 2 && argv[1] === 'claude-mod') return { stdout: JSON.stringify({ available: false, bindings: [], diagnostic: 'Native inbox unavailable' }), exitCode: 0 };
+      if (argv.length === 2 && argv[1] === 'claude-mod') return bridged.push(options), { stdout: JSON.stringify({ available: false, bindings: [], diagnostic: 'Native inbox unavailable' }), exitCode: 0 };
       calls.push({ argv, options });
       if (output instanceof Error) throw output;
       return output;
@@ -23,9 +25,18 @@ function fixture() {
   };
   register((name, handler) => handlers.set(name, handler));
   const invoke = (name, e, next = async () => { throw new Error('handled tool must not fall through'); }, signal = new AbortController().signal) => handlers.get(name)($, e, Object.assign(next, { signal }));
-  return { coordinate, registrations, calls, invoke, setOutput: (value) => { output = value; } };
+  return { coordinate, registrations, calls, bridged, logs, invoke, setOutput: (value) => { output = value; } };
 }
 const tool = 'mcp__square__square';
+
+test('a refused square tool still lets the native inbox reconcile at session start', async () => {
+  const f = fixture({ refuseTool: true });
+  const started = {};
+  assert.equal(await f.invoke('session.start', {}, async () => started), started);
+  assert.equal(f.registrations.length, 0);
+  assert.equal(f.bridged.length, 1);
+  assert.match(f.logs[0], /Square tool unavailable: refused/);
+});
 
 test('square is upfront without native inbox capability and runs direct argv with the live main/child coordinate', async () => {
   const f = fixture();
