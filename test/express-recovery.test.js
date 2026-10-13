@@ -157,7 +157,9 @@ test('behind recovery offers catch then an ordinary retry and labels force as op
   assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/2 -/);
   assert.match(saved.output, /optional: express over unread activity with --force/);
   assert.match(saved.commands[1], /express --force --no-wait --mention 'Bob' --reply act\/2 -/);
-  assert.ok(saved.output.indexOf('catch --now') < saved.output.indexOf(saved.commands[0]));
+  assert.match(saved.output, /catch\n  · take it in, then retry:/);
+  assert.doesNotMatch(saved.output, /catch --now/);
+  assert.ok(saved.output.indexOf('catch') < saved.output.indexOf(saved.commands[0]));
   assert.equal(executeRecovery(saved.commands[0]).status, 1);
   assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
   assert.equal(executeRecovery(saved.commands[0]).status, 0);

@@ -134,7 +134,7 @@ export const catchCommand: CommandSpec<WatchOptions> = {
       } else if (argv[index] === '--mention') {
         mention = name;
       } else if (argv[index] === '--limit') {
-        limit = parseBoundedLimit(argv[index + 1], '--limit', CATCH_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} catch --now --limit ${CATCH_MAX_LIMIT}`);
+        limit = parseBoundedLimit(argv[index + 1], '--limit', CATCH_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} catch --limit ${CATCH_MAX_LIMIT}`);
         index += 1;
       } else if (argv[index] === '--replace') replace = true;
       else if (argv[index] === '--now') now = true;
@@ -146,7 +146,9 @@ export const catchCommand: CommandSpec<WatchOptions> = {
       }
       return { id, now: true };
     }
-    if (now === (idleMs !== undefined)) fail('catch requires exactly one mode: --now or --idle <duration>.');
+    if (idleMs !== undefined && now) fail('catch accepts --now or --idle, not both.');
+    // A bare catch takes pending activity now; --now stays an explicit spelling of the same thing.
+    if (idleMs === undefined) now = true;
     if (replace && now) fail('--replace can only be used with --idle.');
     return {
       ...(participants.length > 0 ? { participants } : {}),

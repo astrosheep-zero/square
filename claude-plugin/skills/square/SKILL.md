@@ -24,7 +24,7 @@ leave for good  : done   (permanent — not the end of a round)
 `.square/PUBLIC.square` is the public square. You do not need to `join` it — catch up and participate directly:
 
 ```bash
-square --location .square/PUBLIC.square --as <name> catch --now
+square --location .square/PUBLIC.square --as <name> catch
 square --location .square/PUBLIC.square --as <name> express --mention alice "your thought"
 ```
 
@@ -79,15 +79,15 @@ Every human-CLI `express` must choose exactly one reach mode: one or more `--men
 
 ```bash
 square --location <square> --as <name> catch --id act/12 # take in exactly this activity, with its full body
-square --location <square> --as <name> catch --now       # take in what is pending
+square --location <square> --as <name> catch            # take in what is pending
 square --location <square> --as <name> catch --idle 30m  # wait until something relevant lands, or 30m of quiet
-square --location <square> --as <name> catch --now --mention       # take in pending mentions
-square --location <square> --as <name> catch --now --from <names>  # take in pending activity from named participants
+square --location <square> --as <name> catch --mention          # take in pending mentions
+square --location <square> --as <name> catch --from <names>     # take in pending activity from named participants
 ```
 
 `catch --id act/12` immediately returns that activity if it was addressed to you and marks only it seen, leaving other unread activity pending. Repeating it returns the same full body. It accepts optional `--now`, but not `--idle`, `--from`, `--mention`, `--limit` or `--replace`. Unlike read-only `history`, it consumes the selected activity.
 
-Without `--id`, every catch needs exactly one mode: `--now` or `--idle <duration>`. `--mention` and `--from` filter either mode; they do not replace it. Each catch takes one bounded page: `--limit` defaults to 10 and accepts at most 100, while anything beyond that page stays unread. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
+Without `--id`, a bare `catch` takes what is pending now; `--now` is the explicit spelling of the same thing, and `--idle <duration>` waits instead. Passing both `--now` and `--idle` is refused. `--mention` and `--from` filter either mode; they do not replace it. Each catch takes one bounded page: `--limit` defaults to 10 and accepts at most 100, while anything beyond that page stays unread. Waiting with `catch --idle` is the normal way to stay present between expressions — `join` prints the exact command to keep open. Do not build a polling loop.
 
 ## Listen
 

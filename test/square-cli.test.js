@@ -522,12 +522,11 @@ test('doctor --fix is not a command', async () => {
   assert.match(result.stderr, /invalid arguments for doctor/);
 });
 
-test('catch requires one explicit mode and rejects removed modes', async () => {
+test('catch conflicts and removed modes are refused while bare catch is the default now', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
   });
   const rejected = [
-    ['catch'],
     ['catch', '--now', '--idle', '1s'],
     ['catch', '--follow'],
     ['catch', '--count', '2'],
@@ -538,7 +537,25 @@ test('catch requires one explicit mode and rejects removed modes', async () => {
   for (const [index, result] of results.entries()) {
     assert.notEqual(result.status, 0, rejected[index].join(' '));
   }
+  assert.match(results[0].stderr, /catch accepts --now or --idle, not both/);
+  assert.match(results[4].stderr, /--replace can only be used with --idle/);
+  assert.equal(run(withName(file, 'Alice', ['catch'])).status, 0);
   assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
+});
+
+test('bare catch takes pending activity now and consumes it', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    const bob = await square.join('Bob');
+    await bob.express('hello Alice', { mentions: ['Alice'] });
+  });
+  const caught = run(withName(file, 'Alice', ['catch']));
+  assert.equal(caught.status, 0, caught.stderr);
+  assert.match(caught.stdout, /hello Alice/);
+  const quiet = run(withName(file, 'Alice', ['catch']));
+  assert.equal(quiet.status, 0, quiet.stderr);
+  assert.doesNotMatch(quiet.stdout, /hello Alice/);
+  assert.match(quiet.stdout, /only footsteps|nothing new for you/);
 });
 
 test('history rejects removed filter aliases', async () => {

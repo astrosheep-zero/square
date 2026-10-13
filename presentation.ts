@@ -369,7 +369,7 @@ export function renderPendingFeed(
 }
 
 export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
-  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} catch --now`;
+  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} catch`;
   return withPathOutput(
     opts.squarePath,
     [
