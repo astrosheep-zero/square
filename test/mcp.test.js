@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
+import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square } from '../dist/square-wiring.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
+import { createSquareApplication } from '../dist/square-application.js';
 
 async function fixture(participant = 'rei') {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-'));
@@ -81,6 +85,56 @@ test('MCP cancellation reaches an in-progress application operation', async () =
     const history = await client.callTool({ name: 'history', arguments: {} });
     assert.equal(history.structuredContent.activities.some((activity) => activity.body === 'waiting'), false);
   } finally { await close(); }
+});
+
+test('stdio disconnect aborts held express and idle catch without later mutation or consumption', async (t) => {
+  const { cwd, squarePath, env } = await fixture('disconnected');
+  const app = createSquareApplication({ cwd, squarePath, env, participant: 'disconnected' });
+  const child = spawn(process.execPath, [path.resolve('dist/square.js'), 'mcp-server'], {
+    cwd, env: { ...env, SQUARE_LOCATION: squarePath }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const exited = once(child, 'exit');
+  const responses = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  t.after(async () => {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await exited;
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+  let id = 0;
+  const send = (method, params) => {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) + '\n');
+    return id;
+  };
+  const request = async (method, params) => {
+    const requestId = send(method, params);
+    const response = JSON.parse((await responses.next()).value);
+    assert.equal(response.id, requestId);
+    assert.equal(response.error, undefined);
+    assert.equal(response.result.isError, undefined);
+    return response.result;
+  };
+  await request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'disconnect-test', version: '1' } });
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  await request('tools/call', { name: 'join', arguments: {} });
+  await request('tools/call', { name: 'hold', arguments: {} });
+  await request('tools/call', { name: 'catch', arguments: {} });
+  send('tools/call', { name: 'express', arguments: { body: 'orphan expression', force: true } });
+  send('tools/call', { name: 'catch', arguments: { idle: 60_000 } });
+  await request('ping');
+  await sleep(100);
+
+  const disconnected = once(child, 'exit', { signal: AbortSignal.timeout(3000) });
+  child.stdin.end();
+  assert.deepEqual(await disconnected, [0, null], stderr);
+  await app.resume();
+  assert.equal((await app.history()).some((activity) => activity.body === 'orphan expression'), false);
+  const writer = createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' }, participant: 'writer' });
+  await writer.join();
+  const expressed = await writer.express('after disconnect', { force: true, mentions: ['disconnected'] });
+  const caught = await app.catch();
+  assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
 });
 
 test('square mcp-server speaks newline-delimited JSON-RPC on stdio', async () => {

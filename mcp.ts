@@ -106,5 +106,10 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
 }
 
 export async function runSquareMcpStdio(options: SquareMcpOptions): Promise<void> {
-  await createSquareMcpServer(options).connect(new StdioServerTransport());
+  const server = createSquareMcpServer(options);
+  const transport = new StdioServerTransport();
+  const close = () => { void server.close(); };
+  process.stdin.once('end', close);
+  process.stdin.once('close', close);
+  await server.connect(transport);
 }
