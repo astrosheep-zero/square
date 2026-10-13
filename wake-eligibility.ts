@@ -2,6 +2,7 @@ import { nameKey, type SquareState, type WakeRoute } from './model.js';
 import { deriveDeliveryModel } from './delivery.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import type { EvidenceRecord, PresenceRecord } from './host-ledger.js';
+import { presenceEpoch } from './registry.js';
 import type { PresentationEvidenceProjection, WakeRequest } from './ports.js';
 import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
 
@@ -60,7 +61,7 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
   }
   const ownerFor = (route: WakeRoute): PresenceRecord | undefined => route.location !== input.location ? undefined
     : ownersBySession.get(identity(nameKey(route.participant), route.sessionId))?.find(
-      (row) => route.epoch === undefined || row.epoch === route.epoch,
+      (row) => route.epoch === undefined || presenceEpoch(row) === route.epoch,
     );
   const ownedRoutes: OwnedWakeRoute[] = [];
   const latest = new Map<string, number>();

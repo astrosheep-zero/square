@@ -120,6 +120,7 @@ test('strict route ownership requires local presence, with optional epoch and ch
     ['matching epoch', [owner()], [route({ epoch: 7 })], true],
     ['mismatched epoch', [owner()], [route({ epoch: 8 })], false],
     ['missing owner epoch', [owner({ epoch: undefined })], [route({ epoch: 7 })], false],
+    ['epochless implicit join owns its zero-epoch route', [owner({ epoch: undefined })], [route({ epoch: 0 })], true],
     ['stale presence route key is ignored', [owner({ route: { kind: 'codex-queue', address: { threadId: 'other' } } })], [route()], true],
     ['cancelled epochless route', [owner({ cancelledThrough: 2 })], [route()], false],
   ]) {
