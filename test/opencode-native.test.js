@@ -17,7 +17,7 @@ async function waitFor(predicate) {
   }
   assert.fail('OpenCode receiver did not settle the expected boundary');
 }
-async function fixture(t) {
+async function fixture(t, beforeSetup) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-opencode-v2-'));
   const original = process.env.SQUARE_HOST_LEDGER_ROOT;
   process.env.SQUARE_HOST_LEDGER_ROOT = path.join(root, 'ledger');
@@ -67,6 +67,7 @@ async function fixture(t) {
       },
     },
   };
+  await beforeSetup?.();
   let cleanup = await plugin.setup(ctx);
   t.after(async () => {
     await cleanup();
@@ -120,11 +121,53 @@ test('v2 native body admission is not presentation; exact prepared primary conte
   assert.equal(f.sent.length, 2);
 });
 
-test('local cancellation and binding replacement fence late native context, while new activity survives', async (t) => {
+test('a transient receiver ledger failure recovers on reconciliation without plugin reload', async (t) => {
+  let failures = 0;
+  const f = await fixture(t, async () => {
+    const readFile = fs.readFile;
+    const evidencePath = path.join(await fs.realpath(process.env.SQUARE_HOST_LEDGER_ROOT), 'evidence.ndjsonl');
+    t.mock.method(fs, 'readFile', async (file, ...args) => {
+      if (file === evidencePath && failures === 0) {
+        failures++;
+        throw Object.assign(new Error('one-shot evidence read failure'), { code: 'EIO' });
+      }
+      return readFile(file, ...args);
+    });
+  });
+  await waitFor(() => failures === 1);
+  assert.equal(f.sent.length, 0);
+  await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+  const index = await f.express('fresh BODY after receiver failure');
+  await waitFor(async () => (await f.evidence()).some((row) => row.activity === `act/${index}` && row.outcome === 'accepted'));
+  await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+  assert.equal(failures, 1);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /fresh BODY after receiver failure/);
+});
+
+test('queued cancellation survives receiver settlement and binding replacement fences late native context', async (t) => {
   const f = await fixture(t);
   const old = await f.express('cancel this BODY');
-  await waitFor(() => f.sent.length === 1);
+  await waitFor(async () => (await f.evidence()).some((row) => row.activity === `act/${old}` && row.outcome === 'accepted'));
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  let entered = false;
+  const readFile = fs.readFile;
+  t.mock.method(fs, 'readFile', async (file, ...args) => {
+    if (!entered && file.endsWith('/presence.ndjsonl')) {
+      entered = true;
+      await blocked;
+      throw Object.assign(new Error('one-shot presence read failure'), { code: 'EIO' });
+    }
+    return readFile(file, ...args);
+  });
+  const preparation = f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+  await waitFor(() => entered);
   f.events.emit('event', { type: 'session.execution.interrupted', data: { sessionID: 'opencode-fixture', reason: 'user' } });
+  // Let the aborted receiver settle while cancellation is queued behind the blocked reconciliation.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  release();
+  await preparation;
   await waitFor(async () => (await f.ledger.listPresence({ session: 'opencode-fixture' })).some((owner) => owner.cancelledThrough >= old));
   await f.reload();
   await f.context(f.sent[0]);

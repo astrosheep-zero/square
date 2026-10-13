@@ -16,7 +16,7 @@ interface OpenCodePluginContext {
   };
   readonly event: { subscribe(options: { signal: AbortSignal }): AsyncIterable<{ type: string; data: { sessionID?: string; reason?: string } }> };
 }
-interface Receiver { readonly abort: AbortController; readonly running: Promise<void> }
+interface Receiver { readonly abort: AbortController; readonly running: Promise<void>; settled: boolean }
 
 /** Actual OpenCode 2.0.20 server plugin. Harness identity belongs to ctx, never process.env. */
 export default {
@@ -62,11 +62,11 @@ export default {
         const scopedEnv = operationEnv('opencode', sessionId, env);
         if (sessionId === activeSession) await automaticSessionStart('opencode', sessionId, directory, scopedEnv);
         if (!await publishOpenCodeRoutes(sessionId, scopedEnv, lifetime.signal)) { stop(sessionId); continue; }
-        if (receivers.has(sessionId)) continue;
+        if (receivers.get(sessionId)?.settled === false) continue;
         const abort = new AbortController();
         const signal = AbortSignal.any([lifetime.signal, abort.signal]);
-        const running = receiveOpenCodePending(target, scopedEnv, signal).catch(() => {});
-        receivers.set(sessionId, { abort, running });
+        const receiver: Receiver = { abort, settled: false, running: receiveOpenCodePending(target, scopedEnv, signal).catch(() => {}).finally(() => { receiver.settled = true; }) };
+        receivers.set(sessionId, receiver);
       }
       for (const sessionId of receivers.keys()) if (!candidates.has(sessionId)) stop(sessionId);
     };
