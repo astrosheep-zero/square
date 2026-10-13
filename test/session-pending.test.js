@@ -159,6 +159,54 @@ test('a stale binding does not rescan the ledger on missing-artifact reconciliat
   assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
 });
 
+test('an unreadable binding stays quiet across reconciliation and restores delivery on repair', async (t) => {
+  const item = await fixture(t);
+  const saved = fs.readFileSync(item.file);
+  const cell = createFileCell(item.file);
+  try { await cell.transact((state) => { state.acts.pop(); state.runtime.nextActIndex--; return { state, result: undefined }; }); }
+  finally { await cell.close(); }
+  const corruptFile = path.join(path.dirname(item.file), 'CORRUPT.square');
+  fs.writeFileSync(corruptFile, 'not a SQLite artifact');
+  await item.bind();
+  await item.ledger.ensurePresence({ location: corruptFile, participant: 'Bob', session: 'one', channel: 'pi', updatedAt: Date.now() });
+  await assert.rejects(readSquareRevision(corruptFile), { code: 'invalid_args' });
+  let snapshotReads = 0;
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/\bFROM\s+square_snapshot\b/i.test(sql) && /\bstate\b/i.test(sql)) snapshotReads++;
+    return prepare.call(this, sql, ...args);
+  });
+  let ledgerReads = 0;
+  const readFile = fs.promises.readFile.bind(fs.promises);
+  t.mock.method(fs.promises, 'readFile', (...args) => {
+    if (String(args[0]).startsWith(item.ledgerRoot)) ledgerReads++;
+    return readFile(...args);
+  });
+  const waiting = armedWait(item.observer, {}, 8_000);
+  await waiting.ready;
+  snapshotReads = 0;
+  ledgerReads = 0;
+  await sleep(4_200);
+  assert.equal(snapshotReads, 0);
+  assert.equal(ledgerReads, 0);
+  fs.writeFileSync(corruptFile, saved);
+  const repaired = (await waiting.pending)[0];
+  assert.equal(path.basename(repaired.squarePath), 'CORRUPT.square');
+  assert.equal(repaired.notifications[0].actIndex, 2);
+});
+
+test('an unrepaired binding respects timeout and cancellation', async (t) => {
+  const item = await fixture(t);
+  await item.bind();
+  fs.writeFileSync(item.file, 'not a SQLite artifact');
+  assert.deepEqual(await item.observer.wait(80), []);
+  const controller = new AbortController();
+  const waiting = armedWait(item.observer, { signal: controller.signal });
+  await waiting.ready;
+  controller.abort();
+  assert.deepEqual(await waiting.pending, []);
+});
+
 test('one session cancellation cannot close a shared monitor or suppress another session', async (t) => {
   const item = await fixture(t);
   const other = await observeSessionPending('two', { SQUARE_HOST_LEDGER_ROOT: item.ledgerRoot });

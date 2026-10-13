@@ -59,8 +59,17 @@ async function capture<T>(observer: VersionObserver<T>, kind: CapturedChange['ki
     return { kind, value, wait: (timeout, abort) => observer.changed(value, timeout, abort) };
   } catch (error) {
     if (signal.aborted) throw signal.reason ?? error;
-    // Keep watching an unreadable/missing artifact so repair can restore delivery.
-    return { kind, wait: (timeout, abort) => observer.hinted(generation, timeout, abort) };
+    // Failed revision reads are not changes; only a successful retry wakes projection.
+    return { kind, wait: async (timeout, abort) => {
+      const deadline = Date.now() + Math.max(0, timeout);
+      let since = generation;
+      while (await observer.hinted(since, Math.max(0, deadline - Date.now()), abort)) {
+        since = observer.generation;
+        try { await observer.read(abort); return true; }
+        catch (error) { if (abort.aborted) throw abort.reason ?? error; }
+      }
+      return false;
+    } };
   }
 }
 
