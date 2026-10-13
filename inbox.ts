@@ -1,4 +1,5 @@
-import { type InboxMembership } from './model.js';
+import { type InboxMembership, nameKey } from './model.js';
+import { type SessionBindingProjection } from './ports.js';
 import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
 import { hostLedgerForEnv } from './registry.js';
 import { type VersionObserver } from './file-changes.js';
@@ -19,35 +20,43 @@ function notificationKey(membership: InboxMembership, actIndex: number): string 
   return membership.squarePath + '\0' + membership.name.toLocaleLowerCase() + '\0' + actIndex;
 }
 
+async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal): Promise<InboxMembership | undefined> {
+  const artifact = openSquareArtifact(binding.location, signal);
+  try {
+    const projection = await projectPresentation({ artifact, binding, now: Date.now() });
+    if (!projection.joined) return undefined;
+    return { name: projection.binding.participant, squarePath: projection.binding.location,
+      notifications: [...projection.notifications],
+      ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) };
+  } finally { await artifact.close(); }
+}
+
 export async function sessionInbox(sessionId: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<InboxMembership[]> {
   const inbox: InboxMembership[] = [];
   const hostLedger = hostLedgerForEnv(env);
   for (const binding of await projectSessionBindings({ hostLedger, sessionId })) {
     if (signal?.aborted) throw signal.reason;
-    const artifact = openSquareArtifact(binding.location, signal);
     try {
-      const projection = await projectPresentation({ artifact, binding, now: Date.now() });
-      if (!projection.joined) continue;
-      inbox.push({ name: projection.binding.participant, squarePath: projection.binding.location,
-        notifications: [...projection.notifications],
-        ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) });
+      const membership = await readInboxMembership(binding, signal);
+      if (membership !== undefined) inbox.push(membership);
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       // A stale or unreadable membership cannot disable delivery for other memberships.
-    } finally { await artifact.close(); }
+    }
   }
   return inbox;
 }
 
-interface CapturedChange {
+interface CapturedChange<T = unknown> {
   kind: 'artifact' | 'presence' | 'evidence';
+  value?: T;
   wait(timeoutMs: number, signal: AbortSignal): Promise<boolean>;
 }
-async function capture<T>(observer: VersionObserver<T>, kind: CapturedChange['kind'], signal: AbortSignal): Promise<CapturedChange> {
+async function capture<T>(observer: VersionObserver<T>, kind: CapturedChange['kind'], signal: AbortSignal): Promise<CapturedChange<T>> {
   const generation = observer.generation;
   try {
     const value = await observer.read(signal);
-    return { kind, wait: (timeout, abort) => observer.changed(value, timeout, abort) };
+    return { kind, value, wait: (timeout, abort) => observer.changed(value, timeout, abort) };
   } catch (error) {
     if (signal.aborted) throw signal.reason ?? error;
     // Keep watching an unreadable/missing artifact so repair can restore delivery.
@@ -65,7 +74,11 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
   const env = { ...suppliedEnv };
   const hostLedger = hostLedgerForEnv(env);
   const ledger = await hostLedger.observeChanges();
-  const artifacts = new Map<string, VersionObserver<number | null>>();
+  const artifacts = new Map<string, {
+    observer: VersionObserver<number | null>;
+    revision?: number | null;
+    inbox: Map<string, InboxMembership | undefined>;
+  }>();
   const lifetime = new AbortController();
   return {
     async wait(timeoutMs, options = {}) {
@@ -80,20 +93,45 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
       try {
         while (!signal.aborted) {
           // Subscribe/capture the ledger BEFORE discovering bindings; a concurrent join cannot fall in a gap.
-          const sources = await Promise.all([capture(ledger.presence, 'presence', signal), capture(ledger.evidence, 'evidence', signal)]);
-          const bindings = await projectSessionBindings({ hostLedger, sessionId });
-          const paths = new Set(await Promise.all(bindings.map((binding) => canonicalPath(binding.location))));
-          for (const [file, observer] of artifacts) {
-            if (!paths.has(file)) { observer.close(); artifacts.delete(file); }
+          const sources: CapturedChange[] = await Promise.all([capture(ledger.presence, 'presence', signal), capture(ledger.evidence, 'evidence', signal)]);
+          const bindings = await Promise.all((await projectSessionBindings({ hostLedger, sessionId })).map(async (binding) =>
+            ({ ...binding, location: await canonicalPath(binding.location) })));
+          const paths = new Set(bindings.map((binding) => binding.location));
+          for (const [file, entry] of artifacts) {
+            if (!paths.has(file)) { entry.observer.close(); artifacts.delete(file); }
           }
           for (const file of paths) {
             if (artifacts.has(file)) continue;
             const observer = await observeSquareChanges(file);
             if (signal.aborted) { observer.close(); return []; }
-            artifacts.set(file, observer);
+            artifacts.set(file, { observer, inbox: new Map() });
           }
-          sources.push(...await Promise.all([...artifacts.values()].map((observer) => capture(observer, 'artifact', signal))));
-          const inbox = await sessionInbox(sessionId, env, signal);
+          for (const [file, entry] of artifacts) {
+            const source = await capture(entry.observer, 'artifact', signal);
+            sources.push(source);
+            if (source.value === undefined || source.value !== entry.revision) entry.inbox.clear();
+            entry.revision = source.value;
+            const names = new Set(bindings.filter((binding) => binding.location === file).map((binding) => nameKey(binding.participant)));
+            for (const name of entry.inbox.keys()) if (!names.has(name)) entry.inbox.delete(name);
+          }
+          const inbox: InboxMembership[] = [];
+          for (const binding of bindings) {
+            if (signal.aborted) return [];
+            const entry = artifacts.get(binding.location)!;
+            const name = nameKey(binding.participant);
+            try {
+              if (!entry.inbox.has(name)) entry.inbox.set(name, await readInboxMembership(binding, signal));
+              const membership = entry.inbox.get(name);
+              if (membership === undefined) continue;
+              const { catchLease, ...rest } = membership;
+              const now = Date.now();
+              inbox.push(catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
+                ? membership : rest);
+            } catch (error) {
+              if (signal.aborted) throw signal.reason ?? error;
+              // Unreadable projections are retried, never cached as current.
+            }
+          }
           const eligible = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
           const excludeKeys = options.excludeKeys;
           const pending: InboxMembership[] = excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
@@ -142,7 +180,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
       lifetime.abort();
       ledger.presence.close();
       ledger.evidence.close();
-      for (const observer of artifacts.values()) observer.close();
+      for (const entry of artifacts.values()) entry.observer.close();
       artifacts.clear();
     },
   };

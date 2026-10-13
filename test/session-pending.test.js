@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createSquareState, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
 import { createFileCell } from '../dist/square-storage.js';
-import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { createHostLedgerPort, FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { observeSessionPending } from '../dist/inbox.js';
 
 async function fixture(t, leaseMs) {
@@ -14,6 +15,7 @@ async function fixture(t, leaseMs) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
   const ledgerRoot = path.join(root, 'ledger');
+  fs.mkdirSync(ledgerRoot);
   const ledger = createHostLedgerPort({ rootPath: ledgerRoot });
   const state = await createSquareState({ force: true, hardCap: null }, 'pending');
   state.acts = [
@@ -30,10 +32,10 @@ async function fixture(t, leaseMs) {
   return { file, ledger, ledgerRoot, observer, bind };
 }
 
-function armedWait(observer, options = {}) {
+function armedWait(observer, options = {}, timeoutMs = 4_000) {
   let armed;
   const ready = new Promise((resolve) => { armed = resolve; });
-  const pending = observer.wait(4_000, { ...options, onChangeArmed: armed });
+  const pending = observer.wait(timeoutMs, { ...options, onChangeArmed: armed });
   return { ready, pending };
 }
 
@@ -54,6 +56,60 @@ test('catch lease expiry wakes notification eligibility without an artifact writ
   const pending = await item.observer.wait(2_000);
   assert.equal(pending[0].notifications[0].actIndex, 2);
   assert.equal(await readSquareRevision(item.file), baseline);
+});
+
+test('unrelated ledger changes reuse unchanged history while local activity still notifies', async (t) => {
+  const item = await fixture(t);
+  const cell = createFileCell(item.file);
+  t.after(() => cell.close());
+  await cell.transact((state) => {
+    state.acts.pop();
+    state.runtime.nextActIndex = 2;
+    return { state, result: undefined };
+  });
+  await item.bind();
+  const waiting = armedWait(item.observer, {}, 2_500);
+  await waiting.ready;
+  let snapshots = 0;
+  let refreshes = 0;
+  const listPresence = FileHostLedgerPort.prototype.listPresence;
+  t.mock.method(FileHostLedgerPort.prototype, 'listPresence', function (input) {
+    if (input.session === 'one') refreshes++;
+    return listPresence.call(this, input);
+  });
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/^SELECT id, revision, state FROM square_snapshot$/i.test(sql)) snapshots++;
+    return prepare.call(this, sql, ...args);
+  });
+  const base = { location: path.join(item.ledgerRoot, 'unrelated.square'), participant: 'Other', session: 'unrelated', activity: 'act/0', kind: 'presentation' };
+  const claim = await item.ledger.claimEvidence({ ...base, leaseMs: 1_000 });
+  await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'presented' });
+  await item.ledger.ensurePresence({ ...base, channel: 'pi' });
+  assert.deepEqual(await waiting.pending, []);
+  assert.ok(refreshes > 0, 'the observer must refresh bindings after the ledger changes');
+  assert.equal(snapshots, 0);
+  const changed = armedWait(item.observer);
+  await changed.ready;
+  await cell.transact((state) => {
+    state.acts.push({ kind: 'say', actor: 'Alice', index: 2, at: 4, body: 'new activity', mentions: ['Bob'] });
+    state.runtime.nextActIndex = 3;
+    return { state, result: undefined };
+  });
+  assert.equal((await changed.pending)[0].notifications[0].body, 'new activity');
+});
+
+test('an unreadable artifact cannot reuse stale pending and repair restores delivery', async (t) => {
+  const item = await fixture(t);
+  await item.bind();
+  assert.equal((await item.observer.wait(1_000))[0].notifications[0].actIndex, 2);
+  const saved = fs.readFileSync(item.file);
+  fs.writeFileSync(item.file, 'not a SQLite database');
+  await sleep(30);
+  const waiting = armedWait(item.observer);
+  await waiting.ready;
+  fs.writeFileSync(item.file, saved);
+  assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
 });
 
 test('presentation-only evidence invalidates eligibility; failed evidence cannot spin deferred retries', async (t) => {
