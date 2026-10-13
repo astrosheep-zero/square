@@ -17,7 +17,7 @@ const controller = "import os,pty,subprocess,threading,http.server,json,time,sel
 test('shipped Claude mod real runtime scheduling and lifecycle', { skip: !enabled, timeout: 240000 }, () => {
   assert.equal(process.platform, 'darwin');
   const version = spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 10000 });
-  assert.match(version.stdout, /^2\.1\.295/);
+  assert.equal(version.status, 0, version.stderr);
   fs.mkdirSync(base, { recursive: true });
   fs.writeFileSync(path.join(base, 'fixture-driver.mjs'), driver.replaceAll('__REPO_DIST__', path.join(repo, 'dist')));
   fs.writeFileSync(path.join(base, 'live-fixture.py'), controller);

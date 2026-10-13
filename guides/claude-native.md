@@ -7,11 +7,11 @@ not evidence of a live receiver.
 
 ## Validated capability
 
-The supported baseline is **macOS Claude Code 2.1.295 with the mod actually
-loaded**. The receiver reads its real session ID, cwd, version, and
+The supported baseline is **macOS Claude Code with the mod actually loaded**;
+no build number is pinned. The receiver reads its real session ID, cwd, version, and
 `CLAUDE_CODE_MESSAGING_SOCKET`. A session ID or socket alone is not capability.
 Missing/disabled/unapproved mods, the normal unapproved headless `-p` path,
-other builds, and other platforms are unavailable. No legacy fallback exists.
+and other platforms are unavailable. No legacy fallback exists.
 Square never changes inbound policy, forwards a child token, or impersonates a
 peer/plugin authority. Native OS-user socket permissions and Claude policy apply.
 
@@ -32,7 +32,7 @@ only sends previously unsent eligible attention, never unknown/admitted attempts
 Initial activation and hot reload use `session.start`. New conversations use
 `classic.SessionStart`: clear reads the new API coordinate; **resume's event
 `session_id` is already the resumed coordinate while `$.session.id()` still reads
-the ending one in 2.1.295**. The event coordinate is used at that boundary, with
+the ending one (observed in 2.1.295)**. The event coordinate is used at that boundary, with
 API cwd/version/socket. Modern `session.end` retires only its pinned `e.sessionId`
 and captured ownership epochs, within the event budget. Late committed joins
 are discovered at the pinned end timestamp. A process crash can omit end.

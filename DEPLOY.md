@@ -5,7 +5,7 @@ native harness commands. Pi receives Square as the published npm package.
 
 ## Requirements
 
-- For Claude native inbox delivery: macOS Claude Code **2.1.295**, with the
+- For Claude native inbox delivery: macOS Claude Code, with the
   Square mod actually loaded in a trusted/approved interactive terminal
 - For OpenCode native body delivery: installed **2.0.20** with the Square v2 server plugin loaded
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later

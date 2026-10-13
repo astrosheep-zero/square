@@ -27,7 +27,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   const scoped = operationEnv('claude', input.sessionId, env);
   const ledger = hostLedgerForEnv(env);
   const signal = AbortSignal.timeout(2500);
-  const supported = process.platform === 'darwin' && input.version === '2.1.295' && typeof input.endpoint === 'string' && input.endpoint.startsWith('/');
+  const supported = process.platform === 'darwin' && typeof input.endpoint === 'string' && input.endpoint.startsWith('/');
   if (input.operation === 'end') {
     const retired: ClaudeBinding[] = [];
     const captured = [...input.bindings ?? []];
@@ -121,7 +121,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       finally { await closeOpenSquare(square); }
       for (const index of indices) { if (signal.aborted) break; await processActNotificationsOnce(binding.location, index, { env: { ...env, SQUARE_NOTIFY_DELIVERY_WAIT_MS: '200' } }); }
     }
-    return `${JSON.stringify({ available: supported, diagnostic: supported ? undefined : 'Native inbox unavailable: requires macOS Claude 2.1.295, an interactive loaded mod and its real endpoint.', bindings, cancelledBindings })}\n`;
+    return `${JSON.stringify({ available: supported, diagnostic: supported ? undefined : 'Native inbox unavailable: requires macOS Claude with an interactive loaded mod and its real endpoint.', bindings, cancelledBindings })}\n`;
   }
   if (!['guard', 'admitted', 'stored'].includes(input.operation) || typeof input.text !== 'string') throw new Error('Unknown Claude bridge operation.');
   return `${JSON.stringify(await observeClaudeDelivery(input.sessionId, input.text, input.operation as 'guard' | 'admitted' | 'stored', env))}\n`;

@@ -42,7 +42,7 @@ async function fixture(t, body = 'hello @Bob') {
   server.listen(endpoint);
   await once(server, 'listening');
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
-  const coordinate = { sessionId: 'claude-test', cwd: root, version: '2.1.295', endpoint };
+  const coordinate = { sessionId: 'claude-test', cwd: root, version: '2.1.999', endpoint };
   const bridge = async (value) => JSON.parse(await runClaudeMod(JSON.stringify({ ...coordinate, ...value }), env));
   const start = await bridge({ operation: 'start' });
   const square = await openSquare(squarePath);
@@ -293,9 +293,9 @@ test('final native write revalidates catch after durable preparation', supported
   assert.equal(f.frames.length, 0);
 });
 
-test('unsupported capabilities publish no native route and leave memberships intact', async (t) => {
+test('a mod without a real endpoint publishes no native route and leave memberships intact', async (t) => {
   const f = await fixture(t);
-  const result = await f.bridge({ operation: 'start', version: '2.1.999' });
+  const result = await f.bridge({ operation: 'start', endpoint: 'relative.sock' });
   assert.equal(result.available, false);
   assert.match(result.diagnostic, /unavailable/);
   assert.equal((await loadSquare(f.squarePath)).routes?.length ?? 0, 0);

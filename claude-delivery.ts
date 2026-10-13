@@ -14,7 +14,7 @@ import { DeliveryError, connect } from './packages/agent-delivery/src/index.js';
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map((match) => match[1]!); }
 export function nativePayload(token: string, preview: string): string { return `[square-inbox:${token}]\n${preview}\n[/square-inbox:${token}]`; }
-function nativeSupported(route: WakeRoute): boolean { return route.address.version === '2.1.295' && route.address.loaded === 'true' && !!route.address.endpoint; }
+function nativeSupported(route: WakeRoute): boolean { return route.address.loaded === 'true' && !!route.address.endpoint; }
 
 /**
  * The shared entry owns platform policy, token resolution and frame shape; Square
@@ -37,7 +37,7 @@ async function writeClaudeWake(sessionId: string, endpoint: string, payload: str
 export function createClaudeWakeTransport(hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
   return {
     async probe(route) {
-      if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: Claude 2.1.295 with a loaded interactive Square mod required.' };
+      if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: a loaded interactive Square mod is required.' };
       try { return (await stat(route.address.endpoint!)).isSocket() || { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint is not a socket.' }; }
       catch { return { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint unavailable.' }; }
     },
@@ -64,7 +64,7 @@ async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) 
 async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
   request = { ...request, location: await canonicalPath(request.location) };
   const signal = AbortSignal.timeout(timeoutMs);
-  if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires Claude 2.1.295 and a loaded interactive Square mod.' };
+  if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires a loaded interactive Square mod.' };
   return hostLedger.withClaimLock(async () => {
     if (signal.aborted) return { outcome: 'not-capable', diagnostic: 'Native dispatch deadline elapsed before send.' };
     if (!request.claimToken || !await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'unknown', signature: 'native_send_suppressed' };
