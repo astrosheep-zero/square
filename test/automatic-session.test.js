@@ -76,6 +76,37 @@ test('automatic session end writes ordinary done for its bound owner', { concurr
   await withEnv({ ...item.env, SQUARE_PARTICIPANT_NAME: 'changed' }, (env) => automaticSessionEnd('pi', 'pi-session', item.cwd, env));
   assert.equal((await loadSquare(item.publicPath)).acts.length, 2);
 });
+test('automatic session end retires every name the ended session owns', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv({ ...item.env, CODEX_THREAD_ID: 'multi-session' }, async (env) => {
+    const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort({ rootPath: hostLedgerRoot(env) }), env });
+    try {
+      await square.join('lead');
+      await square.join('alice');
+    } finally { await square.close(); }
+    await automaticSessionEnd('codex', 'multi-session', item.cwd, env);
+    const ledger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
+    assert.deepEqual(await ledger.listPresence({ session: 'multi-session' }), []);
+    assert.deepEqual(await readWakeRoutes({ location: item.publicPath, sessionId: 'multi-session' }), []);
+  });
+  const done = (await loadSquare(item.publicPath)).acts.filter((act) => act.kind === 'done').map((act) => act.actor).toSorted();
+  assert.deepEqual(done, ['alice', 'lead']);
+});
+test('automatic session end leaves a participant owned by another session standing', { concurrency: false }, async () => {
+  const item = await fixture();
+  await withEnv(item.env, async (env) => {
+    const ending = { ...env, CODEX_THREAD_ID: 'ending-session' };
+    const other = { ...env, CODEX_THREAD_ID: 'other-session' };
+    for (const [name, sessionEnv] of [['lead', ending], ['bob', other]]) {
+      const square = await Square.at({ path: item.publicPath, hostLedger: createHostLedgerPort({ rootPath: hostLedgerRoot(sessionEnv) }), env: sessionEnv });
+      try { await square.join(name); } finally { await square.close(); }
+    }
+    await automaticSessionEnd('codex', 'ending-session', item.cwd, env);
+    assert.equal((await readParticipantOwner(item.publicPath, 'bob', hostLedgerForEnv(env)))?.session, 'other-session');
+    assert.deepEqual((await readWakeRoutes({ location: item.publicPath })).map((route) => route.participant), ['bob']);
+  });
+  assert.deepEqual((await loadSquare(item.publicPath)).acts.map((act) => act.kind), ['join', 'join', 'done']);
+});
 test('successful automatic session end does not reopen a committed artifact', { concurrency: false }, async () => {
   const item = await fixture();
   await withEnv(item.env, (env) => automaticSessionStart('pi', 'pi-session', item.cwd, env));

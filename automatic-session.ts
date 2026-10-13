@@ -107,23 +107,25 @@ export async function automaticSessionEnd(provider: AutomaticProvider, sessionId
   const scopedEnv = operationEnv(provider, sessionId, env);
   const hostLedger = hostLedgerForEnv(scopedEnv);
   const probe = await openSquare(squarePath, { hostLedger, env: scopedEnv });
-  const binding = (await projectSessionBindings({
+  const bindings = await projectSessionBindings({
     hostLedger,
     sessionId,
     location: probe.location,
-  }))[0];
-  const expectedEpoch = binding === undefined
-    ? undefined
-    : (await readParticipantOwner(squarePath, binding.participant, hostLedger))?.epoch;
+  });
   await closeOpenSquare(probe);
   const square = await Square.at({ path: squarePath, hostLedger, env: scopedEnv });
   try {
-    // The ended owner's done, routes, and presence settle inside the ownership claim
-    // lock. A same-session rejoin or takeover that lands afterwards claims only after
-    // that cleanup, so this call never performs post-return ledger or route cleanup that
-    // could remove the replacement owner's fresh rows.
-    if (binding === undefined) await square.retireEndedSessionRoutes(sessionId);
-    else await square.endOwnedSession(binding.participant, sessionId, expectedEpoch);
+    // A harness session may own several names in the same square, so every binding is
+    // ended, not just the first. Each ended owner's done, routes, and presence settle
+    // inside the ownership claim lock, fenced by its own epoch. A same-session rejoin or
+    // takeover that lands afterwards claims only after that cleanup, so this call never
+    // performs post-return ledger or route cleanup that could remove the replacement
+    // owner's fresh rows.
+    if (bindings.length === 0) await square.retireEndedSessionRoutes(sessionId);
+    else for (const binding of bindings) {
+      const expectedEpoch = (await readParticipantOwner(squarePath, binding.participant, hostLedger))?.epoch;
+      await square.endOwnedSession(binding.participant, sessionId, expectedEpoch);
+    }
   } finally {
     await square.close();
   }
