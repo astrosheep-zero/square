@@ -55,6 +55,12 @@ async function cancel($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
+    await $.tool.register({
+      name: 'square',
+      description: "Run the square CLI. args are exactly the words after `square` in the square skill's commands.",
+      inputSchema: { type: 'object', properties: { args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } }, required: ['args'] },
+      isDeferred: false,
+    });
     await reconcile($).catch(() => undefined);
     return next(e);
   });
@@ -63,7 +69,25 @@ export function register(on) {
     return next(e);
   });
   on('tool.call', async ($, e, next) => {
-    try { return await next(e); }
+    try {
+      if (e.tool !== 'mcp__square__square') return await next(e);
+      const sessionId = await $.session.id();
+      const cwd = await $.session.cwd();
+      // process.run has no signal option; it belongs to this cancellable dispatch.
+      next.signal.throwIfAborted();
+      const result = await $.process.run(['square', ...e.args], {
+        cwd, stdin: e.stdin,
+        env: { CLAUDE_CODE_SESSION_ID: sessionId, CLAUDE_CODE_CHILD_SESSION: e.agentId ? '1' : '' },
+        timeoutMs: 600_000,
+      });
+      let text = result.stdout;
+      if (result.stderr) text += `${text && !text.endsWith('\n') ? '\n' : ''}${result.stderr}`;
+      if (result.exitCode !== 0) {
+        text += `${text && !text.endsWith('\n') ? '\n' : ''}Exit code: ${result.exitCode}`;
+        return { deny: text };
+      }
+      return { result: text };
+    }
     finally { if (!e.agentId) await reconcile($, undefined, 'reconcile').catch(() => undefined); }
   });
   on('turn.start', async ($, e, next) => {

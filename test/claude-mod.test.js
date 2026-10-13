@@ -15,6 +15,7 @@ function fixture() {
     clock: { now: async () => 100, after: (_ms, fn) => { fn(); } },
     state: { get: async (ref) => ({ value: state.get(`${ref.key}/${ref.id}`), version: 0 }), set: async (ref, value) => { state.set(`${ref.key}/${ref.id}`, structuredClone(value)); return { isSet: true, version: 1 }; } },
     ui: { log: async () => undefined },
+    tool: { register: async () => ({ tool: 'mcp__square__square' }) },
     process: { run: async (argv, options) => {
       const input = JSON.parse(options.stdin);
       calls.push({ argv, options, input });

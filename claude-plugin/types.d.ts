@@ -3,5 +3,6 @@ export type SquareInboxCoordinate = { sessionId: string; cwd: string; version: s
 export type SquareInboxCancellation = { at: number; bindings?: SquareInboxBinding[] };
 export type SquareInboxState = { coordinate: SquareInboxCoordinate; bindings?: SquareInboxBinding[] };
 declare module 'claude-code' {
+  interface McpToolInputs { mcp__square__square: { args: string[]; stdin?: string } }
   interface PluginState { square: { inbox: StateFamily<SquareInboxState>; cancelAt: StateFamily<SquareInboxCancellation> } }
 }
