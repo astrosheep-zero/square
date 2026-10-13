@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod/v4';
 import { SquareError, isSquareError } from './model.js';
+import { operationEnv } from './automatic-session.js';
+import { SQUARE_IDENTITY } from './identity.js';
 import { createSquareApplication, type ExpressApplicationOptions, type SquareApplication, type SquareApplicationContext } from './square-application.js';
 import type { Activity, CatchOptions, HistoryQuery, OperationControl } from './square-facade.js';
 import { toPublicActivity } from './views.js';
@@ -14,18 +16,19 @@ export type SquareMcpServer = McpServer;
 
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/);
 const stringArray = z.array(z.string());
+const participantName = z.string().optional().describe("Participant name, same as --as. Defaults to the server's configured participant.");
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: 'join', description: 'Join the square as the configured participant.', inputSchema: z.object({ takeover: z.boolean().optional() }).strict() },
-  { name: 'express', description: 'Express a message or embodied action in the square.', inputSchema: z.object({ body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(), reply: activityId.optional(), force: z.boolean().optional(), noWait: z.boolean().optional() }).strict() },
-  { name: 'catch', description: 'Catch and consume activities perceptible to the configured participant.', inputSchema: z.object({ id: activityId.optional(), idle: z.number().finite().min(0).optional(), from: stringArray.optional(), mention: z.boolean().optional(), limit: z.number().int().min(1).optional() }).strict() },
+  { name: 'join', description: 'Join the square as a participant.', inputSchema: z.object({ as: participantName, takeover: z.boolean().optional() }).strict() },
+  { name: 'express', description: 'Express a message or embodied action in the square.', inputSchema: z.object({ as: participantName, body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(), reply: activityId.optional(), force: z.boolean().optional(), noWait: z.boolean().optional() }).strict() },
+  { name: 'catch', description: 'Catch and consume activities perceptible to the participant.', inputSchema: z.object({ as: participantName, id: activityId.optional(), idle: z.number().finite().min(0).optional(), from: stringArray.optional(), mention: z.boolean().optional(), limit: z.number().int().min(1).optional() }).strict() },
   { name: 'history', description: 'Read the activity stream using stable activity-id cursors.', inputSchema: z.object({ limit: z.number().int().min(1).optional(), order: z.enum(['asc', 'desc']).optional(), before: activityId.optional(), after: activityId.optional(), grep: z.string().optional(), fixed: z.string().optional(), from: stringArray.optional(), mention: z.string().optional() }).strict() },
-  { name: 'listen', description: 'Listen for future activity from a participant.', inputSchema: z.object({ target: z.string() }).strict() },
-  { name: 'ignore', description: 'Stop listening for future activity from a participant.', inputSchema: z.object({ target: z.string() }).strict() },
-  { name: 'listening', description: 'List participants this participant is listening to.', inputSchema: z.object({}).strict() },
-  { name: 'hold', description: 'Raise a hand to hold the square.', inputSchema: z.object({ reason: z.string().optional() }).strict() },
-  { name: 'resume', description: 'Release the current hold.', inputSchema: z.object({}).strict() },
-  { name: 'done', description: 'Leave the square without adding a message.', inputSchema: z.object({}).strict() },
+  { name: 'listen', description: 'Listen for future activity from a participant.', inputSchema: z.object({ as: participantName, target: z.string() }).strict() },
+  { name: 'ignore', description: 'Stop listening for future activity from a participant.', inputSchema: z.object({ as: participantName, target: z.string() }).strict() },
+  { name: 'listening', description: 'List participants this participant is listening to.', inputSchema: z.object({ as: participantName }).strict() },
+  { name: 'hold', description: 'Raise a hand to hold the square.', inputSchema: z.object({ as: participantName, reason: z.string().optional() }).strict() },
+  { name: 'resume', description: 'Release the current hold.', inputSchema: z.object({ as: participantName }).strict() },
+  { name: 'done', description: 'Leave the square without adding a message.', inputSchema: z.object({ as: participantName }).strict() },
   { name: 'status', description: 'Read the public status of the square.', inputSchema: z.object({}).strict() },
   { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: z.object({}).strict() },
 ];
@@ -81,14 +84,23 @@ function operation(app: SquareApplication, name: string, args: JsonObject, contr
 }
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
-  const app = createSquareApplication(options);
-  const server = new McpServer({ name: 'square', version: '0.3.61' }, {
+  const baseEnv = { ...options.env };
+  const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
     instructions: 'The catch tool consumes activities. Use history with act/<index> cursors for read-only archive access.',
   });
   for (const tool of TOOL_DEFINITIONS) {
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, async (args, extra) => {
       try {
-        const value = await operation(app, tool.name, args as JsonObject, { signal: extra.signal });
+        const { as: participant, ...operationArgs } = args as JsonObject;
+        const threadId = extra._meta?.threadId;
+        const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
+        const env = typeof threadId === 'string' && threadId.trim()
+          ? operationEnv('codex', threadId, baseEnv)
+          : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
+            ? operationEnv('opencode', opencodeSessionId, baseEnv)
+            : baseEnv;
+        const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant });
+        const value = await operation(app, tool.name, operationArgs, { signal: extra.signal });
         const projected = publicResult(tool.name, value);
         const structuredContent = isObject(projected) ? projected : { result: projected };
         return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
