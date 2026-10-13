@@ -33,7 +33,7 @@ export async function connectExisting(options: ClaudeConnectExistingOptions): Pr
   try {
     scope.check()
     // The ambient environment and platform are the only auth coordinates here.
-    const token = await resolveClaudeToken({ endpoint, token: options.token, claudeHome: options.claudeHome })
+    const token = await scope.wait(resolveClaudeToken({ endpoint, token: options.token, claudeHome: options.claudeHome }, scope.signal))
     scope.check()
     const target = Object.freeze({ harness: 'claude' as const, sessionId: options.sessionId }) as ClaudeTarget
     coordinates.set(target, { endpoint: options.endpoint, token, claudeHome: options.claudeHome })

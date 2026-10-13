@@ -4,8 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-native.js';
+import { connect } from '../dist/packages/agent-delivery/src/index.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { observeClaudeDelivery } from '../dist/claude-delivery.js';
 import { emptyRuntimeState, writeSquareFile, loadSquare } from '../dist/artifact.js';
@@ -69,6 +72,77 @@ test('plain native transport prepares tokenless session-targeted NDJSON and only
   assert.equal((await evidence(f)).length, 0);
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: f.coordinate.endpoint }, 'body', { deadline: Date.now() - 1 })).outcome, 'unavailable');
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: path.join(f.root, 'dead.sock') }, 'body', { deadline: Date.now() + 1000 })).outcome, 'unavailable');
+});
+
+test('slow Claude auth stays inside the original deadline and never sends after timeout', async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.root, 'home');
+  const registry = path.join(home, 'sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  const digest = createHash('sha256').update(f.coordinate.endpoint).digest('hex');
+  fs.writeFileSync(path.join(registry, `${process.pid}.${digest}.key`), JSON.stringify({ peerToken: 'a'.repeat(32) }));
+  const readdir = fs.promises.readdir;
+  const authReads = [];
+  t.mock.method(fs.promises, 'readdir', (directory, ...args) => {
+    if (directory !== registry) return readdir(directory, ...args);
+    const pending = new Promise((resolve) => setTimeout(resolve, 150)).then(() => readdir(directory, ...args));
+    authReads.push(pending);
+    return pending;
+  });
+  const stat = fs.promises.stat;
+  let scannedKeys = 0;
+  t.mock.method(fs.promises, 'stat', (file, ...args) => {
+    if (path.dirname(file) === registry) scannedKeys++;
+    return stat(file, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const target = { sessionId: 'target', endpoint: f.coordinate.endpoint, claudeHome: home };
+  const started = Date.now();
+  await Promise.all([
+    assert.rejects(connect({ harness: 'claude', ...target, timeoutMs: 30 }), { code: 'timeout' }),
+    writeClaudeNative({ ...target, env: {} }, 'never sent', { deadline: started + 30 }).then((result) => {
+      assert.equal(result.outcome, 'unavailable');
+      assert.equal(result.code, 'timeout');
+    }),
+  ]);
+  assert.ok(Date.now() - started < 120, 'auth must not hold either caller until the 150ms read completes');
+  await Promise.all(authReads);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(scannedKeys, 0, 'retired auth must not continue scanning keys');
+  assert.deepEqual(f.frames, []);
+});
+
+test('cancelling Claude auth aborts its key read without sending', async (t) => {
+  const f = await fixture(t);
+  const home = path.join(f.root, 'home');
+  const registry = path.join(home, 'sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  const digest = createHash('sha256').update(f.coordinate.endpoint).digest('hex');
+  const key = path.join(registry, `${process.pid}.${digest}.key`);
+  fs.writeFileSync(key, JSON.stringify({ peerToken: 'a'.repeat(32) }));
+  const readFile = fs.promises.readFile;
+  const signals = [];
+  const controller = new AbortController();
+  t.mock.method(fs.promises, 'readFile', (file, options) => {
+    if (file !== key) return readFile(file, options);
+    signals.push(options?.signal);
+    if (signals.length === 2) controller.abort();
+    return new Promise(() => {});
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const target = { sessionId: 'target', endpoint: f.coordinate.endpoint, claudeHome: home };
+  await Promise.all([
+    assert.rejects(connect({ harness: 'claude', ...target, signal: controller.signal }), { code: 'aborted' }),
+    writeClaudeNative({ ...target, env: {} }, 'never sent', { deadline: Date.now() + 1000, signal: controller.signal }).then((result) => {
+      assert.equal(result.outcome, 'unavailable');
+      assert.equal(result.code, 'aborted');
+    }),
+  ]);
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every((signal) => signal?.aborted));
+  assert.deepEqual(f.frames, []);
 });
 
 test('manual membership without PUBLIC receives bounded body, admission is not presentation, and full stored preview is idempotent', supported, async (t) => {

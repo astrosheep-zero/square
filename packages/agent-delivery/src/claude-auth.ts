@@ -22,7 +22,8 @@ function validToken(value: unknown): value is string { return typeof value === '
  * Explicit token, then the environment token bound to this exact endpoint, then
  * the newest readable peer key for it. Windows requires a token; POSIX does not.
  */
-export async function resolveClaudeToken(options: ClaudeAuthOptions): Promise<string | undefined> {
+export async function resolveClaudeToken(options: ClaudeAuthOptions, signal?: AbortSignal): Promise<string | undefined> {
+  signal?.throwIfAborted()
   const endpoint = typeof options.endpoint === 'string' ? parseLocalEndpoint(options.endpoint) : options.endpoint
   const platform = options.platform ?? process.platform
   const env = options.env ?? process.env
@@ -40,20 +41,24 @@ export async function resolveClaudeToken(options: ClaudeAuthOptions): Promise<st
   const keys: { name: string; pid: number; mtimeMs: number }[] = []
   try {
     for (const name of await readdir(join(home, 'sessions'))) {
+      signal?.throwIfAborted()
       const match = KEY.exec(name)
       if (!match || match[2] !== digest) continue
       try { keys.push({ name, pid: Number(match[1]), mtimeMs: (await stat(join(home, 'sessions', name))).mtimeMs }) } catch { /* unreadable entries are skipped */ }
     }
   } catch { /* no registry is not an error; it only means no peer key */ }
+  signal?.throwIfAborted()
   keys.sort((a, b) => Number(isAlive(b.pid)) - Number(isAlive(a.pid)) || b.mtimeMs - a.mtimeMs)
   for (const key of keys) {
+    signal?.throwIfAborted()
     try {
-      const value: unknown = JSON.parse(await readFile(join(home, 'sessions', key.name), 'utf8'))
+      const value: unknown = JSON.parse(await readFile(join(home, 'sessions', key.name), { encoding: 'utf8', signal }))
       if (value && typeof value === 'object' && validToken((value as Record<string, unknown>).peerToken)) {
         return (value as Record<string, string>).peerToken
       }
     } catch { /* the next readable matching key wins */ }
   }
+  signal?.throwIfAborted()
   if (platform === 'win32') throw new DeliveryError('authentication_failed', false)
   return undefined
 }

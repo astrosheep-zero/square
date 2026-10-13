@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Socket } from 'node:net'
 import { deadline } from './deadline.js'
+import { DeliveryError } from './errors.js'
 import { connectLocal, LocalEndpointError, parseLocalEndpoint, writeFrames } from './local-endpoint.js'
 import { resolveClaudeToken } from './claude-auth.js'
 
@@ -43,29 +44,30 @@ export async function writeClaudeNative(target: ClaudeNativeTarget, text: string
   }
   if (control.signal?.aborted) return { outcome: 'unavailable', code: 'aborted', message: detail('aborted') }
   if (remaining <= 0) return { outcome: 'unavailable', code: 'timeout', message: detail('timeout') }
-  let token: string | undefined
-  try {
-    token = await resolveClaudeToken({ endpoint, token: target.token, claudeHome: target.claudeHome, env: target.env, platform: target.platform })
-  } catch {
-    return { outcome: 'unavailable', code: 'authentication_failed', message: detail('authentication_failed') }
-  }
-  const frames = [
-    ...(token === undefined ? [] : [{ type: 'auth', token }]),
-    { msgV: 1, msg_id: target.messageId ?? randomUUID(), type: 'user', session_id: target.sessionId, message: { role: 'user', content: text }, priority: 'next' },
-  ]
-  const scope = deadline(Math.min(remaining, 2_147_483_647), control.signal)
+  const scope = deadline(control.deadline - Date.now(), control.signal)
   let socket: Socket | undefined
   try {
     scope.check()
-    socket = await connectLocal(endpoint, { signal: scope.signal, timeoutMs: Math.max(1, remaining) })
+    const token = await scope.wait(resolveClaudeToken({ endpoint, token: target.token, claudeHome: target.claudeHome, env: target.env, platform: target.platform }, scope.signal))
+    const frames = [
+      ...(token === undefined ? [] : [{ type: 'auth', token }]),
+      { msgV: 1, msg_id: target.messageId ?? randomUUID(), type: 'user', session_id: target.sessionId, message: { role: 'user', content: text }, priority: 'next' },
+    ]
     scope.check()
+    if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')
+    socket = await connectLocal(endpoint, { signal: scope.signal })
+    scope.check()
+    if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')
     // A receiver that never drains must not hold the caller past its deadline.
     await scope.wait(writeFrames(socket, frames))
     scope.check()
     return { outcome: 'written' }
   } catch (error) {
     const local = error instanceof LocalEndpointError ? error : undefined
-    const code = scope.code ?? local?.code
+    const code = scope.code ?? (error instanceof DeliveryError ? error.code : local?.code)
+    if (code === 'authentication_failed') {
+      return { outcome: 'unavailable', code, message: detail(code) }
+    }
     if (code === 'aborted' || code === 'timeout') {
       return { outcome: socket ? 'unknown' : 'unavailable', code, message: detail(code) }
     }
