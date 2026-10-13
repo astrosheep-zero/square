@@ -29,12 +29,22 @@ export async function projectBoundaryEligibility(input: {
   readonly sessionId: string;
   readonly inbox: readonly InboxMembership[];
 }): Promise<InboxMembership[]> {
+  const memberships = pendingAtBoundary([...input.inbox]);
+  if (memberships.length === 0) return [];
+  const evidence = await projectPresentationEvidence({ hostLedger: input.hostLedger, sessionId: input.sessionId });
+  const presented = new Map<string, Set<string>>();
+  for (const row of evidence) {
+    if (row.outcome !== 'presented' && row.outcome !== 'clipped') continue;
+    const key = JSON.stringify([row.location, nameKey(row.participant)]);
+    let activities = presented.get(key);
+    if (activities === undefined) presented.set(key, activities = new Set());
+    activities.add(row.activity);
+  }
   const pending: InboxMembership[] = [];
-  for (const membership of pendingAtBoundary([...input.inbox])) {
-    const evidence = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: membership.squarePath, participant: membership.name, sessionId: input.sessionId });
-    const notifications = membership.notifications.filter((notification) => !presentationSuppressesWake(
-      evidence.filter((row) => row.activity === formatActivityId(notification.actIndex)),
-    ));
+  for (const membership of memberships) {
+    const key = JSON.stringify([await canonicalPath(membership.squarePath), nameKey(membership.name)]);
+    const activities = presented.get(key);
+    const notifications = membership.notifications.filter((notification) => !activities?.has(formatActivityId(notification.actIndex)));
     if (notifications.length > 0) pending.push({ ...membership, notifications });
   }
   return pending;
@@ -126,7 +136,8 @@ export async function projectWakeEvidenceFromState(input: {
   const canonicalLocation = await canonicalPath(input.location);
   const delivery = input.delivery ?? deriveDeliveryModel(input.state);
   const owners = await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now });
-  const wakeRecords = await input.hostLedger.listEvidence({ location: canonicalLocation, kind: 'wake', now: input.now });
-  const presentations = await projectPresentationEvidence({ hostLedger: input.hostLedger, location: canonicalLocation, now: input.now });
+  const evidence = await input.hostLedger.listEvidence({ location: canonicalLocation, now: input.now });
+  const wakeRecords = evidence.filter((row) => row.kind === 'wake');
+  const presentations = evidence.filter((row) => row.kind === 'presentation').map((row) => ({ location: row.location, participant: row.participant, sessionId: row.session, activity: row.activity, outcome: row.outcome, ...(row.at === undefined ? {} : { at: row.at }) }));
   return projectWakeEligibility({ state: input.state, location: canonicalLocation, owners, wakeRecords, presentations, now: input.now, delivery });
 }
