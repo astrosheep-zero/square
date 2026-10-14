@@ -26,7 +26,7 @@ const guideContents = new Map<string, string>(await Promise.all(
 // ---------------------------------------------------------------------------
 
 const V1_USER_VERSION = 1;
-const V1_SNAPSHOT_TABLE = 'square_snapshot';
+export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
   { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },

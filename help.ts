@@ -84,6 +84,11 @@ const COMMANDS: readonly CommandHelp[] = [
     names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',
     summary: 'Validate artifact integrity.',
   },
+  {
+    names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
+    summary: 'Convert an existing version 1 square to row storage in place.',
+    details: ['It is the only migration command: there is no --check, --backup or --force.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write.'],
+  },
 ];
 
 function definitionFor(command: string): CommandHelp | undefined {
@@ -98,7 +103,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
-    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

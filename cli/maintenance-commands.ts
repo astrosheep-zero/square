@@ -1,3 +1,4 @@
+import { migrateSquareFile } from '../square-migration.js';
 import { diagnoseSquareFile } from '../square-storage.js';
 import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 
@@ -7,6 +8,31 @@ interface DoctorResult {
   output: string;
   exitCode?: number;
 }
+
+interface MigrateResult {
+  output: string;
+}
+
+export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
+  parse(argv, context) {
+    if (argv.length > 0) usage(context.command);
+    return undefined;
+  },
+  async execute(_intent, context) {
+    const squarePath = requireSquarePath(context);
+    const outcome = await migrateSquareFile(squarePath);
+    const body = outcome.status === 'migrated' && outcome.counts !== undefined
+      ? [
+        '✓ migrated to row storage',
+        `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
+      ].join('\n')
+      : '· already format 2 — nothing changed';
+    return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };
+  },
+  present(result) {
+    process.stdout.write(result.output);
+  },
+};
 
 export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   parse(argv, context) {

@@ -123,6 +123,7 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'participants',
   'mcp-server',
   'doctor',
+  'migrate',
 ]);
 
 export interface ParsedGlobalArgs {
