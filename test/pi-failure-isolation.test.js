@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import squarePiExtension from '../extensions/square-pi.js';
+import squarePiExtension from '../plugins/pi/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';

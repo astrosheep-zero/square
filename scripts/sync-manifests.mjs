@@ -5,8 +5,8 @@ import path from 'node:path';
 const root = path.join(import.meta.dirname, '..');
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const manifests = [
-  'claude-plugin/.claude-plugin/plugin.json',
-  'codex-plugin/.codex-plugin/plugin.json',
+  'plugins/claude/.claude-plugin/plugin.json',
+  'plugins/codex/.codex-plugin/plugin.json',
 ];
 
 const changed = [];

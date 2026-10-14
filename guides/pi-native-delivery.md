@@ -1,6 +1,6 @@
 # Pi shared native delivery
 
-The shipped `extensions/square-pi.js` remains the **only Square Pi extension**.
+The shipped `plugins/pi/square-pi.js` remains the **only Square Pi extension**.
 Both its activity steer and advisory `nextTurn` send call the SDK-free shared
 `sendPiMessage` leaf compiled from `packages/agent-delivery/src`. Square keeps
 framing, custom type, display, preview/UI, observation/presentation evidence,

@@ -1,0 +1,7 @@
+{
+  "id": "square",
+  "name": "Square",
+  "requirements": {
+    "paseo": ">=0.11.2"
+  }
+}

@@ -42,7 +42,7 @@ const alice = await square.join('Alice')
 await writeFile(join(root, 'cwd/probe.txt'), 'isolated tool result')
 const eventsFile = join(root, 'events.jsonl')
 await writeFile(eventsFile, '')
-const extension = `import squareExtension from ${JSON.stringify(pathToFileURL(join(squareRoot, 'extensions/square-pi.js')).href)};
+const extension = `import squareExtension from ${JSON.stringify(pathToFileURL(join(squareRoot, 'plugins/pi/square-pi.js')).href)};
 import { appendFileSync } from 'node:fs';
 export default function(pi) {
   squareExtension(pi);

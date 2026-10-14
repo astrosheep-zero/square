@@ -28,6 +28,22 @@ pending batch, not OpenCode's already admitted inbox or unrelated execution.
 No legacy tool-output injection fallback is installed; other builds are not
 claimed as validated.
 
+## Plugin sources
+
+Host-specific entries live under `plugins/pi`, `plugins/claude`, `plugins/codex`,
+`plugins/opencode`, and `plugins/paseo`. Package metadata and native install
+recipes select their entries; moving the sources does not change the existing
+`square install` commands or OpenCode's public `./server` export.
+
+The optional Paseo client plugin only changes Square custom-message presentation:
+
+```bash
+paseo plugin install git:astrosheep-zero/square:plugins/paseo
+```
+
+It uses Paseo's runtime plugin loading and does not require a daemon restart.
+See [Square for Paseo](plugins/paseo/README.md) for requirements and development.
+
 ## Update
 
 ```bash

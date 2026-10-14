@@ -12,7 +12,7 @@ import installedSquarePiExtension, {
   pendingInbox,
   renderPiInbox,
   renderSquareCard,
-} from '../extensions/square-pi.js';
+} from '../plugins/pi/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
@@ -263,7 +263,7 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
     version: SQUARE_IDENTITY.packageVersion,
-    pi: { extensions: ['./extensions/square-pi.js'] },
+    pi: { extensions: ['./plugins/pi/square-pi.js'] },
   }));
   try {
     assert.deepEqual(installPiPackage(home, runPi), [root]);
@@ -338,7 +338,7 @@ test('Claude installation leaves a diagnosable bundle that can be removed', asyn
 
 test('Claude installation overwrites a divergent bundled Square skill with the canonical source', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-canonical-skill-'));
-  const bundledSkill = path.join(import.meta.dirname, '..', 'claude-plugin', 'skills', 'square', 'SKILL.md');
+  const bundledSkill = path.join(import.meta.dirname, '..', 'plugins', 'claude', 'skills', 'square', 'SKILL.md');
   const canonicalSkill = path.join(import.meta.dirname, '..', 'skills', 'square', 'SKILL.md');
   const original = fs.readFileSync(bundledSkill);
   fs.writeFileSync(bundledSkill, 'deliberately divergent bundled content\n');

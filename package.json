@@ -10,9 +10,7 @@
     "dist",
     "guides",
     "skills/square",
-    "claude-plugin",
-    "extensions",
-    "codex-plugin"
+    "plugins"
   ],
   "scripts": {
     "clean": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('dist',{recursive:true,force:true})\"",
@@ -60,8 +58,8 @@
       "default": "./dist/paseo.js"
     },
     "./server": {
-      "types": "./dist/opencode.d.ts",
-      "default": "./dist/opencode.js"
+      "types": "./dist/plugins/opencode/index.d.ts",
+      "default": "./dist/plugins/opencode/index.js"
     },
     "./mcp": {
       "types": "./dist/mcp.d.ts",
@@ -72,7 +70,7 @@
   "types": "dist/index.d.ts",
   "pi": {
     "extensions": [
-      "./extensions/square-pi.js"
+      "./plugins/pi/square-pi.js"
     ],
     "skills": [
       "./skills"

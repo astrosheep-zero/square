@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { register } from '../claude-plugin/hooks/register.js';
+import { register } from '../plugins/claude/hooks/register.js';
 
 // Fixture core only: real scheduling is recorded separately in claude-native-validation.md.
 function fixture() {

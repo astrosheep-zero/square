@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { transformSquareMessage } from "../client/transform.ts";
+import { squareMessageSchema } from "../shared/message.ts";
+
+type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
+const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
+const items = [
+  { square: "design", description: "rei spoke your name (aoi)" },
+  { square: "design", description: "rei answered you (aoi)" },
+];
+function row(overrides: Partial<ToolRow> = {}): ToolRow {
+  return {
+    type: "tool_call", callId: "custom/12", name: "square", status: "completed", error: null,
+    detail: { type: "plain_text", text },
+    metadata: { synthetic: true, customType: "square", details: { items } },
+    ...overrides,
+  } as ToolRow;
+}
+function project(item: ToolRow, phase: "streaming" | "complete" = "complete") {
+  return transformSquareMessage({ item, phase });
+}
+
+test("Square live and history projection preserve exact content and renderer details", () => {
+  const original = row();
+  const before = structuredClone(original);
+  const result = project(original);
+  assert.deepEqual(result, project(original, "streaming"));
+  assert.deepEqual(result, { items: [{
+    type: "plugin", kind: "square-message", version: 1, data: { text, items },
+  }] });
+  assert.deepEqual(original, before, "projection never mutates source history");
+  assert.deepEqual(squareMessageSchema.parse(result!.items[0].data), { text, items });
+});
+
+test("joining context and malformed details retain content under the generic heading", () => {
+  for (const details of [undefined, { items: [] }, { items: [{ description: "missing square" }] }]) {
+    const result = project(row({ metadata: { synthetic: true, customType: "square", details } }));
+    assert.deepEqual(result?.items[0].data, { text });
+  }
+});
+
+test("ordinary tools, unrelated custom messages, and unusable content stay untouched", () => {
+  assert.equal(project(row({ metadata: undefined })), undefined);
+  assert.equal(project(row({ metadata: { customType: "square" } })), undefined);
+  assert.equal(project(row({ metadata: { synthetic: true, customType: "other" } })), undefined);
+  assert.equal(project(row({ detail: { type: "unknown", input: "square", output: text } })), undefined);
+  assert.equal(project(row({ detail: { type: "plain_text" } })), undefined);
+});

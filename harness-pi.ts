@@ -58,7 +58,7 @@ export function doctorPiPackage(homeDir: string, run: PiCommandRunner = runPi): 
     manifest?.version === SQUARE_IDENTITY.packageVersion
       ? `✓ Pi package ${SQUARE_IDENTITY.packageVersion} installed at ${root}`
       : `○ Pi package ${SQUARE_IDENTITY.packageVersion} missing at ${root}`,
-    Array.isArray(extensions) && extensions.includes('./extensions/square-pi.js')
+    Array.isArray(extensions) && extensions.includes('./plugins/pi/square-pi.js')
       ? '✓ Pi Square extension declared'
       : '○ Pi Square extension not declared',
   ];

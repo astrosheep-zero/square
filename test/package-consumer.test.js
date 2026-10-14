@@ -53,7 +53,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
     // Root packs the same Node-only Pi leaf graph; no unpublished package or OpenCode SDK.
-    const { default: extension } = await import('./node_modules/@astrosheep/square/extensions/square-pi.js');
+    const { default: extension } = await import('./node_modules/@astrosheep/square/plugins/pi/square-pi.js');
     const flags = [], handlers = new Map();
     extension({
       on(event, handler) { handlers.set(event, handler); },
@@ -63,6 +63,9 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     });
     if (flags.join() !== 'agent-delivery-socket') process.exit(3);
     if (!handlers.has('session_start') || !handlers.has('session_shutdown')) process.exit(4);
+    // The public OpenCode subpath stays stable after moving the implementation.
+    const { default: plugin } = await import('@astrosheep/square/server');
+    if (plugin.id !== 'square' || typeof plugin.setup !== 'function') process.exit(5);
   `], { cwd: fixture, encoding: 'utf8' });
   assert.equal(runtime.status, 0, runtime.stderr);
 

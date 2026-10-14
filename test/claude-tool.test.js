@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { register } from '../claude-plugin/hooks/register.js';
+import { register } from '../plugins/claude/hooks/register.js';
 
 function fixture({ refuseTool = false } = {}) {
   const handlers = new Map();

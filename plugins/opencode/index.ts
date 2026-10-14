@@ -1,11 +1,11 @@
-import { automaticSessionStart, operationEnv } from './automatic-session.js';
-import { hostLedgerForEnv } from './registry.js';
-import { canonicalPath } from './canonical-path.js';
-import { openSquare } from './square-file-adapter.js';
-import { closeOpenSquare } from './open-square.js';
-import { Square } from './square-wiring.js';
-import { connectNative, type OpenCodeNativeSession, type OpenCodeSessionCapability } from './packages/agent-delivery/src/opencode-native.js';
-import { observeOpenCodeContext, publishOpenCodeRoutes, receiveOpenCodePending, type OpenCodeContextMessage } from './opencode-delivery.js';
+import { automaticSessionStart, operationEnv } from '../../automatic-session.js';
+import { hostLedgerForEnv } from '../../registry.js';
+import { canonicalPath } from '../../canonical-path.js';
+import { openSquare } from '../../square-file-adapter.js';
+import { closeOpenSquare } from '../../open-square.js';
+import { Square } from '../../square-wiring.js';
+import { connectNative, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
+import { observeOpenCodeContext, publishOpenCodeRoutes, receiveOpenCodePending, type OpenCodeContextMessage } from './delivery.js';
 
 interface OpenCodePluginContext {
   readonly app: { readonly version: string };

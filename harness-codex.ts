@@ -87,7 +87,7 @@ export async function installCodexPlugin(homeDir: string, run: CodexCommandRunne
   const root = activeMarketplaceRoot(homeDir, current, resolvedCodexHome);
   const staged = stageReplacement(root, (stage) => {
     const plugin = path.join(stage, 'plugins', SQUARE_IDENTITY.pluginName);
-    fs.cpSync(fileURLToPath(new URL('../codex-plugin/', import.meta.url)), plugin, { recursive: true });
+    fs.cpSync(fileURLToPath(new URL('../plugins/codex/', import.meta.url)), plugin, { recursive: true });
     const skill = path.join(plugin, 'skills', 'square', 'SKILL.md');
     fs.mkdirSync(path.dirname(skill), { recursive: true });
     fs.copyFileSync(path.join(fileURLToPath(new URL('../skills/square/', import.meta.url)), 'SKILL.md'), skill);

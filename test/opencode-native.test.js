@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import plugin from '../dist/opencode.js';
+import plugin from '../dist/plugins/opencode/index.js';
 import { Square } from '../dist/square-wiring.js';
 import { loadSquare } from '../dist/artifact.js';
 import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';

@@ -1,10 +1,10 @@
 import path from 'node:path';
 
-import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
-import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
-import { renderAttentionDescription } from '../dist/attention-presentation.js';
-import { createPiReceiver, sendPiMessage } from '../dist/packages/agent-delivery/src/pi.js';
+import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
+import { automaticSessionEnd, automaticSessionStart } from '../../dist/automatic-session.js';
+import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
+import { renderAttentionDescription } from '../../dist/attention-presentation.js';
+import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
   constructor() {
