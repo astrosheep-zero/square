@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
@@ -25,31 +27,66 @@ export function renderPiInbox(inbox) {
   return renderPendingAtBoundary(pendingInbox(inbox));
 }
 
-const NOTIFY_BODY_MAX = 80;
-
 function framePiMessage(content) {
   return `\n${content.replace(/^\n+/, '').replace(/\n+$/, '')}\n`;
 }
 
-export function summarizePendingForNotify(pending) {
-  const lines = pending.flatMap((membership) => membership.notifications.map((note) => {
-    const description = renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route });
-    const body = note.body.replace(/\s+/g, ' ').trim();
-    const clipped = body.length > NOTIFY_BODY_MAX ? `${body.slice(0, NOTIFY_BODY_MAX).trimEnd()}…` : body;
-    return `${description}${clipped ? ` — ${clipped}` : ''}`;
-  }));
-  if (lines.length === 0) return undefined;
-  return lines.length === 1 ? `■ square · ${lines[0]}` : `■ square · ${lines[0]} (+${lines.length - 1} more)`;
+/** Renderer-only facts for the collapsed card; Pi never sends `details` to the model. */
+export function pendingCardDetails(pending) {
+  const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
+    square: path.basename(membership.squarePath, '.square'),
+    description: renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route }),
+  })));
+  return items.length === 0 ? undefined : { items };
+}
+
+// Conservative terminal width: anything outside ASCII counts as two columns, so a
+// truncated line never exceeds the viewport (Pi stops the TUI when a line overflows).
+const columnsOf = (char) => (char.charCodeAt(0) < 0x80 ? 1 : 2);
+const widthOf = (text) => Array.from(text).reduce((sum, char) => sum + columnsOf(char), 0);
+
+function fitColumns(text, columns) {
+  if (widthOf(text) <= columns) return text;
+  let used = 1; // the ellipsis
+  let out = '';
+  for (const char of text) {
+    if (used + columnsOf(char) > columns) break;
+    used += columnsOf(char);
+    out += char;
+  }
+  return `${out}…`;
+}
+
+/**
+ * Collapsed: one line naming who reached you and where. Expanded: Pi's default card,
+ * which shows the exact content the model received.
+ */
+export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
+  const items = message.details?.items;
+  if (expanded || !Array.isArray(items) || items.length === 0) return undefined;
+  const [first] = items;
+  const tail = ` · ${first.square}${items.length > 1 ? ` +${items.length - 1}` : ''}`;
+  return {
+    invalidate() {},
+    render(width) {
+      const room = Math.max(1, width - outputPad * 2 - 2);
+      // Style only an untruncated line, so escape codes never count toward or get cut by the width.
+      const line = widthOf(first.description + tail) <= room
+        ? `${first.description}${theme.fg('dim', tail)}`
+        : fitColumns(first.description + tail, room);
+      return [`${' '.repeat(outputPad)}${theme.fg('customMessageLabel', '■')} ${line}`];
+    },
+  };
 }
 
 export default function squarePiExtension(pi) {
+  pi.registerMessageRenderer?.('square', renderSquareCard);
   pi.registerFlag('agent-delivery-socket', { type: 'string', description: 'Explicit private local delivery socket' });
   createPiReceiver(pi, {
     get endpoint() { return pi.getFlag('agent-delivery-socket'); },
   });
   let sessionId;
   let sessionCwd;
-  let ui;
   let watcher;
   let watcherAbort;
   let generation = 0;
@@ -199,15 +236,13 @@ export default function squarePiExtension(pi) {
             boundSessionId,
             async (content) => {
               if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
-              // The full activity stays out of the TUI stream (display: false) but still
-              // reaches the model; a brief notify tells the human what just landed.
-              const summary = summarizePendingForNotify(pending);
-              if (summary) ui?.notify?.(summary, 'info');
+              // One card for the human: collapsed it names who reached you, expanded it
+              // shows the same content the model receives.
               const messageContent = framePiMessage(content);
               const landing = waitForLanding(messageContent, signal, 'steer');
               try {
                 sendPiMessage(pi,
-                  { customType: 'square', content: messageContent, display: false },
+                  { customType: 'square', content: messageContent, display: true, details: pendingCardDetails(pending) },
                   { deliverAs: 'steer', triggerTurn: true },
                 );
               } catch (error) {
@@ -261,7 +296,6 @@ export default function squarePiExtension(pi) {
     turnIndex = 0;
     activeTurn = undefined;
     currentRunSignal = undefined;
-    ui = ctx?.ui;
     sessionId = ctx.sessionManager.getSessionId();
     sessionCwd = ctx.cwd || process.cwd();
     const token = generation;
@@ -354,7 +388,6 @@ export default function squarePiExtension(pi) {
     generation += 1;
     failAcks(new Error('Pi session ended'));
     const stopped = stopWatcher();
-    ui = undefined;
     const endedId = sessionId;
     const endedCwd = sessionCwd;
     const endedEnv = sessionEnv(endedId);

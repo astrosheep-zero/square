@@ -8,9 +8,10 @@ import test from 'node:test';
 
 import installedSquarePiExtension, {
   inboxKeys,
+  pendingCardDetails,
   pendingInbox,
   renderPiInbox,
-  summarizePendingForNotify,
+  renderSquareCard,
 } from '../extensions/square-pi.js';
 import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
@@ -478,23 +479,27 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.doesNotMatch(context, /catch --now/);
 });
 
-test('Pi notify summary distinguishes being addressed, listening, and everyone’s attention', () => {
+test('Pi square card collapses to who reached you and where, and expands to the model content', () => {
   const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
-  assert.equal(
-    summarizePendingForNotify([membership([note()])]),
-    '■ square · Alice spoke your name (Bob) — hello @Bob',
-  );
-  assert.equal(
-    summarizePendingForNotify([membership([note({ route: 'attention' })])]),
-    '■ square · Alice spoke · you’re listening to Alice — hello @Bob',
-  );
-  assert.equal(
-    summarizePendingForNotify([membership([note({ route: 'bell' }), note({ actor: 'Cara', body: 'y'.repeat(120) })])]),
-    `■ square · Alice rang the bell · everyone’s attention — hello @Bob (+1 more)`,
-  );
-  assert.match(summarizePendingForNotify([membership([note({ body: 'y'.repeat(120) })])]), /…$/);
-  assert.equal(summarizePendingForNotify([membership([])]), undefined);
+  const theme = { fg: (_color, text) => `<${text}>` };
+  const details = pendingCardDetails([membership([note({ route: 'bell' }), note({ actor: 'Cara', route: 'reply' })])]);
+  assert.deepEqual(details.items, [
+    { square: 'SQUARE', description: 'Alice rang the bell · everyone’s attention' },
+    { square: 'SQUARE', description: 'Cara answered you (Bob)' },
+  ]);
+  assert.equal(pendingCardDetails([membership([])]), undefined);
+
+  const message = { customType: 'square', content: 'model text', details };
+  const card = renderSquareCard(message, { expanded: false, outputPad: 1 }, theme);
+  assert.deepEqual(card.render(80), [' <■> Alice rang the bell · everyone’s attention< · SQUARE +1>']);
+  // Narrow terminals truncate instead of overflowing the viewport.
+  const [narrow] = card.render(20);
+  assert.match(narrow, /…$/);
+  assert.ok(Array.from(narrow.replace(/<■>/, 'x')).reduce((n, c) => n + (c.charCodeAt(0) < 0x80 ? 1 : 2), 0) <= 20);
+  // Expanded, and messages without card details (joining context), fall back to Pi's full card.
+  assert.equal(renderSquareCard(message, { expanded: true, outputPad: 1 }, theme), undefined);
+  assert.equal(renderSquareCard({ ...message, details: undefined }, { expanded: false }, theme), undefined);
 });
 
 async function piFixture(sessionId, pending = true) {
@@ -643,8 +648,9 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await lock.held();
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
-      assert.equal(sent[0].message.display, false, 'the activity stays out of the TUI stream; the notify carries the human-facing summary');
-      assert.deepEqual(notified, [{ message: '■ square · Alice spoke your name (Bob) — hello @Bob', level: 'info' }]);
+      assert.equal(sent[0].message.display, true, 'the human sees one collapsible card instead of a separate notify');
+      assert.deepEqual(sent[0].message.details, { items: [{ square: 'SQUARE', description: 'Alice spoke your name (Bob)' }] });
+      assert.deepEqual(notified, [], 'the card replaces the transient notify');
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
         async () => await hasPresentedForOwner('pi-boundary-child-session', item.squarePath, 'Bob', 2),

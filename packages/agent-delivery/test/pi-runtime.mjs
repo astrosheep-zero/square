@@ -164,7 +164,7 @@ try {
   await alice.express('real shared Square leaf @PiFixture')
   await awaitSettled(n)
   const nativeSquare = (await messages()).find((e) => e.message.customType === 'square' && e.message.content.includes('real shared Square leaf'))
-  assert.ok(nativeSquare); assert.equal(nativeSquare.message.display, false)
+  assert.ok(nativeSquare); assert.equal(nativeSquare.message.display, true)
   assert.ok(requests.some((r) => texts(r).some((text) => text.includes('real shared Square leaf'))))
   checks.push('one packed actual Square extension handles both shared native activity and optional external receiver')
   const pre = await agent.steer('NEVER_SENT', { signal: AbortSignal.abort() })
