@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { Square, SquareError } from '../dist/index.js';
-import { loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { ROUTE_FRESH_MS } from '../dist/routes.js';
 import { upsertWakeRoute } from './wake-routes.js';
@@ -36,7 +36,7 @@ test('opening a file square validates and projects unchanged persisted state', a
   const built = await Square.build({ path: squarePath, markdown: '# context' });
   await built.close();
 
-  const persisted = await loadSquare(squarePath);
+  const persisted = (await readSquareSnapshot(squarePath)).state;
   try {
     const square = await Square.at({ path: squarePath });
     const snapshot = await square.snapshot();
@@ -45,7 +45,7 @@ test('opening a file square validates and projects unchanged persisted state', a
     assert.deepEqual(await square.history(), []);
     assert.deepEqual(await square.participants(), []);
     await square.close();
-    assert.deepEqual(await loadSquare(squarePath), persisted);
+    assert.deepEqual((await readSquareSnapshot(squarePath)).state, persisted);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -141,7 +141,7 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
     const alice = await square.join('Alice');
     const bob = await square.join('Bob');
     await bob.catch();
-    const routeBefore = (await loadSquare(squarePath)).routes.find((route) => route.participant === 'Bob');
+    const routeBefore = (await readSquareSnapshot(squarePath)).state.routes.find((route) => route.participant === 'Bob');
     assert.ok(routeBefore);
 
     const snapshot = () => ({
@@ -161,7 +161,7 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
     assert.equal(caught.consumedThrough, expressed.activity.id);
     assert.equal(caught.idleExpired, false);
 
-    const routeAfter = (await loadSquare(squarePath)).routes.find((route) => route.participant === 'Bob');
+    const routeAfter = (await readSquareSnapshot(squarePath)).state.routes.find((route) => route.participant === 'Bob');
     assert.equal(routeAfter.updatedAt, routeBefore.updatedAt);
 
     const quietExpiry = await bob.catch({ idle: 80 });
@@ -183,24 +183,24 @@ test('publishing an unchanged fresh route is a no-op and expiry still refreshes 
     const route = { location: squarePath, participant: 'Bob', sessionId: 'route-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'route-session' } };
     await upsertWakeRoute(route, { at: 5_000 });
     const bytes = fs.readFileSync(squarePath);
-    assert.equal((await loadSquare(squarePath)).routes.length, 1);
+    assert.equal((await readSquareSnapshot(squarePath)).state.routes.length, 1);
 
     await upsertWakeRoute(route, { at: 5_000 + 3_600_000 });
     assert.equal(fs.readFileSync(squarePath).equals(bytes), true);
-    assert.equal((await loadSquare(squarePath)).routes[0].updatedAt, 5_000);
+    assert.equal((await readSquareSnapshot(squarePath)).state.routes[0].updatedAt, 5_000);
 
     // A changed address is a meaningful publication and still replaces the standing route.
     await upsertWakeRoute({ ...route, address: { threadId: 'other-session' } }, { at: 6_000 });
-    const replaced = await loadSquare(squarePath);
+    const replaced = (await readSquareSnapshot(squarePath)).state;
     assert.equal(replaced.routes[0].address.threadId, 'other-session');
     assert.equal(replaced.routes[0].updatedAt, 6_000);
 
     // An expired route must still be refreshed so a standing publication never goes stale.
-    const stale = await loadSquare(squarePath);
+    const stale = (await readSquareSnapshot(squarePath)).state;
     stale.routes[0].updatedAt = 6_000 - ROUTE_FRESH_MS;
     await writeSquareFile(squarePath, stale);
     await upsertWakeRoute({ ...route, address: { threadId: 'other-session' } }, { at: 7_000 });
-    assert.equal((await loadSquare(squarePath)).routes[0].updatedAt, 7_000);
+    assert.equal((await readSquareSnapshot(squarePath)).state.routes[0].updatedAt, 7_000);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

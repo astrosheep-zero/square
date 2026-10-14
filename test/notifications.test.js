@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { emptyRuntimeState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { createWakeTransport, processActNotificationsOnce, sweepPrivilegedPending } from '../dist/notifications.js';
 import { PaseoAdapter } from '../dist/paseo-delivery.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
@@ -129,7 +129,7 @@ test('PaseoAdapter wakes an idle agent and sends supplied awareness only', async
   assert.ok(timeouts.every(([, timeoutMs]) => timeoutMs > 0 && timeoutMs <= 321));
   assert.ok(timeouts.every(([, timeoutMs], index) => index === 0 || timeoutMs <= timeouts[index - 1][1]));
   assert.doesNotMatch(sent.prompt, /private payload/);
-  assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
+  assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.observations, {});
   assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
@@ -259,7 +259,7 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.doesNotMatch(sent.prompt, /catch --now/);
   assert.match(sent.prompt, /attention: act\/2 for Bob from Alice/);
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
-  assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
+  assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('the notification worker uses an artifact Paseo route with a local binding', async () => {
@@ -343,7 +343,7 @@ test('a closed Paseo route is retired without consuming pending attention', asyn
   assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
   const { readWakeRoutes } = await import('./wake-routes.js');
   assert.deepEqual(await readWakeRoutes({ env: item.env, now: Date.now() }), []);
-  assert.deepEqual((await loadSquare(item.squarePath)).runtime.observations, {});
+  assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.observations, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('a refreshed Paseo route wakes the old pending notification', async () => {
@@ -375,7 +375,7 @@ test('a refreshed Paseo route wakes the old pending notification', async () => {
   assert.equal(sent.activity, 'act/2');
   assert.equal(typeof sent.attemptN, 'number');
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
-  assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.['act/2'], undefined);
+  assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.['act/2'], undefined);
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('a worker with no route writes no synthetic attempt', async () => {
@@ -385,7 +385,7 @@ test('a worker with no route writes no synthetic attempt', async () => {
     adapters: [fakeAdapter('paseo', async () => { throw new Error('no route must not dispatch'); })],
   }));
   assert.deepEqual(await readWakeAttempts({ env: item.env }), []);
-  assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
+  assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
 test('wake transport rechecks pending and route ownership before send', async () => {
@@ -397,7 +397,7 @@ test('wake transport rechecks pending and route ownership before send', async ()
     adapters: [{
       kind: 'paseo',
       dispatch: async (_address, _payload, beforeSend) => {
-        const current = await loadSquare(item.squarePath);
+        const current = (await readSquareSnapshot(item.squarePath)).state;
         await writeSquareFile(item.squarePath, { ...current, routes: [] });
         if (!(await beforeSend())) return { outcome: 'gate-rejected' };
         calls += 1;
@@ -419,7 +419,7 @@ test('standalone wake transport uses strict eligibility and structural address e
   try {
     await route(item);
     const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-    const state = await loadSquare(item.squarePath);
+    const state = (await readSquareSnapshot(item.squarePath)).state;
     state.routes[0].epoch = 7;
     state.routes[0].address = { agentId: 'bob-agent', extra: 'value' };
     await writeSquareFile(item.squarePath, state);

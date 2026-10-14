@@ -1,7 +1,5 @@
-import { hostLedgerRoot } from './host-ledger-root.js';
-import { nameKey } from './model.js';
-import { WAKE_ROUTE_KINDS, type WakeRoute, type WakeRouteKind } from './model.js';
-import { isCurrentlyJoined } from './runtime.js';
+import { nameKey, WAKE_ROUTE_KINDS, type WakeRoute, type WakeRouteKind } from './model.js';
+import type { SquareRead, SquareWrite } from './ports.js';
 import { canonicalPath, canonicalPathSync } from './canonical-path.js';
 export { WAKE_ROUTE_KINDS } from './model.js';
 export type { WakeRoute, WakeRouteKind } from './model.js';
@@ -38,7 +36,6 @@ export function resolvePrimaryWakeRoute(boundary: WakeBoundary, env: NodeJS.Proc
 export function routeIdentityKey(route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>, location = route.location): string {
   return JSON.stringify([location, nameKey(route.participant), route.sessionId]);
 }
-
 export type RouteEpoch = { readonly epoch?: number };
 function sameRouteAddress(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
   const leftKeys = Object.keys(left).sort();
@@ -46,61 +43,43 @@ function sameRouteAddress(left: Readonly<Record<string, string>>, right: Readonl
   return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => rightKeys[index] === key && left[key] === right[key]);
 }
 
-export function applyWakeRouteToState(state: import('./model.js').SquareState, route: Omit<WakeRoute, 'updatedAt'> & RouteEpoch, at = Date.now()): void {
+export function applyWakeRoute(facts: SquareWrite, route: Omit<WakeRoute, 'updatedAt'> & RouteEpoch, at = Date.now()): void {
   const location = canonicalPathSync(route.location);
-  state.routes = [...(state.routes ?? []).filter((item) => {
-    const itemLocation = canonicalPathSync(item.location);
-    return !(itemLocation === location && routeIdentityKey(item, itemLocation) === routeIdentityKey(route, location));
-  }), { ...route, location, updatedAt: at }];
+  const identity = routeIdentityKey(route, location);
+  facts.replaceRoutes([...facts.routes().filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) !== identity),
+    { ...route, location, updatedAt: at, extra: {} }]);
 }
-export function dropSessionWakeRoutesFromState(state: import('./model.js').SquareState, location: string, sessionId: string, expectedEpoch?: number): void {
+export function dropSessionWakeRoutes(facts: SquareWrite, location: string, sessionId: string, expectedEpoch?: number): void {
   const canonical = canonicalPathSync(location);
-  state.routes = (state.routes ?? []).filter((item) => {
-    if (item.sessionId !== sessionId || canonicalPathSync(item.location) !== canonical) return true;
-    if (expectedEpoch === undefined) return false;
-    return (item as WakeRoute & RouteEpoch).epoch !== expectedEpoch;
-  });
+  facts.replaceRoutes(facts.routes().filter((item) => item.sessionId !== sessionId || canonicalPathSync(item.location) !== canonical
+    || (expectedEpoch !== undefined && item.epoch !== expectedEpoch)));
 }
 
-/**
- * Drop one ended session's routes at a location, atomically with the lifecycle decide.
- *
- * A route survives when the ending transaction did not commit `done` and this session
- * still holds the sole live presence for its participant — an in-flight same-session
- * rejoin. `liveParticipants === undefined` means the ledger could not be read, so
- * nothing is dropped on suspicion. An explicit epoch fence additionally keeps routes
- * published by a later generation.
- */
-export function dropEndedSessionWakeRoutesFromState(
-  state: import('./model.js').SquareState,
+/** Keep an in-flight same-session rejoin; unknown host evidence is not a reason to retire it. */
+export function dropEndedSessionWakeRoutes(
+  facts: SquareWrite,
   location: string,
   sessionId: string,
   opts: { readonly expectedEpoch?: number; readonly liveParticipants?: ReadonlySet<string>; readonly force: boolean; readonly participant?: string },
 ): void {
   const canonical = canonicalPathSync(location);
-  state.routes = (state.routes ?? []).filter((item) => {
+  facts.replaceRoutes(facts.routes().filter((item) => {
     if (item.sessionId !== sessionId || canonicalPathSync(item.location) !== canonical) return true;
     if (opts.participant !== undefined && nameKey(item.participant) !== nameKey(opts.participant)) return true;
-    if (!opts.force) {
-      // Keep only a route whose participant is still joined and whose ended session still
-      // holds the sole live presence — an in-flight same-session rejoin. A no-longer-joined
-      // participant is retired even when a stale presence row survives.
-      if (isCurrentlyJoined(state.acts, item.participant)
-        && (opts.liveParticipants === undefined || opts.liveParticipants.has(nameKey(item.participant)))) return true;
-    }
-    if (opts.expectedEpoch !== undefined && (item as WakeRoute & RouteEpoch).epoch !== opts.expectedEpoch) return true;
-    return false;
-  });
+    if (!opts.force && facts.participant(item.participant)?.joined
+      && (opts.liveParticipants === undefined || opts.liveParticipants.has(nameKey(item.participant)))) return true;
+    return opts.expectedEpoch !== undefined && item.epoch !== opts.expectedEpoch;
+  }));
 }
-export function dropParticipantWakeRoutesFromState(state: import('./model.js').SquareState, location: string, participant: string): void {
+export function dropParticipantWakeRoutes(facts: SquareWrite, location: string, participant: string): void {
   const canonical = canonicalPathSync(location);
-  state.routes = (state.routes ?? []).filter((item) => !(nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical));
+  facts.replaceRoutes(facts.routes().filter((item) => !(nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical)));
 }
-export function sessionCanEndParticipant(state: import('./model.js').SquareState, location: string, participant: string, sessionId: string, currentSessionId?: string): boolean {
+export function sessionCanEndParticipant(facts: SquareRead, location: string, participant: string, sessionId: string, sessionIdNow?: string): boolean {
   const canonical = canonicalPathSync(location);
-  const owned = (state.routes ?? []).filter((item) => nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical);
-  if (owned.length === 0) return currentSessionId === sessionId;
-  return owned.every((item) => item.sessionId === sessionId) && (currentSessionId === undefined || currentSessionId === sessionId);
+  const owned = facts.routes().filter((item) => nameKey(item.participant) === nameKey(participant) && canonicalPathSync(item.location) === canonical);
+  if (owned.length === 0) return sessionIdNow === sessionId;
+  return owned.every((item) => item.sessionId === sessionId) && (sessionIdNow === undefined || sessionIdNow === sessionId);
 }
 
 export async function publishWakeRoute(
@@ -110,26 +89,21 @@ export async function publishWakeRoute(
 ): Promise<void> {
   const location = await canonicalPath(route.location);
   const at = opts.at ?? Date.now();
-  await artifact.transact((state) => {
-    if (opts.requireCurrentSession) {
-      if (!isCurrentlyJoined(state.acts, route.participant)
-        || (state.routes ?? []).some((item) => nameKey(item.participant) === nameKey(route.participant) && canonicalPathSync(item.location) === location && item.sessionId !== route.sessionId)) return { state, result: undefined };
-    }
-    const identity = routeIdentityKey({ ...route, location });
-    const matching = (state.routes ?? []).filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) === identity);
+  await artifact.transact((facts) => {
+    const routes = facts.routes();
+    if (opts.requireCurrentSession && (!facts.participant(route.participant)?.joined
+      || routes.some((item) => nameKey(item.participant) === nameKey(route.participant) && canonicalPathSync(item.location) === location && item.sessionId !== route.sessionId))) return;
+    const identity = routeIdentityKey(route, location);
+    const matching = routes.filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) === identity);
     const existing = matching[0];
-    const existingEpoch = (existing as (WakeRoute & RouteEpoch) | undefined)?.epoch;
-    const epochMatches = route.epoch === undefined ? existingEpoch === undefined : existingEpoch === route.epoch;
-    if (matching.length === 1 && existing !== undefined && existing.updatedAt > at - ROUTE_FRESH_MS && existing.kind === route.kind && existing.channel === route.channel && sameRouteAddress(existing.address, route.address) && epochMatches) return { result: undefined };
-    return { state: { ...state, routes: [...(state.routes ?? []).filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) !== identity), { ...route, location, updatedAt: at }] }, result: undefined };
+    if (matching.length === 1 && existing.updatedAt > at - ROUTE_FRESH_MS && existing.kind === route.kind
+      && existing.channel === route.channel && sameRouteAddress(existing.address, route.address) && existing.epoch === route.epoch) return;
+    applyWakeRoute(facts, { ...route, location }, at);
   });
 }
 export async function retireWakeRouteFromArtifact(artifact: import('./ports.js').SquareArtifactPort, route: Pick<WakeRoute, 'location' | 'participant' | 'sessionId'>, opts: { readonly expectedEpoch?: number } = {}): Promise<void> {
   const location = await canonicalPath(route.location);
-  const target = routeIdentityKey({ ...route, location });
-  await artifact.transact((state) => ({ state: { ...state, routes: (state.routes ?? []).filter((item) => {
-    const itemLocation = canonicalPathSync(item.location);
-    if (routeIdentityKey(item, itemLocation) !== target) return true;
-    return opts.expectedEpoch !== undefined && (item as WakeRoute & RouteEpoch).epoch !== opts.expectedEpoch;
-  }) }, result: undefined }));
+  const target = routeIdentityKey(route, location);
+  await artifact.transact((facts) => facts.replaceRoutes(facts.routes().filter((item) =>
+    routeIdentityKey(item, canonicalPathSync(item.location)) !== target || (opts.expectedEpoch !== undefined && item.epoch !== opts.expectedEpoch))));
 }

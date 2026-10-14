@@ -1,10 +1,8 @@
-import { activityAuthors, audienceOf, formatActivityId, parseActivityId, type Perception } from './square-core.js';
-import { derivePerceptionProjection, type PerceptionProjection } from './perception-projection.js';
-import { recordObservation } from './runtime.js';
-import { matchesCatchSelection } from './catch-selection.js';
-import { participantIdentity } from './participant-identity.js';
-import { SquareError, type SquareState, type StoredAct, validateName } from './model.js';
-import { resolveRosterName } from './runtime.js';
+import { formatActivityId, parseActivityId, type Perception } from './square-core.js';
+import { readCursor } from './runtime.js';
+import { SquareError, type StoredAct } from './model.js';
+import { resolveKnownName } from './decisions.js';
+import type { DirectedFilter, SquareWrite } from './ports.js';
 import type { CatchOptions } from './square-facade.js';
 
 export interface CatchDecision {
@@ -15,10 +13,8 @@ export interface CatchDecision {
   readonly changed: boolean;
   readonly remaining: number;
 }
-
 export const CATCH_DEFAULT_LIMIT = 10;
 export const CATCH_MAX_LIMIT = 100;
-
 function catchLimit(value: number | undefined): number {
   const limit = value ?? CATCH_DEFAULT_LIMIT;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > CATCH_MAX_LIMIT) {
@@ -27,82 +23,32 @@ function catchLimit(value: number | undefined): number {
   return limit;
 }
 
-export type CatchProjection = Pick<PerceptionProjection, 'cursorFor' | 'directedTo' | 'perceive' | 'isSeen'>;
-
-function resolveCatchName(state: SquareState, requestedName: string): string {
-  validateName(requestedName);
-  const known = resolveRosterName(state, requestedName);
-  if (known === undefined) {
-    throw new SquareError('invalid_args', `✕ ${participantIdentity(requestedName)} has never stepped into this square`, { reason: 'never_joined' });
-  }
-  return known;
-}
-
-/** Pure catch selection and acknowledgement over one SquareState snapshot. */
-export function decideCatch(
-  state: SquareState,
-  requestedName: string,
-  options: CatchOptions,
-  at: number,
-  project: (state: SquareState) => CatchProjection = derivePerceptionProjection,
-): CatchDecision {
-  const viewer = resolveCatchName(state, requestedName);
+/** Selection, receipts and resulting cursor belong to one artifact write transaction. */
+export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchDecision {
+  const viewer = resolveKnownName(facts, requestedName);
   const limit = catchLimit(options.limit);
-  const delivery = project(state);
+  let delivered: readonly StoredAct[];
+  let filter: DirectedFilter = { unseenOnly: true };
   if (options.id !== undefined) {
-    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) {
-      throw new SquareError('invalid_args', 'Catch id cannot be combined with idle, from, mention or limit.');
-    }
+    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Catch id cannot be combined with idle, from, mention or limit.');
     const index = parseActivityId(options.id);
     if (index === undefined) throw new SquareError('invalid_args', 'Invalid catch id: expected an activity id like act/12.');
-    const activity = state.acts.find((item) => item.index === index);
-    if (activity === undefined || activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) {
+    const activity = facts.activity(index);
+    if (activity === undefined || activity.kind !== 'say' || facts.directedAt(viewer, index) === undefined) {
       throw new SquareError('invalid_args', `✕ ${formatActivityId(index)} isn't addressed to you`, {
-        reason: 'not_addressed',
-        activityId: formatActivityId(index),
-        activityExists: activity !== undefined,
+        reason: 'not_addressed', activityId: formatActivityId(index), activityExists: activity !== undefined,
       });
     }
-    const perception = delivery.perceive(activity, viewer);
-    const changed = recordObservation(state, viewer, index, 'seen', at);
-    const cursor = delivery.cursorFor(viewer);
-    return {
-      viewer,
-      delivered: [activity],
-      perceptions: new Map([[index, perception]]),
-      consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
-      changed,
-      remaining: state.acts.filter((item) => item.kind === 'say' && delivery.directedTo(item, viewer) && !delivery.isSeen(viewer, item.index)).length,
-    };
+    delivered = [activity];
+  } else {
+    filter = { unseenOnly: true, ...(options.from === undefined ? {} : { senders: options.from }), ...(options.mention === true ? { attentionOnly: true } : {}) };
+    delivered = facts.activities(facts.directed(viewer, filter, { edge: 'oldest', limit }).items.map((item) => item.index));
   }
-  const filter = { participants: options.from, mention: options.mention === true ? viewer : undefined };
-  const authors = activityAuthors(state.acts);
-  const delivered: StoredAct[] = [];
-  const perceptions = new Map<number, Perception>();
-
-  const matching: StoredAct[] = [];
-  for (const activity of state.acts) {
-    if (activity.kind !== 'say' || !delivery.directedTo(activity, viewer)) continue;
-    const replyAuthor = activity.reply === undefined ? undefined : authors.get(activity.reply);
-    if (!matchesCatchSelection(activity.actor, audienceOf(activity), filter, replyAuthor)) continue;
-    if (delivery.isSeen(viewer, activity.index)) continue;
-    matching.push(activity);
-  }
-
-  delivered.push(...matching.slice(0, limit));
-  for (const activity of delivered) perceptions.set(activity.index, delivery.perceive(activity, viewer));
-
-  let changed = false;
-  for (const activity of delivered) {
-    changed = recordObservation(state, viewer, activity.index, 'seen', at) || changed;
-  }
-  const consumed = delivery.cursorFor(viewer);
+  const changed = facts.markSeen(viewer, delivered.map((item) => item.index), at) > 0;
+  const cursor = readCursor(facts, viewer);
   return {
-    viewer,
-    delivered,
-    perceptions,
-    consumedThrough: consumed < 0 ? null : formatActivityId(consumed),
-    changed,
-    remaining: Math.max(0, matching.length - delivered.length),
+    viewer, delivered, perceptions: new Map(delivered.map((item) => [item.index, 'full' as const])),
+    consumedThrough: cursor < 0 ? null : formatActivityId(cursor), changed,
+    remaining: facts.directedCount(viewer, filter),
   };
 }

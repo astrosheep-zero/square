@@ -1,7 +1,7 @@
 # Row-oriented artifact design
 
-**Status: design closed for binding; implementation and capacity validation pending.**
-Source baseline: `99679eb` (0.3.70). No runtime implementation is implied by this document.
+**Status: design closed; row runtime candidate implemented and measured, awaiting independent review/acceptance.**
+Source baseline: `99679eb` (0.3.70). This document specifies the design; [runtime delivery evidence](row-runtime-delivery-evidence.md) records implementation verification and actual capacity measurements. Explicit migration remains a separately accepted delivery.
 
 ## Decision in brief
 
@@ -562,6 +562,6 @@ Verification declarations for both delivery snapshots include `npm test` and `np
 node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 300 --mode session
 node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 300 --mode session --active --no-hints
 ```
-These are implementation-target commands: `--no-hints` and the 300-worker support do not exist yet. `--no-hints` disables fs.watch only inside benchmark workers, never through production configuration. Active session mode includes the simultaneous catch phase and comparison at 1,800 versus 18,000 unrelated history rows; preserve result/counter positive controls and report incomplete phases as failure. There is no new production performance knob. The baseline 20-second discovery deadline is retained as a finite probe bound, not a user-facing latency guarantee.
+These commands are implemented by the runtime candidate; `--no-hints` and direct 300-worker support are benchmark capabilities. `--no-hints` disables fs.watch only inside benchmark workers, never through production configuration. Active session mode includes the simultaneous catch phase and comparison at 1,800 versus 18,000 unrelated history rows; preserve result/counter positive controls and report incomplete phases as failure. There is no new production performance knob. The baseline 20-second discovery deadline is retained as a finite probe bound, not a user-facing latency guarantee.
 
 Independent design review found the architecture sound. Its concrete closure amendments are incorporated: no revision-driven pagination restart, retained follow-up/expiry obligations, explicit history audience-selector composition, domain ownership of pendingAudience, and refusal instead of a bespoke non-finite JSON codec. Design review is not implementation review, a test result, or a capacity result.

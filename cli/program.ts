@@ -31,7 +31,7 @@ async function handleSquareError(error: unknown, squarePath?: string, name?: str
       let participantCount: number | undefined;
       try {
         const square = await openSquare(squarePath, { clock: nowMs });
-        try { participantCount = inSquareCount((await square.artifact.read()).state); } finally { await closeOpenSquare(square); }
+        try { participantCount = (await square.artifact.read(inSquareCount)).value; } finally { await closeOpenSquare(square); }
       } catch { /* the header count is best effort */ }
       process.stderr.write(formatRefusal(squarePath, existing, participantCount === undefined ? {} : { participantCount }));
     }

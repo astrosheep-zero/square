@@ -22,7 +22,6 @@ import {
   withPathOutput,
 } from './presentation.js';
 import { nowMs, SLEEP_MS } from './runtime.js';
-import { unreadActivitySummaries } from './decisions.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { createSquareApplication } from './square-application.js';
@@ -169,7 +168,7 @@ export async function cmdActivity(
     const pendingLead = pendingSpeaker === undefined
       ? ''
       : `▲ while you spoke, ${participantIdentity(pendingSpeaker)} said something behind you\n\n`;
-    const pending = hasPending ? `\n\n${pendingLead}${renderPendingFeed([...fresh.activities], [...pendingPublic], knownName, fresh.state)}` : '';
+    const pending = hasPending ? `\n\n${pendingLead}${renderPendingFeed(pendingPublic, before.sayNumbers, before.perceptions, knownName)}` : '';
     const hint = expressHintLine(ownActCount);
     const receiptId = landed.activity.id;
     const capCount = fresh.hardCap === null ? '' : ` · ${ownActCount}/${fresh.hardCap}`;
@@ -203,7 +202,7 @@ export async function cmdActivity(
           ...output,
           retryCommand,
           forceCommand,
-          activitySummaries: unreadActivitySummaries(fresh.state, knownName, nowMs()),
+          activitySummaries: fresh.activitySummaries,
         }));
         process.exit(1);
         return;

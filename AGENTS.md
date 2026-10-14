@@ -63,7 +63,7 @@ Implementation taste:
 - The authoritative artifact is one versioned SQLite `.square` database containing the square's state; there is no independent runtime sidecar. SQLite-owned recovery journals are allowed.
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
-- All behavior operates on `SquareState`, never on SQLite schema fields, storage framing, or display text.
+- Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.
 - Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; directed attention has two landing-time derivations — a roster-matching `@name` in a body becomes mention metadata exactly as if `--mention` had been passed, and a reply reaches the author of the activity it answers exactly as if that author had been mentioned. `reply` itself stays the stored fact; the audience is derived from it.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.

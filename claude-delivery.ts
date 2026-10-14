@@ -4,7 +4,8 @@ import { closeOpenSquare } from './open-square.js';
 import { hostLedgerForEnv } from './registry.js';
 import type { EvidenceRecord, HostLedgerPort, PresenceRecord } from './host-ledger.js';
 import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
-import { nativePendingPreview, projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
+import { projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
+import { nativePendingPreview } from './inbox.js';
 import { presentPending } from './presentation-operations.js';
 import { type WakeRoute } from './model.js';
 import { canonicalPath } from './canonical-path.js';
@@ -53,8 +54,7 @@ async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) 
   if (!owner || index === undefined || !row.claimToken) return undefined;
   const square = await openSquare(owner.location, { hostLedger });
   try {
-    const state = (await square.artifact.read()).state;
-    const preview = nativePendingPreview(state, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+    const { value: preview } = await square.artifact.read((facts) => nativePendingPreview(facts, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: owner.cancelledThrough, now: Date.now() }));
     if (!preview || nativePayload(row.claimToken, preview.payload) !== native.payload) return undefined;
     return { cancelledThrough: owner.cancelledThrough, clipped: preview.clipped };
   } finally { await closeOpenSquare(square); }
@@ -74,7 +74,7 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
     let payload: string;
     try {
       const index = parseActivityId(request.activity);
-      const preview = index === undefined ? undefined : nativePendingPreview((await square.artifact.read()).state, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId, participant: request.participant, actIndex: index, epoch: request.route.epoch, address: { endpoint: request.route.address.endpoint! }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+      const preview = index === undefined ? undefined : (await square.artifact.read((facts) => nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId, participant: request.participant, actIndex: index, epoch: request.route.epoch, address: { endpoint: request.route.address.endpoint! }, cancelledThrough: owner.cancelledThrough, now: Date.now() }))).value;
       if (!preview) return { outcome: 'not-capable', diagnostic: 'Catch or consumption owns this activity.' };
       payload = nativePayload(request.claimToken, preview.payload);
     } finally { await closeOpenSquare(square); }
@@ -106,10 +106,10 @@ export async function observeClaudeDelivery(sessionId: string, text: string, ope
         const prior = await projectPresentationEvidence({ hostLedger: ledger, location: row.location, participant: row.participant, sessionId, activity: row.activity });
         if (presentationSuppressesWake(prior)) continue;
         const square = await openSquare(row.location, { hostLedger: ledger, env });
-        try { await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId, activity: row.activity, sink: { present() {} }, markSeen: !pending.clipped, current: (state) => {
+        try { await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId, activity: row.activity, sink: { present() {} }, markSeen: !pending.clipped, current: (facts) => {
           const index = parseActivityId(row.activity);
           if (index === undefined) return false;
-          const preview = nativePendingPreview(state, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: pending.cancelledThrough, now: Date.now() });
+          const preview = nativePendingPreview(facts, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: pending.cancelledThrough, now: Date.now() });
           return preview !== undefined && nativePayload(row.claimToken!, preview.payload) === native.payload;
         } }); }
         finally { await closeOpenSquare(square); }

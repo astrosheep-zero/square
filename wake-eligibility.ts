@@ -1,20 +1,22 @@
-import { nameKey, type SquareState, type WakeRoute } from './model.js';
-import { deriveDeliveryModel } from './delivery.js';
+import { nameKey, type WakeRoute } from './model.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import type { EvidenceRecord, PresenceRecord } from './host-ledger.js';
 import { presenceEpoch } from './registry.js';
-import type { PresentationEvidenceProjection, WakeRequest } from './ports.js';
+import type { DirectedHead, HostLedgerPort, PresentationEvidenceProjection, RouteFact, WakeRequest } from './ports.js';
+import { canonicalPath } from './canonical-path.js';
 import { decodeWakeEvidence, type WakeAttempt } from './wake-evidence.js';
 
 export interface WakeSnapshot {
-  readonly state: SquareState;
+  readonly routes: readonly RouteFact[];
+  readonly pending: readonly DirectedHead[];
+  readonly seen?: readonly { readonly recipient: string; readonly index: number }[];
   /** Canonicalized by the caller; every identity in this snapshot is square-local. */
   readonly location: string;
   readonly owners: readonly PresenceRecord[];
+  readonly bindings?: readonly PresenceRecord[];
   readonly wakeRecords: readonly EvidenceRecord[];
   readonly presentations: readonly PresentationEvidenceProjection[];
   readonly now: number;
-  readonly delivery?: ReturnType<typeof deriveDeliveryModel>;
 }
 
 export interface OwnedWakeRoute {
@@ -50,7 +52,6 @@ function identity(...parts: readonly (string | number)[]): string { return JSON.
 
 /** One strict ownership join, latest selection, and request fence over primary evidence only. */
 export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
-  const delivery = input.delivery ?? deriveDeliveryModel(input.state);
   const ownersBySession = new Map<string, PresenceRecord[]>();
   for (const owner of input.owners) {
     if (owner.location !== input.location) continue;
@@ -59,17 +60,19 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
     rows.push(owner);
     ownersBySession.set(key, rows);
   }
-  const ownerFor = (route: WakeRoute): PresenceRecord | undefined => route.location !== input.location ? undefined
+  const ownerFor = (route: Pick<RouteFact, 'location' | 'participant' | 'sessionId' | 'epoch'>): PresenceRecord | undefined => route.location !== input.location ? undefined
     : ownersBySession.get(identity(nameKey(route.participant), route.sessionId))?.find(
       (row) => route.epoch === undefined || presenceEpoch(row) === route.epoch,
     );
   const ownedRoutes: OwnedWakeRoute[] = [];
   const latest = new Map<string, number>();
-  for (const route of input.state.routes ?? []) {
-    const participant = nameKey(route.participant);
-    const owner = ownerFor(route);
-    if (owner === undefined) continue;
-    ownedRoutes.push({ route, owner });
+  for (const fact of input.routes) {
+    const participant = nameKey(fact.participant);
+    const owner = ownerFor(fact);
+    // Malformed legacy epoch cannot acquire an owner by coercion or enter a transport request.
+    if (owner === undefined || (fact.epoch !== undefined && typeof fact.epoch !== 'number')) continue;
+    const { extra, epoch, ...route } = fact;
+    ownedRoutes.push({ route: { ...route, ...(epoch === undefined ? {} : { epoch }) }, owner });
     latest.set(participant, Math.max(latest.get(participant) ?? Number.NEGATIVE_INFINITY, route.updatedAt));
   }
   const selectedByRecipient = new Map<string, OwnedWakeRoute[]>();
@@ -80,10 +83,8 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
     rows.push(owned);
     selectedByRecipient.set(key, rows);
   }
-  const pending = new Set<string>();
-  for (const recipient of delivery.joinedRecipients()) {
-    for (const notification of delivery.pendingFor(recipient)) pending.add(identity(nameKey(recipient), notification.item.index));
-  }
+  const pending = new Set(input.pending.map((head) => identity(nameKey(head.recipient), head.index)));
+  const seen = new Set(input.seen?.map((receipt) => identity(nameKey(receipt.recipient), receipt.index)));
   const attemptsByAttention = new Map<string, WakeAttempt[]>();
   for (const record of input.wakeRecords) {
     if (record.location !== input.location) continue;
@@ -104,6 +105,8 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
     identity(nameKey(route.participant), formatActivityId(actIndex), route.sessionId),
   );
   const isCancelled = (owner: PresenceRecord, actIndex: number): boolean => actIndex <= (owner.cancelledThrough ?? -1);
+  const bindingCurrent = (owner: PresenceRecord): boolean => input.bindings === undefined
+    || input.bindings.some((captured) => sameBinding(captured, owner));
 
   return {
     evidence(recipient, actIndex) {
@@ -115,10 +118,10 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
       const routes = (selectedByRecipient.get(key) ?? []).filter(({ owner }) => !isCancelled(owner, actIndex));
       const presented = routes.length > 0 && routes.every(({ route }) => isPresented(route, actIndex));
       return {
-        delivered: delivery.isSeen(recipient, actIndex), presented, attempts,
+        delivered: seen.has(identity(key, actIndex)), presented, attempts,
         ...(terminal === undefined ? {} : { terminal }),
         attemptableRoutes: terminal === undefined && pending.has(identity(key, actIndex))
-          ? routes.filter(({ route }) => !isPresented(route, actIndex)).map(({ route }) => route) : [],
+          ? routes.filter(({ route, owner }) => bindingCurrent(owner) && !isPresented(route, actIndex)).map(({ route }) => route) : [],
       };
     },
     currentness(request) {
@@ -129,11 +132,11 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
       const activityPending = actIndex !== undefined && request.location === input.location
         && pending.has(identity(nameKey(request.participant), actIndex));
       const owner = sameLocation && sameRecipient ? ownerFor(route) : undefined;
-      const sessionBound = owner !== undefined;
-      const matchesRequest = (published: WakeRoute): boolean => published.location === route.location
+      const sessionBound = owner !== undefined && bindingCurrent(owner);
+      const matchesRequest = (published: RouteFact | WakeRoute): boolean => published.location === route.location
         && nameKey(published.participant) === nameKey(route.participant) && published.sessionId === route.sessionId
         && published.kind === route.kind && published.epoch === route.epoch && Object.keys(published.address).length === Object.keys(route.address).length && Object.keys(published.address).every((key) => published.address[key] === route.address[key]);
-      const routePublished = sameLocation && sameRecipient && (input.state.routes ?? []).some(matchesRequest);
+      const routePublished = sameLocation && sameRecipient && input.routes.some(matchesRequest);
       const selectedOwner = sameLocation && sameRecipient
         && (selectedByRecipient.get(nameKey(route.participant)) ?? []).some(({ route: published }) => matchesRequest(published));
       const cancelled = actIndex !== undefined && owner !== undefined && isCancelled(owner, actIndex);
@@ -143,6 +146,27 @@ export function projectWakeEligibility(input: WakeSnapshot): WakeEligibility {
         activityPending, sessionBound, routePublished, selectedOwner, cancelled, presented };
     },
   };
+}
+
+/** Host observation happens only after detached artifact facts have left their transaction. */
+export async function projectWakeEvidence(input: Pick<WakeSnapshot, 'routes' | 'pending' | 'seen' | 'location' | 'now' | 'bindings'> & {
+  readonly hostLedger: HostLedgerPort;
+  readonly owners?: readonly PresenceRecord[];
+}): Promise<WakeEligibility> {
+  const location = await canonicalPath(input.location);
+  const owners = input.owners ?? await input.hostLedger.listPresence({ location, now: input.now });
+  const records = await input.hostLedger.listEvidence({ location, now: input.now });
+  const presentations = records.filter((row) => row.kind === 'presentation').map((row) => ({
+    location: row.location, participant: row.participant, sessionId: row.session, activity: row.activity, outcome: row.outcome,
+    ...(row.at === undefined ? {} : { at: row.at }),
+  }));
+  return projectWakeEligibility({ ...input, location, owners, wakeRecords: records.filter((row) => row.kind === 'wake'), presentations });
+}
+
+export function sameBinding(captured: PresenceRecord, current: PresenceRecord): boolean {
+  return captured.location === current.location && nameKey(captured.participant) === nameKey(current.participant)
+    && captured.session === current.session && captured.channel === current.channel && captured.epoch === current.epoch
+    && (captured.cancelledThrough ?? -1) === (current.cancelledThrough ?? -1);
 }
 
 export function wakeIsEligible(evidence: WakeEvidence): boolean {

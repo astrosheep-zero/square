@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import type { DatabaseSync } from 'node:sqlite';
 
 import {
   isWakeRouteKind,
@@ -17,6 +18,71 @@ const guideNames = ['participant', 'architect', 'brainstorm'];
 const guideContents = new Map<string, string>(await Promise.all(
   guideNames.map(async (name) => [name, (await fs.promises.readFile(new URL(`../guides/${name}.md`, import.meta.url), 'utf8')).trim()] as const),
 ));
+
+// ---------------------------------------------------------------------------
+// Legacy v1 framing. This is the only place that knows the pre-row artifact
+// shape; the row runtime never decodes it and the migration transaction is its
+// only production reader.
+// ---------------------------------------------------------------------------
+
+const V1_USER_VERSION = 1;
+const V1_SNAPSHOT_TABLE = 'square_snapshot';
+const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
+const V1_SNAPSHOT_COLUMNS = [
+  { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },
+  { cid: 1, name: 'revision', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+  { cid: 2, name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+] as const;
+
+export interface LegacyFraming {
+  readonly applicationId: number;
+  readonly userVersion: number;
+  readonly journalMode: string;
+}
+
+/**
+ * The one recovery command for an owned legacy artifact, with a shell-quoted
+ * path. Kept here, beside the framing check, so the refusal and the migration
+ * instruction cannot drift apart. (presentation.ts quotes other recovery
+ * commands; this module stays free of the renderer.)
+ */
+export function migrationRecoveryCommand(location: string): string {
+  return `square --location '${location.replace(/'/g, `'\\''`)}' migrate`;
+}
+
+/**
+ * Read-only legacy framing: application id, format version, journal mode and the
+ * exact owned snapshot schema. It decodes no snapshot payload, writes no pragma
+ * and runs no DDL, so a caller can establish that a file really is an owned v1
+ * square before offering the migration recovery command. Anything else is
+ * refused as unrelated or unsupported rather than repaired.
+ */
+export function validateLegacyFraming(database: DatabaseSync, applicationId: number, location = ''): LegacyFraming {
+  const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
+  if (identity.application_id !== applicationId) throw invalidArtifact('unrelated SQLite database.');
+  if (identity.user_version !== V1_USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
+  const journalMode = (database.prepare('PRAGMA journal_mode').get() as { journal_mode?: unknown }).journal_mode;
+  if (typeof journalMode !== 'string' || journalMode !== (location === ':memory:' ? 'memory' : 'delete')) throw invalidArtifact('unsupported journal mode.');
+  const objects = database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+    .all() as { type?: unknown; name?: unknown; tbl_name?: unknown; sql?: unknown }[];
+  if (objects.length !== 1) throw invalidArtifact('unsupported snapshot schema.');
+  const [object] = objects;
+  if (object.type !== 'table' || object.name !== V1_SNAPSHOT_TABLE || object.tbl_name !== V1_SNAPSHOT_TABLE
+    || typeof object.sql !== 'string' || normalizedSchemaSql(object.sql) !== normalizedSchemaSql(V1_SNAPSHOT_DDL)) throw invalidArtifact('unsupported snapshot schema.');
+  const columns = database.prepare('SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid')
+    .all(V1_SNAPSHOT_TABLE) as { cid?: unknown; name?: unknown; type?: unknown; notnull?: unknown; dflt_value?: unknown; pk?: unknown; hidden?: unknown }[];
+  if (columns.length !== V1_SNAPSHOT_COLUMNS.length || !columns.every((column, index) => {
+    const expected = V1_SNAPSHOT_COLUMNS[index];
+    return column.cid === expected.cid && column.name === expected.name && column.type === expected.type
+      && column.notnull === expected.notnull && column.dflt_value === expected.dflt_value
+      && column.pk === expected.pk && column.hidden === expected.hidden;
+  })) throw invalidArtifact('unsupported snapshot schema.');
+  return { applicationId, userVersion: V1_USER_VERSION, journalMode };
+}
+
+function normalizedSchemaSql(sql: string): string {
+  return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
+}
 
 function invalidArtifact(detail: string): SquareError {
   return new SquareError('invalid_args', `Invalid square artifact: ${detail}`);
@@ -112,7 +178,40 @@ function validateActs(value: unknown): value is StoredAct[] {
   return true;
 }
 
+function nonFiniteRoutePath(value: unknown, path: string): string | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? undefined : path;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const found = nonFiniteRoutePath(value[index], `${path}[${index}]`);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (isObject(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      const found = nonFiniteRoutePath(item, `${path}.${key}`);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The one restriction layered on the permissive v1 route validator: an
+ * exponent-overflow number (`1e999`) parses to Infinity, passes the old checks,
+ * and cannot survive an ordinary JSON round trip. It is refused rather than
+ * silently coerced, wherever it sits in a route — updatedAt, epoch, or a nested
+ * extra.
+ */
+function assertFiniteRouteNumbers(routes: readonly unknown[]): void {
+  for (let index = 0; index < routes.length; index += 1) {
+    const found = nonFiniteRoutePath(routes[index], `routes[${index}]`);
+    if (found !== undefined) throw invalidArtifact(`${found} is not a finite number.`);
+  }
+}
+
 export function validateSquareState(value: unknown): SquareState {
+  if (isObject(value) && Array.isArray(value.routes)) assertFiniteRouteNumbers(value.routes);
   if (!isObject(value) || !hasExactKeys(value, ['hardCap', 'preamble', 'warmup', 'acts', 'runtime'], ['throttlePerMinute', 'routes'])
     || !(value.hardCap === null || (Number.isSafeInteger(value.hardCap) && (value.hardCap as number) > 0))
     || (value.throttlePerMinute !== undefined && (!Number.isSafeInteger(value.throttlePerMinute) || (value.throttlePerMinute as number) <= 0))

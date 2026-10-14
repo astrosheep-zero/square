@@ -16,7 +16,7 @@ import {
   retireEndedSessionRoutes,
   type OperationContext,
 } from './square-actions.js';
-import { history, participantHistory, participants, snapshot } from './views.js';
+import { history, joinFacts, participantHistory, participants, snapshot, standingCount } from './views.js';
 import { currentParticipant } from './views.js';
 import type { Activity, CatchOptions, CatchResult, ExpressOptions, ExpressResult, HistoryQuery, ListenerChangeResult, ParticipantStatus, SquareSnapshot } from './square-facade.js';
 import type { Participant, OperationControl, SquareAtInput, SquareBuildInput } from './square-facade.js';
@@ -43,7 +43,7 @@ class ParticipantHandle implements Participant {
   }
 
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult> {
-    return catchUp(this.context, this.name, options, undefined, control);
+    return catchUp(this.context, this.name, options, control);
   }
 
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> {
@@ -112,6 +112,8 @@ export class Square {
   }
 
   participants(): Promise<ParticipantStatus[]> { return participants(this.square); }
+  joinFacts(name: string, control?: OperationControl) { return joinFacts(this.square, name, control); }
+  standingCount(): Promise<number> { return standingCount(this.square); }
   snapshot(control?: OperationControl): Promise<SquareSnapshot> { return snapshot(this.square, control); }
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return history(this.square, query, control); }
   async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { Square } from '../dist/index.js';
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
 import { run, tempSquare, withName } from './square-cli-helpers.js';
 
 async function setup(t, file) {
@@ -27,9 +27,9 @@ test('exact catch acknowledges only its id and repeats without changing observat
   assert.equal(caught.remaining, 1);
   assert.equal(caught.consumedThrough, 'act/1');
   assert.equal(caught.idleExpired, false);
-  const before = (await loadSquare(file)).runtime.observations;
+  const before = (await readSquareSnapshot(file)).state.runtime.observations;
   assert.deepEqual(await bob.catch({ id: second.id }), caught);
-  assert.deepEqual((await loadSquare(file)).runtime.observations, before);
+  assert.deepEqual((await readSquareSnapshot(file)).state.runtime.observations, before);
   assert.deepEqual((await bob.catch()).activities.map((item) => item.id), [first.id]);
 });
 

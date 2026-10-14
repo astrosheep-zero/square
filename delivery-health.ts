@@ -1,12 +1,11 @@
-import { type DirectedNotificationRoute, deriveDeliveryModel } from './delivery.js';
+import { type DirectedNotificationRoute, collectPending } from './delivery.js';
 import { formatActivityId } from './square-core.js';
 import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
-import { projectWakeEvidenceFromState } from './square-projections.js';
+import { projectWakeEvidence } from './wake-eligibility.js';
 import type { WakeAttempt, WakeReleaseDiagnostic } from './wake-evidence.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { pendingDeliveriesFromState } from './views.js';
 import { readWakeReleaseDiagnostics } from './wake-attempts.js';
 
 export type DeliveryHealthKind =
@@ -49,21 +48,13 @@ export async function classifyDeliveryHealth(
   const env = opts.env ?? process.env;
   const square = await openSquare(squarePath, { clock: () => now, env });
   try {
-    const { state } = await square.artifact.read();
-    const delivery = deriveDeliveryModel(state);
-    const pending = pendingDeliveriesFromState(state, delivery);
-    const evidenceProjection = await projectWakeEvidenceFromState({
-      location: squarePath,
-      state,
-      hostLedger: square.hostLedger!,
-      now,
-      delivery,
-    });
+    const { scan, routes, pending } = await collectPending(square.artifact);
+    const evidenceProjection = await projectWakeEvidence({ location: squarePath, routes, pending, hostLedger: square.hostLedger!, now });
     const items: DeliveryHealthItem[] = [];
-    for (const pendingDelivery of pending) {
-      for (const note of pendingDelivery.notifications) {
-        const ageMs = Math.max(0, now - note.item.at);
-        const evidence = evidenceProjection.evidence(pendingDelivery.recipient, note.item.index);
+    for (const participant of scan.roster) {
+      for (const note of pending.filter((head) => head.recipient === participant.name)) {
+        const ageMs = Math.max(0, now - note.at);
+        const evidence = evidenceProjection.evidence(note.recipient, note.index);
         const kind: DeliveryHealthKind = evidence.presented
           ? 'presented-not-delivered'
           : evidence.terminal?.outcome === 'accepted'
@@ -76,10 +67,10 @@ export async function classifyDeliveryHealth(
         const attempt = evidence.terminal ?? evidence.attempts.at(-1);
         items.push({
           squarePath,
-          recipient: pendingDelivery.recipient,
-          actIndex: note.item.index,
-          actor: note.item.actor,
-          at: note.item.at,
+          recipient: note.recipient,
+          actIndex: note.index,
+          actor: note.actor,
+          at: note.at,
           ageMs,
           route: note.route,
           kind,

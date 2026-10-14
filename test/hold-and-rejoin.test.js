@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
 import { persistSquare, run, runAsync, withName, withPath } from './square-cli-helpers.js';
 
 const HELD_BUDGET_ENV = { SQUARE_HELD_WAIT_BUDGET_MS: '300' };
@@ -26,7 +26,7 @@ test('a held express announces the holder, waits within a budget, then keeps a d
   assert.ok(elapsed >= 250, `expected a real wait, got ${elapsed}ms`);
   assert.ok(elapsed < 5000, `expected the wait to give up, got ${elapsed}ms`);
 
-  const acts = (await loadSquare(file)).acts;
+  const acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).kind, 'hold', 'no say may land while the hand is up');
 });
 
@@ -45,7 +45,7 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
   assert.equal(landed.status, 0, landed.stderr);
   assert.match(landed.stdout, /your activity is waiting/);
   assert.match(landed.stdout, /your words land/);
-  assert.equal((await loadSquare(file)).acts.at(-1).kind, 'say');
+  assert.equal((await readSquareSnapshot(file)).state.acts.at(-1).kind, 'say');
 });
 
 test('express after done announces the return; a standing participant sees none', async () => {

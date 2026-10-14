@@ -36,13 +36,12 @@ function ownershipLeaks(identifier, owners) {
     .map((file) => `${identifier}: ${file}`);
 }
 
-test('the internal aggregate is state, never a document', () => {
-  const leaks = [
-    ...ownershipLeaks('SquareDoc', []),
-    ...ownershipLeaks('createSquareDoc', []),
-    ...ownershipLeaks('readDocument', []),
-  ];
-  assert.deepEqual(leaks, [], `stale document-shaped aggregate API:\n${leaks.join('\n')}`);
+test('normal runtime has one fact path, with no retired whole-state bridge', () => {
+  const retired = ['SquareDoc', 'createSquareDoc', 'readDocument', 'transactSquareSnapshot', 'deriveDeliveryModel', 'replayLandedAudiences', 'cloneState'];
+  const leaks = retired.flatMap((identifier) => ownershipLeaks(identifier, []));
+  assert.deepEqual(leaks, [], `retired whole-state runtime API:\n${leaks.join('\n')}`);
+  const stateOwners = ['model.ts', 'square-state.ts', 'artifact.ts', 'square-storage.ts', 'square-sqlite.ts', 'square-file-adapter.ts', 'square-migration.ts'];
+  assert.deepEqual(ownershipLeaks('SquareState', stateOwners), []);
 });
 
 test('artifact storage has one production import boundary', () => {
@@ -62,30 +61,22 @@ test('one canonicalizer owns square location keys', () => {
   assert.deepEqual(leaks, [], `retired canonicalization or channel names survived:\n${leaks.join('\n')}`);
 });
 
-test('SQLite snapshot ownership stays at the artifact boundary', () => {
-  const sqliteImports = filesContaining(/from ['"]node:sqlite['"]/, ['artifact.ts', 'file-lock.ts']);
-  assert.deepEqual(sqliteImports, [], `SQLite escaped its storage owners: ${sqliteImports.join(', ')}`);
-
-  const artifact = productionSources.get('artifact.ts') ?? '';
-  assert.match(artifact, /from ['"]node:sqlite['"]/);
-  for (const identifier of ['square_snapshot', 'application_id', 'user_version']) {
-    assert.match(artifact, new RegExp(`\\b${identifier}\\b`), `artifact.ts must own ${identifier}`);
-    assert.deepEqual(
-      ownershipLeaks(identifier, ['artifact.ts']),
-      [],
-      `${identifier} escaped artifact.ts`,
-    );
+test('SQLite artifact rows stay private to storage framing and explicit migration', () => {
+  const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-state.ts', 'square-migration.ts'];
+  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts']), []);
+  const driver = productionSources.get('square-sqlite.ts') ?? '';
+  assert.match(driver, /CREATE TABLE landed_audience/);
+  assert.doesNotMatch(driver, /CREATE (?:TRIGGER|VIEW|VIRTUAL TABLE)/);
+  for (const identifier of ['square_snapshot', 'square_meta', 'landed_audience', 'application_id', 'user_version']) {
+    assert.deepEqual(ownershipLeaks(identifier, boundary), [], `${identifier} escaped the artifact boundary`);
   }
 });
 
-test('artifact port transactions accept synchronous state transitions only', () => {
-  for (const file of ['ports.ts']) {
-    const source = productionSources.get(file) ?? '';
-    const signature = source.match(/transact<R>\(fn:[\s\S]*?\): Promise<R>;/)?.[0];
-    assert.ok(signature, `${file} must declare the artifact transaction seam`);
-    const callback = signature.slice(0, signature.lastIndexOf('): Promise<R>;'));
-    assert.doesNotMatch(callback, /\bPromise(?:Like)?\b/, `${file} lets an asynchronous transition cross the port`);
-  }
+test('artifact callbacks are synchronous typed capabilities, not replacement snapshots', () => {
+  const source = productionSources.get('ports.ts') ?? '';
+  assert.match(source, /read<R>\(select: \(facts: SquareRead\) => R,/);
+  assert.match(source, /transact<R>\(change: \(facts: SquareWrite\) => R,/);
+  assert.doesNotMatch(source, /SquareState|state\?:/);
 });
 
 test('raw file state APIs stay inside storage and the file artifact adapter', () => {
@@ -139,7 +130,7 @@ test('CLI observation consumes concern projections, not state or domain law', ()
   assert.deepEqual(leaks, [], `CLI observation bypasses concern projections:\n${leaks.join('\n')}`);
 });
 
-test('decisions and perception stay state-only, outside host and storage operations', () => {
+test('decisions and perception use domain facts, outside host and storage operations', () => {
   for (const file of ['decisions.ts', 'catch-decisions.ts', 'perception-projection.ts']) {
     const source = productionSources.get(file);
     assert.ok(source, `${file} must be part of production sources`);

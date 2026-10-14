@@ -85,10 +85,10 @@ test('unavailable watches reconcile without loading history', async (t) => {
   t.mock.method(fs, 'watch', () => { throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' }); });
   const cell = createFileCell(file);
   t.after(() => cell.close());
-  const baseline = (await cell.read()).version;
+  const baseline = await cell.revision();
   const waiting = cell.changed(baseline, 4_000);
   await sleep(40);
-  await cell.transact((state) => ({ state: { ...state, preamble: ['changed without notification'] }, result: undefined }));
+  await cell.transact((facts) => facts.land({ kind: 'join', actor: 'Alice', at: 1 }));
   assert.equal(await waiting, true);
 });
 

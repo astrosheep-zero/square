@@ -11,8 +11,9 @@ import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';
-import { projectWakeEvidenceFromState } from './square-projections.js';
-import type { WakeCurrentness } from './wake-eligibility.js';
+import { projectWakeEvidence, type WakeCurrentness } from './wake-eligibility.js';
+import { pendingHead } from './delivery.js';
+import { parseActivityId } from './square-core.js';
 import { canonicalPath } from './canonical-path.js';
 import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
 import { createHostLedgerPort } from './host-ledger-file-adapter.js';
@@ -73,8 +74,12 @@ async function observeWakeRequest(request: WakeRequest, hostLedger: import('./ho
   try {
     const location = await canonicalPath(request.location);
     square = await openSquare(location, { hostLedger });
-    const { state } = await square.artifact.read();
-    const eligibility = await projectWakeEvidenceFromState({ state, hostLedger, location, now });
+    const { value: facts } = await square.artifact.read((facts) => {
+      const index = parseActivityId(request.activity);
+      const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
+      return { routes: facts.routes(), pending: head === undefined ? [] : [head] };
+    });
+    const eligibility = await projectWakeEvidence({ ...facts, hostLedger, location, now });
     return { ...eligibility.currentness({ ...request, location }), observationAvailable: true };
   } catch {
     return { current: false, activityPending: false, sessionBound: false, routePublished: false,

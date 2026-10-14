@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+
+// Explicit fixture inspection only; automatic-session production paths never export authority.
+async function loadSquare(location) { return (await readSquareSnapshot(location)).state; }
 import { automaticParticipant, automaticSessionEnd, automaticSessionStart } from '../dist/automatic-session.js';
 import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
@@ -211,10 +214,7 @@ test('automatic session end writes done when the callable route is already missi
     await automaticSessionStart('pi', 'pi-session', item.cwd, env);
     const square = await openSquare(item.publicPath);
     try {
-      await square.artifact.transact((state) => ({
-        state: { ...state, routes: (state.routes ?? []).filter((route) => route.sessionId !== 'pi-session') },
-        result: undefined,
-      }));
+      await square.artifact.transact((facts) => facts.replaceRoutes(facts.routes().filter((route) => route.sessionId !== 'pi-session')));
     } finally { await closeOpenSquare(square); }
     await automaticSessionEnd('pi', 'pi-session', item.cwd, env);
   });

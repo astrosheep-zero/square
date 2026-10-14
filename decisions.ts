@@ -1,339 +1,202 @@
 import {
-  InternalSquareError,
-  SquareError,
-  type ActivitiesOptions,
-  type Act,
-  type StoredAct,
-  type SquareState,
-  type Reach,
-  type HardCap,
-  sameName,
-  validateName,
+  SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type Act, type StoredAct, type Reach, type HardCap, sameName, nameKey, validateName,
 } from './model.js';
+import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
-import {
-  UNREAD_BLOCK_GRACE_MS,
-  actId,
-  actStableIndex,
-  foldedState,
-  freshWatchLease,
-  publicActs,
-  resolveRosterName,
-  rosterNames,
-  THROTTLE_WINDOW_MS,
-} from './runtime.js';
-import { actDelta, directedPeerSays } from './activity-feed.js';
-import { actorOf, formatActivityId, isIgnored, isListening, listeningTo, MAX_IDENTITY_SET_SIZE, validate, type FoldedSquareState, type Perception } from './square-core.js';
-import { deriveDeliveryModel, type DeliveryModel } from './delivery.js';
-import { compileSearchPattern } from './search.js';
+import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
+import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
 import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
 
-export interface UnreadActivitySummary {
-  name: string;
-  count: number;
-  latestActivityAgeMs: number;
-  previews: UnreadActivityPreview[];
-}
+type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
+export interface UnreadActivitySummary { name: string; count: number; latestActivityAgeMs: number; previews: UnreadActivityPreview[] }
+export interface UnreadActivityPreview { number: number; act: Extract<StoredAct, { kind: 'say' }>; perception: Perception }
 
-export interface UnreadActivityPreview {
-  number: number;
-  act: Extract<StoredAct, { kind: 'say' }>;
-  perception: Perception;
-}
-
-export function resolveKnownName(squareState: SquareState, name: string): string {
+export function resolveKnownName(facts: SquareRead, name: string): string {
   validateName(name);
-  const known = resolveRosterName(squareState, name);
-  if (known === undefined) {
-    throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
-  }
+  const known = facts.participant(name)?.name;
+  if (known === undefined) throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
   return known;
 }
-
-export interface DecideJoinResult {
-  joinedName: string;
-  addParticipant: boolean;
-  joinAct?: Extract<Act, { kind: 'join' }>;
-}
-
-export interface DecideImplicitJoinResult {
-  joinedName: string;
-  state: 'joined' | 'active' | 'done';
-  joinAct?: Extract<Act, { kind: 'join' }>;
-}
-
-export function decideJoin(squareState: SquareState, name: string, now: number): DecideJoinResult {
+export interface DecideJoinResult { joinedName: string; addParticipant: boolean; joinAct?: TimedAct<'join'> }
+export interface DecideImplicitJoinResult { joinedName: string; state: 'joined' | 'active' | 'done'; joinAct?: TimedAct<'join'> }
+export function decideJoin(facts: SquareRead, name: string, now: number): DecideJoinResult {
   validateName(name);
-  const knownName = resolveRosterName(squareState, name);
-  const joinedName = knownName ?? name;
-  const state = foldedState(squareState);
-  const result = validate(state, { kind: 'join', actor: joinedName, at: now });
-  if (!result.ok && result.reason === 'already_joined') {
-    return { joinedName, addParticipant: false };
-  }
-  return {
-    joinedName,
-    addParticipant: knownName === undefined,
-    joinAct: { kind: 'join', actor: joinedName, at: now },
-  };
+  const current = facts.participant(name);
+  const joinedName = current?.name ?? name;
+  return current?.joined ? { joinedName, addParticipant: false }
+    : { joinedName, addParticipant: current === undefined, joinAct: { kind: 'join', actor: joinedName, at: now } };
 }
-
-/** Automatic presence may enter only once; an explicit join remains the re-entry path. */
-export function decideImplicitJoin(squareState: SquareState, name: string, now: number): DecideImplicitJoinResult {
+export function decideImplicitJoin(facts: SquareRead, name: string, now: number): DecideImplicitJoinResult {
   validateName(name);
-  const knownName = resolveRosterName(squareState, name);
-  const joinedName = knownName ?? name;
-  if (knownName !== undefined) {
-    const current = foldedState(squareState).participants.find((participant) => sameName(participant.name, knownName));
-    return { joinedName, state: current?.joined === true ? 'active' : 'done' };
+  const current = facts.participant(name);
+  return current === undefined ? { joinedName: name, state: 'joined', joinAct: { kind: 'join', actor: name, at: now } }
+    : { joinedName: current.name, state: current.joined ? 'active' : 'done' };
+}
+function validateActivityName(name: string): void {
+  try { validateName(name); }
+  catch (error) {
+    if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true };
+    throw error;
   }
-  return {
-    joinedName,
-    state: 'joined',
-    joinAct: { kind: 'join', actor: joinedName, at: now },
-  };
 }
-
-function resolveStandingName(squareState: SquareState, requestedName: string): string {
-  validateName(requestedName);
-  const name = resolveRosterName(squareState, requestedName);
-  if (name === undefined) throw new SquareError('not_joined', `${participantIdentity(requestedName)} has not joined this square`);
-  return name;
+function activityRefusal(code: SquareErrorCode, message: string, facts?: SquareErrorFacts): SquareError {
+  return new SquareError(code, message, { ...facts, activityUnsent: true });
 }
-
-function requireStanding(squareState: SquareState, act: Act): void {
-  const result = validate(foldedState(squareState), act);
-  if (result.ok) return;
-  if (result.reason === 'done') throw new SquareError('already_done', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} is already done`);
-  if (result.reason === 'not_joined') throw new SquareError('not_joined', `${act.actor === undefined ? 'participant' : participantIdentity(act.actor)} has not joined this square`);
-  if (result.reason === 'listening_limit') throw new SquareError('invalid_args', `A participant can listen to at most ${result.limit} others`);
-  throw new Error(`Unexpected standing validation result: ${result.reason}`);
+function resolveStanding(facts: SquareRead, name: string, activity = false): ParticipantFact {
+  if (activity) validateActivityName(name); else validateName(name);
+  const current = facts.participant(name);
+  if (current === undefined) {
+    const message = `${participantIdentity(name)} has not joined this square`;
+    throw activity ? activityRefusal('not_joined', message) : new SquareError('not_joined', message);
+  }
+  return current;
 }
-
+function requireStanding(current: ParticipantFact): void {
+  if (current.done) throw new SquareError('already_done', `${participantIdentity(current.name)} is already done`);
+  if (!current.joined) throw new SquareError('not_joined', `${participantIdentity(current.name)} has not joined this square`);
+}
 export type ActDecision =
-  | {
-      type: 'sent';
-      act: Act;
-      /** The replied-to author was not standing, so the reply landed without reaching them. */
-      replyAuthorNotHere?: string;
-    }
+  | { type: 'sent'; act: TimedAct; replyAuthorNotHere?: string }
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped'; count: number; hardCap: number }
   | { type: 'throttled'; delayMs: number }
   | { type: 'held'; reason: string | undefined }
   | { type: 'bell_quota'; nextAt: number };
 
-const UNREAD_PREVIEW_LIMIT = 3;
-
-/** The unread activity a viewer has not caught up to, grouped by speaker. */
-export function unreadActivitySummaries(squareState: SquareState, name: string, now: number): UnreadActivitySummary[] {
-  const delivery = deriveDeliveryModel(squareState);
-  const delta = actDelta(squareState.acts, delivery.cursorFor(name));
-  const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
-
-  const sayCountByActor = new Map<string, number>();
-  const unreadByParticipant = new Map<string, { count: number; latestAt: number; previews: UnreadActivityPreview[] }>();
-  for (const item of unreadPublic) {
-    if (item.kind === 'say') {
-      const key = item.actor.toLocaleLowerCase();
-      sayCountByActor.set(key, (sayCountByActor.get(key) ?? 0) + 1);
+/** Count the directed suffix, but hydrate only its last three previews per spelling. */
+export function unreadActivitySummaries(facts: SquareRead, name: string, now: number): UnreadActivitySummary[] {
+  let afterIndex = readCursor(facts, name);
+  const numbers = new Map<string, number>();
+  const summaries = new Map<string, { count: number; latestAt: number; previews: { index: number; number: number }[] }>();
+  while (true) {
+    const page = facts.directed(name, { afterIndex }, { edge: 'oldest', limit: FACT_PAGE_SIZE });
+    for (const item of page.items) {
+      const key = nameKey(item.actor);
+      const number = (numbers.get(key) ?? 0) + 1;
+      numbers.set(key, number);
+      const summary = summaries.get(item.actor) ?? { count: 0, latestAt: -Infinity, previews: [] };
+      summary.count++;
+      summary.latestAt = Math.max(summary.latestAt, item.at);
+      summary.previews.push({ index: item.index, number });
+      if (summary.previews.length > 3) summary.previews.shift();
+      summaries.set(item.actor, summary);
     }
-    if (sameName(item.actor, name)) continue;
-    const actorKey = item.actor.toLocaleLowerCase();
-    const currentSummary = unreadByParticipant.get(item.actor);
-    unreadByParticipant.set(item.actor, {
-      count: (currentSummary?.count ?? 0) + 1,
-      latestAt: currentSummary === undefined ? item.at : Math.max(currentSummary.latestAt, item.at),
-      previews: [
-        ...(currentSummary?.previews ?? []),
-        { number: sayCountByActor.get(actorKey) ?? 1, act: item, perception: delivery.perceive(item, name) },
-      ].slice(-UNREAD_PREVIEW_LIMIT),
-    });
+    if (!page.hasMore) break;
+    afterIndex = page.items.at(-1)!.index;
   }
-
-  return [...unreadByParticipant.entries()]
-    .map(([participant, summary]) => ({
-      name: participant,
-      count: summary.count,
-      latestActivityAgeMs: Math.max(0, now - summary.latestAt),
-      previews: summary.previews,
-    }))
-    .sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
+  const selected = facts.activities([...summaries.values()].flatMap((item) => item.previews.map((preview) => preview.index)));
+  const byIndex = new Map(selected.map((item) => [item.index, item]));
+  return [...summaries].map(([name, summary]) => ({
+    name, count: summary.count, latestActivityAgeMs: Math.max(0, now - summary.latestAt),
+    previews: summary.previews.map((preview) => ({ number: preview.number, act: byIndex.get(preview.index) as Extract<StoredAct, { kind: 'say' }>, perception: 'full' as const })),
+  })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
-export function decideAct(
-  squareState: SquareState,
-  input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }
-): ActDecision {
-  const { now, force } = input;
-  const name = resolveStandingName(squareState, input.name);
-  const body = input.body;
-  if (body.trim() === '') throw new SquareError('invalid_args', 'express body cannot be empty');
-  const reach = input.reach;
-  const state = foldedState(squareState);
-  const requestedMentions = input.mentions ?? [];
+export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {
+  const { now, force, body, reach, reply } = input;
+  const current = resolveStanding(facts, input.name, true);
+  const name = current.name;
+  if (body.trim() === '') throw activityRefusal('invalid_args', 'express body cannot be empty');
+  const roster = facts.roster();
+  const joinedNames = roster.filter((participant) => participant.joined).map((participant) => participant.name);
   const mentionNames: string[] = [];
-  const joinedNames = state.participants.filter((participant) => participant.joined).map((participant) => participant.name);
-  for (const requested of requestedMentions) {
-    validateName(requested);
+  const addMention = (resolved: string) => {
+    if (mentionNames.some((existing) => sameName(existing, resolved))) return;
+    if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) throw activityRefusal('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
+    mentionNames.push(resolved);
+  };
+  for (const requested of input.mentions ?? []) {
+    validateActivityName(requested);
     const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
-    if (resolved === undefined) {
-      throw new SquareError('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing' });
-    }
-    if (!mentionNames.some((existing) => sameName(existing, resolved))) {
-      if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {
-        throw new SquareError('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
-      }
-      mentionNames.push(resolved);
-    }
+    if (resolved === undefined) throw activityRefusal('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing' });
+    addMention(resolved);
   }
   if (input.noMention !== true) {
-    // Body @name tokens resolve against the standing roster at landing time; the stored
-    // body never changes, only mention metadata is derived. Explicit --no-mention turns
-    // this scan off entirely.
     const unmatched: MentionCandidate[] = [];
     for (const candidate of scanMentionCandidates(body)) {
       const resolved = resolveNameAt(body, candidate, joinedNames);
-      if (resolved === undefined) {
-        unmatched.push(candidate);
-        continue;
-      }
-      if (!mentionNames.some((existing) => sameName(existing, resolved))) {
-        if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) {
-          throw new SquareError('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
-        }
-        mentionNames.push(resolved);
-      }
+      if (resolved === undefined) unmatched.push(candidate); else addMention(resolved);
     }
-    // A bell already reaches everyone: only there does an unmatched @token stay literal text.
     if (reach !== 'bell' && unmatched.length > 0) {
-      const roster = rosterNames(squareState);
-      const notStanding = unmatched.filter((candidate) => resolveNameAt(body, candidate, roster) !== undefined);
+      const names = roster.map((participant) => participant.name);
+      const notStanding = unmatched.filter((candidate) => resolveNameAt(body, candidate, names) !== undefined);
       const unknown = unmatched.filter((candidate) => !notStanding.includes(candidate));
       const lines: string[] = [];
-      if (unknown.length > 0) {
-        lines.push(`✕ ${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
-      }
-      if (notStanding.length > 0) {
-        lines.push(`✕ ${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
-      }
+      if (unknown.length > 0) lines.push(`✕ ${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
+      if (notStanding.length > 0) lines.push(`✕ ${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
       lines.push('  · wrap literal @text in backticks, or pass --no-mention to land bare');
-      throw new SquareError('invalid_args', lines.join('\n'), { reason: 'unmatched_mention' });
+      throw activityRefusal('invalid_args', lines.join('\n'), { reason: 'unmatched_mention' });
     }
   }
-  if (reach === 'bell' && mentionNames.length > 0) {
-    throw new SquareError('invalid_args', '✕ a bell cannot be combined with a mention — remove --mention or the @name in the body.', { reason: 'bell_mention_conflict' });
+  if (reach === 'bell' && mentionNames.length > 0) throw activityRefusal('invalid_args', '✕ a bell cannot be combined with a mention — remove --mention or the @name in the body.', { reason: 'bell_mention_conflict' });
+  const header = facts.header();
+  if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
+    const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
+    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`);
   }
-  const reply = input.reply;
-  if (reply !== undefined) {
-    if (!Number.isSafeInteger(reply) || reply < 0 || reply >= squareState.runtime.nextActIndex) {
-      const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
-      throw new SquareError('invalid_args', `Unknown reply activity: ${label}`);
-    }
+  const replyAuthor = reply === undefined ? undefined : facts.activity(reply)?.actor;
+  const replyAuthorNotHere = replyAuthor === undefined || sameName(replyAuthor, name) || facts.participant(replyAuthor)?.joined ? undefined : replyAuthor;
+  // Preserve admission priority after metadata validation.
+  if (current.done) throw activityRefusal('already_done', `${name} is already done`);
+  if (!current.joined) throw activityRefusal('not_joined', `${name} has not joined this square`);
+  const hold = facts.hold();
+  if (hold.active) return { type: 'held', reason: hold.reason };
+  if (header.hardCap !== null && current.sayCount >= header.hardCap) return { type: 'capped', count: current.sayCount, hardCap: header.hardCap };
+  if (reach === 'bell') {
+    const recent = facts.recentSayTimes(now - 3600000, 1, name, true);
+    if (recent.length > 0) return { type: 'bell_quota', nextAt: recent[0] + 3600000 };
   }
-  // A non-standing author never rejects the activity: the reply still lands and the
-  // speaker is told the notification did not reach them.
-  const repliedTo = reply === undefined ? undefined : squareState.acts.find((act) => act.index === reply);
-  const repliedToAuthor = repliedTo === undefined ? undefined : actorOf(repliedTo);
-  const replyAuthorNotHere = repliedToAuthor === undefined || sameName(repliedToAuthor, name)
-    || state.participants.some((participant) => participant.joined && sameName(participant.name, repliedToAuthor))
-    ? undefined
-    : repliedToAuthor;
-
-  const result = validate(
-    state,
-    {
-      kind: 'say', actor: name, at: now, body, mentions: mentionNames,
-      ...(reach !== undefined ? { reach } : {}),
-      ...(reply !== undefined ? { reply } : {}),
-    },
-    { hardCap: squareState.hardCap, throttlePerMinute: squareState.throttlePerMinute, throttleWindowMs: THROTTLE_WINDOW_MS }
-  );
-  if (!result.ok) {
-    if (result.reason === 'done') throw new SquareError('already_done', `${name} is already done`);
-    if (result.reason === 'mention_limit') throw new SquareError('invalid_args', `An activity can mention at most ${result.limit} participants`);
-    if (result.reason === 'held') return { type: 'held', reason: result.hold.reason };
-    if (result.reason === 'hard_cap') return { type: 'capped', count: result.count, hardCap: result.hardCap };
-    if (result.reason === 'throttled') return { type: 'throttled', delayMs: result.delayMs };
-    if (result.reason === 'bell_quota') return { type: 'bell_quota', nextAt: result.nextAt };
-    if (result.reason === 'not_joined') throw new SquareError('not_joined', `${name} has not joined this square`);
+  if (header.throttlePerMinute !== undefined) {
+    const recent = facts.recentSayTimes(now - THROTTLE_WINDOW_MS, header.throttlePerMinute);
+    if (recent.length >= header.throttlePerMinute) return { type: 'throttled', delayMs: Math.max(1, recent[0] + THROTTLE_WINDOW_MS - now) };
   }
-
-  const delivery = deriveDeliveryModel(squareState);
-  const delta = actDelta(squareState.acts, delivery.cursorFor(name));
-  const unreadPublic = directedPeerSays(squareState, delta, name, delivery);
-  const activitySummaries = unreadActivitySummaries(squareState, name, now);
-
-  const latestActivityAgeMs = activitySummaries[0]?.latestActivityAgeMs;
-  const hasUnread = unreadPublic.length > 0;
-  const hasFreshUnreadActivity = latestActivityAgeMs !== undefined && latestActivityAgeMs <= UNREAD_BLOCK_GRACE_MS;
-
-  if (!force && hasUnread && !hasFreshUnreadActivity) {
-    return { type: 'blocked', activitySummaries };
+  if (!force) {
+    const activitySummaries = unreadActivitySummaries(facts, name, now);
+    if (activitySummaries.length > 0 && activitySummaries[0].latestActivityAgeMs > UNREAD_BLOCK_GRACE_MS) return { type: 'blocked', activitySummaries };
   }
-
-  return {
-    type: 'sent',
-    act: {
-      kind: 'say', actor: name, at: now, body, mentions: mentionNames,
-      ...(reach !== undefined ? { reach } : {}),
-      ...(reply !== undefined ? { reply } : {}),
-    },
-    ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }),
-  };
+  return { type: 'sent', act: { kind: 'say', actor: name, at: now, body, mentions: mentionNames,
+    ...(reach === undefined ? {} : { reach }), ...(reply === undefined ? {} : { reply }) },
+    ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }) };
 }
 
 export function validateDoneBody(body: unknown): void {
-  if (body !== undefined && body !== '') {
-    throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving');
-  }
+  if (body !== undefined && body !== '') throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving');
 }
-
-export function coreDone(squareState: SquareState, name: string, body: string, now: number): Extract<Act, { kind: 'done' }> {
+export function coreDone(facts: SquareRead, name: string, body: string, now: number): TimedAct<'done'> {
   validateDoneBody(body);
-  const resolvedName = resolveStandingName(squareState, name);
-  const act = { kind: 'done' as const, actor: resolvedName, at: now };
-  requireStanding(squareState, act);
-  return act;
+  const current = resolveStanding(facts, name);
+  requireStanding(current);
+  return { kind: 'done', actor: current.name, at: now };
 }
-
-export function coreListen(squareState: SquareState, actor: string, target: string, now: number): Extract<Act, { kind: 'listen' }> | undefined {
-  const resolvedActor = resolveStandingName(squareState, actor);
+function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore', actor: string, target: string, now: number): TimedAct<'listen' | 'ignore'> | undefined {
+  const current = resolveStanding(facts, actor);
   validateName(target);
-  const state = foldedState(squareState);
-  const act = { kind: 'listen' as const, actor: resolvedActor, target, at: now };
-  requireStanding(squareState, act);
-  return isListening(state, resolvedActor, target) && !isIgnored(state, resolvedActor, target) ? undefined : act;
+  requireStanding(current);
+  const outgoing = facts.attention(current.name);
+  const existing = outgoing.find((item) => sameName(item.target, target));
+  if (kind === 'listen' && existing?.kind !== 'listen' && outgoing.filter((item) => item.kind === 'listen').length >= MAX_IDENTITY_SET_SIZE) {
+    throw new SquareError('invalid_args', `A participant can listen to at most ${MAX_IDENTITY_SET_SIZE} others`);
+  }
+  return existing?.kind === kind ? undefined : { kind, actor: current.name, target, at: now };
+}
+export function coreListen(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'listen', actor, target, now); }
+export function coreIgnore(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'ignore', actor, target, now); }
+export function coreListening(facts: SquareRead, actor: string): readonly string[] {
+  const current = resolveStanding(facts, actor);
+  return facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target);
+}
+export function coreHold(facts: SquareRead, actor: string, body: string, now: number): TimedAct<'hold'> {
+  const current = resolveStanding(facts, actor);
+  requireStanding(current);
+  return { kind: 'hold', actor: current.name, at: now, body: body.replace(/\r\n/g, '\n').trim() };
+}
+export function coreResume(facts: SquareRead, actor: string, now: number): TimedAct<'resume'> {
+  const current = resolveStanding(facts, actor);
+  requireStanding(current);
+  return { kind: 'resume', actor: current.name, at: now };
 }
 
-export function coreIgnore(squareState: SquareState, actor: string, target: string, now: number): Extract<Act, { kind: 'ignore' }> | undefined {
-  const resolvedActor = resolveStandingName(squareState, actor);
-  validateName(target);
-  const state = foldedState(squareState);
-  const act = { kind: 'ignore' as const, actor: resolvedActor, target, at: now };
-  requireStanding(squareState, act);
-  return isIgnored(state, resolvedActor, target) ? undefined : act;
-}
-
-export function coreListening(squareState: SquareState, actor: string): readonly string[] {
-  const resolvedActor = resolveStandingName(squareState, actor);
-  return listeningTo(foldedState(squareState), resolvedActor);
-}
-
-export function coreHold(squareState: SquareState, actor: string, body: string, now: number): Extract<Act, { kind: 'hold' }> {
-  const resolvedName = resolveStandingName(squareState, actor);
-  const act = { kind: 'hold' as const, actor: resolvedName, at: now, body: body.replace(/\r\n/g, '\n').trim() };
-  requireStanding(squareState, act);
-  return act;
-}
-
-export function coreResume(squareState: SquareState, actor: string, now: number): Extract<Act, { kind: 'resume' }> {
-  const resolvedName = resolveStandingName(squareState, actor);
-  const act = { kind: 'resume' as const, actor: resolvedName, at: now };
-  requireStanding(squareState, act);
-  return act;
-}
-
+export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
 export interface ParticipantStatus {
   name: string;
   state: 'active' | 'done' | 'not joined';
@@ -344,13 +207,9 @@ export interface ParticipantStatus {
   unreadActivityCount: number;
   pendingMentionCount: number;
 }
-
-export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
-
 export function compareParticipantActivity(a: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>, b: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>): number {
   return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
 }
-
 export interface StatusResult {
   hardCap: HardCap;
   throttlePerMinute: number | undefined;
@@ -364,113 +223,30 @@ export interface StatusResult {
   latestAct: StoredAct | undefined;
   now: number;
 }
-
-function buildParticipantStatuses(squareState: SquareState, now: number, state = foldedState(squareState), suppliedDelivery?: DeliveryModel): ParticipantStatus[] {
-  const delivery = suppliedDelivery ?? deriveDeliveryModel(squareState);
-  return state.participants.map((snapshot): ParticipantStatus => {
-    const participant = snapshot.name;
-    let lastActiveAt = snapshot.lastActiveAt;
-    // Receipt time is evidence of catching; the consumed activity's time is not.
-    if (snapshot.joined) {
-      for (const observation of Object.values(squareState.runtime.observations[participant] ?? {})) {
-        if (observation.state === 'seen') lastActiveAt = Math.max(lastActiveAt ?? -Infinity, observation.at);
-      }
-    }
-    const presence: CorePresenceState = snapshot.done ? 'done' : !snapshot.joined ? 'never-joined'
-      : freshWatchLease(squareState, participant, now) !== undefined ? 'watching' : 'active';
-    const participantStatus = snapshot?.done ? 'done' : snapshot?.joined ? 'active' : 'not joined';
-    const consumedThrough = delivery.cursorFor(participant);
-    let unreadActivityCount = 0;
-    if (snapshot?.joined) {
-      for (const act of squareState.acts) {
-        if (actStableIndex(act) <= consumedThrough) continue;
-        if (directedPeerSays(squareState, [act], participant, delivery).length > 0) unreadActivityCount++;
-      }
+export function coreParticipants(facts: SquareRead, now: number): ParticipantStatus[] {
+  return facts.roster().map((current): ParticipantStatus => {
+    let lastActiveAt = current.lastActiveAt;
+    if (current.joined) {
+      const seenAt = facts.receiptFacts(current.name, current.lastJoinIndex ?? -1).latestAt;
+      if (seenAt !== undefined) lastActiveAt = Math.max(lastActiveAt ?? -Infinity, seenAt);
     }
     return {
-      name: participant,
-      state: participantStatus,
-      listening: listeningTo(state, participant),
-      activityCount: snapshot?.activityCount ?? 0,
-      lastActiveAt,
-      presence,
-      unreadActivityCount,
-      pendingMentionCount: snapshot?.joined ? delivery.pendingFor(participant).length : 0,
+      name: current.name, state: current.done ? 'done' : current.joined ? 'active' : 'not joined',
+      listening: facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target),
+      activityCount: current.sayCount, lastActiveAt,
+      presence: current.done ? 'done' : !current.joined ? 'never-joined' : freshWatchLease(facts, current.name, now) !== undefined ? 'watching' : 'active',
+      unreadActivityCount: current.joined ? facts.directedCount(current.name, { afterIndex: readCursor(facts, current.name) }) : 0,
+      pendingMentionCount: current.joined ? facts.directedCount(current.name, { afterIndex: current.lastJoinIndex ?? -1, unseenOnly: true }) : 0,
     };
   }).sort(compareParticipantActivity);
 }
-
-export function coreStatus(squareState: SquareState, now: number, delivery?: DeliveryModel): StatusResult {
-  const state = foldedState(squareState);
-  const latestAct = publicActs(squareState.acts).at(-1);
+export function coreStatus(facts: SquareRead, now: number): StatusResult {
+  const header = facts.header(), hold = facts.hold(), roster = facts.roster();
+  const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
   return {
-    hardCap: squareState.hardCap,
-    throttlePerMinute: squareState.throttlePerMinute,
-    activeCount: state.joined.length,
-    doneCount: state.done.length,
-    holdActive: state.hold.active,
-    holdReason: state.hold.reason,
-    holdActor: state.hold.actor,
-    holdAt: state.hold.at,
-    participants: buildParticipantStatuses(squareState, now, state, delivery),
-    latestAct,
-    now,
+    hardCap: header.hardCap, throttlePerMinute: header.throttlePerMinute,
+    activeCount: roster.filter((item) => item.joined).length, doneCount: roster.filter((item) => item.done).length,
+    holdActive: hold.active, holdReason: hold.reason, holdActor: hold.actor, holdAt: hold.at,
+    participants: coreParticipants(facts, now), latestAct: latest === undefined ? undefined : facts.activity(latest.index), now,
   };
-}
-
-export function coreParticipants(squareState: SquareState, now: number, delivery?: DeliveryModel): ParticipantStatus[] {
-  return buildParticipantStatuses(squareState, now, undefined, delivery);
-}
-
-export function coreActivities(squareState: SquareState, opts: ActivitiesOptions, suppliedDelivery?: DeliveryModel): StoredAct[] {
-  const participants = opts.participants ?? [];
-  const canonicalParticipants = participants.map((participant) => resolveKnownName(squareState, participant));
-  let acts = [...squareState.acts];
-  let delivery = suppliedDelivery;
-  const projected = (): DeliveryModel => delivery ??= deriveDeliveryModel(squareState);
-
-  // --at establishes one or more context windows first; other filters AND inside their union.
-  if (opts.atIndexes !== undefined && opts.atIndexes.length > 0) {
-    const before = opts.beforeContext ?? 0;
-    const after = opts.afterContext ?? 0;
-    const selected = new Set<number>();
-    for (const atIndex of opts.atIndexes) {
-      const centerPos = acts.findIndex((act) => act.index === atIndex);
-      if (centerPos < 0) continue;
-      for (const act of acts.slice(Math.max(0, centerPos - before), centerPos + after + 1)) selected.add(act.index);
-    }
-    acts = acts.filter((act) => selected.has(act.index));
-  }
-  if (opts.afterIndex != null) acts = acts.filter((act) => act.index > opts.afterIndex!);
-  if (opts.beforeIndex != null) acts = acts.filter((act) => act.index < opts.beforeIndex!);
-  if (canonicalParticipants.length > 0) {
-    acts = acts.filter(
-      (act) =>
-        act.actor !== undefined && canonicalParticipants.some((participant) => sameName(participant, act.actor!))
-    );
-  }
-  if (opts.after != null) acts = acts.filter((act) => act.at > opts.after!);
-  if (opts.mention != null) {
-    const mention = resolveKnownName(squareState, opts.mention);
-    acts = acts.filter((act) => act.kind === 'say' && projected().plan(act).some((item) => sameName(item.recipient, mention)));
-  }
-  const search = opts.grep !== undefined ? { pattern: opts.grep, fixed: false } : opts.fixed !== undefined ? { pattern: opts.fixed, fixed: true } : undefined;
-  if (search !== undefined && search.pattern !== '') {
-    // Search only the public activity model rendered by history, but include all
-    // of its user-facing fields rather than coupling matching to rendered text.
-    acts = acts.filter((act) => act.kind === 'say' || act.kind === 'done');
-    const re = compileSearchPattern(search.pattern, search.fixed);
-    acts = acts.filter((act) => [
-      actId(act.index),
-      act.actor ?? '',
-      'body' in act && typeof act.body === 'string' ? act.body : '',
-    ].some((field) => re.test(field)));
-  }
-
-  if (opts.order === 'desc') {
-    acts = [...acts].sort((a, b) => b.index - a.index || b.at - a.at);
-  } else {
-    acts = [...acts].sort((a, b) => a.index - b.index || a.at - b.at);
-  }
-  return acts;
 }

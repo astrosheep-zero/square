@@ -4,375 +4,394 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isDeepStrictEqual } from 'node:util';
 import { observeFileVersion } from './file-changes.js';
-
+import { canonicalPath } from './canonical-path.js';
 import { InternalSquareError, SquareError, type SquareState } from './model.js';
-import { createSquareState, emptyRuntimeState, validateSquareState } from './square-state.js';
-
-const APPLICATION_ID = 0x53515245;
-const USER_VERSION = 1;
-const SNAPSHOT_TABLE = 'square_snapshot';
-const SNAPSHOT_DDL = `CREATE TABLE ${SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
-const SNAPSHOT_COLUMNS = [
-  { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },
-  { cid: 1, name: 'revision', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
-  { cid: 2, name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
-] as const;
-
+import type { SquareArtifactPort, SquareRead, SquareWrite } from './ports.js';
+import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
+import { APPLICATION_ID, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader } from './square-sqlite.js';
 export { createSquareState, emptyRuntimeState } from './square-state.js';
-
-export interface DoctorProblem { kind: string; message: string; }
-export interface DiagnoseResult { unfixable?: string; problems: DoctorProblem[]; state?: SquareState; }
-export interface SquareSnapshot { readonly state: SquareState; readonly revision: number; }
-
-function invalidArtifact(detail: string): SquareError {
-  return new SquareError('invalid_args', `Invalid square artifact: ${detail}`);
+export interface DoctorProblem {
+    kind: string;
+    message: string;
 }
-
-function requireSquareExtension(squarePath: string): void {
-  if (!squarePath.endsWith('.square')) throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${squarePath}`);
+export interface DiagnoseResult {
+    unfixable?: string;
+    migrationRequired?: string;
+    problems: DoctorProblem[];
+    standingCount?: number;
 }
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof Error && /unable to open database file|no such file|SQLITE_CANTOPEN/i.test(error.message);
+export interface SquareSnapshot {
+    readonly state: SquareState;
+    readonly revision: number;
 }
-
-function isNotADatabase(error: unknown): boolean {
-  return error instanceof Error && /not a database|file is not a database|SQLITE_NOTADB/i.test(error.message);
+function requireSquareExtension(location: string): void {
+    if (!location.endsWith('.square'))
+        throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${location}`);
 }
-
-function openExistingDatabase(squarePath: string): DatabaseSync {
-  const uri = pathToFileURL(path.resolve(squarePath));
-  uri.searchParams.set('mode', 'rw');
-  try {
-    return new DatabaseSync(uri.href);
-  } catch (error) {
-    if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
-    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
-    throw error;
-  }
-}
-
-function closeQuietly(database: DatabaseSync | undefined): void {
-  try { database?.close(); } catch { /* closing does not alter the primary failure */ }
-}
-
-function parseState(state: unknown): SquareState {
-  if (typeof state !== 'string') throw invalidArtifact('snapshot state is malformed.');
-  try { return validateSquareState(JSON.parse(state) as unknown); } catch (error) {
-    if (error instanceof SquareError) throw error;
-    throw invalidArtifact('snapshot state is not valid JSON.');
-  }
-}
-
-function normalizedSql(sql: string): string {
-  return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
-}
-
-function isOwnedSnapshotSchema(database: DatabaseSync): boolean {
-  const objects = database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
-    .all() as { type?: unknown; name?: unknown; tbl_name?: unknown; sql?: unknown }[];
-  if (objects.length !== 1) return false;
-  const [object] = objects;
-  if (object.type !== 'table' || object.name !== SNAPSHOT_TABLE || object.tbl_name !== SNAPSHOT_TABLE
-    || typeof object.sql !== 'string' || normalizedSql(object.sql) !== normalizedSql(SNAPSHOT_DDL)) return false;
-  const columns = database.prepare('SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid')
-    .all(SNAPSHOT_TABLE) as { cid?: unknown; name?: unknown; type?: unknown; notnull?: unknown; dflt_value?: unknown; pk?: unknown; hidden?: unknown }[];
-  return columns.length === SNAPSHOT_COLUMNS.length && columns.every((column, index) => {
-    const expected = SNAPSHOT_COLUMNS[index];
-    return column.cid === expected.cid && column.name === expected.name && column.type === expected.type
-      && column.notnull === expected.notnull && column.dflt_value === expected.dflt_value
-      && column.pk === expected.pk && column.hidden === expected.hidden;
-  });
-}
-
-function validateDatabaseHeader(database: DatabaseSync): void {
-  const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
-  if (identity.application_id !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
-  if (identity.user_version !== USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
-  if (!isOwnedSnapshotSchema(database)) throw invalidArtifact('unsupported snapshot schema.');
-}
-
-function validateSnapshotRevision(rows: readonly { id?: unknown; revision?: unknown }[]): number {
-  if (rows.length !== 1 || rows[0].id !== 1 || !Number.isSafeInteger(rows[0].revision) || (rows[0].revision as number) < 0) throw invalidArtifact('snapshot row is malformed.');
-  return rows[0].revision as number;
-}
-
-function validateDatabase(database: DatabaseSync): SquareSnapshot {
-  try {
-    validateDatabaseHeader(database);
-    const rows = database.prepare(`SELECT id, revision, state FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown; state?: unknown }[];
-    const revision = validateSnapshotRevision(rows);
-    return { state: parseState(rows[0].state), revision };
-  } catch (error) {
-    if (error instanceof SquareError) throw error;
-    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
-    throw error;
-  }
-}
-
-/** Opens an existing artifact without permitting SQLite to create a missing path. */
-function readExistingArtifact<T>(squarePath: string, read: (database: DatabaseSync) => T): T {
-  requireSquareExtension(squarePath);
-  let database: DatabaseSync | undefined;
-  try {
-    database = openExistingDatabase(squarePath);
-    return read(database);
-  } catch (error) {
-    if (error instanceof SquareError) throw error;
-    if (isNotFound(error)) throw new InternalSquareError('not_found', `square file not found: ${squarePath}`);
-    if (isNotADatabase(error)) throw invalidArtifact('not a SQLite database.');
-    throw error;
-  } finally {
-    closeQuietly(database);
-  }
-}
-
-function readSquareSnapshotOnce(squarePath: string): SquareSnapshot {
-  return readExistingArtifact(squarePath, validateDatabase);
-}
-
-async function createTemporaryArtifact(squarePath: string): Promise<string> {
-  const directory = path.dirname(squarePath);
-  await fs.promises.mkdir(directory, { recursive: true });
-  while (true) {
-    const temporary = path.join(directory, `.${path.basename(squarePath)}.${process.pid}.${randomUUID()}.tmp`);
-    try {
-      const handle = await fs.promises.open(temporary, 'wx');
-      await handle.close();
-      return temporary;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
-      throw error;
-    }
-  }
-}
-
-async function syncTemporaryArtifact(temporary: string): Promise<void> {
-  // Windows FlushFileBuffers requires a writable handle; r+ never creates a missing file.
-  const handle = await fs.promises.open(temporary, 'r+');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-function initializeDatabase(squarePath: string, state: SquareState): void {
-  const encoded = JSON.stringify(state);
-  let database: DatabaseSync | undefined;
-  try {
-    database = openExistingDatabase(squarePath);
-    database.exec(`PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${USER_VERSION}; ${SNAPSHOT_DDL};`);
-    database.prepare(`INSERT INTO ${SNAPSHOT_TABLE} (id, revision, state) VALUES (1, 0, ?)`).run(encoded);
-    database.exec('COMMIT;');
-  } catch (error) {
-    try { database?.exec('ROLLBACK;'); } catch { /* retain initialization failure */ }
-    throw error;
-  } finally {
-    closeQuietly(database);
-  }
-}
-
-/** Creates a new SQLite artifact only when its pathname did not already exist. */
-export async function createSquareFile(squarePath: string, state: SquareState): Promise<boolean> {
-  requireSquareExtension(squarePath);
-  const validated = validateSquareState(state);
-  const temporary = await createTemporaryArtifact(squarePath);
-  try {
-    initializeDatabase(temporary, validated);
-    await syncTemporaryArtifact(temporary);
-    try {
-      await fs.promises.link(temporary, squarePath);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw error;
-    }
-  } finally {
-    try { await fs.promises.unlink(temporary); } catch { /* cleanup cannot invalidate a published artifact */ }
-  }
-}
-
 function isBusy(error: unknown): boolean {
-  return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
+    return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (typeof value === 'object' || typeof value === 'function') && value !== null
-    && typeof (value as { then?: unknown }).then === 'function';
+function storageError(error: unknown, location: string): unknown {
+    if (!(error instanceof Error) || error instanceof SquareError || error instanceof InternalSquareError)
+        return error;
+    if (/unable to open database file|no such file|SQLITE_CANTOPEN/i.test(error.message))
+        return new InternalSquareError('not_found', `square file not found: ${location}`);
+    if (/not a database|SQLITE_NOTADB/i.test(error.message))
+        return invalidArtifact('not a SQLite database.');
+    return error;
 }
-
-function discardThenable(value: PromiseLike<unknown>): void {
-  void Promise.resolve(value).catch(() => undefined);
-}
-
-function closedError(): Error {
-  return new Error('Square artifact is closed');
-}
-
-async function pauseForBusy(signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) throw signal.reason ?? closedError();
-  try {
-    await sleep(25, undefined, { signal });
-  } catch (error) {
-    if (signal?.aborted) throw signal.reason ?? closedError();
-    throw error;
-  }
-}
-
-/**
- * Reads a complete validated snapshot, yielding between transient SQLite lock
- * conflicts. The URI remains create-disabled throughout the retry loop.
- */
-export function readSquareSnapshot(squarePath: string, signal?: AbortSignal): Promise<SquareSnapshot> {
-  return readWithBusyRetry(() => readSquareSnapshotOnce(squarePath), signal);
-}
-
-/** Check the artifact revision without loading or parsing the historical state. */
-export function readSquareRevision(squarePath: string, signal?: AbortSignal): Promise<number> {
-  return readWithBusyRetry(() => readExistingArtifact(squarePath, (database) => {
-    validateDatabaseHeader(database);
-    const rows = database.prepare(`SELECT id, revision FROM ${SNAPSHOT_TABLE}`).all() as { id?: unknown; revision?: unknown }[];
-    return validateSnapshotRevision(rows);
-  }), signal);
-}
-
-/** One reference-counted revision detector per canonical artifact in this process. */
-export function observeSquareRevision(squarePath: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
-  return observeFileVersion(squarePath, 'square-revision', async (file, signal) => {
-    try { return await readSquareRevision(file, signal); }
-    catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
-      if (error instanceof InternalSquareError && error.code === 'not_found') return null;
-      throw error;
-    }
-  });
-}
-
-async function readWithBusyRetry<T>(read: () => T, signal?: AbortSignal): Promise<T> {
-  while (true) {
-    if (signal?.aborted) throw signal.reason ?? closedError();
+/** Private artifact-boundary connection shared with explicit migration. Never creates a path. */
+export function openExistingSquareDatabase(location: string): DatabaseSync {
+    requireSquareExtension(location);
+    const uri = pathToFileURL(path.resolve(location));
+    uri.searchParams.set('mode', 'rw');
     try {
-      return read();
-    } catch (error) {
-      if (!isBusy(error)) throw error;
-      await pauseForBusy(signal);
+        return new DatabaseSync(uri.href);
     }
-  }
+    catch (error) {
+        throw storageError(error, location);
+    }
 }
-
-export type SquareTransition<R> = (state: SquareState, revision: number) => { state?: SquareState; result: R };
-
-/**
- * Executes one synchronous SquareState transition under SQLite's write lock.
- * A busy COMMIT retries on this same transaction, so fn is never replayed.
- */
-export async function transactSquareSnapshot<R>(
-  squarePath: string,
-  fn: SquareTransition<R>,
-  signal?: AbortSignal,
-  forceCommit = false,
-): Promise<{ result: R; revision: number; changed: boolean }> {
-  requireSquareExtension(squarePath);
-  let database: DatabaseSync | undefined;
-  let begun = false;
-  try {
-    database = openExistingDatabase(squarePath);
-    // Validate before any persistent pragma can touch an unsupported artifact.
+function abort(signal?: AbortSignal): void {
+    if (signal?.aborted)
+        throw signal.reason ?? new Error('Square artifact operation aborted');
+}
+export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSignal): Promise<T> {
     while (true) {
-      try {
-        validateDatabase(database);
-        break;
-      } catch (error) {
-        if (!isBusy(error)) throw error;
-        await pauseForBusy(signal);
-      }
+        abort(signal);
+        try {
+            return operation();
+        }
+        catch (error) {
+            if (!isBusy(error))
+                throw error;
+            try {
+                await sleep(25, undefined, { signal });
+            }
+            catch (error) {
+                abort(signal);
+                throw error;
+            }
+        }
     }
-    while (true) {
-      if (signal?.aborted) throw signal.reason ?? closedError();
-      try {
-        database.exec('PRAGMA busy_timeout = 0; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;');
-        database.exec('BEGIN IMMEDIATE;');
-        begun = true;
-        break;
-      } catch (error) {
-        if (!isBusy(error)) throw error;
-        await pauseForBusy(signal);
-      }
+}
+function synchronous(value: unknown): void {
+    if (value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as {
+        then?: unknown;
+    }).then === 'function') {
+        void Promise.resolve(value).catch(() => undefined);
+        throw new TypeError('Square artifact callbacks must be synchronous.');
     }
-    const current = validateDatabase(database);
-    const outcome = fn(structuredClone(current.state), current.revision);
-    if (isThenable(outcome)) {
-      discardThenable(outcome);
-      throw new TypeError('Square artifact transitions must be synchronous.');
-    }
-    if (typeof outcome !== 'object' || outcome === null || !Object.hasOwn(outcome, 'result')) {
-      throw new TypeError('Square artifact transition must return { state?, result }.');
-    }
-    if (outcome.state === undefined || (!forceCommit && isDeepStrictEqual(outcome.state, current.state))) {
-      database.exec('ROLLBACK;');
-      begun = false;
-      return { result: outcome.result, revision: current.revision, changed: false };
-    }
-    const state = validateSquareState(outcome.state);
-    if (current.revision === Number.MAX_SAFE_INTEGER) {
-      throw invalidArtifact('snapshot revision cannot advance beyond the safe integer limit.');
-    }
-    const revision = current.revision + 1;
-    database.prepare(`UPDATE ${SNAPSHOT_TABLE} SET revision = ?, state = ? WHERE id = 1`)
-      .run(revision, JSON.stringify(state));
-    while (true) {
-      if (signal?.aborted) throw signal.reason ?? closedError();
-      try {
-        database.exec('COMMIT;');
+}
+/** Acquisition may retry; after change starts, only COMMIT retries, retaining its result. */
+export async function inSqliteTransaction<T>(db: DatabaseSync, write: boolean, validate: () => void, change: () => T, signal?: AbortSignal): Promise<T> {
+    let begun = false;
+    try {
+        await retrySqliteBusy(() => {
+            db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
+            begun = true;
+            try {
+                validate();
+            }
+            catch (error) {
+                db.exec('ROLLBACK');
+                begun = false;
+                throw error;
+            }
+        }, signal);
+        abort(signal);
+        const result = change();
+        synchronous(result);
+        await retrySqliteBusy(() => db.exec('COMMIT'), signal);
         begun = false;
-        return { result: outcome.result, revision, changed: true };
-      } catch (error) {
-        if (!isBusy(error)) throw error;
-        await pauseForBusy(signal);
-      }
+        return result;
     }
-  } catch (error) {
-    if (begun) {
-      try { database?.exec('ROLLBACK;'); } catch { /* retain callback and SQLite failures */ }
+    catch (error) {
+        if (begun) {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch { /* retain the original failure */ }
+        }
+        throw error;
     }
-    throw error;
-  } finally {
-    closeQuietly(database);
-  }
 }
-
-/** Replaces an existing validated snapshot in place and always advances its revision. */
-export async function replaceSquareSnapshot(squarePath: string, state: SquareState): Promise<SquareSnapshot> {
-  const replacement = structuredClone(validateSquareState(state));
-  const committed = await transactSquareSnapshot(
-    squarePath,
-    () => ({ state: replacement, result: undefined }),
-    undefined,
-    true,
-  );
-  return { state: replacement, revision: committed.revision };
+const readMethods: readonly (keyof SquareRead)[] = [
+    'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
+    'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
+    'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
+    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'routes',
+];
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'replaceRoutes'];
+/** One connection, ordered operations, guarded synchronous transaction capabilities. */
+export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
+    let database: DatabaseSync | undefined;
+    let closed = false, inCallback = false;
+    let tail: Promise<void> = Promise.resolve();
+    const cancel = new AbortController();
+    const canonical = initial === undefined ? canonicalPath(location) : Promise.resolve(location);
+    if (initial !== undefined) {
+        database = new DatabaseSync(':memory:');
+        try {
+            initializeSqlite(database, initial);
+            database.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=2`);
+        }
+        catch (error) {
+            database.close();
+            throw error;
+        }
+    }
+    const combined = (signal?: AbortSignal) => AbortSignal.any([cancel.signal, ...(externalSignal ? [externalSignal] : []), ...(signal ? [signal] : [])]);
+    const validate = (db: DatabaseSync) => validateSqliteHeader(db, initial === undefined ? location : ':memory:');
+    async function connection(signal: AbortSignal): Promise<DatabaseSync> {
+        if (database)
+            return database;
+        location = await canonical;
+        abort(signal);
+        database = openExistingSquareDatabase(location);
+        try {
+            await retrySqliteBusy(() => validate(database!), signal);
+            database.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
+        }
+        catch (error) {
+            database.close();
+            database = undefined;
+            throw storageError(error, location);
+        }
+        return database;
+    }
+    function queue<T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (inCallback)
+            throw new TypeError('Square artifact operations cannot nest inside a callback.');
+        if (closed)
+            return Promise.reject(new Error('Square artifact is closed'));
+        const operationSignal = combined(signal);
+        const result = tail.then(() => {
+            abort(operationSignal);
+            return operation(operationSignal);
+        });
+        tail = result.then(() => undefined, () => undefined);
+        return result;
+    }
+    async function transaction<R>(callback: (facts: SquareRead | SquareWrite) => R, write: boolean, signal: AbortSignal) {
+        const db = await connection(signal);
+        return inSqliteTransaction(db, write, () => validate(db), () => {
+            const driver = createSqliteDriver(db), version = driver.header().revision;
+            let active = true, failed = false, failure: unknown;
+            function guard<F extends (...args: never[]) => unknown>(fn: F): F {
+                return ((...args: never[]) => {
+                    if (!active)
+                        throw new Error('Square artifact transaction capability expired');
+                    abort(signal);
+                    if (failed)
+                        throw failure;
+                    try {
+                        return fn(...args);
+                    }
+                    catch (error) {
+                        failed = true;
+                        failure = storageError(error, location);
+                        throw failure;
+                    }
+                }) as F;
+            }
+            const reads = Object.fromEntries(readMethods.map(name => [name, guard(driver[name] as (...args: never[]) => unknown)])) as unknown as SquareRead;
+            const writes = Object.fromEntries(writeMethods.map(name => [name, guard(driver[name] as (...args: never[]) => unknown)])) as unknown as LandingWriter;
+            const facts = write ? wrapSquareWrite(reads, writes) : reads;
+            let value: R;
+            inCallback = true;
+            try {
+                value = callback(facts);
+                synchronous(value);
+            }
+            finally {
+                inCallback = false;
+                active = false;
+            }
+            if (failed)
+                throw failure;
+            const changed = write && driver.changed;
+            if (changed) {
+                if (version === Number.MAX_SAFE_INTEGER)
+                    throw invalidArtifact('revision cannot advance beyond the safe integer limit.');
+                db.prepare('UPDATE square_meta SET revision=? WHERE id=1').run(version + 1);
+            }
+            return {
+                value, version: version + Number(changed), changed
+            };
+        }, signal);
+    }
+    const revision: SquareArtifactPort['revision'] = signal => queue(async (s) => {
+        const db = await connection(s);
+        return inSqliteTransaction(db, false, () => validate(db), () => createSqliteDriver(db).header().revision, s);
+    }, signal);
+    return {
+        read: (select, signal) => queue(async (s) => {
+            const { value, version } = await transaction(select, false, s);
+            return { value, version };
+        }, signal),
+        transact: (change, signal) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s), signal),
+        revision,
+        async changed(since, timeout, signal) {
+            if (inCallback)
+                throw new TypeError('Square artifact operations cannot nest inside a callback.');
+            if (closed)
+                return false;
+            const s = combined(signal), deadline = Date.now() + Math.max(0, timeout);
+            if (initial !== undefined) {
+                try {
+                    do {
+                        if (await revision(s) > since)
+                            return true;
+                        if (Date.now() >= deadline)
+                            return false;
+                        await sleep(Math.min(25, deadline - Date.now()), undefined, { signal: s });
+                    } while (!closed);
+                }
+                catch (error) {
+                    if (closed)
+                        return false;
+                    abort(s);
+                    throw error;
+                }
+                return false;
+            }
+            const observer = await observeSquareRevision(await canonical);
+            try {
+                return await observer.changed(since, Math.max(0, deadline - Date.now()), s);
+            }
+            catch (error) {
+                if (closed)
+                    return false;
+                throw error;
+            }
+            finally {
+                observer.close();
+            }
+        },
+        async close() {
+            if (inCallback)
+                throw new TypeError('Square artifact cannot close inside a callback.');
+            if (closed) {
+                await tail;
+                return;
+            }
+            closed = true;
+            cancel.abort(new Error('Square artifact is closed'));
+            await tail;
+            database?.close();
+            database = undefined;
+        },
+    };
 }
-
-export async function writeSquareFile(squarePath: string, squareState: SquareState): Promise<void> {
-  requireSquareExtension(squarePath);
-  if (await createSquareFile(squarePath, squareState)) return;
-  await replaceSquareSnapshot(squarePath, squareState);
+async function temporaryArtifact(location: string): Promise<string> {
+    await fs.promises.mkdir(path.dirname(location), { recursive: true });
+    const temporary = path.join(path.dirname(location), `.${path.basename(location)}.${process.pid}.${randomUUID()}.tmp`);
+    const handle = await fs.promises.open(temporary, 'wx');
+    await handle.close();
+    return temporary;
 }
-
-export async function loadSquare(squarePath: string): Promise<SquareState> {
-  return structuredClone((await readSquareSnapshot(squarePath)).state);
+async function initializeFile(location: string, state: SquareState): Promise<void> {
+    const db = new DatabaseSync(location);
+    try {
+        db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL');
+        await inSqliteTransaction(db, true, () => { }, () => {
+            initializeSqlite(db, state);
+            db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=2`);
+        });
+    }
+    finally {
+        db.close();
+    }
+    const handle = await fs.promises.open(location, 'r+');
+    try {
+        await handle.sync();
+    }
+    finally {
+        await handle.close();
+    }
 }
-
-export async function probeSquare(squarePath: string): Promise<SquareState | undefined> {
-  if (!squarePath.endsWith('.square')) return undefined;
-  try { return structuredClone(readSquareSnapshotOnce(squarePath).state); } catch { return undefined; }
+/** New-format creation; initial authority is accepted only at this explicit boundary. */
+export async function createSquareFile(location: string, state: SquareState): Promise<boolean> {
+    requireSquareExtension(location);
+    const temporary = await temporaryArtifact(location);
+    try {
+        await initializeFile(temporary, state);
+        try {
+            await fs.promises.link(temporary, location);
+            return true;
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+                return false;
+            throw error;
+        }
+    }
+    finally {
+        await fs.promises.unlink(temporary).catch(() => undefined);
+    }
 }
-
-export async function diagnoseSquareFile(squarePath: string): Promise<DiagnoseResult> {
-  try { return { problems: [], state: await loadSquare(squarePath) }; } catch (error) {
-    return { unfixable: error instanceof Error ? error.message : String(error), problems: [] };
-  }
+/** Explicit build --force / fixture import, never a runtime state-replacement callback. */
+export async function writeSquareFile(location: string, state: SquareState): Promise<void> {
+    if (await createSquareFile(location, state))
+        return;
+    const db = openExistingSquareDatabase(location);
+    try {
+        await retrySqliteBusy(() => validateSqliteHeader(db, location));
+        db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
+        await inSqliteTransaction(db, true, () => validateSqliteHeader(db, location), () => {
+            const revision = createSqliteDriver(db).header().revision;
+            if (revision === Number.MAX_SAFE_INTEGER)
+                throw invalidArtifact('revision cannot advance beyond the safe integer limit.');
+            for (const table of ['landed_audience', 'attention', 'participants', 'routes', 'catch_leases', 'receipts', 'activities', 'square_meta'])
+                db.exec(`DROP TABLE ${table}`);
+            initializeSqlite(db, state, revision + 1);
+        });
+    }
+    finally {
+        db.close();
+    }
+}
+async function inspectFile<R>(location: string, select: (db: DatabaseSync) => R, signal?: AbortSignal): Promise<R> {
+    const db = openExistingSquareDatabase(location);
+    try {
+        return await inSqliteTransaction(db, false, () => validateSqliteHeader(db, location), () => select(db), signal);
+    }
+    catch (error) {
+        throw storageError(error, location);
+    }
+    finally {
+        db.close();
+    }
+}
+/** Explicit test/export projection. Hot callers must use the typed port. */
+export function readSquareSnapshot(location: string, signal?: AbortSignal): Promise<SquareSnapshot> {
+    return inspectFile(location, db => ({ state: exportSqliteState(db), revision: createSqliteDriver(db).header().revision }), signal);
+}
+export function readSquareRevision(location: string, signal?: AbortSignal): Promise<number> {
+    return inspectFile(location, db => createSqliteDriver(db).header().revision, signal);
+}
+export function observeSquareRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+    return observeFileVersion(location, 'square-revision', async (file, signal) => {
+        try {
+            return await readSquareRevision(file, signal);
+        }
+        catch (error) {
+            abort(signal);
+            if (error instanceof InternalSquareError && error.code === 'not_found')
+                return null;
+            throw error;
+        }
+    });
+}
+export async function diagnoseSquareFile(location: string): Promise<DiagnoseResult> {
+    try {
+        return { problems: [], ...await inspectFile(location, inspectSqlite) };
+    }
+    catch (error) {
+        if (error instanceof SquareError && error.facts?.reason === 'migration_required')
+            return { migrationRequired: error.message, problems: [] };
+        return { unfixable: error instanceof Error ? error.message : String(error), problems: [] };
+    }
 }

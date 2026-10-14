@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
 import { Square, SquareError } from '../dist/index.js';
 import { createSquareApplication } from '../dist/square-application.js';
 import { build, persistSquare, run, tempSquare, withName } from './square-cli-helpers.js';
@@ -43,7 +43,7 @@ test('done remains bodyless after reaching the cap and while a hand is raised', 
     await bob.hold('pause');
     await alice.done('');
   }, { hardCap: 1 });
-  const state = await loadSquare(file);
+  const state = (await readSquareSnapshot(file)).state;
   assert.deepEqual(state.acts.map((activity) => activity.kind), ['join', 'join', 'say', 'hold', 'done']);
   assert.equal(Object.hasOwn(state.acts.at(-1), 'body'), false);
 });
@@ -54,18 +54,18 @@ test('application rejects done bodies before joining or rejoining', async () => 
   const app = createSquareApplication({ cwd: path.dirname(file), env: { ...process.env }, squarePath: file, participant: 'Alice' });
   for (const body of ['a message', ' \n', null, false]) {
     await assert.rejects(() => app.done(body), rejectsDoneBody);
-    assert.deepEqual((await loadSquare(file)).acts, []);
+    assert.deepEqual((await readSquareSnapshot(file)).state.acts, []);
   }
   await app.join();
   await app.done();
-  const before = (await loadSquare(file)).acts;
+  const before = (await readSquareSnapshot(file)).state.acts;
   await assert.rejects(() => app.done('another message'), rejectsDoneBody);
-  assert.deepEqual((await loadSquare(file)).acts, before);
+  assert.deepEqual((await readSquareSnapshot(file)).state.acts, before);
 });
 
 test('CLI done rejects argument and stdin payloads without leaving or posting', async () => {
   const file = await persistSquare(async ({ square }) => { await square.join('Alice'); });
-  const before = (await loadSquare(file)).acts;
+  const before = (await readSquareSnapshot(file)).state.acts;
   const attempts = [
     { args: ['done', 'a message'] },
     { args: ['done', ' \n'] },
@@ -79,11 +79,11 @@ test('CLI done rejects argument and stdin payloads without leaving or posting', 
     assert.equal(result.status, 2, result.stdout + result.stderr);
     assert.match(result.stderr, /done only leaves the square and does not accept a message/);
     assert.match(result.stderr, /square done --help\n$/);
-    assert.deepEqual((await loadSquare(file)).acts, before);
+    assert.deepEqual((await readSquareSnapshot(file)).state.acts, before);
   }
   const result = run(withName(file, 'Alice', ['done']));
   assert.equal(result.status, 0, result.stderr);
-  const acts = (await loadSquare(file)).acts;
+  const acts = (await readSquareSnapshot(file)).state.acts;
   assert.deepEqual(acts.map((activity) => activity.kind), ['join', 'done']);
   assert.equal(Object.hasOwn(acts.at(-1), 'body'), false);
 });

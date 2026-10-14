@@ -5,15 +5,13 @@ import {
 import {
   STALE_MS,
   WATCH_HEARTBEAT_MS,
-  countSays,
-  inSquareCount,
   nowMs,
 } from './runtime.js';
 import { openSquare } from './square-file-adapter.js';
 import type { OpenSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { createSquareApplication } from './square-application.js';
-import { resolveParticipant, watchPresentation } from './views.js';
+import { resolveParticipant, standingCount, watchPresentation } from './views.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease, type WatchLeaseStart } from './wakes.js';
 import {
   renderWatchForceTakeover,
@@ -66,7 +64,7 @@ function watchOutputResult(
   const perceptions = new Map(delivered.map(({ activity, perception }) => [activity.index, perception]));
   return {
     type: 'output',
-    stdout: renderWatchOutput([...presentation.activities], publicItems, {
+    stdout: renderWatchOutput(publicItems, presentation.sayNumbers, {
       ...opts,
       viewer: name,
       perceptions,
@@ -119,8 +117,8 @@ function writeWatchTerminal(squarePath: string, name: string, presentation: Watc
         ...(idleMs === undefined ? {} : { idleMs }),
         presence: presentation.presence,
         showCatchHint: !hasAutomaticDeliveryIdentity(),
-        ownActivityCount: countSays(presentation.state.acts, name),
-        hardCap: presentation.state.hardCap,
+        ownActivityCount: presentation.ownActivityCount,
+        hardCap: presentation.hardCap,
       }),
       { participantCount: presentation.participantCount }
     )
@@ -198,7 +196,7 @@ async function cmdWatchNow(squarePath: string, name: string, opts: WatchOptions,
       ...(opts.mention === undefined ? {} : { mention: true }),
       ...(opts.limit === undefined ? {} : { limit: opts.limit }),
     });
-    const presentation = await watchPresentation(square, name);
+    const presentation = await watchPresentation(square, name, caught.activities.map((a) => a.id));
     const status = presentation.terminalStatus;
     const result = caught.activities.length > 0
       ? watchOutputResult(squarePath, presentation, name, caught, { mention: opts.mention, participants: opts.participants, limit: opts.limit, ...(status ? { status } : {}) })
@@ -216,7 +214,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   let participantCount: number | undefined;
   try {
     square = await openSquare(squarePath, { clock: nowMs, env: caller.env });
-    participantCount = inSquareCount((await square.artifact.read()).state);
+    participantCount = await standingCount(square);
     name = (await resolveParticipant(square, name)).name;
   } catch (err) {
     if (isSquareError(err)) {
@@ -235,7 +233,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
     }
   } catch (err) {
     let participantCount: number | undefined;
-    try { participantCount = inSquareCount((await square.artifact.read()).state); } catch { /* the header count is best effort */ }
+    try { participantCount = await standingCount(square); } catch { /* the header count is best effort */ }
     await closeOpenSquare(square).catch(() => undefined);
     if (isSquareError(err)) {
       const bodyLines = [err.message];
@@ -284,7 +282,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
   try {
     while (true) {
       // Capture before evaluation: changes during catch/lease checks must not be lost.
-      const baseline = (await square.artifact.read()).version;
+      const baseline = await square.artifact.revision();
       const leaseState = await pulseWatchLease(square, name, currentLeaseId!, opts, nowMs() >= nextHeartbeatAt);
       if ((leaseState.type === 'sleep' || leaseState.type === 'held') && leaseState.heartbeatAt !== undefined) {
         nextHeartbeatAt = leaseState.heartbeatAt + WATCH_HEARTBEAT_MS;
@@ -298,7 +296,7 @@ export async function cmdWatch(squarePath: string, name: string, opts: WatchOpti
           ...(opts.limit === undefined ? {} : { limit: opts.limit }),
         });
         if (caught.activities.length > 0) {
-          result = watchOutputResult(squarePath, await watchPresentation(square, name), name, caught, { mention: opts.mention, participants: opts.participants, limit: opts.limit });
+          result = watchOutputResult(squarePath, await watchPresentation(square, name, caught.activities.map((a) => a.id)), name, caught, { mention: opts.mention, participants: opts.participants, limit: opts.limit });
         }
       }
 

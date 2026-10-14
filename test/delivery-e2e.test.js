@@ -3,20 +3,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { wakeGraceMs } from '../dist/notifications.js';
-import { deriveDeliveryModel } from '../dist/delivery.js';
+import { pendingHead, pendingNotifications } from '../dist/delivery.js';
+import { createFileCell } from '../dist/square-storage.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { upsertWakeRoute } from './wake-routes.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
-import { projectWakeEvidenceFromState } from '../dist/square-projections.js';
-import { wakeIsEligible } from '../dist/wake-eligibility.js';
+import { projectWakeEvidence, wakeIsEligible } from '../dist/wake-eligibility.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
@@ -131,8 +132,12 @@ async function wakeEvidence(squarePath, recipient, actIndex, now, env) {
   const hostLedger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
   const square = await openSquare(squarePath, { clock: () => now, hostLedger, env });
   try {
-    const { state } = await square.artifact.read();
-    const projection = await projectWakeEvidenceFromState({ location: squarePath, state, hostLedger: square.hostLedger ?? hostLedger, now });
+    const { value: facts } = await square.artifact.read((facts) => {
+      const head = pendingHead(facts, recipient, actIndex);
+      return { routes: facts.routes(), pending: head === undefined ? [] : [head],
+        seen: facts.receipt(recipient, actIndex) === undefined ? [] : [{ recipient, index: actIndex }] };
+    });
+    const projection = await projectWakeEvidence({ location: squarePath, ...facts, hostLedger: square.hostLedger ?? hostLedger, now });
     return projection.evidence(recipient, actIndex);
   } finally {
     await closeOpenSquare(square);
@@ -204,7 +209,9 @@ test('artifact roundtrip derives only directed pending attention', async () => {
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'please review @Bob'], 30);
 
-    const pending = deriveDeliveryModel(await loadSquare(item.squarePath)).pendingFor('Bob');
+    const artifact = createFileCell(item.squarePath);
+    const pending = (await artifact.read((facts) => pendingNotifications(facts, 'Bob'))).value;
+    await artifact.close();
     assert.equal(pending.length, 1);
   } finally {
     item.cleanup();
@@ -216,7 +223,7 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
   try {
     const body = `@Bob ${'x'.repeat(400)}`;
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', body], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item, 'bob-owner', 'bob-native');
     let payload;
 
@@ -247,7 +254,7 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.filter((row) => row.outcome === 'clipped').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
-    assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
+    assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
     assert.ok(payload.includes(`catch --id ${formatActivityId(act.index)}`));
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
@@ -262,7 +269,7 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     const caught = item.cli('Bob', ['catch', '--id', formatActivityId(act.index)], 40);
     assert.equal(caught.status, 0, caught.stderr);
     assert.ok(caught.stdout.includes(body));
-    assert.ok((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)]);
+    assert.ok((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(act.index)]);
   } finally {
     item.cleanup();
   }
@@ -272,7 +279,7 @@ test('a native boundary marks a fully presented body seen', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'short attention @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item, 'bob-owner', 'bob-native');
 
     const result = await withRegistry(item.env, () => presentPendingAtBoundary(
@@ -283,7 +290,7 @@ test('a native boundary marks a fully presented body seen', async () => {
     ));
 
     assert.equal(result, 'presented');
-    const observation = (await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(act.index)];
+    const observation = (await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(act.index)];
     assert.equal(observation.state, 'seen');
     assert.equal(typeof observation.at, 'number');
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
@@ -298,15 +305,18 @@ test('catch is the durable acknowledgement that closes pending attention for lat
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'please catch @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item);
     await markPresentedEvidence(item, 'bob-session', act);
 
     item.cli('Bob', ['catch', '--now'], 40);
-    const caught = await loadSquare(item.squarePath);
+    const caught = (await readSquareSnapshot(item.squarePath)).state;
     assert.equal(caught.runtime.observations.Bob[formatActivityId(act.index)].state, 'seen');
-    assert.ok(readCursor(caught, 'Bob') >= act.index);
-    assert.deepEqual(deriveDeliveryModel(caught).pendingFor('Bob'), []);
+    const artifact = createFileCell(item.squarePath);
+    const { value: afterCatch } = await artifact.read((facts) => ({ cursor: readCursor(facts, 'Bob'), pending: pendingNotifications(facts, 'Bob') }));
+    await artifact.close();
+    assert.ok(afterCatch.cursor >= act.index);
+    assert.deepEqual(afterCatch.pending, []);
 
     const worker = await runWorker(item, act.index);
     assert.equal(worker.code, 0, worker.stderr);
@@ -321,7 +331,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'wake once @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
 
@@ -334,7 +344,7 @@ test('wake acceptance is durable and at most once across worker processes', asyn
 
     assert.equal(callCount(callLog), 1);
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
-    assert.deepEqual((await loadSquare(item.squarePath)).runtime.leases, {});
+    assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.leases, {});
   } finally {
     item.cleanup();
   }
@@ -344,7 +354,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'native wake preview @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item);
     let payload;
     const adapter = {
@@ -362,7 +372,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
     assert.match(payload, /act\//);
     assert.match(payload, /attention: act\/2 for Bob/);
     assert.equal(fs.existsSync(item.env.SQUARE_PRESENTED), false);
-    assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
+    assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
     const later = await withRegistry(item.env, () => presentPendingAtBoundary(
       'bob-session',
       () => 'presented',
@@ -380,7 +390,7 @@ test('a current owner notified observation suppresses another wake', async () =>
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'notify current owner @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item, 'current-owner', 'current-session');
     const adapter = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, act.index, {
@@ -400,7 +410,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'crash window @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await registerRoute(item);
     const callLog = path.join(item.root, 'worker-calls.log');
     const held = spawnHeldWorker(item, act.index, callLog);
@@ -408,7 +418,7 @@ test('a crash after send records unknown and blocks blind retry', async () => {
     await held.sent;
     held.child.kill();
     await new Promise((resolve) => held.child.once('close', resolve));
-    const interrupted = (await loadSquare(item.squarePath)).runtime;
+    const interrupted = (await readSquareSnapshot(item.squarePath)).state.runtime;
     const lease = interrupted.leases.Bob;
     assert.equal(lease, undefined);
     assert.equal(callCount(callLog), 1);
@@ -437,13 +447,13 @@ test('presentation suppresses wake before worker start and at the final pre-send
   try {
     await registerRoute(item);
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'already visible @Bob'], 30);
-    const visible = (await loadSquare(item.squarePath)).acts.at(-1);
+    const visible = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     await markPresentedEvidence(item, 'bob-session', visible);
     const first = acceptedAdapter();
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, visible.index, { env: item.env, adapters: [first] }));
 
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'race boundary @Bob'], 40);
-    const racing = (await loadSquare(item.squarePath)).acts.at(-1);
+    const racing = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     const second = acceptedAdapter(() => markPresentedEvidence(item, 'bob-session', racing));
     await withRegistry(item.env, () => processActNotificationsOnce(item.squarePath, racing.index, { env: item.env, adapters: [second] }));
 
@@ -459,7 +469,7 @@ test('an old route and clipped presentation do not suppress the replacement sess
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'new owner must see this @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     const oldAt = Date.now() - 1_000;
     const newAt = oldAt + 1;
     await registerRoute(item, 'old-owner', 'old-session', oldAt);
@@ -474,7 +484,7 @@ test('an old route and clipped presentation do not suppress the replacement sess
     await newLedger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'new-session', channel: 'paseo', updatedAt: newAt + 1 });
     const adapter = acceptedAdapter();
 
-    const routes = (await loadSquare(item.squarePath)).routes;
+    const routes = (await readSquareSnapshot(item.squarePath)).state.routes;
     assert.equal(routes.some((route) => route.sessionId === 'old-session'), true);
     assert.equal(routes.some((route) => route.sessionId === 'new-session'), true);
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
@@ -505,7 +515,7 @@ test('new route evidence lets the bounded sweep recover old failed attention', a
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'recover this @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     const firstAttemptAt = Date.now() - 2_000;
     await registerRoute(item, 'bob-owner', 'bob-session', firstAttemptAt - 1_000);
     const failed = {
@@ -554,11 +564,11 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
       const item = workshop();
       try {
         item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'agreement @Bob'], 30);
-        const act = (await loadSquare(item.squarePath)).acts.at(-1);
+        const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
         const now = Date.now();
         await registerRoute(item, 'bob-owner', 'bob-session', now - 1000);
         const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-        const state = await loadSquare(item.squarePath);
+        const state = (await readSquareSnapshot(item.squarePath)).state;
         const owner = (await ledger.listPresence({ location: item.squarePath })).find((r) => r.session === 'bob-session');
         state.routes = state.routes.filter((r) => r.sessionId === 'bob-session');
         if (scenario === 'absent owner') await ledger.removePresence(owner);
@@ -597,7 +607,7 @@ test('worker, sweep, and doctor derive the same wake eligibility without diagnos
   const item = workshop();
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'shared evidence @Bob'], 30);
-    const act = (await loadSquare(item.squarePath)).acts.at(-1);
+    const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
     const now = Date.now();
     await registerRoute(item, 'bob-owner', 'bob-session', now - 1_000);
 
@@ -661,7 +671,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', '--mention', 'Carol', 'one activity two recipients @Bob @Carol'], now - 20_000);
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'inside grace @Bob'], now - wakeGraceMs(item.env));
 
-    const acts = (await loadSquare(item.squarePath)).acts.filter((act) => act.kind === 'say');
+    const acts = (await readSquareSnapshot(item.squarePath)).state.acts.filter((act) => act.kind === 'say');
     const byBody = new Map(acts.map((act) => [act.body, act]));
     const notified = byBody.get('already notified @Bob');
     const terminal = byBody.get('terminal attempt @Bob');
@@ -670,7 +680,7 @@ test('one sweep projects every candidate from one ledger read and keeps individu
     const grace = byBody.get('inside grace @Bob');
     assert.ok(notified && terminal && failed && presented && grace);
 
-    const state = await loadSquare(item.squarePath);
+    const state = (await readSquareSnapshot(item.squarePath)).state;
     state.runtime.observations.Bob = {
       [formatActivityId(notified.index)]: { state: 'seen', at: now - 1 },
     };
@@ -759,33 +769,47 @@ test('one sweep projects every candidate from one ledger read and keeps individu
 
 test('mid-dispatch generation, route, cancellation, consumption and presentation changes prevent send', async (t) => {
   for (const change of ['generation', 'route', 'cancellation', 'consumption', 'presentation', 'superseded route', 'unavailable observation']) {
-    await t.test(change, async () => {
+    await t.test(change, async (caseTest) => {
       const item = workshop();
       try {
         item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'final fence @Bob'], 30);
-        const act = (await loadSquare(item.squarePath)).acts.at(-1);
+        const act = (await readSquareSnapshot(item.squarePath)).state.acts.at(-1);
         await registerRoute(item);
         const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
-        const state = await loadSquare(item.squarePath);
+        const state = (await readSquareSnapshot(item.squarePath)).state;
         state.routes = state.routes.filter((r) => r.sessionId === 'bob-session');
         // Give this request a generation to pin, rather than weakening optional-epoch semantics.
         const owner = (await ledger.listPresence({ location: item.squarePath })).find((r) => r.session === 'bob-session');
         await ledger.ensurePresence({ ...owner, epoch: 7 });
         state.routes[0].epoch = 7;
         await writeSquareFile(item.squarePath, state);
+        let unavailable = false;
+        if (change === 'unavailable observation') {
+          const prepare = DatabaseSync.prototype.prepare;
+          caseTest.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+            if (unavailable && /FROM participants/i.test(sql)) throw new Error('current artifact read unavailable');
+            return prepare.call(this, sql, ...args);
+          });
+        }
         const adapter = acceptedAdapter(async () => {
-          const current = await loadSquare(item.squarePath);
           if (change === 'generation') await ledger.ensurePresence({ ...owner, epoch: 8 });
-          if (change === 'route') { current.routes[0].address.agentId = 'replacement'; await writeSquareFile(item.squarePath, current); }
+          if (change === 'route') {
+            const artifact = createFileCell(item.squarePath);
+            try { await artifact.transact((facts) => facts.replaceRoutes(facts.routes().map((route) => ({ ...route, address: { ...route.address, agentId: 'replacement' } })))); }
+            finally { await artifact.close(); }
+          }
           if (change === 'cancellation') await ledger.suppressPresence({ ...owner, epoch: 7 }, act.index);
           if (change === 'consumption') item.cli('Bob', ['catch', '--id', formatActivityId(act.index)], 40);
           if (change === 'presentation') await markPresentationEvidence(item, 'bob-session', act);
           if (change === 'superseded route') {
-            current.routes.push({ ...current.routes[0], sessionId: 'replacement', updatedAt: current.routes[0].updatedAt + 1 });
             await ledger.ensurePresence({ ...owner, session: 'replacement', epoch: 7 });
-            await writeSquareFile(item.squarePath, current);
+            const artifact = createFileCell(item.squarePath);
+            try { await artifact.transact((facts) => {
+              const routes = facts.routes();
+              facts.replaceRoutes([...routes, { ...routes[0], sessionId: 'replacement', updatedAt: routes[0].updatedAt + 1 }]);
+            }); } finally { await artifact.close(); }
           }
-          if (change === 'unavailable observation') fs.renameSync(item.squarePath, `${item.squarePath}.hidden`);
+          if (change === 'unavailable observation') unavailable = true;
         });
         await processActNotificationsOnce(item.squarePath, act.index, { env: item.env, adapters: [adapter] });
         assert.equal(adapter.calls, 0);

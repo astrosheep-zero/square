@@ -5,7 +5,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
+
+async function loadSquare(location) { return (await readSquareSnapshot(location)).state; }
 import {
   claimSessionParticipant,
   claimSessionTakeover,
@@ -776,7 +778,7 @@ function streamState(acts) {
 async function withStreamSquare(state, action) {
   const cell = createMemoryCell(state);
   try {
-    return await action({ cell, clock: Date.now, location: 'memory' });
+    return await action({ artifact: cell, clock: Date.now, location: 'memory' });
   } finally {
     await cell.close();
   }
@@ -821,8 +823,8 @@ test('stream resumes after its exclusive cursor and drains forward batches witho
 
 test('stream advances through recipient-filter gaps while preserving addressed activity order', async () => {
   const acts = [
-    { kind: 'join', actor: 'Alice', at: 0, body: '', index: 0 },
-    { kind: 'join', actor: 'Bob', at: 1, body: '', index: 1 },
+    { kind: 'join', actor: 'Alice', at: 0, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 1, index: 1 },
     ...Array.from({ length: 203 }, (_value, offset) => {
       const index = offset + 2;
       return {

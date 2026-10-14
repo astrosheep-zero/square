@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
-import { createSquareState, writeSquareFile, loadSquare } from '../dist/artifact.js';
+import { createSquareState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { createFileCell } from '../dist/square-storage.js';
 import { CLI, ROOT, testEnv, withName } from './square-cli-helpers.js';
 
@@ -48,7 +48,7 @@ test('CLI hold keeps its lease alive, pauses quiet expiry, then wakes on resume 
   await bounded((async () => {
     let firstHeartbeat;
     for (;;) {
-      const lease = (await loadSquare(item.file)).runtime.leases.Bob;
+      const lease = (await readSquareSnapshot(item.file)).state.runtime.leases.Bob;
       if (lease) {
         firstHeartbeat ??= lease.heartbeatAt;
         if (lease.heartbeatAt - firstHeartbeat >= 200) return;
@@ -59,14 +59,13 @@ test('CLI hold keeps its lease alive, pauses quiet expiry, then wakes on resume 
   })(), 'held catch did not renew its lease');
   const cell = createFileCell(item.file);
   try {
-    await cell.transact((state) => {
-      state.acts.push({ kind: 'resume', actor: 'Host', at: Date.now(), index: state.runtime.nextActIndex++ });
-      state.acts.push({ kind: 'say', actor: 'Host', at: Date.now(), index: state.runtime.nextActIndex++, mentions: ['Bob'], body: 'activity after resume' });
-      return { state, result: undefined };
+    await cell.transact((facts) => {
+      facts.land({ kind: 'resume', actor: 'Host', at: Date.now() });
+      facts.land({ kind: 'say', actor: 'Host', at: Date.now(), body: 'activity after resume', mentions: ['Bob'] });
     });
   } finally { await cell.close(); }
   const result = await bounded(item.finished, 'catch did not wake for resumed activity');
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /activity after resume/);
-  assert.equal((await loadSquare(item.file)).runtime.leases.Bob, undefined);
+  assert.equal((await readSquareSnapshot(item.file)).state.runtime.leases.Bob, undefined);
 });

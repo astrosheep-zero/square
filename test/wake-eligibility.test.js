@@ -4,24 +4,18 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { projectBoundaryEligibility, projectWakeEvidenceFromState } from '../dist/square-projections.js';
-import { emptyRuntimeState } from '../dist/artifact.js';
-import { projectWakeEligibility, wakeIsEligible } from '../dist/wake-eligibility.js';
-import { deriveDeliveryModel } from '../dist/delivery.js';
+import { projectBoundaryEligibility } from '../dist/square-projections.js';
+import { projectWakeEvidence, projectWakeEligibility, wakeIsEligible } from '../dist/wake-eligibility.js';
 
 const location = '/square/one.square';
-const route = (overrides = {}) => ({ location, participant: 'Bob', sessionId: 's', channel: 'paseo', kind: 'paseo', address: { agentId: 'a', extra: 'b' }, updatedAt: 10, ...overrides });
+const route = (overrides = {}) => ({ location, participant: 'Bob', sessionId: 's', channel: 'paseo', kind: 'paseo', address: { agentId: 'a', extra: 'b' }, updatedAt: 10, extra: {}, ...overrides });
 const owner = (overrides = {}) => ({ location, participant: 'bOB', session: 's', channel: 'pi', epoch: 7, ...overrides });
 const record = (overrides = {}) => ({ location, participant: 'BOB', session: 'retired', activity: 'act/2', kind: 'wake', outcome: 'failed', routeKind: 'codex-queue', attemptN: 1, at: 20, ...overrides });
 const presentation = (overrides = {}) => ({ location, participant: 'bob', sessionId: 's', activity: 'act/2', outcome: 'clipped', ...overrides });
 function snapshot(overrides = {}) {
   return {
     location, now: 100, owners: [owner()], wakeRecords: [], presentations: [],
-    state: { hardCap: null, preamble: [], warmup: [], runtime: { ...emptyRuntimeState(3), nextActIndex: 3 }, routes: [route()], acts: [
-      { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-      { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-      { kind: 'say', actor: 'Alice', mentions: ['Bob'], body: 'hello', at: 3, index: 2 },
-    ] }, ...overrides,
+    routes: [route()], pending: [{ index: 2, actor: 'Alice', at: 3, recipient: 'Bob', route: 'mention' }], ...overrides,
   };
 }
 const request = (overrides = {}) => ({ location, participant: 'bob', actor: 'Alice', activity: 'act/2', route: route(), ...overrides });
@@ -82,14 +76,15 @@ test('wake evidence reads all kinds once per fresh projection', async (t) => {
       if (target === file) reads += 1;
       return readFile(target, ...args);
     });
-    const input = { location, state: snapshot().state, hostLedger: ledger, now: 100 };
-    const first = (await projectWakeEvidenceFromState(input)).evidence('Bob', 2);
+    const input = { ...snapshot(), hostLedger: ledger, now: 100 };
+    delete input.owners;
+    const first = (await projectWakeEvidence(input)).evidence('Bob', 2);
     assert.equal(reads, 1);
     assert.equal(first.presented, true);
     assert.deepEqual(first.attempts.map((attempt) => attempt.outcome), ['failed']);
     rows[1].outcome = 'failed';
     await fs.writeFile(file, rows.map((row) => JSON.stringify(row)).join('\n'));
-    assert.equal(wakeIsEligible((await projectWakeEvidenceFromState(input)).evidence('Bob', 2)), true);
+    assert.equal(wakeIsEligible((await projectWakeEvidence(input)).evidence('Bob', 2)), true);
     assert.equal(reads, 2);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
@@ -106,7 +101,7 @@ test('empty boundaries skip evidence reads; pending boundary and wake projection
     });
     assert.deepEqual(await projectBoundaryEligibility({ hostLedger: ledger, sessionId: 's', inbox: [] }), []);
     await assert.rejects(projectBoundaryEligibility({ hostLedger: ledger, sessionId: 's', inbox: [{ squarePath: location, name: 'Bob', notifications: [{ actIndex: 2, actor: 'Alice', at: 10, route: 'mention', body: 'hello' }] }] }), failure);
-    await assert.rejects(projectWakeEvidenceFromState({ location, state: snapshot().state, hostLedger: ledger, now: 100 }), failure);
+    await assert.rejects(projectWakeEvidence({ ...snapshot(), hostLedger: ledger, now: 100 }), failure);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -125,14 +120,14 @@ test('strict route ownership requires local presence, with optional epoch and ch
     ['cancelled epochless route', [owner({ cancelledThrough: 2 })], [route()], false],
   ]) {
     const input = snapshot({ owners });
-    input.state.routes = routes;
+    input.routes = routes;
     assert.equal(wakeIsEligible(projectWakeEligibility(input).evidence('Bob', 2)), expected, label);
   }
 });
 
 test('latest route selection follows the strict join and retains ties with session-local suppression', () => {
   const input = snapshot({ owners: [owner(), owner({ session: 't' })], presentations: [presentation()] });
-  input.state.routes = [route(), route({ sessionId: 't' }), route({ sessionId: 'unowned', updatedAt: 100 })];
+  input.routes = [route(), route({ sessionId: 't' }), route({ sessionId: 'unowned', updatedAt: 100 })];
   const eligibility = projectWakeEligibility(input);
   assert.equal(eligibility.evidence('Bob', 2).presented, false);
   assert.deepEqual(eligibility.evidence('Bob', 2).attemptableRoutes.map((r) => r.sessionId), ['t']);
@@ -140,15 +135,33 @@ test('latest route selection follows the strict join and retains ties with sessi
   assert.equal(eligibility.currentness(request({ route: route({ sessionId: 't' }) })).current, true);
   input.presentations.push(presentation({ sessionId: 't' }));
   assert.equal(projectWakeEligibility(input).evidence('Bob', 2).presented, true);
-  input.state.routes.push(route({ sessionId: 't', updatedAt: 11 }));
+  input.routes.push(route({ sessionId: 't', updatedAt: 11 }));
   assert.equal(projectWakeEligibility(input).currentness(request()).selectedOwner, false);
+});
+
+test('route envelopes stay lossless while malformed epochs cannot own a wake and ordered duplicates retain ties', () => {
+  const input = snapshot({ owners: [owner(), owner({ session: 't' })] });
+  input.routes = [route({ sessionId: 't' }), route({ epoch: '7' }), route({ epoch: null }),
+    route({ epoch: [7] }), route({ extra: { legacy: { flag: true } } }), route()];
+  const before = structuredClone(input.routes);
+  const selected = projectWakeEligibility(input).evidence('Bob', 2).attemptableRoutes;
+  assert.deepEqual(selected.map((row) => row.sessionId), ['t', 's', 's']);
+  assert.equal(selected.every((row) => row.epoch === undefined && !Object.hasOwn(row, 'extra')), true);
+  assert.deepEqual(input.routes, before, 'transport narrowing must not rewrite the artifact envelope');
+});
+
+test('captured binding fences do not hide a newly owned superseding route during latest selection', () => {
+  const captured = owner();
+  const input = snapshot({ owners: [captured, owner({ session: 'new' })], bindings: [captured] });
+  input.routes.push(route({ sessionId: 'new', updatedAt: 11 }));
+  assert.equal(projectWakeEligibility(input).currentness(request()).selectedOwner, false);
+  assert.deepEqual(projectWakeEligibility(input).evidence('Bob', 2).attemptableRoutes, []);
 });
 
 test('cancellation suppresses only its owned route and captured batch, not a tied session or new activity', () => {
   const input = snapshot({ owners: [owner({ cancelledThrough: 2 }), owner({ session: 't' })] });
-  input.state.routes.push(route({ sessionId: 't' }));
-  input.state.acts.push({ kind: 'say', actor: 'Alice', mentions: ['Bob'], body: 'new activity', at: 4, index: 3 });
-  input.state.runtime.nextActIndex = 4;
+  input.routes.push(route({ sessionId: 't' }));
+  input.pending.push({ actor: 'Alice', at: 4, index: 3, recipient: 'Bob', route: 'mention' });
   const eligibility = projectWakeEligibility(input);
   assert.deepEqual(eligibility.evidence('Bob', 2).attemptableRoutes.map((r) => r.sessionId), ['t']);
   assert.deepEqual(eligibility.evidence('Bob', 3).attemptableRoutes.map((r) => r.sessionId), ['s', 't']);
@@ -181,13 +194,13 @@ test('one currentness pins pending, strict selected ownership, generation, struc
   const input = snapshot();
   assert.equal(projectWakeEligibility(input).currentness(request({ route: route({ address: { extra: 'b', agentId: 'a' } }) })).current, true);
   for (const [label, change, field] of [
-    ['generation', (s) => { s.state.routes[0].epoch = 7; }, 'routePublished'],
+    ['generation', (s) => { s.routes[0].epoch = 7; }, 'routePublished'],
     ['removed owner', (s) => { s.owners = []; }, 'sessionBound'],
-    ['route address', (s) => { s.state.routes[0].address.agentId = 'changed'; }, 'routePublished'],
-    ['route kind', (s) => { s.state.routes[0].kind = 'codex-queue'; }, 'routePublished'],
-    ['latest owned route', (s) => { s.owners.push(owner({ session: 't' })); s.state.routes.push(route({ sessionId: 't', updatedAt: 11 })); }, 'selectedOwner'],
+    ['route address', (s) => { s.routes[0].address.agentId = 'changed'; }, 'routePublished'],
+    ['route kind', (s) => { s.routes[0].kind = 'codex-queue'; }, 'routePublished'],
+    ['latest owned route', (s) => { s.owners.push(owner({ session: 't' })); s.routes.push(route({ sessionId: 't', updatedAt: 11 })); }, 'selectedOwner'],
     ['cancellation', (s) => { s.owners[0].cancelledThrough = 2; }, 'cancelled'],
-    ['consumption', (s) => { s.state.runtime.observations.Bob = { 'act/2': { state: 'seen', at: 50 } }; }, 'activityPending'],
+    ['consumption', (s) => { s.pending = []; s.seen = [{ recipient: 'Bob', index: 2 }]; }, 'activityPending'],
     ['presentation', (s) => { s.presentations.push(presentation()); }, 'presented'],
   ]) {
     const changed = snapshot(); change(changed);
@@ -196,19 +209,18 @@ test('one currentness pins pending, strict selected ownership, generation, struc
     assert.equal(current[field], field === 'cancelled' || field === 'presented', label);
   }
   const epochInput = snapshot({ owners: [owner({ epoch: 8 })] });
-  epochInput.state.routes = [route({ epoch: 7 })];
+  epochInput.routes = [route({ epoch: 7 })];
   assert.equal(projectWakeEligibility(epochInput).currentness(request({ route: route({ epoch: 7 }) })).sessionBound, false);
   assert.equal(projectWakeEligibility(input).currentness(request({ location: '/other.square' })).current, false);
   assert.equal(projectWakeEligibility(input).currentness(request({ participant: 'Alice' })).current, false);
   assert.equal(projectWakeEligibility(input).currentness(request({ activity: 'invalid' })).current, false);
 });
 
-test('a frozen eligibility snapshot uses the supplied delivery replay without deriving again', () => {
+test('eligibility indexes its detached pending facts once for repeated observations', () => {
   const input = snapshot();
   let pendingReads = 0;
-  const delivery = deriveDeliveryModel(input.state);
-  const eligibility = projectWakeEligibility({ ...input, delivery: { ...delivery, pendingFor(recipient) { pendingReads += 1; return delivery.pendingFor(recipient); } } });
-  const initial = pendingReads;
+  const eligibility = projectWakeEligibility({ ...input, get pending() { pendingReads++; return input.pending; } });
+  assert.equal(pendingReads, 1, 'the counter must observe construction');
   for (let i = 0; i < 100; i += 1) { eligibility.evidence('Bob', 2); eligibility.currentness(request()); }
-  assert.equal(pendingReads, initial);
+  assert.equal(pendingReads, 1);
 });

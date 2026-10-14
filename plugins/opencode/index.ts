@@ -77,7 +77,7 @@ export default {
       await ledger.withClaimLock(async () => {
         for (const owner of (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode')) {
           const square = await openSquare(owner.location, { hostLedger: ledger, env, signal: lifetime.signal });
-          try { await ledger.suppressPresence(owner, (await square.artifact.read(lifetime.signal)).state.runtime.nextActIndex - 1); }
+          try { await ledger.suppressPresence(owner, (await square.artifact.read((facts) => facts.header().nextActIndex - 1, lifetime.signal)).value); }
           finally { await closeOpenSquare(square); }
         }
       }, lifetime.signal);

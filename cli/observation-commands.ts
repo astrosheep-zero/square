@@ -23,7 +23,7 @@ import { cmdWatch } from '../watch.js';
 import { openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
 import { createSquareApplication } from '../square-application.js';
-import { historyPresentation, participantsPresentation, statusPresentation, type HistoryPresentation } from '../views.js';
+import { historyPresentation, type HistoryPresentation } from '../views.js';
 import { hostLedgerForEnv } from '../registry.js';
 
 import {
@@ -381,17 +381,9 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       // plain archive hides `read` bookkeeping, while --at/-C/--since windows
       // render the raw activity stream around their coordinates.
       const projection = await historyPresentation(square, { ...options, order: 'asc' });
-      const hideReadActs = options.atIndexes === undefined && options.beforeContext === undefined && options.afterContext === undefined && options.after === undefined;
-      let events = hideReadActs ? projection.activities.filter((activity) => activity.kind !== 'read') : [...projection.activities];
-      if (options.lastN === null && events.length > HISTORY_MAX_LIMIT) {
+      const events = [...projection.activities];
+      if (options.lastN === null && projection.totalMatches > HISTORY_MAX_LIMIT) {
         fail(`✕ history is capped at ${HISTORY_MAX_LIMIT} activities\n${historyContinuationCommand(options, squarePath, ['--limit', String(HISTORY_MAX_LIMIT)])}`);
-      }
-      const searching = options.grep !== undefined || options.fixed !== undefined;
-      const totalMatches = searching ? events.length : 0;
-      if (options.lastN != null) {
-        events = options.afterIndex !== undefined
-          ? events.slice(0, options.lastN)
-          : events.slice(-options.lastN);
       }
       if (options.order === 'desc') events.reverse();
       if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item)).join('\n') + (events.length > 0 ? '\n' : '');
@@ -401,15 +393,12 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       const pattern = options.grep ?? options.fixed;
       const output = pattern === undefined || pattern === ''
         ? renderHistoryProjection(projection, events, options.noTruncate === true, squarePath)
-        : renderGrepActivitiesView(events, totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
+        : renderGrepActivitiesView(events, projection.totalMatches, options.noTruncate, squarePath, pattern, options.fixed !== undefined, () => 'full');
       const publicEvents = events.filter(isArchiveActivity);
-      const allPublic = projection.activities.filter(isArchiveActivity);
-      const pageMin = publicEvents.length === 0 ? undefined : Math.min(...publicEvents.map((item) => item.index));
-      const pageMax = publicEvents.length === 0 ? undefined : Math.max(...publicEvents.map((item) => item.index));
       const hasMore = options.lastN != null && publicEvents.length > 0 && (
         options.afterIndex !== undefined
-          ? allPublic.some((item) => item.index > (pageMax ?? options.afterIndex!))
-          : allPublic.some((item) => item.index < (pageMin ?? Infinity))
+          ? projection.publicAfter
+          : projection.publicBefore
       );
       const cursorDirection = options.afterIndex !== undefined ? '--after' : '--before';
       const cursorIndex = cursorDirection === '--after' ? Math.max(...publicEvents.map((item) => item.index)) : Math.min(...publicEvents.map((item) => item.index));
@@ -483,7 +472,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
     const squarePath = requireSquarePath(context);
     const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs });
     {
-      const presentation = await application.status();
+      const presentation = await application.status(context.name ?? '');
       const result = presentation.status;
     const active = result.participants.filter((participant) => participant.state === 'active');
     const here = active.filter((participant) =>
@@ -540,7 +529,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
           now: result.now,
           preview: 200,
           actNumber: presentation.latestActNumber,
-          squareState: presentation.state,
+          perception: presentation.latestPerception,
         });
     const latest = visible.text === ''
       ? [result.latestAct === undefined
@@ -549,15 +538,10 @@ export const statusCommand: CommandSpec<undefined, string> = {
       : [`  ${visible.text.replace(/\n/g, '\n  ')}`];
     // Presence events after the latest public act: otherwise the roster can say someone is
     // here while the latest line shows them leaving, with nothing to reconcile the two.
-    const latestIndex = result.latestAct?.index ?? -1;
-    const stepsIn = presentation.state.acts.filter((act): act is Extract<StoredAct, { kind: 'join' }> =>
-      act.kind === 'join' && act.index > latestIndex);
-    for (const act of stepsIn.slice(-3)) {
-      const rejoined = presentation.state.acts.some((other) =>
-        other.kind === 'done' && other.actor === act.actor && other.index < act.index);
-      latest.push(style('dim', `  → ${participantIdentity(act.actor)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(act.at, result.now)}`));
+    for (const { activity, rejoined } of presentation.joins) {
+      latest.push(style('dim', `  → ${participantIdentity(activity.actor!)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, result.now)}`));
     }
-    if (stepsIn.length > 3) latest.push(style('dim', `  → … ${stepsIn.length - 3} more stepped in`));
+    if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
     if (visible.bodyClipped && result.latestAct !== undefined) {
       latest.push(`${commandPrefix(squarePath)} history --at ${actId(result.latestAct)} -C 2 --no-truncate`);
     }

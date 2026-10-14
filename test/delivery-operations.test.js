@@ -4,12 +4,88 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareState, writeSquareFile, loadSquare } from '../dist/artifact.js';
+import { createSquareState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { join } from '../dist/square-actions.js';
-import { deliverPending } from '../dist/delivery-operations.js';
+import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
+import { createMemoryCell } from '../dist/square-storage.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/square-file-adapter.js';
+
+test('global sweep progresses through suppression and unrelated writes without hydrating bodies or chasing new landings', async (t) => {
+  t.mock.method(Date, 'now', () => 1005);
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-sweep-pages-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const location = path.join(root, 'S.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts = [
+    { kind: 'join', actor: 'Alice', index: 0, at: 0 }, { kind: 'join', actor: 'Bob', index: 1, at: 0 },
+    ...Array.from({ length: 105 }, (_, n) => ({ kind: 'say', actor: 'Alice', index: n + 2, at: 1000, mentions: ['Bob'], body: `withheld ${n}` })),
+    { kind: 'say', actor: 'Alice', index: 107, at: 1, mentions: ['Bob'], body: 'old but later coordinate' },
+  ];
+  state.runtime.nextActIndex = 108;
+  state.routes = [{ location, participant: 'Bob', sessionId: 'bob', channel: 'paseo', kind: 'paseo', address: { agentId: 'bob' }, updatedAt: 1 }];
+  const artifact = createMemoryCell(state);
+  t.after(() => artifact.close());
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'ledger') });
+  await ledger.ensurePresence({ location, participant: 'Bob', session: 'bob', channel: 'paseo' });
+  const read = artifact.read.bind(artifact);
+  const pages = [];
+  let bodies = 0;
+  artifact.read = async (select, signal) => {
+    let scanned = false;
+    const result = await read((facts) => select({ ...facts,
+      activity(index) { bodies++; return facts.activity(index); },
+      activities(indexes) { bodies += indexes.length; return facts.activities(indexes); },
+      pendingAudience(after, through, limit) {
+        scanned = true; pages.push({ after, through });
+        return facts.pendingAudience(after, through, limit);
+      },
+    }), signal);
+    if (scanned) await artifact.transact((facts) => facts.land({ kind: 'say', actor: 'Alice', at: 0, mentions: ['Bob'], body: 'next pass only' }));
+    return result;
+  };
+  await artifact.read((facts) => facts.activity(2));
+  assert.equal(bodies, 1, 'the hydration counter must detect a selected body');
+  bodies = 0;
+  const input = { artifact, hostLedger: ledger, location, now: 1005, graceMs: 10, limit: 1 };
+  assert.deepEqual(await sweepPending(input), [107]);
+  assert.deepEqual(pages, [{ after: -1, through: 107 }, { after: 101, through: 107 }]);
+  assert.equal(bodies, 0);
+  // No mutation is needed to reconsider the first page when its grace expires.
+  artifact.read = read;
+  assert.deepEqual(await sweepPending({ ...input, now: 1011 }), [2]);
+});
+
+test('dispatch remains roster-major rather than landed recipient order across global pages', async (t) => {
+  t.mock.method(Date, 'now', () => 100);
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-dispatch-order-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const location = path.join(root, 'S.square');
+  const state = await createSquareState({ force: true, hardCap: null }, '');
+  state.acts = [
+    { kind: 'join', actor: 'Alice', index: 0, at: 0 }, { kind: 'join', actor: 'Cara', index: 1, at: 0 }, { kind: 'join', actor: 'Bob', index: 2, at: 0 },
+    { kind: 'say', actor: 'Alice', index: 3, at: 1, mentions: ['Bob', 'Cara'], body: 'first' },
+    { kind: 'say', actor: 'Alice', index: 4, at: 2, mentions: ['Bob', 'Cara'], body: 'second' },
+  ];
+  state.runtime.nextActIndex = 5;
+  state.routes = ['Cara', 'Bob'].map((participant) => ({ location, participant, sessionId: participant, channel: 'paseo', kind: 'paseo', address: { agentId: participant }, updatedAt: 1 }));
+  const artifact = createMemoryCell(state);
+  t.after(() => artifact.close());
+  const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'ledger') });
+  for (const participant of ['Cara', 'Bob']) await ledger.ensurePresence({ location, participant, session: participant, channel: 'paseo' });
+  assert.deepEqual((await artifact.read((facts) => facts.audience(3))).value.map((edge) => edge.recipient), ['Bob', 'Cara']);
+  const sent = [];
+  const result = await deliverPending({ artifact, hostLedger: ledger, location, now: 100,
+    transport: { async attempt(request, _timeout, beforeSend) {
+      assert.equal(await beforeSend(), true);
+      sent.push([request.participant, request.activity]);
+      return { outcome: 'accepted' };
+    } },
+  });
+  assert.deepEqual(sent, [['Cara', 'act/3'], ['Cara', 'act/4'], ['Bob', 'act/3'], ['Bob', 'act/4']]);
+  assert.equal(result.accepted, 4);
+});
 
 test('release preserves token authority and rejects late or tokenless terminal evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-fence-'));
@@ -293,10 +369,7 @@ test('attention caught after claim is not sent', async () => {
   const ledger = Object.create(base);
   ledger.claimWakeAttempt = async (input) => {
     const claim = await base.claimWakeAttempt(input);
-    if (claim.status === 'acquired') await artifactRef.transact((current) => {
-      current.runtime.observations.Bob = { 'act/2': { state: 'seen', at: 10 } };
-      return { state: current, result: undefined };
-    });
+    if (claim.status === 'acquired') await artifactRef.transact((facts) => facts.markSeen('Bob', [2], 10));
     return claim;
   };
   const square = await openSquare(location, { hostLedger: base });
@@ -335,7 +408,7 @@ test('presentation claim is exclusive across concurrent executors', async () => 
     ]);
     assert.equal(calls, 1);
     assert.equal(results.filter((result) => result.presented).length, 1);
-    assert.equal((await loadSquare(location)).runtime.observations.Bob['act/2'].state, 'seen');
+    assert.equal((await readSquareSnapshot(location)).state.runtime.observations.Bob['act/2'].state, 'seen');
   } finally {
     await Promise.all([left.artifact.close(), right.artifact.close()]);
     fs.rmSync(root, { recursive: true, force: true });
@@ -497,7 +570,7 @@ test('clipped presentation stays retryable and never records presented evidence'
     assert.equal(first.presented, true);
     assert.equal(second.presented, true);
     assert.equal(calls, 2);
-    assert.equal((await loadSquare(location)).runtime.observations.Bob?.['act/2'], undefined);
+    assert.equal((await readSquareSnapshot(location)).state.runtime.observations.Bob?.['act/2'], undefined);
     const evidence = await ledger.listEvidence({ location, participant: 'Bob', session: 'clip-session', activity: 'act/2', kind: 'presentation' });
     assert.equal(evidence.some((row) => row.outcome === 'presented'), false);
     assert.equal(evidence.at(-1)?.outcome, 'clipped');
@@ -515,7 +588,7 @@ test('producer commits artifact before a repository presence permission failure'
   let committedBeforeEnsure = false;
   const ledger = {
     ensurePresence: async () => {
-      const snapshot = await loadSquare(location);
+      const snapshot = (await readSquareSnapshot(location)).state;
       committedBeforeEnsure = snapshot.acts.length > 0;
       throw new Error('read-only host ledger');
     },
@@ -525,7 +598,7 @@ test('producer commits artifact before a repository presence permission failure'
     const result = await join({ artifact: square.artifact, clock: () => 1, location, hostLedger: ledger }, 'Alice');
     assert.equal(result.activity?.kind, 'join');
     assert.equal(committedBeforeEnsure, true);
-    assert.equal((await loadSquare(location)).acts.length, 1);
+    assert.equal((await readSquareSnapshot(location)).state.acts.length, 1);
   } finally {
     await square.artifact.close();
     fs.rmSync(root, { recursive: true, force: true });

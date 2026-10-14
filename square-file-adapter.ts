@@ -1,11 +1,9 @@
-import path from 'node:path';
 export { observeSquareRevision as observeSquareChanges } from './artifact.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 
 import {
   createSquareState,
   createSquareSnapshot,
-  probeSquareFile,
   writeSquareSnapshot,
   createFileCell,
   createMemoryCell,
@@ -70,7 +68,7 @@ export async function openSquare(
   const ledgerRoot = hostLedgerRoot(env);
   const artifact = openSquareArtifact(squarePath, options.signal);
   try {
-    await artifact.read(control?.signal);
+    await artifact.read(facts => facts.header(), control?.signal);
     return {
       artifact,
       clock: options.clock ?? Date.now,
@@ -91,8 +89,8 @@ export async function openSquare(
 }
 
 export async function probeSquare(squarePath: string): Promise<OpenSquare | undefined> {
-  const state = await probeSquareFile(squarePath);
-  return state === undefined ? undefined : { artifact: createMemoryCell(state), clock: Date.now, location: squarePath, hostLedger: createHostLedgerPort({ rootPath: hostLedgerRoot(process.env) }) };
+  if (!squarePath.endsWith('.square')) return undefined;
+  try { return await openSquare(squarePath); } catch { return undefined; }
 }
 
 export async function buildSquare(squarePath: string, options: SquareBuildOptions): Promise<OpenSquare> {

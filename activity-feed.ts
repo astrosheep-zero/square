@@ -1,15 +1,15 @@
-import { type StoredAct, type SquareState } from './model.js';
-import { deriveDeliveryModel } from './delivery.js';
+import type { SquareRead } from './ports.js';
+import type { StoredAct } from './model.js';
+import { readCursor } from './runtime.js';
 
-export function actDelta(acts: StoredAct[], cursor: number): StoredAct[] {
-  return acts.filter((act) => act.index > cursor);
-}
-
-/** Visible activities after the participant's derived continuous-seen prefix. */
-export function deliveryDelta(squareState: SquareState, name: string, delivery = deriveDeliveryModel(squareState)): StoredAct[] {
-  return actDelta(squareState.acts, delivery.cursorFor(name));
-}
-
-export function directedPeerSays(squareState: SquareState, delta: StoredAct[], name: string, delivery = deriveDeliveryModel(squareState)): Extract<StoredAct, { kind: 'say' }>[] {
-  return delta.filter((act): act is Extract<StoredAct, { kind: 'say' }> => delivery.directedTo(act, name));
+/** Directed suffix includes seen rows beyond an earlier hole, unlike notification pending. */
+export function directedSuffix(facts: SquareRead, name: string): Extract<StoredAct, { kind: 'say' }>[] {
+  const result: Extract<StoredAct, { kind: 'say' }>[] = [];
+  let afterIndex = readCursor(facts, name);
+  while (true) {
+    const page = facts.directed(name, { afterIndex }, { edge: 'oldest', limit: 100 });
+    for (const act of facts.activities(page.items.map((head) => head.index))) if (act.kind === 'say') result.push(act);
+    if (!page.hasMore) return result;
+    afterIndex = page.items.at(-1)!.index;
+  }
 }

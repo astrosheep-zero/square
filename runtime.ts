@@ -1,214 +1,61 @@
-import { audienceIncludes, audienceOf, fold, formatActivityId, replayLandedAudiences, type ActivityId, type LandedAudienceReplay, type Reach } from './square-core.js';
-import {
-  SquareError,
-  type StoredAct,
-  type SquareState,
-  type HoldState,
-  type ActivityObservation,
-  type ObservationState,
-  type WatchLease,
-  findParticipantName,
-  nameKey,
-  sameName,
-} from './model.js';
+import { formatActivityId, type ActivityId } from './square-core.js';
+import { SquareError, sameName, type StoredAct, type WatchLease } from './model.js';
+import type { SquareRead } from './ports.js';
 
 function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const value = parseInt(raw, 10);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new SquareError('invalid_args', `Invalid ${name}: expected a positive integer.`);
-  }
+  if (!Number.isFinite(value) || value <= 0) throw new SquareError('invalid_args', `Invalid ${name}: expected a positive integer.`);
   return value;
 }
-
 export const WATCH_HEARTBEAT_MS = parseIntegerEnv('SQUARE_WATCH_HEARTBEAT_MS', 60000);
 export const SLEEP_MS = parseIntegerEnv('SQUARE_WATCH_POLL_MS', 10000);
 export const STALE_MS = parseIntegerEnv('SQUARE_WATCH_QUIET_MS', 300000);
 export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', 180000);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
-/** A held express waits for the hand to lower, but not forever: past this budget it gives up exactly like --no-wait (draft saved, retry printed). 0 disables waiting. */
 export const HELD_WAIT_BUDGET_MS = parseIntegerEnv('SQUARE_HELD_WAIT_BUDGET_MS', 10 * 60 * 1000);
+export const FACT_PAGE_SIZE = 100;
 
 export function nowMs(): number {
   const override = process.env.SQUARE_NOW_MS;
   if (override === undefined) return Date.now();
   const value = parseInt(override, 10);
-  if (!Number.isFinite(value)) {
-    throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
-  }
+  if (!Number.isFinite(value)) throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
   return value;
 }
+export function rosterNames(facts: SquareRead): string[] { return facts.roster().map((participant) => participant.name); }
+export function inSquareCount(facts: SquareRead): number { return facts.roster().filter((participant) => participant.joined).length; }
+export function actId(actOrIndex: StoredAct | number): ActivityId { return formatActivityId(typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index); }
 
-/** Pure directed-activity filter. Bell matches every viewer; mentions match by audience. */
-export function matchesMentionTarget(act: { body: string; mentions?: readonly string[]; reach?: Reach }, mention: string | true): boolean {
-  const audience = audienceOf(act);
-  if (mention === true) return audience.kind === 'bell' || audience.names.length > 0;
-  return audienceIncludes(audience, mention);
+export function watchTerminalStatus(facts: SquareRead, name: string): 'capped' | 'quorum' | undefined {
+  const cap = facts.header().hardCap;
+  if (cap !== null && (facts.participant(name)?.sayCount ?? 0) >= cap) return 'capped';
+  const peers = facts.roster().filter((participant) => !sameName(participant.name, name));
+  return peers.length > 0 && peers.every((peer) => peer.done) ? 'quorum' : undefined;
 }
 
-export function foldedState(squareState: SquareState) {
-  return fold(squareState.acts);
+/** A continuous prefix stops at the first unseen historical audience edge after join. */
+export function readCursor(facts: SquareRead, name: string): number {
+  const boundary = facts.participant(name)?.lastJoinIndex ?? -1;
+  const block = facts.directed(name, { afterIndex: boundary, unseenOnly: true }, { edge: 'oldest', limit: 1 }).items[0]?.index;
+  const last = facts.activityHeads({
+    afterIndex: boundary, ...(block === undefined ? {} : { beforeIndex: block }), actorRequired: true,
+    kinds: ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore'],
+  }, { edge: 'newest', limit: 1 }).items[0]?.index;
+  return Math.max(boundary, last ?? boundary);
 }
 
-export function rosterNames(squareState: SquareState): string[] {
-  return foldedState(squareState).participants.map((participant) => participant.name);
-}
-
-export function inSquareCount(squareState: SquareState): number {
-  return foldedState(squareState).joined.length;
-}
-
-export function resolveRosterName(squareState: SquareState, name: string): string | undefined {
-  return findParticipantName(rosterNames(squareState), name);
-}
-
-export function countSays(acts: StoredAct[], name: string): number {
-  return acts.filter((act) => act.kind === 'say' && sameName(act.actor, name)).length;
-}
-
-export function sayNumberFor(acts: StoredAct[], target: StoredAct): number {
-  if (target.kind !== 'say') throw new Error('sayNumberFor only applies to say acts');
-  let number = 0;
-  for (const act of acts) {
-    if (act.kind === 'say' && sameName(act.actor, target.actor)) number++;
-    if (act === target) return number;
-    if (target.index !== undefined && act.index === target.index) return number;
-  }
-  throw new Error('target say act is not present in act history');
-}
-
-/** Shared terminal condition for a participant's watch lifecycle. */
-export function watchTerminalStatus(squareState: SquareState, name: string): 'capped' | 'quorum' | undefined {
-  if (squareState.hardCap !== null && countSays(squareState.acts, name) >= squareState.hardCap) return 'capped';
-  const done = new Set(fold(squareState.acts).done.map((participant) => nameKey(participant)));
-  done.delete(nameKey(name));
-  const peers = rosterNames(squareState).filter((participant) => !sameName(participant, name));
-  return peers.length > 0 && peers.every((peer) => done.has(nameKey(peer))) ? 'quorum' : undefined;
-}
-
-export function joinedNames(acts: StoredAct[]): Set<string> {
-  return new Set(acts.filter((act) => act.kind === 'join').map((act) => nameKey(act.actor)));
-}
-
-export function isCurrentlyJoined(acts: StoredAct[], name: string): boolean {
-  return fold(acts).participants.some((participant) => sameName(participant.name, name) && participant.joined);
-}
-
-/** Stable index of the recipient's most recent join act, if any. */
-export function lastJoinIndex(acts: StoredAct[], name: string): number | undefined {
-  let last: number | undefined;
-  for (const act of acts) {
-    if (act.kind === 'join' && sameName(act.actor, name)) last = actStableIndex(act);
-  }
-  return last;
-}
-
-export function actStableIndex(act: StoredAct): number {
-  if (act.index === undefined) throw new Error(`act ${act.kind} is missing a stable index`);
-  return act.index;
-}
-
-export function actId(actOrIndex: StoredAct | number): ActivityId {
-  const index = typeof actOrIndex === 'number' ? actOrIndex : actStableIndex(actOrIndex);
-  return formatActivityId(index);
-}
-
-function canonicalRuntimeName(squareState: SquareState, name: string): string {
-  return resolveRosterName(squareState, name) ?? name;
-}
-
-export function currentHold(acts: StoredAct[]): HoldState {
-  const hold = fold(acts).hold;
-  return hold.active ? { active: true, at: hold.at, reason: hold.reason } : { active: false };
-}
-
-export function publicActs(acts: StoredAct[]): Array<Extract<StoredAct, { kind: 'say' | 'done' }>> {
-  return acts.filter((act): act is Extract<StoredAct, { kind: 'say' | 'done' }> => act.kind === 'say' || act.kind === 'done');
-}
-
-export function recordObservation(
-  squareState: SquareState,
-  name: string,
-  index: number,
-  state: ObservationState,
-  at = Date.now(),
-): boolean {
-  if (!Number.isSafeInteger(index) || index < 0 || !Number.isFinite(at)) return false;
-  const key = canonicalRuntimeName(squareState, name);
-  const id = formatActivityId(index);
-  const current = squareState.runtime.observations[key]?.[id];
-  if (current?.state === 'seen' || (current?.state === state && current.at >= at)) return false;
-  const next: ActivityObservation = {
-    state: 'seen',
-    at: Math.max(current?.at ?? -Infinity, at),
-  };
-  ((squareState.runtime.observations ??= {})[key] ??= {})[id] = next;
-  return true;
-}
-
-export function readCursor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
-  const recipient = landed.resolveParticipant(name) ?? name;
-  const boundary = landed.lastJoinIndex(recipient) ?? -1;
-  let cursor = boundary;
-  for (const act of squareState.acts) {
-    if (act.index <= boundary || act.kind === 'read' || act.actor === undefined) continue;
-    if (sameName(act.actor, recipient)) {
-      cursor = act.index;
-      continue;
-    }
-    if (!landed.includes(act, recipient)) {
-      cursor = act.index;
-      continue;
-    }
-    if (squareState.runtime.observations?.[recipient]?.[formatActivityId(act.index)]?.state !== 'seen') break;
-    cursor = act.index;
-  }
-  return cursor;
-}
-
-/**
- * The last public act the participant was verifiably present for, or -1 when there is no evidence.
- *
- * "Was here" is a claim of presence, so it rides on evidence: the participant's own acts
- * and seen receipts after their latest join. Anything else — in particular acts merely
- * not addressed to them — says nothing about where they actually were.
- */
-export function presenceAnchor(squareState: SquareState, name: string, landed: LandedAudienceReplay = replayLandedAudiences(squareState.acts)): number {
-  const recipient = landed.resolveParticipant(name) ?? name;
-  const boundary = landed.lastJoinIndex(recipient) ?? -1;
+/** Presence rides on own activity or exact receipts, not nonaddressed cursor progress. */
+export function presenceAnchor(facts: SquareRead, name: string): number {
+  const boundary = facts.participant(name)?.lastJoinIndex ?? -1;
   if (boundary < 0) return -1;
-  let evidence = boundary;
-  for (const act of squareState.acts) {
-    if (act.index <= boundary || act.index <= evidence || act.actor === undefined) continue;
-    if (sameName(act.actor, recipient)
-      || squareState.runtime.observations?.[recipient]?.[formatActivityId(act.index)]?.state === 'seen') {
-      evidence = act.index;
-    }
-  }
-  for (let i = squareState.acts.length - 1; i >= 0; i--) {
-    const event = squareState.acts[i];
-    if (event.index <= boundary || event.index > evidence) continue;
-    if (event.kind === 'say' || event.kind === 'done') return event.index;
-  }
-  return -1;
+  const own = facts.activityHeads({ afterIndex: boundary, actors: [name] }, { edge: 'newest', limit: 1 }).items[0]?.index;
+  const evidence = Math.max(boundary, own ?? boundary, facts.receiptFacts(name, boundary).latestActorActivityIndex ?? boundary);
+  return facts.activityHeads({ afterIndex: boundary, throughIndex: evidence, kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0]?.index ?? -1;
 }
-
-export function freshWatchLease(squareState: SquareState, name: string, at = Date.now()) {
-  const key = canonicalRuntimeName(squareState, name);
-  const lease = squareState.runtime.leases[key];
-  if (lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS) return undefined;
-  return lease;
-}
-
-export function writeWatchLease(squareState: SquareState, name: string, lease: WatchLease): void {
-  squareState.runtime.leases[canonicalRuntimeName(squareState, name)] = lease;
-}
-
-export function removeWatchLease(squareState: SquareState, name: string, leaseId: string): boolean {
-  const key = canonicalRuntimeName(squareState, name);
-  if (squareState.runtime.leases[key]?.leaseId !== leaseId) return false;
-  delete squareState.runtime.leases[key];
-  return true;
+export function freshWatchLease(facts: SquareRead, name: string, at = Date.now()): WatchLease | undefined {
+  const lease = facts.lease(name);
+  return lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS ? undefined : lease;
 }

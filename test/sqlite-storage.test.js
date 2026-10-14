@@ -6,341 +6,134 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-
-import { createSquareState, loadSquare, probeSquare, writeSquareFile } from '../dist/artifact.js';
+import { createSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { createFileCell } from '../dist/square-storage.js';
 
-const ROOT = path.resolve(import.meta.dirname, '..');
-const FIXTURES = path.join(ROOT, 'test', 'fixtures');
-const CLI = path.join(ROOT, 'dist', 'square.js');
-
-function makeDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-sqlite-'));
+const root = path.resolve(import.meta.dirname, '..');
+const initial = () => ({ hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+async function fixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-row-lifecycle-'));
+  const file = path.join(dir, 'test.square');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
+  await createSquareFile(file, initial());
+  const port = createFileCell(file);
+  t.after(() => port.close());
+  return { file, port };
+}
+function child(script, file) {
+  const process = spawn(globalThis.process.execPath, ['--import', './test/sandbox-env.js', '--input-type=module', '-e', script, file], { cwd: root, env: { ...globalThis.process.env, NODE_NO_WARNINGS: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '', err = '';
+  process.stdout.setEncoding('utf8'); process.stderr.setEncoding('utf8');
+  process.stdout.on('data', s => { out += s; }); process.stderr.on('data', s => { err += s; });
+  const exited = new Promise((resolve, reject) => { process.once('error', reject); process.once('close', (code, signal) => resolve({ code, signal, out, err })); });
+  return { process, exited };
+}
+async function until(predicate) {
+  const deadline = Date.now() + 10000;
+  while (!predicate()) { if (Date.now() > deadline) throw new Error('probe did not become ready'); await sleep(10); }
 }
 
-async function makeSquare(t, state = undefined) {
-  const dir = makeDir(t);
-  const squarePath = path.join(dir, 'SQUARE.square');
-  await writeSquareFile(squarePath, state ?? await createSquareState({ force: true, hardCap: null }, 'SQLite test'));
-  return squarePath;
-}
-
-async function makeAliceSquare(t) {
-  const state = await createSquareState({ force: true, hardCap: null }, 'SQLite test');
-  state.acts.push({ kind: 'join', actor: 'Alice', at: 0, index: 0 });
-  state.runtime.nextActIndex = 1;
-  return makeSquare(t, state);
-}
-
-function runNode(script, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, ...args], {
-      cwd: ROOT,
-      env: { ...process.env, NODE_NO_WARNINGS: '1', ...options.env },
-      stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk) => { stdout += chunk; });
-    child.stderr?.on('data', (chunk) => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', (status, signal) => resolve({ child, status, signal, stdout, stderr }));
-    child.stdin?.end(options.input ?? '');
-  });
-}
-
-function startNode(script, args) {
-  const child = spawn(process.execPath, [script, ...args], {
-    cwd: ROOT,
-    env: { ...process.env, NODE_NO_WARNINGS: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  return child;
-}
-
-async function untilOutput(child, expected, timeoutMs = 2_000) {
-  let output = '';
-  const seen = new Promise((resolve, reject) => {
-    child.stdout.on('data', (chunk) => {
-      output += chunk;
-      if (output.includes(expected)) resolve();
-    });
-    child.once('error', reject);
-    child.once('exit', (code, signal) => reject(new Error('child exited before ' + expected + ': ' + (code ?? signal))));
-  });
-  await Promise.race([
-    seen,
-    sleep(timeoutMs).then(() => { throw new Error('timed out waiting for ' + expected + '; saw ' + output); }),
-  ]);
-}
-
-async function settlesWithin(promise, timeoutMs, message) {
-  return Promise.race([
-    promise,
-    sleep(timeoutMs).then(() => { throw new Error(message); }),
-  ]);
-}
-
-test('concurrent processes retain every activity while readers observe only validated snapshots', async (t) => {
-  const squarePath = await makeAliceSquare(t);
-  const writers = Array.from({ length: 12 }, (_, index) =>
-    runNode(path.join(FIXTURES, 'sqlite-square-writer.js'), [squarePath, 'Alice', 'concurrent-' + index]),
-  );
-  const readerCells = Array.from({ length: 3 }, () => createFileCell(squarePath));
-  t.after(async () => Promise.all(readerCells.map((cell) => cell.close())));
-  const readers = readerCells.map(async (cell) => {
-    for (let index = 0; index < 30; index += 1) {
-      const snapshot = await cell.read();
-      assert.equal(snapshot.state.runtime.nextActIndex >= snapshot.state.acts.length, true);
-      await sleep(2);
-    }
-  });
-
-  const [results] = await Promise.all([Promise.all(writers), Promise.all(readers)]);
-  for (const result of results) assert.equal(result.status, 0, result.stderr);
-  const persisted = await loadSquare(squarePath);
-  const bodies = persisted.acts.filter((act) => act.kind === 'say').map((act) => act.body).sort();
-  assert.deepEqual(bodies, Array.from({ length: 12 }, (_, index) => 'concurrent-' + index).sort());
-  assert.deepEqual(persisted.acts.map((act) => act.index), Array.from({ length: persisted.acts.length }, (_, index) => index));
-});
-
-test('simultaneous non-force builds produce exactly one SQLite square', async (t) => {
-  const dir = makeDir(t);
-  const squarePath = path.join(dir, 'SQUARE.square');
-  const results = await Promise.all(Array.from(
-    { length: 8 },
-    () => runNode(path.join(FIXTURES, 'sqlite-square-build.js'), [squarePath]),
-  ));
-  const successful = results.filter((result) => result.status === 0);
-  const conflicts = results.filter((result) => result.status !== 0);
-  assert.equal(successful.length, 1, results.map((result) => result.stderr).join('\n'));
-  assert.equal(conflicts.length, 7);
-  for (const conflict of conflicts) {
-    assert.match(conflict.stderr, /Cannot build over an existing square/);
-  }
-  assert.equal((await loadSquare(squarePath)).preamble[0], 'SQLite build race');
-  assert.equal(fs.existsSync(squarePath + '.lock'), false);
-});
-
-test('failed or killed initial creators never publish a partial square and leave creation retryable', async (t) => {
-  const initializationDir = makeDir(t);
-  const initializationPath = path.join(initializationDir, 'initialization-failure.square');
-  const initialization = await runNode(
-    path.join(FIXTURES, 'sqlite-initialization-failure.js'),
-    [initializationPath],
-  );
-  assert.equal(initialization.status, 0, initialization.stderr);
-  assert.match(initialization.stdout, /initialization-failed-before-publication/);
-  assert.equal(fs.existsSync(initializationPath), false);
-  const retriedInitialization = await runNode(path.join(FIXTURES, 'sqlite-square-build.js'), [initializationPath]);
-  assert.equal(retriedInitialization.status, 0, retriedInitialization.stderr);
-  assert.equal((await loadSquare(initializationPath)).preamble[0], 'SQLite build race');
-
-  const killedDir = makeDir(t);
-  const killedPath = path.join(killedDir, 'killed-before-publication.square');
-  const creator = startNode(path.join(FIXTURES, 'sqlite-prepublication-kill.js'), [killedPath]);
-  t.after(() => { if (!creator.killed) creator.kill('SIGKILL'); });
-  await untilOutput(creator, 'ready-before-publication');
-  assert.equal(fs.existsSync(killedPath), false, 'destination appeared before publication');
-  creator.kill('SIGKILL');
-  const termination = await new Promise((resolve) => creator.once('close', (status, signal) => resolve({ status, signal })));
-  assert.equal(termination.signal, 'SIGKILL');
-  assert.equal(fs.existsSync(killedPath), false, 'killed creator left a public destination');
-  const retriedKilled = await runNode(path.join(FIXTURES, 'sqlite-square-build.js'), [killedPath]);
-  assert.equal(retriedKilled.status, 0, retriedKilled.stderr);
-  assert.equal((await loadSquare(killedPath)).preamble[0], 'SQLite build race');
-});
-
-test('SIGKILL during an uncommitted SQLite write recovers the last committed snapshot', async (t) => {
-  const squarePath = await makeSquare(t);
-  const committed = await loadSquare(squarePath);
-  const child = startNode(
-    path.join(FIXTURES, 'sqlite-uncommitted-writer.js'),
-    [squarePath, JSON.stringify({ ...committed, preamble: ['uncommitted replacement'] })],
-  );
-  t.after(() => { if (!child.killed) child.kill('SIGKILL'); });
-  await untilOutput(child, 'transaction-open');
-  child.kill('SIGKILL');
-  await new Promise((resolve) => child.once('close', resolve));
-  assert.deepEqual(await loadSquare(squarePath), committed);
-});
-
-test('idle change waits query only revision metadata, never the historical payload', async (t) => {
-  const state = await createSquareState({ force: true, hardCap: null }, 'Idle wait');
-  state.acts = Array.from({ length: 128 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index, index, body: 'history '.repeat(256) }));
-  state.runtime.nextActIndex = state.acts.length;
-  const squarePath = await makeSquare(t, state);
-  const cell = createFileCell(squarePath);
-  t.after(() => cell.close());
-  const baseline = (await cell.read()).version;
-  const queries = [];
-  const prepare = DatabaseSync.prototype.prepare;
-  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/\bFROM\s+square_snapshot\b/i.test(sql)) queries.push(sql);
-    return prepare.call(this, sql, ...args);
-  });
-
-  assert.equal(await cell.changed(baseline, 80), false);
-  assert.ok(queries.length > 0, 'the wait must check the authoritative revision');
-  for (const sql of queries) {
-    assert.match(sql, /^SELECT id, revision FROM square_snapshot$/i);
-    assert.doesNotMatch(sql, /\bstate\b/i);
-  }
-});
-
-test('revision waits abort during lock contention and close stops a pending wait', async (t) => {
-  const squarePath = await makeSquare(t);
-  const cell = createFileCell(squarePath);
-  const baseline = (await cell.read()).version;
-  const writer = new DatabaseSync(squarePath);
-  try {
-    writer.exec('BEGIN EXCLUSIVE');
-    const controller = new AbortController();
-    const reason = new Error('cancel revision wait');
-    const aborted = assert.rejects(cell.changed(baseline, 60_000, controller.signal), (error) => error === reason);
-    await sleep(30);
-    controller.abort(reason);
-    await settlesWithin(aborted, 500, 'abort left a contended revision read running');
-
-    const waiting = cell.changed(baseline, 60_000);
-    await sleep(30);
-    await cell.close();
-    assert.equal(await settlesWithin(waiting, 500, 'close left a revision wait running'), false);
-  } finally {
-    // Release SQLite's Windows file handle before makeSquare's directory cleanup.
-    try { writer.exec('ROLLBACK'); } finally { writer.close(); await cell.close(); }
-  }
-});
-
-test('already-open cells observe cross-process commits and an in-place force rebuild by revision', async (t) => {
-  const squarePath = await makeAliceSquare(t);
-  const cell = createFileCell(squarePath);
-  t.after(() => cell.close());
-  const initial = await cell.read();
-  const before = fs.statSync(squarePath);
-
-  const writer = runNode(path.join(FIXTURES, 'sqlite-square-writer.js'), [squarePath, 'Alice', 'cross-process']);
-  assert.equal(await cell.changed(initial.version, 3_000), true);
-  assert.equal((await writer).status, 0);
-  const afterWrite = await cell.read();
-  assert.ok(afterWrite.version > initial.version);
-  assert.equal(afterWrite.state.acts.at(-1)?.body, 'cross-process');
-
-  const rebuilt = await runNode(CLI, ['build', '--location', squarePath, '--force'], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    input: 'Force rebuild context\n',
-  });
-  assert.equal(rebuilt.status, 0, rebuilt.stderr);
-  assert.equal(await cell.changed(afterWrite.version, 3_000), true);
-  const afterRebuild = await cell.read();
-  assert.ok(afterRebuild.version > afterWrite.version);
-  assert.equal(fs.statSync(squarePath).ino, before.ino);
-});
-
-test('a held reader makes COMMIT retry asynchronously, runs the callback once, and releases cleanly', async (t) => {
-  const squarePath = await makeSquare(t);
-  const reader = new DatabaseSync(squarePath, { readOnly: true });
-  let readerClosed = false;
-  const cell = createFileCell(squarePath);
-  t.after(async () => {
-    try { reader.exec('ROLLBACK'); } catch { /* already released */ }
-    if (!readerClosed) reader.close();
-    await cell.close();
-  });
-  reader.exec('BEGIN');
-  reader.prepare('SELECT state FROM square_snapshot WHERE id = 1').get();
-
-  let calls = 0;
-  let settled = false;
-  const commit = cell.transact((state) => {
-    calls += 1;
-    return { state: { ...state, preamble: ['commit after reader'] }, result: undefined };
-  }).then(() => { settled = true; });
-  let immediateRan = false;
-  setImmediate(() => { immediateRan = true; });
-  await sleep(50);
+test('a blocked COMMIT retries the same callback/result and releases the event loop', async t => {
+  const { file, port } = await fixture(t);
+  const reader = new DatabaseSync(file, { readOnly: true });
+  t.after(() => reader.close());
+  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
+  let calls = 0, finished = false;
+  const pending = port.transact(w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
+  await until(() => calls === 1);
+  await sleep(40);
+  assert.equal(finished, false);
   assert.equal(calls, 1);
-  assert.equal(settled, false);
-  assert.equal(immediateRan, true, 'a busy COMMIT blocked the event loop instead of backing off asynchronously');
-
   reader.exec('ROLLBACK');
-  reader.close();
-  readerClosed = true;
-  await settlesWithin(commit, 3_000, 'COMMIT did not finish after the held reader released');
-  assert.equal((await loadSquare(squarePath)).preamble[0], 'commit after reader');
+  const result = await pending;
+  assert.equal(result.value.index, 0);
+  assert.equal(result.version, 1);
+  assert.equal(calls, 1);
 });
 
-test('an exclusive writer makes ordinary reads wait asynchronously and then return after release', async (t) => {
-  const squarePath = await makeSquare(t);
-  const writer = new DatabaseSync(squarePath);
-  const cell = createFileCell(squarePath);
-  let writerClosed = false;
-  t.after(async () => {
-    try { writer.exec('ROLLBACK'); } catch { /* already released */ }
-    if (!writerClosed) writer.close();
-    await cell.close();
-  });
+test('abort while COMMIT is busy rolls back all landing effects and preserves the caller reason', async t => {
+  const { file, port } = await fixture(t), reader = new DatabaseSync(file, { readOnly: true });
+  t.after(() => reader.close());
+  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
+  const abort = new AbortController(), reason = new Error('stop commit');
+  let calls = 0;
+  const pending = assert.rejects(port.transact(w => { calls++; w.land({ kind: 'join', actor: 'Alice', at: 0 }); }, abort.signal), e => e === reason);
+  await until(() => calls === 1);
+  abort.abort(reason);
+  await pending;
+  reader.exec('ROLLBACK');
+  const header = (await port.read(r => r.header())).value;
+  assert.equal(header.nextActIndex, 0);
+  assert.equal(await port.revision(), 0);
+  assert.deepEqual((await port.read(r => r.roster())).value, []);
+});
 
-  const expected = await cell.read();
+test('exclusive lock acquisition is cancellable before callback; close drains work and stops changed waits', async t => {
+  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
+  t.after(() => writer.close());
+  await port.revision();
   writer.exec('BEGIN EXCLUSIVE');
-  let settled = false;
-  const pending = cell.read().then((snapshot) => { settled = true; return snapshot; });
-  let immediateRan = false;
-  setImmediate(() => { immediateRan = true; });
-  await sleep(50);
-  assert.equal(settled, false);
-  assert.equal(immediateRan, true, 'an exclusive-reader retry blocked the event loop');
-
+  const abort = new AbortController(), reason = new Error('stop acquisition');
+  let calls = 0;
+  const pending = assert.rejects(port.read(r => { calls++; return r.header(); }, abort.signal), e => e === reason);
+  await sleep(40); abort.abort(reason); await pending;
+  assert.equal(calls, 0);
+  const waiting = port.changed(0, 60000);
+  const reading = assert.rejects(port.read(r => r.header()), /closed/);
+  await sleep(30);
+  await port.close();
+  await reading;
+  assert.equal(await waiting, false);
   writer.exec('ROLLBACK');
-  writer.close();
-  writerClosed = true;
-  assert.deepEqual(await settlesWithin(pending, 3_000, 'read did not finish after exclusive lock release'), expected);
+  await port.close();
 });
 
-test('exclusive lock leaves probe and changed bounded, and close cancels a pending read', async (t) => {
-  const squarePath = await makeSquare(t);
-  const writer = new DatabaseSync(squarePath);
-  const cell = createFileCell(squarePath);
-  let writerClosed = false;
-  t.after(async () => {
-    try { writer.exec('ROLLBACK'); } catch { /* already released */ }
-    if (!writerClosed) writer.close();
-    await cell.close();
+test('two processes serialize unseen selection plus sparse receipt insertion without double consumption', async t => {
+  const { file, port } = await fixture(t);
+  await port.transact(w => {
+    w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 });
+    w.land({ kind: 'say', actor: 'Alice', at: 2, body: 'one', mentions: ['Bob'] });
   });
-  const baseline = (await cell.read()).version;
-  writer.exec('BEGIN EXCLUSIVE');
-
-  const probeStarted = Date.now();
-  assert.equal(await probeSquare(squarePath), undefined);
-  assert.ok(Date.now() - probeStarted < 500, 'probe was not bounded by an exclusive writer');
-  const started = Date.now();
-  assert.equal(await cell.changed(baseline, 50), false);
-  assert.ok(Date.now() - started < 500, 'changed timeout was not bounded');
-
-  const pendingRead = cell.read().then(
-    () => new Error('pending read unexpectedly completed while the exclusive lock remained held'),
-    (error) => error,
-  );
-  const closing = cell.close();
-  const [readFailure] = await settlesWithin(Promise.all([pendingRead, closing]), 500, 'close left a pending read orphaned');
-  assert.match(String(readFailure), /closed/i);
-  writer.exec('ROLLBACK');
-  writer.close();
-  writerClosed = true;
+  const script = `import {createFileCell} from './dist/square-storage.js';
+    const p=createFileCell(process.argv[1]);
+    const result=await p.transact(w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
+    console.log(JSON.stringify(result));await p.close();`;
+  const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
+  for (const o of outcomes) assert.equal(o.code, 0, o.err);
+  const results = outcomes.map(o => JSON.parse(o.out));
+  assert.deepEqual(results.flatMap(r => r.value), [2]);
+  assert.deepEqual(results.map(r => r.changed).sort(), [false, true]);
+  assert.equal(await port.revision(), 2);
 });
 
-test('rejected async callbacks do not commit or leak unhandled rejections in memory or file cells', async (t) => {
-  const squarePath = await makeSquare(t);
-  const before = await loadSquare(squarePath);
-  for (const kind of ['memory', 'file']) {
-    const result = await runNode(path.join(FIXTURES, 'sqlite-async-transition.js'), kind === 'file' ? [kind, squarePath] : [kind]);
-    assert.equal(result.status, 0, result.stderr);
-  }
-  assert.deepEqual(await loadSquare(squarePath), before);
+test('process death before commit recovers authority and derived landing indices together', async t => {
+  const { file, port } = await fixture(t);
+  await port.transact(w => { w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 }); });
+  const before = await readSquareSnapshot(file);
+  const script = `import {createFileCell} from './dist/square-storage.js';
+    const p=createFileCell(process.argv[1]);await p.transact(w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
+  const running = child(script, file);
+  t.after(() => { if (!running.process.killed) running.process.kill('SIGKILL'); });
+  let ready = false; running.process.stdout.on('data', s => { if (s.includes('ready')) ready = true; });
+  await until(() => ready);
+  running.process.kill('SIGKILL');
+  assert.equal((await running.exited).signal, 'SIGKILL');
+  assert.deepEqual(await readSquareSnapshot(file), before);
+  assert.deepEqual((await port.read(r => r.directed('Bob', {}, { edge: 'oldest', limit: 10 }))).value.items, []);
+});
+
+test('idle revision discovery has a positive control and never selects historical bodies', async t => {
+  const { file, port } = await fixture(t);
+  await port.transact(w => {
+    for (let i = 0; i < 128; i++) w.land({ kind: 'say', actor: 'Alice', at: i, body: 'history '.repeat(128) });
+  });
+  const queries = [], prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) { queries.push(sql); return prepare.call(this, sql, ...args); });
+  assert.equal(await port.changed(1, 80), false);
+  assert.ok(queries.some(sql => /FROM square_meta/i.test(sql)), 'must actually observe authoritative revision');
+  assert.equal(queries.some(sql => /payload_json|SELECT \* FROM activities/i.test(sql)), false);
+  const writer = createFileCell(file);
+  t.after(() => writer.close());
+  await writer.transact(w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
+  assert.equal(await port.changed(1, 1000), true);
 });

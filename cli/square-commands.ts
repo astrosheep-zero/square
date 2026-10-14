@@ -7,7 +7,6 @@ import {
   type Reach,
   type RoomChangeAct,
   formatHardCap,
-  sameName,
 } from '../model.js';
 import {
   formatRefusal,
@@ -24,15 +23,13 @@ import {
   hasAutomaticDeliveryIdentity,
 } from '../registry.js';
 import { sessionIdsFromEnvironment } from '../participant-identity.js';
-import { actId, inSquareCount, nowMs } from '../runtime.js';
+import { actId, nowMs } from '../runtime.js';
 import { createSquare, openSquare } from '../square-file-adapter.js';
 import { closeOpenSquare } from '../open-square.js';
-import { Square } from '../square-wiring.js';
 import { createSquareApplication } from '../square-application.js';
-import { entryPresentation, eventPresentation } from '../views.js';
+import { entryPresentation, eventPresentation, standingCount } from '../views.js';
 import { createDefaultWakeTransport } from '../notifications.js';
 import { style } from '../tty-style.js';
-import type { Participant } from '../square-facade.js';
 
 import {
   type CommandContext,
@@ -166,8 +163,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     const squarePath = requireSquarePath(context);
     const hostLedger = hostLedgerForEnv(context.env);
     const beforeSquare = await openSquare(squarePath, { clock: nowMs, env: context.env, hostLedger });
-    const before = await entryPresentation(beforeSquare, intent.name, intent.lastN);
-    await closeOpenSquare(beforeSquare);
+    const beforeCount = await standingCount(beforeSquare).finally(() => closeOpenSquare(beforeSquare));
     const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs, hostLedger, wakeTransport: await createDefaultWakeTransport(hostLedger, nowMs) });
     let joinedName: string;
     let joinKind: 'joined' | 'reconnected' | 'taken-over';
@@ -181,7 +177,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           `✕ ${participantIdentity(intent.name)} shoos you out of the square`,
           '  · a same-named participant stands here — the name is taken',
           ...takeoverRecoveryLines(squarePath, intent.name),
-        ], { participantCount: before.participantCount }));
+        ], { participantCount: beforeCount }));
         process.exit(2);
       }
       throw error;
@@ -193,7 +189,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
         now: nowMs(),
         preview: intent.lastN === null ? undefined : 200,
         actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
-        squareState: after.state,
+        perception: after.perceptions[event.index],
       })).filter(Boolean).join('\n\n');
       const contextText = after.joinContext;
       const fallback = hasAutomaticDeliveryIdentity()
@@ -208,7 +204,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       const isRejoin = joinKind !== 'joined';
       const reconnect = joinKind === 'reconnected';
       // The long scene belongs to a name's first join here; a return reads its own line.
-      const joinedBefore = after.state.acts.filter((act) => act.kind === 'join' && sameName(act.actor, joinedName)).length > 1;
+      const joinedBefore = after.joinedBefore;
       const rejoinScene = '*the flagstones are where you left them. so is your shadow.*';
       const entryScene = joinKind !== 'joined' ? '' : joinedBefore ? rejoinScene : scene;
       const output = [
@@ -313,14 +309,10 @@ export const listenCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, true); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await Square.at({ path: squarePath, clock: nowMs });
-    try {
-      const result = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).listen(intent.target!);
-      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
-      return listenerPresentation(squarePath, intent.name, intent.target!, 'listen', result.activity, participantCount);
-    } finally {
-      await square.close();
-    }
+    const result = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).listen(intent.target!);
+    const square = await openSquare(squarePath, { clock: nowMs, env: context.env });
+    try { return listenerPresentation(squarePath, intent.name, intent.target!, 'listen', result.activity, await standingCount(square)); }
+    finally { await closeOpenSquare(square); }
   },
   present: (result) => process.stdout.write(result),
 };
@@ -329,14 +321,10 @@ export const ignoreCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, true); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await Square.at({ path: squarePath, clock: nowMs });
-    try {
-      const result = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).ignore(intent.target!);
-      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
-      return listenerPresentation(squarePath, intent.name, intent.target!, 'ignore', result.activity, participantCount);
-    } finally {
-      await square.close();
-    }
+    const result = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).ignore(intent.target!);
+    const square = await openSquare(squarePath, { clock: nowMs, env: context.env });
+    try { return listenerPresentation(squarePath, intent.name, intent.target!, 'ignore', result.activity, await standingCount(square)); }
+    finally { await closeOpenSquare(square); }
   },
   present: (result) => process.stdout.write(result),
 };
@@ -345,18 +333,14 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const square = await Square.at({ path: squarePath, clock: nowMs });
+    const targets = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).listening();
+    const square = await openSquare(squarePath, { clock: nowMs, env: context.env });
     try {
-      const participant = { name: intent.name };
-      const targets = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, participant: intent.name, clock: nowMs }).listening();
-      const participantCount = (await square.snapshot()).participants.filter((item) => item.state === 'joined').length;
       const body = targets.length === 0
-        ? `○ ${participantIdentity(participant.name)} is not turned toward anyone`
+        ? `○ ${participantIdentity(intent.name)} is not turned toward anyone`
         : ['listening', ...targets.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
-      return withPathOutput(squarePath, body, { participantCount });
-    } finally {
-      await square.close();
-    }
+      return withPathOutput(squarePath, body, { participantCount: await standingCount(square) });
+    } finally { await closeOpenSquare(square); }
   },
   present: (result) => process.stdout.write(result),
 };
@@ -380,9 +364,8 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
     validateDoneInput(body);
     const application = createSquareApplication({ cwd: context.cwd, env: context.env, squarePath, clock: nowMs, participant: intent.name });
     const result = await application.done(body);
-    const name = result.activity.actor;
     const presentation = await openSquare(squarePath, { clock: nowMs, env: context.env, hostLedger: hostLedgerForEnv(context.env) });
-    const participantCount = (await entryPresentation(presentation, name).finally(() => closeOpenSquare(presentation))).participantCount;
+    const participantCount = await standingCount(presentation).finally(() => closeOpenSquare(presentation));
     return withPathOutput(squarePath, `○ you stepped out — your footsteps fade · ${result.activity.id}`, { participantCount });
   },
   present: (result) => process.stdout.write(result),

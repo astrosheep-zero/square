@@ -13,7 +13,7 @@ import installedSquarePiExtension, {
   renderPiInbox,
   renderSquareCard,
 } from '../plugins/pi/square-pi.js';
-import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { emptyRuntimeState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
   CLAUDE_PLUGIN_ID,
@@ -304,7 +304,7 @@ test('package facade participant verbs persist through shared actions', async ()
     await alice.resume();
     await alice.done();
     await square.close();
-    const persisted = await loadSquare(squarePath);
+    const persisted = (await readSquareSnapshot(squarePath)).state;
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
     assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2, 3, 4]);
   } finally {
@@ -737,13 +737,13 @@ test('Pi steers pending activity into a running agent and commits only when it l
       assert.deepEqual(sent[0].options, { deliverAs: 'steer', triggerTurn: true });
       assert.match(sent[0].message.content, /steer me while running @Bob/);
       assert.equal(await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), false);
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       await piMessageEnd(handlers, 'another Square message');
       assert.equal(await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(async () => await hasPresentedForOwner('pi-running-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the landed notification');
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
       assert.equal(sent.length, 1);
     } finally {
       await handlers.get('session_shutdown')({}, context);
@@ -784,7 +784,7 @@ test('Pi retries a dropped steer after a transient evidence rename refusal and c
       assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
       assert.equal(sent.length, 2);
     } finally {
       await handlers.get('session_shutdown')({}, context);
@@ -831,7 +831,7 @@ test('Pi cancels the entire TUI pending batch without resurrecting it on later a
       );
       for (const index of [actIndex, queuedIndex]) {
         assert.equal(await hasPresentedForOwner('pi-tui-aborted-session', item.squarePath, 'Bob', index), false);
-        assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(index)], undefined);
+        assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(index)], undefined);
       }
       assert.equal(sent.length, 2);
     } finally {
@@ -1037,7 +1037,7 @@ test('Pi defers a rejected native injection until the next Square change', async
       actIndex = await expressToPi(item, 'retry me @Bob');
       await waitUntil(() => calls === 1, 'Pi did not attempt native injection');
       assert.equal(await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex), false);
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
       const square = await Square.at({ path: item.squarePath });
       try {
@@ -1052,7 +1052,7 @@ test('Pi defers a rejected native injection until the next Square change', async
         async () => await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex),
         'successful retry did not commit presentation',
       );
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }
@@ -1079,10 +1079,10 @@ test('Pi presents a clipped body without marking it seen after it lands', async 
       assert.match(sent[0].message.content, /x{195}…/);
       assert.doesNotMatch(sent[0].message.content, /shown in full/);
       assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
       await piMessageEnd(handlers, sent[0].message.content);
       await new Promise((resolve) => setTimeout(resolve, 25));
-      assert.equal((await loadSquare(item.squarePath)).runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
       assert.equal(sent.length, 1);
     } finally {
       await handlers.get('session_shutdown')({}, context);

@@ -10,6 +10,7 @@ import { presentPending } from './presentation-operations.js';
 import { hostLedgerForEnv } from './registry.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
+import type { OpenSquare } from './open-square.js';
 import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
 import { projectBoundaryEligibility } from './square-projections.js';
 export { pendingAtBoundary } from './square-projections.js';
@@ -112,7 +113,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
   let rendered = false;
   const renderOnce = async () => { if (!rendered) { rendered = true; result = await present(delivered.context); } };
   for (const entry of delivered.complete) {
-    let square;
+    let square: OpenSquare | undefined;
     try {
       try { square = await openSquare(entry.membership.squarePath, { env, signal }); } catch { continue; }
       for (const index of entry.actIndexes) {
@@ -123,8 +124,8 @@ async function presentPendingAtBoundaryUnlocked<T>(
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
           if (!outcome.presented) {
-            const snapshot = await square!.artifact.read(signal).catch(() => undefined);
-            if (snapshot?.state.acts.every((activity: { index: number }) => activity.index !== index)) await renderOnce();
+            const exists = await square!.artifact.read((facts) => facts.activity(index) !== undefined, signal).catch(() => undefined);
+            if (exists?.value === false) await renderOnce();
           }
         });
         presentationLocks.set(key, work);

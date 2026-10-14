@@ -2,7 +2,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError } from './model.js';
 import { validateDoneBody } from './decisions.js';
-import { currentHold, HELD_WAIT_BUDGET_MS } from './runtime.js';
+import { HELD_WAIT_BUDGET_MS } from './runtime.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
 import { Square } from './square-wiring.js';
 import { openSquare } from './square-file-adapter.js';
@@ -55,7 +55,7 @@ export interface SquareApplication {
   resume(control?: OperationControl): Promise<ExpressResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, control?: OperationControl): Promise<ExpressResult>;
-  status(): Promise<ApplicationStatusProjection>;
+  status(viewer?: string): Promise<ApplicationStatusProjection>;
   participants(): Promise<ApplicationParticipants>;
 }
 
@@ -104,21 +104,21 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const square = await open(control);
       try {
         const participantName = await requireParticipant(context, squarePath, hostLedger, env);
-        const before = await square.snapshot(control);
-        const standing = before.participants.some((item) => item.name.toLocaleLowerCase() === participantName.toLocaleLowerCase() && item.state === 'joined');
+        const before = await square.joinFacts(participantName, control);
+        const standing = before.participant?.joined ?? false;
         const identity = localSessionIdentities(env)[0];
         const owner = standing ? await readParticipantOwner(squarePath, participantName, hostLedger).catch(() => undefined) : undefined;
         const reconnect = standing && identity !== undefined && owner?.session === identity.sessionId;
         if (standing && owner !== undefined && identity !== undefined && !options.takeover && !reconnect) {
-          throw new SquareError('already_joined', `✕ ${participantName} already stands here — another session holds the name`, { pending: before.participants.length });
+          throw new SquareError('already_joined', `✕ ${participantName} already stands here — another session holds the name`, { pending: before.participantCount });
         }
         if (options.takeover && standing) {
           const replaced = await square.takeoverWithActivity(participantName, control);
           const activity = replaced.activities.at(-1) ?? null;
-          return { participant: replaced.participant.name, activity, kind: 'taken-over', participantCount: (await square.snapshot()).participants.length };
+          return { participant: replaced.participant.name, activity, kind: 'taken-over', participantCount: (await square.joinFacts(participantName)).participantCount };
         }
         const joined = await square.joinWithActivity(participantName, control);
-        return { participant: joined.participant.name, activity: joined.activity, kind: reconnect ? 'reconnected' : 'joined', participantCount: (await square.snapshot()).participants.length };
+        return { participant: joined.participant.name, activity: joined.activity, kind: reconnect ? 'reconnected' : 'joined', participantCount: (await square.joinFacts(participantName)).participantCount };
       } finally { await square.close(); }
     },
     async express(body, options = {}, control = {}) {
@@ -148,15 +148,15 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
             const waitStarted = Date.now();
             const square = await openSquare(location(), { clock: context.clock, env, hostLedger }, control);
             try {
-              const snapshot = await square.artifact.read(control.signal);
-              if (currentHold(snapshot.state.acts).active) await square.artifact.changed(snapshot.version, Math.max(1, HELD_WAIT_BUDGET_MS - heldWaitedMs), control.signal);
+              const observation = await square.artifact.read((facts) => facts.hold().active, control.signal);
+              if (observation.value) await square.artifact.changed(observation.version, Math.max(1, HELD_WAIT_BUDGET_MS - heldWaitedMs), control.signal);
             } finally { await closeOpenSquare(square); }
             heldWaitedMs += Date.now() - waitStarted;
           }
         }
       }
     },
-    catch(options, control) { return existing((square, name) => catchUp(square, name, options, undefined, control), control); },
+    catch(options, control) { return existing((square, name) => catchUp(square, name, options, control), control); },
     async history(query, control) {
       checkControl(control);
       if (context.participant !== undefined || env.SQUARE_PARTICIPANT_NAME !== undefined) return existing((square, name) => participantHistory(square, name, query, control), control);
@@ -181,9 +181,9 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       }
       return joined((participant) => participant.done(body, control), control);
     },
-    async status() {
+    async status(viewer = '') {
       const square = await openSquare(location(), { clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });
-      try { return await statusPresentation(square); } finally { await closeOpenSquare(square); }
+      try { return await statusPresentation(square, viewer); } finally { await closeOpenSquare(square); }
     },
     async participants() {
       const square = await openSquare(location(), { clock: context.clock, env, hostLedger, wakeTransport: context.wakeTransport });

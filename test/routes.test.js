@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { createMemoryCell } from '../dist/square-storage.js';
 import { hostLedgerForEnv, readParticipantOwner, sessionOwnsParticipant, squareAssignedParticipantName } from '../dist/registry.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
@@ -36,7 +37,7 @@ test('callable routes are read from receiver-owned square artifact', async () =>
     await upsertWakeRoute({ location, participant: 'Alice', sessionId: 's-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 's-a' } }, { env: item.env, at: 1 });
     assert.deepEqual((await readWakeRoutes({ location, now: 2 })).map((route) => [route.sessionId, route.address]), [['s-a', { threadId: 's-a' }]]);
     const canonical = await fs.promises.realpath(location);
-    assert.equal((await loadSquare(location)).routes[0].location, canonical, 'published routes must use the same native path as presence and artifact adapters');
+    assert.equal((await readSquareSnapshot(location)).state.routes[0].location, canonical, 'published routes must use the same native path as presence and artifact adapters');
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 /** A persisted presence row carrying a stale `route` key is ignored on read: no migration, no route authority. */
@@ -132,6 +133,26 @@ test('same participant keeps independent routes for multiple sessions', async ()
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
+test('publication preserves nonmatching route envelopes and order, collapses every matching duplicate, then becomes a semantic no-op', async () => {
+  const location = '/square-route-facts.square';
+  const matching = { location, participant: 'Bob', sessionId: 's', channel: 'paseo', kind: 'paseo', address: { a: '1', b: '2' }, updatedAt: 100 };
+  const retained = { ...matching, participant: 'Alice', epoch: ['legacy'], note: { keep: true } };
+  const artifact = createMemoryCell({ ...emptyState(), routes: [matching, retained, { ...matching, participant: 'bOB' }] });
+  try {
+    await publishWakeRoute(artifact, matching, { at: 101 });
+    const first = await artifact.read((facts) => facts.routes());
+    assert.deepEqual(first.value.map((route) => route.participant), ['Alice', 'Bob']);
+    assert.deepEqual(first.value[0].epoch, ['legacy']);
+    assert.deepEqual(first.value[0].extra, { note: { keep: true } });
+    assert.deepEqual(first.value[1].extra, {});
+    assert.equal(first.value[1].updatedAt, 101);
+    await publishWakeRoute(artifact, { ...matching, address: { b: '2', a: '1' } }, { at: 102 });
+    assert.equal(await artifact.revision(), first.version, 'address key order does not force publication');
+    const future = await artifact.read((facts) => facts.routes());
+    assert.deepEqual(future.value, first.value);
+  } finally { await artifact.close(); }
+});
+
 test('session route cleanup compares canonical locations', async () => {
   const item = fixture();
   try {
@@ -175,17 +196,13 @@ test('session route cleanup matches live transaction state instead of a prior sn
     const extraRoute = { location, participant: 'Other', sessionId: 'extra-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'extra-session' }, updatedAt: 3 };
     await writeSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], routes: [extraRoute, newRoute, oldRoute], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
     const square = await openSquare(location);
-    const read = square.artifact.read.bind(square.artifact);
-    square.artifact.read = async () => {
-      const snapshot = await read();
-      return { ...snapshot, state: { ...snapshot.state, routes: [oldRoute] } };
-    };
+    square.artifact.read = async () => { throw new Error('cleanup must read current routes inside its write transaction'); };
     try { await retireWakeRoutesForSession(square.artifact, { location, sessionId: 'old-session' }); } finally { await closeOpenSquare(square); }
     assert.deepEqual((await readWakeRoutes({ location })).map((route) => route.sessionId), ['extra-session', 'new-session']);
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 
-test('session ownership is exclusive session identity, not a refreshable updatedAt race', () => {
+test('session ownership is exclusive session identity, not a refreshable updatedAt race', async () => {
   const location = '/square.square';
   const state = {
     hardCap: null, preamble: [], warmup: [], acts: [],
@@ -195,36 +212,44 @@ test('session ownership is exclusive session identity, not a refreshable updated
     ],
     runtime: { nextActIndex: 0, observations: {}, leases: {} },
   };
-  assert.equal(sessionCanEndParticipant(state, location, 'shared', 'old-session'), false);
-  assert.equal(sessionCanEndParticipant(state, location, 'shared', 'new-session'), false);
-  assert.equal(sessionCanEndParticipant({ ...state, routes: state.routes.filter((route) => route.sessionId === 'new-session') }, location, 'shared', 'new-session'), true);
+  const artifact = createMemoryCell(state);
+  try {
+    await artifact.read((facts) => {
+      assert.equal(sessionCanEndParticipant(facts, location, 'shared', 'old-session'), false);
+      assert.equal(sessionCanEndParticipant(facts, location, 'shared', 'new-session'), false);
+    });
+    await artifact.transact((facts) => {
+      facts.replaceRoutes(facts.routes().filter((route) => route.sessionId === 'new-session'));
+      assert.equal(sessionCanEndParticipant(facts, location, 'shared', 'new-session'), true);
+    });
+  } finally { await artifact.close(); }
 });
 
-test('missing participant routes require current session proof before SessionEnd can write done', () => {
-  const state = emptyState();
-  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session'), false);
-  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session', 'new-session'), false);
-  assert.equal(sessionCanEndParticipant(state, '/square.square', 'shared', 'old-session', 'old-session'), true);
+test('missing participant routes require current session proof before SessionEnd can write done', async () => {
+  const artifact = createMemoryCell(emptyState());
+  try {
+    await artifact.read((facts) => {
+      assert.equal(sessionCanEndParticipant(facts, '/square.square', 'shared', 'old-session'), false);
+      assert.equal(sessionCanEndParticipant(facts, '/square.square', 'shared', 'old-session', 'new-session'), false);
+      assert.equal(sessionCanEndParticipant(facts, '/square.square', 'shared', 'old-session', 'old-session'), true);
+    });
+  } finally { await artifact.close(); }
 });
 
 test('done to joined clears stale participant routes before publishing the current route', async () => {
   const item = await openExpressFixture();
   try {
     const oldRoute = { location: item.location, participant: 'Alice', sessionId: 'old-session', channel: 'codex', kind: 'codex-queue', address: { threadId: 'old-session' }, updatedAt: 1 };
-    await item.square.artifact.transact((state) => {
-      state.acts.push(
-        { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-        { kind: 'done', actor: 'Alice', at: 2, body: '', index: 1 },
-      );
-      state.runtime.nextActIndex = 2;
-      state.routes = [oldRoute];
-      return { state, result: undefined };
+    await item.square.artifact.transact((facts) => {
+      facts.land({ kind: 'join', actor: 'Alice', at: 1 });
+      facts.land({ kind: 'done', actor: 'Alice', at: 2, body: '' });
+      facts.replaceRoutes([{ ...oldRoute, extra: {} }]);
     });
     const replacementEnv = { ...item.square.env, CODEX_THREAD_ID: 'new-session' };
     const replacement = await openSquare(item.location, { clock: item.square.clock, hostLedger: item.ledger, env: replacementEnv });
     try { await join(replacement, 'Alice'); } finally { await closeOpenSquare(replacement); }
     assert.deepEqual((await readWakeRoutes({ location: item.location, participant: 'Alice' })).map((route) => route.sessionId), ['new-session']);
-    assert.equal((await loadSquare(item.location)).acts.at(-1)?.kind, 'join');
+    assert.equal((await readSquareSnapshot(item.location)).state.acts.at(-1)?.kind, 'join');
   } finally { await closeOpenSquare(item.square); fs.rmSync(item.item.root, { recursive: true, force: true }); }
 });
 
@@ -332,21 +357,10 @@ test('route retirement canonicalizes an aliased item location', async () => {
     await writeSquareFile(location, emptyState());
     const square = await openSquare(location);
     try {
-      await square.artifact.transact((state) => ({
-        state: {
-          ...state,
-          routes: [{
-            location: alias,
-            participant: 'Alice',
-            sessionId: 'session-a',
-            channel: 'codex',
-            kind: 'codex-queue',
-            address: { threadId: 'session-a' },
-            updatedAt: 1,
-          }],
-        },
-        result: undefined,
-      }));
+      await square.artifact.transact((facts) => facts.replaceRoutes([{
+        location: alias, participant: 'Alice', sessionId: 'session-a', channel: 'codex', kind: 'codex-queue',
+        address: { threadId: 'session-a' }, updatedAt: 1, extra: {},
+      }]));
       await retireWakeRouteFromArtifact(square.artifact, { location, participant: 'Alice', sessionId: 'session-a' });
       assert.deepEqual(await readWakeRoutes({ location }), []);
     } finally {
@@ -366,10 +380,7 @@ test('route publication replaces an aliased persisted identity', async () => {
     fs.symlinkSync(location, alias);
     const square = await openSquare(location);
     try {
-      await square.artifact.transact((state) => ({
-        state: { ...state, routes: [{ location: alias, participant: 'Alice', sessionId: 'session-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 'session-a' }, updatedAt: 1 }] },
-        result: undefined,
-      }));
+      await square.artifact.transact((facts) => facts.replaceRoutes([{ location: alias, participant: 'Alice', sessionId: 'session-a', channel: 'codex', kind: 'codex-queue', address: { threadId: 'session-a' }, updatedAt: 1, extra: {} }]));
       await publishWakeRoute(square.artifact, {
         location,
         participant: 'Alice',
@@ -400,9 +411,7 @@ test('express refreshes only an expired or changed caller artifact route', async
     assert.equal(standing[0].address.threadId, 'alice-session');
 
     // A route past its freshness horizon is refreshed by the next publication.
-    const { state } = await item.square.artifact.read();
-    state.routes[0].updatedAt = before.updatedAt - ROUTE_FRESH_MS;
-    await writeSquareFile(item.location, state);
+    await item.square.artifact.transact((facts) => facts.replaceRoutes(facts.routes().map((route) => ({ ...route, updatedAt: before.updatedAt - ROUTE_FRESH_MS }))));
     item.setNow(700);
     await express(item.square, 'Alice', 'expired route refreshed', { force: true });
     const refreshed = (await readWakeRoutes({ location: item.location, participant: 'Alice', sessionId: 'alice-session' }))[0];
@@ -418,20 +427,17 @@ test('express publication failure does not affect the committed activity or deli
   const item = await openExpressFixture();
   try {
     await join(item.square, 'Alice');
+    await item.square.artifact.transact((facts) => facts.replaceRoutes(facts.routes().map((route) => ({ ...route, updatedAt: 0 }))));
+    item.setNow(ROUTE_FRESH_MS + 1);
     const transact = item.square.artifact.transact.bind(item.square.artifact);
-    let calls = 0;
-    let failPublication = false;
-    item.square.artifact.transact = async (fn) => {
-      calls += 1;
-      if (failPublication && calls === 4) throw new Error('publication unavailable');
-      return transact(fn);
-    };
-    failPublication = true;
+    item.square.artifact.transact = (fn, signal) => transact((facts) => fn({ ...facts,
+      replaceRoutes() { throw new Error('publication unavailable'); },
+    }), signal);
     const result = await express(item.square, 'Alice', 'committed despite route failure', { force: true });
     assert.equal(result.activity.body, 'committed despite route failure');
     assert.deepEqual(result.delivery, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
-    const state = (await item.square.artifact.read()).state;
-    assert.equal(state.acts.at(-1).body, 'committed despite route failure');
+    const { value: last } = await item.square.artifact.read((facts) => facts.activity(facts.header().lastActIndex));
+    assert.equal(last.body, 'committed despite route failure');
   } finally {
     await closeOpenSquare(item.square);
     fs.rmSync(item.item.root, { recursive: true, force: true });

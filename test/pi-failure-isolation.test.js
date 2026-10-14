@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { emptyRuntimeState, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { emptyRuntimeState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
@@ -180,7 +180,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
   await hostLedgerForEnv().ensurePresence({ location: squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
 
   const original = fs.readFileSync(squarePath);
-  const before = (await loadSquare(squarePath)).runtime.observations;
+  const before = (await readSquareSnapshot(squarePath)).state.runtime.observations;
   const handlers = new Map();
   const sent = [];
   const pi = {
@@ -223,7 +223,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
 
     readFault.mock.restore();
     assert.deepEqual(fs.readFileSync(squarePath), original);
-    assert.deepEqual((await loadSquare(squarePath)).runtime.observations, before);
+    assert.deepEqual((await readSquareSnapshot(squarePath)).state.runtime.observations, before);
     assert.equal(fs.existsSync(presented), false);
 
     assert.equal(typeof repairHint, 'function');
@@ -237,7 +237,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
       async () => await hasPresentedForOwner(sessionId, squarePath, 'Bob', 2),
       'Pi did not present after recovering from the unreadable artifact',
     );
-    assert.equal((await loadSquare(squarePath)).runtime.observations.Bob[formatActivityId(2)].state, 'seen');
+    assert.equal((await readSquareSnapshot(squarePath)).state.runtime.observations.Bob[formatActivityId(2)].state, 'seen');
   } finally {
     readFault.mock.restore();
     await handlers.get('session_shutdown')({}, context);

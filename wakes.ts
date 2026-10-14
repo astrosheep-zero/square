@@ -1,43 +1,46 @@
 import { type WatchLease, type WatchOptions } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { resolveKnownName } from './decisions.js';
-import { WATCH_STALE_MS, currentHold, freshWatchLease, removeWatchLease, watchTerminalStatus, writeWatchLease } from './runtime.js';
+import { WATCH_STALE_MS, freshWatchLease, watchTerminalStatus } from './runtime.js';
 
 export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active'; readonly lease: WatchLease };
 export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held'; readonly heartbeatAt?: number } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
 
-function filter(options: WatchOptions): { participants?: string[]; mention?: string } {
-  return { ...(options.participants === undefined ? {} : { participants: [...options.participants] }), ...(options.mention === undefined ? {} : { mention: options.mention }) };
+function newLease(leaseId: string, at: number, options: WatchOptions): WatchLease {
+  const filter = { ...(options.participants === undefined ? {} : { participants: [...options.participants] }), ...(options.mention === undefined ? {} : { mention: options.mention }) };
+  return { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter).length === 0 ? {} : { filter }) };
 }
-
 
 export async function acquireWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions): Promise<WatchLeaseStart> {
   const at = square.clock();
-  return square.artifact.transact<WatchLeaseStart>((state) => {
-    const known = resolveKnownName(state, name); const existing = freshWatchLease(state, known, at);
-    if (existing !== undefined && !options.replace) return { result: { type: 'active' as const, lease: existing } };
-    writeWatchLease(state, known, { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
-    return { state, result: { type: 'started' as const, leaseId, replaced: existing !== undefined, heartbeatAt: at } };
+  const { value } = await square.artifact.transact<WatchLeaseStart>((facts) => {
+    const known = resolveKnownName(facts, name); const existing = freshWatchLease(facts, known, at);
+    if (existing !== undefined && !options.replace) return { type: 'active', lease: existing };
+    facts.putLease(known, newLease(leaseId, at, options));
+    return { type: 'started', leaseId, replaced: existing !== undefined, heartbeatAt: at };
   });
+  return value;
 }
 
 export async function pulseWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions, heartbeatDue: boolean): Promise<WatchLeasePulse> {
   const at = square.clock();
-  return square.artifact.transact<WatchLeasePulse>((state) => {
-    const known = resolveKnownName(state, name); const lease = freshWatchLease(state, known, at);
-    if (lease?.leaseId !== leaseId) return { result: { type: 'replaced' as const } };
-    const held = currentHold(state.acts).active;
-    const terminal = held ? undefined : watchTerminalStatus(state, known);
-    if (terminal !== undefined) return { result: { type: 'terminal' as const, status: terminal } };
-    const type = held ? 'held' as const : 'sleep' as const;
-    if (!heartbeatDue) return { result: { type } };
-    writeWatchLease(state, known, { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter(options)).length === 0 ? {} : { filter: filter(options) }) });
-    return { state, result: { type, heartbeatAt: at } };
+  const { value } = await square.artifact.transact<WatchLeasePulse>((facts) => {
+    const known = resolveKnownName(facts, name); const lease = freshWatchLease(facts, known, at);
+    if (lease?.leaseId !== leaseId) return { type: 'replaced' };
+    const held = facts.hold().active;
+    const terminal = held ? undefined : watchTerminalStatus(facts, known);
+    if (terminal !== undefined) return { type: 'terminal', status: terminal };
+    const type = held ? 'held' : 'sleep';
+    if (!heartbeatDue) return { type };
+    facts.putLease(known, newLease(leaseId, at, options));
+    return { type, heartbeatAt: at };
   });
+  return value;
 }
 
 export async function releaseWatchLease(square: OpenSquare, name: string, leaseId: string | undefined): Promise<void> {
-  if (leaseId === undefined) return;
-  await square.artifact.transact((state) => { const known = resolveKnownName(state, name); return removeWatchLease(state, known, leaseId) ? { state, result: undefined } : { result: undefined }; });
+  if (leaseId !== undefined) await square.artifact.transact((facts) => facts.removeLease(resolveKnownName(facts, name), leaseId));
 }
-export async function ownsWatchLease(square: OpenSquare, name: string, leaseId: string): Promise<boolean> { const { state } = await square.artifact.read(); return freshWatchLease(state, resolveKnownName(state, name), square.clock())?.leaseId === leaseId; }
+export async function ownsWatchLease(square: OpenSquare, name: string, leaseId: string): Promise<boolean> {
+  return (await square.artifact.read((facts) => freshWatchLease(facts, resolveKnownName(facts, name), square.clock())?.leaseId === leaseId)).value;
+}

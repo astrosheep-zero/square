@@ -1,9 +1,7 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import type { SquareState } from './model.js';
 import type { HostLedgerPort, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort } from './ports.js';
-import { deriveDeliveryModel } from './delivery.js';
-import { projectWakeEvidenceFromState } from './square-projections.js';
-import { wakeIsEligible, type WakeCurrentness } from './wake-eligibility.js';
+import { capturePendingScan, collectPending, pendingFacts, pendingHead, pendingPages, sameJoin } from './delivery.js';
+import { projectWakeEvidence, wakeIsEligible, type WakeCurrentness } from './wake-eligibility.js';
 import { canonicalPath } from './canonical-path.js';
 import { retireWakeRouteFromArtifact } from './routes.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
@@ -51,22 +49,26 @@ async function attemptWakeWithin(
 }
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
   const location = await canonicalPath(input.location);
-  const { state } = await input.artifact.read();
-  const delivery = deriveDeliveryModel(state);
-  const eligibility = await projectWakeEvidenceFromState({ state, location, hostLedger: input.hostLedger, now: input.now ?? Date.now(), delivery });
+  const requested = input.activity === undefined ? undefined : typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
+  if (input.activity !== undefined && requested === undefined) return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 };
+  const owners = await input.hostLedger.listPresence({ location, now: input.now ?? Date.now() });
+  const { scan, routes, pending } = await collectPending(input.artifact, requested);
+  const eligibility = await projectWakeEvidence({ routes, pending, owners, location, hostLedger: input.hostLedger, now: input.now ?? Date.now() });
   const observeCurrentness = async (request: WakeRequest, now: number): Promise<WakeCurrentness & { readonly observationAvailable: boolean }> => {
-    const { state: currentState } = await input.artifact.read();
-    const projection = await projectWakeEvidenceFromState({ state: currentState, location, hostLedger: input.hostLedger, now });
+    const index = parseActivityId(request.activity)!;
+    const captured = scan.roster.find((participant) => participant.name === request.participant)!;
+    const { value: facts } = await input.artifact.read((facts) => {
+      const head = sameJoin(facts, captured) ? pendingHead(facts, request.participant, index) : undefined;
+      return { routes: facts.routes(), pending: head === undefined ? [] : [head] };
+    });
+    const projection = await projectWakeEvidence({ ...facts, bindings: owners, location, hostLedger: input.hostLedger, now });
     return { ...projection.currentness({ ...request, location }), observationAvailable: true };
   };
   let attempted = 0; let accepted = 0; let failed = 0; let unknown = 0; let notCapable = 0;
-  for (const recipient of delivery.joinedRecipients()) {
-    for (const notification of delivery.pendingFor(recipient)) {
-      if (input.activity !== undefined) {
-        const requested = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
-        if (requested === undefined || requested !== notification.item.index) continue;
-      }
-      const evidence = eligibility.evidence(recipient, notification.item.index);
+  for (const participant of scan.roster) {
+    const recipient = participant.name;
+    for (const notification of pending.filter((head) => head.recipient === recipient)) {
+      const evidence = eligibility.evidence(recipient, notification.index);
       if (evidence.terminal !== undefined) continue;
       const candidates = evidence.attemptableRoutes;
       let acceptedForAttention = false;
@@ -75,8 +77,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
       let notCapableForAttention = false;
       if (candidates.length === 0 && !evidence.presented) notCapableForAttention = true;
       for (const route of candidates) {
-        const activity = formatActivityId(notification.item.index);
-        const attention = { squarePath: location, actIndex: notification.item.index, recipient };
+        const activity = formatActivityId(notification.index);
+        const attention = { squarePath: location, actIndex: notification.index, recipient };
         const leaseMs = input.timeoutMs ?? 5000;
         const requestRoute = route;
         if (input.transport.probe !== undefined) {
@@ -94,7 +96,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
         if (claim.status === 'busy') break;
         if (claim.status === 'terminal') break;
         const { claimToken, attemptN } = claim;
-        const request = { location: input.location, participant: recipient, activity, actor: notification.item.actor, route: requestRoute };
+        const request = { location: input.location, participant: recipient, activity, actor: notification.actor, route: requestRoute };
         const claimRelease: Parameters<typeof releaseWakeClaim>[0] = { hostLedger: input.hostLedger, location, participant: recipient, session: route.sessionId, activity, claimToken, routeKind: route.kind, attemptN };
         // One teardown path for every exit after claim acquisition; each call site keeps its own error policy.
         const abandon = async (details: Parameters<typeof releaseWakeClaim>[1], options: { readonly bestEffortClaim?: boolean } = {}): Promise<void> => {
@@ -172,19 +174,24 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
 }
 
 export async function sweepPending(input: { readonly artifact: SquareArtifactPort; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number }): Promise<number[]> {
-  const { state } = await input.artifact.read();
-  return sweepPendingFromState({ ...input, state });
-}
-
-export async function sweepPendingFromState(input: { readonly state: SquareState; readonly hostLedger: HostLedgerPort; readonly location: string; readonly now: number; readonly graceMs: number; readonly limit: number; readonly deriveDelivery?: (snapshot: SquareState) => ReturnType<typeof deriveDeliveryModel> }): Promise<number[]> {
-  const delivery = input.deriveDelivery?.(input.state) ?? deriveDeliveryModel(input.state);
-  const eligibility = await projectWakeEvidenceFromState({ ...input, delivery });
-  const selected = new Set<number>();
-  for (const recipient of delivery.joinedRecipients()) {
-    for (const notification of delivery.pendingFor(recipient)) {
-      if (input.now - notification.item.at <= input.graceMs) continue;
-      if (wakeIsEligible(eligibility.evidence(recipient, notification.item.index))) selected.add(notification.item.index);
+  if (input.limit <= 0) return [];
+  const location = await canonicalPath(input.location);
+  const owners = await input.hostLedger.listPresence({ location, now: input.now });
+  const { value: scan } = await input.artifact.read(capturePendingScan);
+  const selected: import('./ports.js').DirectedHead[] = [];
+  const indexes = new Set<number>();
+  for await (const page of pendingPages(input.artifact, scan)) {
+    const { value: facts } = await input.artifact.read((facts) => pendingFacts(facts, scan, page));
+    const eligibility = await projectWakeEvidence({ ...facts, bindings: owners, location, hostLedger: input.hostLedger, now: input.now });
+    for (const head of facts.pending) {
+      if (indexes.size >= input.limit && !indexes.has(head.index)) break;
+      if (input.now - head.at > input.graceMs && wakeIsEligible(eligibility.evidence(head.recipient, head.index))) {
+        selected.push(head); indexes.add(head.index);
+      }
     }
+    if (indexes.size >= input.limit) break;
   }
-  return [...selected].sort((left, right) => left - right).slice(0, Math.max(0, input.limit));
+  const { value: facts } = await input.artifact.read((facts) => pendingFacts(facts, scan, selected));
+  const eligibility = await projectWakeEvidence({ ...facts, bindings: owners, location, hostLedger: input.hostLedger, now: input.now });
+  return [...new Set(facts.pending.filter((head) => wakeIsEligible(eligibility.evidence(head.recipient, head.index))).map((head) => head.index))];
 }

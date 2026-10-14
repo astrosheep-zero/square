@@ -1,4 +1,4 @@
-import type { InboxNotification, SquareState, StoredAct, WakeRoute, WatchLease } from './model.js';
+import type { Act, HardCap, InboxNotification, StoredAct, WakeRoute, WakeRouteKind, WatchLease } from './model.js';
 export type {
   ClaimResult,
   EvidenceClaim,
@@ -16,10 +16,125 @@ export type {
 } from './host-ledger.js';
 import type { HostLedgerPort } from './host-ledger.js';
 
-/** Atomic artifact access. Never exposes framing, compression, locks, or storage schema. */
+export type ActivityIndex = number;
+export interface SquareHeader {
+  readonly revision: number;
+  readonly nextActIndex: number;
+  readonly lastActIndex: number;
+  readonly hardCap: HardCap;
+  readonly throttlePerMinute?: number;
+  readonly preamble: readonly string[];
+  readonly warmup: readonly string[];
+}
+export interface ParticipantFact {
+  readonly name: string;
+  readonly firstIndex: number;
+  readonly joined: boolean;
+  readonly done: boolean;
+  readonly sayCount: number;
+  readonly lastActiveAt?: number;
+  readonly lastJoinIndex?: number;
+}
+export interface AttentionFact {
+  readonly listener: string;
+  readonly target: string;
+  readonly kind: 'listen' | 'ignore';
+  readonly sinceIndex: number;
+}
+export interface ActivityHead {
+  readonly index: ActivityIndex;
+  readonly at: number;
+  readonly kind: StoredAct['kind'];
+  readonly actor?: string;
+  readonly reach?: 'bell';
+  readonly reply?: ActivityIndex;
+}
+export interface ActivityFilter {
+  readonly afterIndex?: number;
+  readonly beforeIndex?: number;
+  readonly throughIndex?: number;
+  readonly indexes?: readonly ActivityIndex[];
+  readonly kinds?: readonly StoredAct['kind'][];
+  readonly actors?: readonly string[];
+  readonly actorMatch?: 'identity' | 'exact';
+  readonly actorRequired?: true;
+  readonly afterAt?: number;
+}
+export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
+export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
+export interface DirectedFilter {
+  readonly afterIndex?: number;
+  readonly beforeIndex?: number;
+  readonly throughIndex?: number;
+  readonly unseenOnly?: true;
+  readonly senders?: readonly string[];
+  readonly attentionOnly?: true;
+}
+export interface DirectedHead {
+  readonly index: ActivityIndex;
+  readonly at: number;
+  readonly actor: string;
+  readonly recipient: string;
+  readonly route: 'mention' | 'reply' | 'attention' | 'bell';
+}
+export interface LandedRecipient { readonly recipient: string; readonly route: DirectedHead['route'] }
+export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
+export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+export interface RouteFact {
+  readonly location: string;
+  readonly participant: string;
+  readonly sessionId: string;
+  readonly channel: string;
+  readonly kind: WakeRouteKind;
+  readonly address: Readonly<Record<string, string>>;
+  readonly updatedAt: number;
+  readonly epoch?: JsonValue;
+  readonly extra: Readonly<Record<string, JsonValue>>;
+}
+/** Domain facts exist only during a synchronous artifact callback. Values are detached. */
+export interface SquareRead {
+  header(): SquareHeader;
+  participant(requestedName: string): ParticipantFact | undefined;
+  roster(): readonly ParticipantFact[];
+  attention(listener: string): readonly AttentionFact[];
+  incomingAttention(sender: string): readonly AttentionFact[];
+  hold(): { readonly active: boolean; readonly at?: number; readonly reason?: string; readonly actor?: string };
+  activity(index: ActivityIndex): StoredAct | undefined;
+  activityHeads(filter: ActivityFilter, page: IndexPage): FactPage<ActivityHead>;
+  activities(indexes: readonly ActivityIndex[]): readonly StoredAct[];
+  activityCount(filter: ActivityFilter): number;
+  contextIndexes(centers: readonly ActivityIndex[], before: number, after: number): readonly ActivityIndex[];
+  sayOrdinals(indexes: readonly ActivityIndex[]): Readonly<Record<number, number>>;
+  recentSayTimes(afterExclusive: number, takeLatest: number, actor?: string, bellOnly?: true): readonly number[];
+  audience(index: ActivityIndex): readonly LandedRecipient[];
+  directed(recipient: string, filter: DirectedFilter, page: IndexPage): FactPage<DirectedHead>;
+  directedAt(recipient: string, index: ActivityIndex): DirectedHead | undefined;
+  directedCount(recipient: string, filter: DirectedFilter): number;
+  pendingAudience(afterExclusive: number, throughInclusive: number, activityLimit: number): {
+    readonly groups: readonly { readonly index: ActivityIndex; readonly at: number; readonly actor: string; readonly recipients: readonly LandedRecipient[] }[];
+    readonly hasMore: boolean;
+  };
+  receipt(requestedName: string, index: ActivityIndex): { readonly at: number } | undefined;
+  receiptFacts(requestedName: string, afterIndex: number): ReceiptFacts;
+  receiptAssignments(): readonly ReceiptAssignment[];
+  lease(requestedName: string): WatchLease | undefined;
+  routes(): readonly RouteFact[];
+}
+export interface SquareWrite extends SquareRead {
+  land(activity: Act & { readonly at: number }): StoredAct;
+  markSeen(requestedName: string, indexes: readonly ActivityIndex[], at: number): number;
+  putLease(requestedName: string, lease: WatchLease): boolean;
+  removeLease(requestedName: string, expectedLeaseId: string): boolean;
+  replaceRoutes(routes: readonly RouteFact[]): boolean;
+}
+export interface SquareReadResult<R> { readonly value: R; readonly version: number }
+export interface SquareCommitResult<R> extends SquareReadResult<R> { readonly changed: boolean }
+/** Atomic artifact access; no framing, SQL or lazy transaction capability escapes. */
 export interface SquareArtifactPort {
-  read(signal?: AbortSignal): Promise<{ state: SquareState; version: number }>;
-  transact<R>(fn: (state: SquareState, version: number) => { state?: SquareState; result: R }, signal?: AbortSignal): Promise<R>;
+  read<R>(select: (facts: SquareRead) => R, signal?: AbortSignal): Promise<SquareReadResult<R>>;
+  transact<R>(change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
+  revision(signal?: AbortSignal): Promise<number>;
   changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -120,5 +235,5 @@ export interface PresentPendingInput {
   /** Boundary previews that were clipped remain pending for a later full presentation. */
   readonly markSeen?: boolean;
   /** Receiver-specific fences checked inside the artifact observation transaction. */
-  readonly current?: (state: SquareState) => boolean;
+  readonly current?: (facts: SquareRead) => boolean;
 }

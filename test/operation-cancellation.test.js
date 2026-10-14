@@ -83,23 +83,27 @@ test("memory change wait removes abort listeners on normal settlement", async ()
   const cell = createMemoryCell(createSquareState({ force: false, hardCap: null }, "context"));
   const controller = new AbortController();
   const waiting = cell.changed(0, 60_000, controller.signal);
-  await cell.transact((state) => ({ state: { ...state, preamble: ["changed"] }, result: undefined }));
+  await cell.transact((facts) => facts.putLease("Watcher", { leaseId: "lease", heartbeatAt: 1, expiresAt: 60_000 }));
   assert.equal(await waiting, true);
   controller.abort(new Error("late cancellation"));
   await cell.close();
 });
 
-test("abort during a transition preserves the committed result", async () => {
+test("abort inside a transition before commit rolls back the whole change", async () => {
   const initial = createSquareState({ force: false, hardCap: null }, "context");
   const cell = createMemoryCell(initial);
   const controller = new AbortController();
-  const result = await cell.transact((state) => {
-    controller.abort(new Error("response discarded"));
-    state.preamble = ["committed"];
-    return { state, result: "committed-result" };
-  }, controller.signal);
-  assert.equal(result, "committed-result");
-  assert.deepEqual((await cell.read()).state.preamble, ["committed"]);
+  await assert.rejects(
+    () => cell.transact((facts) => {
+      facts.land({ kind: "join", actor: "Alice", at: 1 });
+      controller.abort(new Error("response discarded"));
+    }, controller.signal),
+    /response discarded/,
+  );
+  const header = (await cell.read((facts) => facts.header())).value;
+  assert.equal(header.revision, 0);
+  assert.equal(header.lastActIndex, -1);
+  assert.equal(header.nextActIndex, 0);
   await cell.close();
 });
 
@@ -137,7 +141,8 @@ test("post-commit express preserves its result after response cancellation", asy
   const wrapped = { ...open, artifact: { ...artifact, transact: async (fn, signal) => { const result = await artifact.transact(fn, signal); controller.abort(new Error("response discarded")); return result; } } };
   const result = await express(wrapped, joined.name, "committed", { force: true }, { signal: controller.signal });
   assert.equal(result.activity.body, "committed");
-  assert.equal((await artifact.read()).state.acts.at(-1).body, "committed");
+  const latest = (await artifact.read((facts) => facts.activityHeads({}, { edge: "newest", limit: 1 }))).value.items[0];
+  assert.equal((await artifact.read((facts) => facts.activity(latest.index))).value.body, "committed");
   await open.artifact.close();
 });
 
@@ -189,7 +194,7 @@ test("post-commit catch preserves its result before return cancellation", async 
   const controller = new AbortController();
   const artifact = open.artifact;
   const wrapped = { ...open, artifact: { ...artifact, transact: async (fn, signal) => { const result = await artifact.transact(fn, signal); controller.abort(new Error("response discarded")); return result; } } };
-  const result = await catchUp(wrapped, bob.name, {}, undefined, { signal: controller.signal });
+  const result = await catchUp(wrapped, bob.name, {}, { signal: controller.signal });
   assert.equal(result.activities[0].body, "boundary catch");
   assert.deepEqual((await catchUp(open, bob.name)).activities, []);
   await open.artifact.close();

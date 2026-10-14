@@ -62,8 +62,9 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       const probe = await openSquare(row.location, { hostLedger: ledger, env: scoped, signal });
       let eligible = false;
       try {
-        const state = (await probe.artifact.read(signal)).state;
-        const last = state.acts.findLast((activity) => activity.actor === row.participant && ['join', 'done', 'kick'].includes(activity.kind));
+        const { value: last } = await probe.artifact.read((facts) => facts.activityHeads({
+          actors: [row.participant], actorMatch: 'exact', kinds: ['join', 'done'],
+        }, { edge: 'newest', limit: 1 }).items[0], signal);
         eligible = last?.kind === 'done' && `act/${last.index}` === row.activity;
       } finally { await closeOpenSquare(probe); }
       if (!eligible) continue;
@@ -95,12 +96,20 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
         if (current.epoch !== epoch) await ledger.ensurePresence({ ...current, epoch });
         const square = await openSquare(binding.location, { hostLedger: ledger, env: scoped, signal });
         try {
-          const state = (await square.artifact.read(signal)).state;
-          const existing = state.routes?.find((route) => route.participant === binding.participant && route.sessionId === input.sessionId && route.kind === 'claude-native' && route.epoch === epoch);
+          const { value: existing } = await square.artifact.read((facts) => facts.routes().find((route) => route.participant === binding.participant && route.sessionId === input.sessionId && route.kind === 'claude-native' && route.epoch === epoch), signal);
           if (!supported) { if (existing) await retireWakeRouteFromArtifact(square.artifact, existing, { expectedEpoch: epoch }); return; }
           const cutoff = cancelled?.epoch === epoch || (lateCancelledJoin && current.epoch === binding.epoch && (current.updatedAt ?? Infinity) <= input.cancelAt!) ? input.cancelAt : undefined;
           if (cutoff !== undefined) {
-            const through = state.acts.filter((activity) => activity.at <= cutoff).reduce((highest, activity) => Math.max(highest, activity.index), -1);
+            const { value: through } = await square.artifact.read((facts) => {
+              let beforeIndex: number | undefined;
+              for (;;) {
+                const page = facts.activityHeads({ beforeIndex }, { edge: 'newest', limit: 100 });
+                const last = [...page.items].reverse().find((activity) => activity.at <= cutoff);
+                if (last !== undefined) return last.index;
+                if (!page.hasMore) return -1;
+                beforeIndex = page.items[0].index;
+              }
+            }, signal);
             await ledger.suppressPresence({ ...current, epoch }, through);
           }
           if (!existing || existing.address.endpoint !== input.endpoint) recovery.add(binding.location);

@@ -1,11 +1,8 @@
 import { formatActivityId } from './square-core.js';
-import { nameKey, type InboxMembership, type InboxNotification, type SquareState } from './model.js';
-import type { HostLedgerPort, PresenceRecord, SquareArtifactPort, PresentationEvidenceProjection, PresentationProjection, SessionBindingProjection } from './ports.js';
-import { deriveDeliveryModel, leaseOwnsNotification } from './delivery.js';
-import { freshWatchLease } from './runtime.js';
-import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
+import { nameKey, type InboxMembership } from './model.js';
+import type { HostLedgerPort, PresentationEvidenceProjection, SessionBindingProjection } from './ports.js';
+import { leaseOwnsNotification } from './delivery.js';
 import { canonicalPath } from './canonical-path.js';
-import { projectWakeEligibility, type WakeEligibility } from './wake-eligibility.js';
 
 /** A fresh blocking catch owns only the notifications admitted by its filter. */
 export function pendingAtBoundary(inbox: InboxMembership[]): InboxMembership[] {
@@ -68,46 +65,6 @@ export async function projectSessionBindings(input: {
   }));
 }
 
-export async function projectPresentation(input: {
-  readonly artifact: SquareArtifactPort;
-  readonly binding: SessionBindingProjection;
-  readonly now?: number;
-}): Promise<PresentationProjection> {
-  const { state } = await input.artifact.read();
-  const delivery = deriveDeliveryModel(state);
-  const known = delivery.knownParticipant(input.binding.participant);
-  if (known === undefined || !delivery.joinedRecipients().some((recipient) => recipient.toLocaleLowerCase() === known.toLocaleLowerCase())) return { binding: input.binding, joined: false, notifications: [] };
-  const binding = input.binding.participant === known ? input.binding : { ...input.binding, participant: known };
-  const notifications: InboxNotification[] = delivery.pendingFor(known).map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, route, body: item.body }));
-  const lease = freshWatchLease(state, known, input.now ?? Date.now());
-  return { binding, joined: true, notifications, ...(lease === undefined ? {} : { catchLease: lease }) };
-}
-
-export interface NativePendingPreview {
-  readonly payload: string;
-  readonly clipped: boolean;
-}
-
-/** The one native pending preview. `epoch` matches exactly, and each harness pins its own address entry. */
-export type NativePendingPreviewInput = {
-  readonly location: string; readonly sessionId: string; readonly participant: string;
-  readonly actIndex: number; readonly epoch?: number; readonly cancelledThrough?: number; readonly now: number;
-} & (
-  | { readonly routeKind: 'claude-native'; readonly address: { readonly endpoint: string } }
-  | { readonly routeKind: 'opencode-server'; readonly address: { readonly sessionId: string } }
-);
-
-export function nativePendingPreview(state: SquareState, input: NativePendingPreviewInput): NativePendingPreview | undefined {
-  const route = state.routes?.find((candidate) => candidate.kind === input.routeKind && candidate.sessionId === input.sessionId
-    && candidate.epoch === input.epoch && nameKey(candidate.participant) === nameKey(input.participant)
-    && (input.routeKind === 'claude-native' ? candidate.address.endpoint === input.address.endpoint : candidate.address.sessionId === input.address.sessionId));
-  if (!route || input.actIndex <= (input.cancelledThrough ?? -1)) return undefined;
-  const notification = deriveDeliveryModel(state).pendingFor(input.participant).find((entry) => entry.item.index === input.actIndex);
-  const lease = freshWatchLease(state, input.participant, input.now);
-  if (!notification || (lease !== undefined && leaseOwnsNotification(lease, { ...notification.item, recipient: input.participant, route: notification.route }))) return undefined;
-  return { payload: renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: input.actIndex, actor: notification.item.actor, route: notification.route, body: notification.item.body }), clipped: attentionBodyIsClipped(notification.item.body) };
-}
-
 export async function projectPresentationEvidence(input: {
   readonly hostLedger: HostLedgerPort;
   readonly location?: string;
@@ -125,19 +82,3 @@ export function presentationSuppressesWake(evidence: readonly Pick<PresentationE
   return evidence.some((row) => row.outcome === 'clipped' || row.outcome === 'presented');
 }
 
-/** Read primary evidence once; wake behavior belongs to the pure eligibility projection. */
-export async function projectWakeEvidenceFromState(input: {
-  readonly location: string;
-  readonly state: SquareState;
-  readonly hostLedger: HostLedgerPort;
-  readonly now: number;
-  readonly delivery?: ReturnType<typeof deriveDeliveryModel>;
-}): Promise<WakeEligibility> {
-  const canonicalLocation = await canonicalPath(input.location);
-  const delivery = input.delivery ?? deriveDeliveryModel(input.state);
-  const owners = await input.hostLedger.listPresence({ location: canonicalLocation, now: input.now });
-  const evidence = await input.hostLedger.listEvidence({ location: canonicalLocation, now: input.now });
-  const wakeRecords = evidence.filter((row) => row.kind === 'wake');
-  const presentations = evidence.filter((row) => row.kind === 'presentation').map((row) => ({ location: row.location, participant: row.participant, sessionId: row.session, activity: row.activity, outcome: row.outcome, ...(row.at === undefined ? {} : { at: row.at }) }));
-  return projectWakeEligibility({ state: input.state, location: canonicalLocation, owners, wakeRecords, presentations, now: input.now, delivery });
-}

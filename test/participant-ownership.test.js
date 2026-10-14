@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareState, loadSquare, writeSquareFile } from '../dist/artifact.js';
+import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { Square } from '../dist/square-wiring.js';
@@ -129,7 +129,7 @@ test('a file square opened without a ledger binds the env ledger for join and do
       await participant.done();
       assert.equal(await readParticipantOwner(f.location, 'Alice', envLedger), undefined);
       assert.deepEqual(await envLedger.listPresence({ location: f.location, participant: 'Alice' }), []);
-      assert.deepEqual((await loadSquare(f.location)).acts.map((act) => act.kind), ['join', 'done']);
+      assert.deepEqual((await readSquareSnapshot(f.location)).state.acts.map((act) => act.kind), ['join', 'done']);
     } finally { await square.close(); }
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

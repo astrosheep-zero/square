@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { activityRetryCommand } from '../dist/activity.js';
@@ -184,7 +185,7 @@ test('only admission rejection proves a failed express unsent; post-commit failu
     throw new SquareError('invalid_args', 'injected failure after the commit');
   };
   await assert.rejects(express(square, 'Alice', 'actually committed'), (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
-  assert.equal((await square.artifact.read()).state.acts.at(-1).body, 'actually committed');
+  assert.equal((await square.artifact.read((facts) => facts.activity(facts.header().lastActIndex))).value.body, 'actually committed');
   for (const landedId of [undefined, 'act/1']) {
     const rendered = renderActivityUncertain({ squarePath: '/tmp/test.square', name: 'Alice', draftPath: '/tmp/draft.md', landedId });
     assert.match(rendered, /sending it again could repeat your activity/);
@@ -192,4 +193,24 @@ test('only admission rejection proves a failed express unsent; post-commit failu
     assert.doesNotMatch(rendered, / express |--force|< '\/tmp\/draft.md'/);
   }
   await square.artifact.close();
+});
+
+test('selected artifact corruption never advertises a safely unsent activity', async () => {
+  const file = await persistSquare(async ({ square }) => {
+    const writer = await square.join('Writer');
+    await writer.express('original', { force: true });
+  });
+  const database = new DatabaseSync(file);
+  const before = database.prepare('SELECT revision, next_act_index FROM square_meta').get();
+  database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":42}');
+  database.close();
+  const square = await Square.at({ path: file });
+  try {
+    const writer = await square.join('Writer');
+    await assert.rejects(writer.express('reply', { force: true, reply: 'act/1' }),
+      (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
+  } finally { await square.close(); }
+  const after = new DatabaseSync(file);
+  try { assert.deepEqual(after.prepare('SELECT revision, next_act_index FROM square_meta').get(), before); }
+  finally { after.close(); }
 });

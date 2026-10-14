@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { loadSquare, emptyRuntimeState } from '../dist/artifact.js';
+import { readSquareSnapshot, emptyRuntimeState } from '../dist/artifact.js';
 import { decideAct } from '../dist/decisions.js';
+import { createMemoryCell } from '../dist/square-storage.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
 import { activityRetryCommand } from '../dist/activity.js';
 import { Square } from '../dist/index.js';
@@ -27,6 +28,12 @@ const standingState = () => makeState({
     { kind: 'join', actor: 'Cara', at: 3 },
   ],
 });
+
+async function decide(state, input) {
+  const cell = createMemoryCell(state);
+  try { return (await cell.read((facts) => decideAct(facts, input))).value; }
+  finally { await cell.close(); }
+}
 
 test('scanMentionCandidates honors boundaries, code spans, and the name grammar', () => {
   const cases = [
@@ -56,13 +63,13 @@ test('scanMentionCandidates honors boundaries, code spans, and the name grammar'
   }
 });
 
-test('decideAct lifts a roster-matching body @name into mentions at landing', () => {
-  const decision = decideAct(standingState(), { name: 'Alice', body: 'hey @bob', force: true, now: 10 });
+test('decideAct lifts a roster-matching body @name into mentions at landing', async () => {
+  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @bob', force: true, now: 10 });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, ['Bob']);
 });
 
-test('a roster match may end at a CJK boundary but never at an ASCII one', () => {
+test('a roster match may end at a CJK boundary but never at an ASCII one', async () => {
   const state = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -70,30 +77,30 @@ test('a roster match may end at a CJK boundary but never at an ASCII one', () =>
       { kind: 'join', actor: '小明', at: 3 },
     ],
   });
-  const fluent = decideAct(state, { name: 'Alice', body: '告诉@rei这个', force: true, now: 10 });
+  const fluent = await decide(state, { name: 'Alice', body: '告诉@rei这个', force: true, now: 10 });
   assert.deepEqual(fluent.act.mentions, ['rei']);
-  const cjkName = decideAct(state, { name: 'Alice', body: '@小明早上好', force: true, now: 11 });
+  const cjkName = await decide(state, { name: 'Alice', body: '@小明早上好', force: true, now: 11 });
   assert.deepEqual(cjkName.act.mentions, ['小明']);
-  assert.throws(
-    () => decideAct(state, { name: 'Alice', body: '@小明abc', force: true, now: 12 }),
+  await assert.rejects(
+    () => decide(state, { name: 'Alice', body: '@小明abc', force: true, now: 12 }),
     (error) => /does not match anyone in this square/.test(error.message),
   );
 });
 
-test('decideAct never backs off to a shorter roster prefix', () => {
-  assert.throws(
-    () => decideAct(standingState(), { name: 'Alice', body: 'hey @Bob2', force: true, now: 10 }),
+test('decideAct never backs off to a shorter roster prefix', async () => {
+  await assert.rejects(
+    () => decide(standingState(), { name: 'Alice', body: 'hey @Bob2', force: true, now: 10 }),
     (error) => /@Bob2 does not match anyone in this square/.test(error.message),
   );
 });
 
-test('body @names union with --mention and dedupe case-insensitively', () => {
-  const decision = decideAct(standingState(), { name: 'Alice', body: '@Bob and @cara', force: true, now: 10, mentions: ['Cara'] });
+test('body @names union with --mention and dedupe case-insensitively', async () => {
+  const decision = await decide(standingState(), { name: 'Alice', body: '@Bob and @cara', force: true, now: 10, mentions: ['Cara'] });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, ['Cara', 'Bob']);
 });
 
-test('an unmatched body @name is rejected with a two-tier message and an escape hint', () => {
+test('an unmatched body @name is rejected with a two-tier message and an escape hint', async () => {
   const state = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -101,8 +108,8 @@ test('an unmatched body @name is rejected with a two-tier message and an escape 
       { kind: 'done', actor: 'Bob', at: 3 },
     ],
   });
-  assert.throws(
-    () => decideAct(state, { name: 'Alice', body: '@Bob @Eve listen up', force: true, now: 10 }),
+  await assert.rejects(
+    () => decide(state, { name: 'Alice', body: '@Bob @Eve listen up', force: true, now: 10 }),
     (error) => /@Eve does not match anyone in this square/.test(error.message)
       && /@Bob is not standing in this square/.test(error.message)
       && /--no-mention/.test(error.message)
@@ -110,31 +117,31 @@ test('an unmatched body @name is rejected with a two-tier message and an escape 
   );
 });
 
-test('explicit noMention switches body scanning off entirely', () => {
-  const decision = decideAct(standingState(), { name: 'Alice', body: 'hey @Bob', force: true, now: 10, noMention: true });
+test('explicit noMention switches body scanning off entirely', async () => {
+  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @Bob', force: true, now: 10, noMention: true });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, []);
 });
 
-test('a bell rejects a body @name but tolerates unmatched at-sign text', () => {
-  assert.throws(
-    () => decideAct(standingState(), { name: 'Alice', body: 'look @Bob', force: true, now: 10, reach: 'bell' }),
+test('a bell rejects a body @name but tolerates unmatched at-sign text', async () => {
+  await assert.rejects(
+    () => decide(standingState(), { name: 'Alice', body: 'look @Bob', force: true, now: 10, reach: 'bell' }),
     (error) => /bell cannot be combined with a mention/.test(error.message),
   );
-  const decision = decideAct(standingState(), { name: 'Alice', body: 'look @decorator fans', force: true, now: 10, reach: 'bell' });
+  const decision = await decide(standingState(), { name: 'Alice', body: 'look @decorator fans', force: true, now: 10, reach: 'bell' });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, []);
   assert.equal(decision.act.reach, 'bell');
 });
 
-test('body @names share the mention limit with --mention', () => {
+test('body @names share the mention limit with --mention', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0 },
     ...Array.from({ length: 10 }, (_, index) => ({ kind: 'join', actor: `P${index + 1}`, at: index + 1 })),
     { kind: 'join', actor: 'Bob', at: 12 },
   ];
-  assert.throws(
-    () => decideAct(makeState({ acts }), {
+  await assert.rejects(
+    () => decide(makeState({ acts }), {
       name: 'Alice', body: 'and @Bob', force: true, now: 20,
       mentions: Array.from({ length: 10 }, (_, index) => `P${index + 1}`),
     }),
@@ -175,12 +182,12 @@ test('the CLI lands a body @name with a reach echo and rejects unknown names', a
   const directed = run(withName(file, 'Alice', ['express', 'hey @Bob']));
   assert.equal(directed.status, 0, directed.stderr);
   assert.match(directed.stdout, /● you walk over to @Bob — act\/\d+/);
-  let acts = (await loadSquare(file)).acts;
+  let acts = (await readSquareSnapshot(file)).state.acts;
   assert.deepEqual(acts.at(-1).mentions, ['Bob']);
 
   const bare = run(withName(file, 'Alice', ['express', '--no-mention', 'hey @Bob']));
   assert.equal(bare.status, 0, bare.stderr);
-  acts = (await loadSquare(file)).acts;
+  acts = (await readSquareSnapshot(file)).state.acts;
   assert.deepEqual(acts.at(-1).mentions, []);
 
   const unknown = run(withName(file, 'Alice', ['express', 'hey @Eve']));

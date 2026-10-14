@@ -1,11 +1,10 @@
-import { type StoredAct, type SquareState, type PublicAct, type RoomChangeAct, sameName } from './model.js';
+import { type StoredAct, type PublicAct, type RoomChangeAct, sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, formatActivityId, type Perception } from './square-core.js';
-import { perceiveActivity } from './delivery.js';
-import { actId, sayNumberFor, HELD_WAIT_BUDGET_MS } from './runtime.js';
+import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
+import { actId, HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
 import { compareParticipantActivity } from './decisions.js';
@@ -299,13 +298,11 @@ function renderPresenceOnlySay(
 export function renderAmbientEventFacts(
   event: StoredAct,
   viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
+  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
 ): RenderedEvent {
   if (event.kind !== 'say') return renderEventCliFacts(event, opts);
-  if (opts.perception === undefined && opts.squareState === undefined) {
-    throw new Error('Ambient say rendering requires a settled perception or SquareState');
-  }
-  const seen = opts.perception ?? perceiveActivity(opts.squareState!, event, viewer);
+  if (opts.perception === undefined) throw new Error('Ambient say rendering requires a settled perception');
+  const seen = opts.perception;
   if (seen === 'presence') {
     const presence = renderPresenceOnlySay(event, opts);
     const body = opts.presencePreview === undefined ? { text: '', clipped: false } : renderedBody(event.body, opts.presencePreview);
@@ -317,7 +314,7 @@ export function renderAmbientEventFacts(
 export function renderAmbientEvent(
   event: StoredAct,
   viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; squareState?: SquareState; perception?: Perception } = {}
+  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
 ): string {
   return renderAmbientEventFacts(event, viewer, opts).text;
 }
@@ -351,21 +348,8 @@ function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[];
   ];
 }
 
-export function renderPendingFeed(
-  history: StoredAct[],
-  publicItems: PublicAct[],
-  viewer = '',
-  squareState: SquareState,
-): string {
-  const lines: string[] = [];
-  for (const act of publicItems) {
-    const rendered = renderAmbientEvent(act, viewer, {
-      actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
-      ...(squareState === undefined ? {} : { squareState }),
-    });
-    if (rendered !== '') lines.push(rendered);
-  }
-  return lines.join('\n\n');
+export function renderPendingFeed(publicItems: readonly StoredAct[], sayNumbers: Readonly<Record<number, number>>, perceptions: Readonly<Record<number, Perception>>, viewer: string): string {
+  return publicItems.map((act) => renderAmbientEvent(act, viewer, { actNumber: sayNumbers[act.index], perception: perceptions[act.index] })).filter(Boolean).join('\n\n');
 }
 
 export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
@@ -589,26 +573,11 @@ export function renderDoctorUnfixable(reason: string): string {
 }
 
 export function renderWatchOutput(
-  history: StoredAct[],
   publicItems: PublicAct[],
-  opts: { mention?: string; viewer: string; squareState?: SquareState; perceptions?: ReadonlyMap<number, Perception> }
+  sayNumbers: Readonly<Record<number, number>>,
+  opts: { mention?: string; viewer: string; perceptions: ReadonlyMap<number, Perception> }
 ): string {
-  const sections: string[] = [];
-
-  if (publicItems.length > 0) {
-    const rendered = publicItems
-      .map((act) =>
-        renderAmbientEvent(act, opts.viewer, {
-          actNumber: act.kind === 'say' ? sayNumberFor(history, act) : undefined,
-          mention: opts.mention,
-          ...(opts.perceptions?.has(act.index) ? { perception: opts.perceptions.get(act.index)! } : {}),
-          ...(opts.squareState === undefined ? {} : { squareState: opts.squareState }),
-        })
-      )
-      .filter(Boolean)
-      .join('\n\n');
-    if (rendered !== '') sections.push(rendered);
-  }
-
-  return sections.join('\n\n') + '\n';
+  return publicItems.map((act) => renderAmbientEvent(act, opts.viewer, {
+    actNumber: sayNumbers[act.index], mention: opts.mention, perception: opts.perceptions.get(act.index),
+  })).filter(Boolean).join('\n\n') + '\n';
 }

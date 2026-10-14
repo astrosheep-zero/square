@@ -6,7 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import plugin from '../dist/plugins/opencode/index.js';
 import { Square } from '../dist/square-wiring.js';
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
 import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';
 
 async function waitFor(predicate) {
@@ -81,7 +81,7 @@ async function fixture(t, beforeSetup) {
     squarePath, env, ledger, hooks, sent, events, square,
     express: async (body) => Number((await alice.express(body, { mentions: ['Bob'] })).activity.id.slice(4)),
     evidence: () => ledger.listEvidence({ session: 'opencode-fixture' }),
-    seen: async (index) => (await loadSquare(squarePath)).runtime.observations.Bob?.[`act/${index}`]?.state,
+    seen: async (index) => (await readSquareSnapshot(squarePath)).state.runtime.observations.Bob?.[`act/${index}`]?.state,
     context: async (input, overrides = {}) => hooks.get('context')({ sessionID: input.sessionID, messages: [{ id: input.id, role: 'user', content: [{ type: 'text', text: input.text }], ...overrides }] }),
     reload: async () => { await cleanup(); cleanup = await plugin.setup(ctx); await hooks.get('prompt')({ sessionID: 'opencode-fixture' }); },
     fail: () => { failure = true; },
@@ -190,7 +190,7 @@ test('uncertain native call is not replayed after reload and deletion retires al
   assert.equal(f.sent.length, 1);
   f.events.emit('event', { type: 'session.deleted', data: { sessionID: 'opencode-fixture' } });
   await waitFor(async () => (await f.ledger.listPresence({ session: 'opencode-fixture' })).length === 0);
-  assert.equal((await loadSquare(f.squarePath)).acts.at(-1).kind, 'done');
+  assert.equal((await readSquareSnapshot(f.squarePath)).state.acts.at(-1).kind, 'done');
 });
 
 test('moving out stops native delivery without ending membership; deletion retires even without a receiver', async (t) => {
@@ -198,8 +198,8 @@ test('moving out stops native delivery without ending membership; deletion retir
   await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
   await f.moveAway();
   assert.equal((await f.ledger.listPresence({ session: 'opencode-fixture' })).length, 1);
-  assert.notEqual((await loadSquare(f.squarePath)).acts.at(-1).kind, 'done');
+  assert.notEqual((await readSquareSnapshot(f.squarePath)).state.acts.at(-1).kind, 'done');
   f.events.emit('event', { type: 'session.deleted', data: { sessionID: 'opencode-fixture' } });
   await waitFor(async () => (await f.ledger.listPresence({ session: 'opencode-fixture' })).length === 0);
-  assert.equal((await loadSquare(f.squarePath)).acts.at(-1).kind, 'done');
+  assert.equal((await readSquareSnapshot(f.squarePath)).state.acts.at(-1).kind, 'done');
 });

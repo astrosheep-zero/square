@@ -8,9 +8,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createSquareState, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
 import { createFileCell } from '../dist/square-storage.js';
 import { createHostLedgerPort, FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { observeSessionPending } from '../dist/inbox.js';
+import { observeSessionPending, sessionInbox } from '../dist/inbox.js';
 
-async function fixture(t, leaseMs) {
+async function fixture(t, leaseMs, hasPending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pending-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
@@ -23,7 +23,8 @@ async function fixture(t, leaseMs) {
     { kind: 'join', actor: 'Bob', index: 1, at: 2 },
     { kind: 'say', actor: 'Alice', index: 2, at: 3, body: 'hello', mentions: ['Bob'] },
   ];
-  state.runtime.nextActIndex = 3;
+  if (!hasPending) state.acts.pop();
+  state.runtime.nextActIndex = state.acts.length;
   if (leaseMs !== undefined) state.runtime.leases.Bob = { leaseId: 'catch', heartbeatAt: Date.now(), expiresAt: Date.now() + leaseMs, filter: { mention: 'Bob' } };
   await writeSquareFile(file, state);
   const observer = await observeSessionPending('one', { SQUARE_HOST_LEDGER_ROOT: ledgerRoot });
@@ -59,14 +60,9 @@ test('catch lease expiry wakes notification eligibility without an artifact writ
 });
 
 test('unrelated ledger changes reuse unchanged history while local activity still notifies', async (t) => {
-  const item = await fixture(t);
+  const item = await fixture(t, undefined, false);
   const cell = createFileCell(item.file);
   t.after(() => cell.close());
-  await cell.transact((state) => {
-    state.acts.pop();
-    state.runtime.nextActIndex = 2;
-    return { state, result: undefined };
-  });
   await item.bind();
   const waiting = armedWait(item.observer, {}, 2_500);
   await waiting.ready;
@@ -79,7 +75,7 @@ test('unrelated ledger changes reuse unchanged history while local activity stil
   });
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/^SELECT id, revision, state FROM square_snapshot$/i.test(sql)) snapshots++;
+    if (/SELECT \* FROM activities/i.test(sql)) snapshots++;
     return prepare.call(this, sql, ...args);
   });
   const base = { location: path.join(item.ledgerRoot, 'unrelated.square'), participant: 'Other', session: 'unrelated', activity: 'act/0', kind: 'presentation' };
@@ -91,12 +87,9 @@ test('unrelated ledger changes reuse unchanged history while local activity stil
   assert.equal(snapshots, 0);
   const changed = armedWait(item.observer);
   await changed.ready;
-  await cell.transact((state) => {
-    state.acts.push({ kind: 'say', actor: 'Alice', index: 2, at: 4, body: 'new activity', mentions: ['Bob'] });
-    state.runtime.nextActIndex = 3;
-    return { state, result: undefined };
-  });
+  await cell.transact((facts) => facts.land({ kind: 'say', actor: 'Alice', at: 4, body: 'new activity', mentions: ['Bob'] }));
   assert.equal((await changed.pending)[0].notifications[0].body, 'new activity');
+  assert.ok(snapshots > 0, 'the hydration counter must detect the changed recipient projection');
 });
 
 test('an unreadable artifact cannot reuse stale pending and repair restores delivery', async (t) => {
@@ -134,7 +127,7 @@ test('presentation-only evidence invalidates eligibility; failed evidence cannot
   await sleep(100);
   assert.equal(resolved, false);
   const cell = createFileCell(item.file);
-  try { await cell.transact((state) => ({ state: { ...state, preamble: ['external edge'] }, result: undefined })); }
+  try { await cell.transact((facts) => facts.land({ kind: 'resume', at: Date.now() })); }
   finally { await cell.close(); }
   assert.equal((await retry.pending)[0].notifications[0].actIndex, 2);
 });
@@ -163,7 +156,7 @@ test('an unreadable binding stays quiet across reconciliation and restores deliv
   const item = await fixture(t);
   const saved = fs.readFileSync(item.file);
   const cell = createFileCell(item.file);
-  try { await cell.transact((state) => { state.acts.pop(); state.runtime.nextActIndex--; return { state, result: undefined }; }); }
+  try { await cell.transact((facts) => facts.markSeen('Bob', [2], Date.now())); }
   finally { await cell.close(); }
   const corruptFile = path.join(path.dirname(item.file), 'CORRUPT.square');
   fs.writeFileSync(corruptFile, 'not a SQLite artifact');
@@ -173,7 +166,7 @@ test('an unreadable binding stays quiet across reconciliation and restores deliv
   let snapshotReads = 0;
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/\bFROM\s+square_snapshot\b/i.test(sql) && /\bstate\b/i.test(sql)) snapshotReads++;
+    if (/SELECT \* FROM activities/i.test(sql)) snapshotReads++;
     return prepare.call(this, sql, ...args);
   });
   let ledgerReads = 0;
@@ -193,6 +186,37 @@ test('an unreadable binding stays quiet across reconciliation and restores deliv
   const repaired = (await waiting.pending)[0];
   assert.equal(path.basename(repaired.squarePath), 'CORRUPT.square');
   assert.equal(repaired.notifications[0].actIndex, 2);
+  assert.ok(snapshotReads > 0, 'the body counter must detect the repaired recipient projection');
+});
+
+test('complete recipient discovery crosses 100 withheld candidates and expiry alone reconsiders the earlier batch', async (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  const item = await fixture(t, undefined, false);
+  const cell = createFileCell(item.file);
+  t.after(() => cell.close());
+  await cell.transact((facts) => {
+    facts.land({ kind: 'join', actor: 'Cara', at: now });
+    for (let index = 0; index < 105; index++) facts.land({ kind: 'say', actor: 'Alice', at: now, body: `earlier ${index}`, mentions: ['Bob'] });
+    facts.land({ kind: 'say', actor: 'Cara', at: now, body: 'later eligible', mentions: ['Bob'] });
+    facts.putLease('Bob', { leaseId: 'alice-catch', heartbeatAt: now, expiresAt: now + 400, filter: { participants: ['Alice'] } });
+  });
+  await item.bind();
+  const env = { SQUARE_HOST_LEDGER_ROOT: item.ledgerRoot };
+  const complete = await sessionInbox('one', env);
+  assert.equal(complete[0].notifications.length, 106, 'storage pages must not shrink the initial boundary key set');
+  const eligible = await item.observer.wait(1000);
+  assert.deepEqual(eligible[0].notifications.map((note) => note.body), ['later eligible']);
+  const revision = await readSquareRevision(item.file);
+  const later = eligible[0].notifications[0].actIndex;
+  const excluded = new Set([`${eligible[0].squarePath}\0${eligible[0].name.toLocaleLowerCase()}\0${later}`]);
+  const waiting = armedWait(item.observer, { excludeKeys: excluded, skipImmediate: true });
+  await waiting.ready;
+  now += 401;
+  const earlier = await waiting.pending;
+  assert.equal(earlier[0].notifications.length, 105);
+  assert.equal(earlier[0].notifications[0].body, 'earlier 0');
+  assert.equal(await readSquareRevision(item.file), revision, 'expiry reconsideration is not a receipt or artifact write');
 });
 
 test('an unrepaired binding respects timeout and cancellation', async (t) => {

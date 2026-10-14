@@ -1,11 +1,13 @@
 import { type InboxMembership, nameKey } from './model.js';
-import { type SessionBindingProjection } from './ports.js';
+import type { PresentationProjection, SessionBindingProjection, SquareRead } from './ports.js';
 import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
 import { hostLedgerForEnv } from './registry.js';
 import { type VersionObserver } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
-import { projectBoundaryEligibility, projectPresentation, projectSessionBindings } from './square-projections.js';
-import { WATCH_STALE_MS } from './runtime.js';
+import { projectBoundaryEligibility, projectSessionBindings } from './square-projections.js';
+import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
+import { pendingHead, pendingNotifications, leaseOwnsNotification } from './delivery.js';
+import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;
@@ -16,18 +18,61 @@ export interface PendingWaitOptions {
   onChangeArmed?: (armed: boolean) => void;
 }
 
+function bindingCoordinate(binding: SessionBindingProjection): string {
+  return JSON.stringify([binding.location, nameKey(binding.participant), binding.sessionId, binding.channel, binding.epoch, binding.cancelledThrough ?? -1]);
+}
+
 function notificationKey(membership: InboxMembership, actIndex: number): string {
   return membership.squarePath + '\0' + membership.name.toLocaleLowerCase() + '\0' + actIndex;
 }
 
-async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal): Promise<InboxMembership | undefined> {
+export function projectPresentation(facts: SquareRead, requested: SessionBindingProjection, now = Date.now()): PresentationProjection {
+  const participant = facts.participant(requested.participant);
+  if (!participant?.joined) return { binding: requested, joined: false, notifications: [] };
+  const binding = { ...requested, participant: participant.name };
+  const notifications = pendingNotifications(facts, participant.name).map(({ item, route }) => ({
+    actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route,
+  }));
+  const catchLease = freshWatchLease(facts, participant.name, now);
+  return { binding, joined: true, notifications, ...(catchLease === undefined ? {} : { catchLease }) };
+}
+
+export interface NativePendingPreview {
+  readonly payload: string;
+  readonly clipped: boolean;
+}
+export type NativePendingPreviewInput = {
+  readonly location: string; readonly sessionId: string; readonly participant: string;
+  readonly actIndex: number; readonly epoch?: number; readonly cancelledThrough?: number; readonly now: number;
+} & (
+  | { readonly routeKind: 'claude-native'; readonly address: { readonly endpoint: string } }
+  | { readonly routeKind: 'opencode-server'; readonly address: { readonly sessionId: string } }
+);
+
+/** First matching ordered route, exact native epoch/address and catch ownership. */
+export function nativePendingPreview(facts: SquareRead, input: NativePendingPreviewInput): NativePendingPreview | undefined {
+  const route = facts.routes().find((candidate) => candidate.kind === input.routeKind && candidate.sessionId === input.sessionId
+    && candidate.epoch === input.epoch && nameKey(candidate.participant) === nameKey(input.participant)
+    && (input.routeKind === 'claude-native' ? candidate.address.endpoint === input.address.endpoint : candidate.address.sessionId === input.address.sessionId));
+  if (!route || input.actIndex <= (input.cancelledThrough ?? -1)) return undefined;
+  const head = pendingHead(facts, input.participant, input.actIndex);
+  const lease = freshWatchLease(facts, input.participant, input.now);
+  if (!head || (lease !== undefined && leaseOwnsNotification(lease, head))) return undefined;
+  const item = facts.activity(input.actIndex);
+  if (item?.kind !== 'say') return undefined;
+  return { payload: renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
+    actor: item.actor, route: head.route, body: item.body }), clipped: attentionBodyIsClipped(item.body) };
+}
+
+async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal) {
   const artifact = openSquareArtifact(binding.location, signal);
   try {
-    const projection = await projectPresentation({ artifact, binding, now: Date.now() });
-    if (!projection.joined) return undefined;
-    return { name: projection.binding.participant, squarePath: projection.binding.location,
-      notifications: [...projection.notifications],
-      ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) };
+    return await artifact.read((facts): InboxMembership | undefined => {
+      const projection = projectPresentation(facts, binding);
+      if (!projection.joined) return undefined;
+      return { name: projection.binding.participant, squarePath: projection.binding.location, notifications: [...projection.notifications],
+        ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) };
+    }, signal);
   } finally { await artifact.close(); }
 }
 
@@ -37,7 +82,7 @@ export async function sessionInbox(sessionId: string, env: NodeJS.ProcessEnv = p
   for (const binding of await projectSessionBindings({ hostLedger, sessionId })) {
     if (signal?.aborted) throw signal.reason;
     try {
-      const membership = await readInboxMembership(binding, signal);
+      const { value: membership } = await readInboxMembership(binding, signal);
       if (membership !== undefined) inbox.push(membership);
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
@@ -85,8 +130,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
   const ledger = await hostLedger.observeChanges();
   const artifacts = new Map<string, {
     observer: VersionObserver<number | null>;
-    revision?: number | null;
-    inbox: Map<string, InboxMembership | undefined>;
+    inbox: Map<string, { binding: string; version: number; value: InboxMembership | undefined }>;
   }>();
   const lifetime = new AbortController();
   return {
@@ -115,11 +159,11 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
             if (signal.aborted) { observer.close(); return []; }
             artifacts.set(file, { observer, inbox: new Map() });
           }
+          const revisions = new Map<string, number | null | undefined>();
           for (const [file, entry] of artifacts) {
             const source = await capture(entry.observer, 'artifact', signal);
             sources.push(source);
-            if (source.value === undefined || source.value !== entry.revision) entry.inbox.clear();
-            entry.revision = source.value;
+            revisions.set(file, source.value);
             const names = new Set(bindings.filter((binding) => binding.location === file).map((binding) => nameKey(binding.participant)));
             for (const name of entry.inbox.keys()) if (!names.has(name)) entry.inbox.delete(name);
           }
@@ -129,8 +173,13 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
             const entry = artifacts.get(binding.location)!;
             const name = nameKey(binding.participant);
             try {
-              if (!entry.inbox.has(name)) entry.inbox.set(name, await readInboxMembership(binding, signal));
-              const membership = entry.inbox.get(name);
+              const coordinate = bindingCoordinate(binding);
+              const cached = entry.inbox.get(name);
+              if (cached?.version !== revisions.get(binding.location) || cached?.binding !== coordinate) {
+                const projection = await readInboxMembership(binding, signal);
+                entry.inbox.set(name, { ...projection, binding: coordinate });
+              }
+              const membership = entry.inbox.get(name)?.value;
               if (membership === undefined) continue;
               const { catchLease, ...rest } = membership;
               const now = Date.now();

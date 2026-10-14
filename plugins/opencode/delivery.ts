@@ -1,11 +1,11 @@
 import type { EvidenceRecord, NativeDeliveryEvidence, PresenceRecord } from '../../host-ledger.js';
-import type { WakeTransportPort } from '../../ports.js';
-import { nameKey, type SquareState } from '../../model.js';
-import { observeSessionPending, sessionInbox } from '../../inbox.js';
+import type { SquareRead, WakeTransportPort } from '../../ports.js';
+import { nameKey } from '../../model.js';
+import { nativePendingPreview, observeSessionPending, sessionInbox } from '../../inbox.js';
 import { hostLedgerForEnv } from '../../registry.js';
 import { openSquare } from '../../square-file-adapter.js';
 import { closeOpenSquare } from '../../open-square.js';
-import { nativePendingPreview, presentationSuppressesWake, projectPresentationEvidence } from '../../square-projections.js';
+import { presentationSuppressesWake, projectPresentationEvidence } from '../../square-projections.js';
 import { presentPending } from '../../presentation-operations.js';
 import { deliverPending } from '../../delivery-operations.js';
 import { createWakeTransport } from '../../notifications.js';
@@ -19,8 +19,8 @@ export interface OpenCodeContextMessage { readonly id?: string; readonly role: s
 const key = (location: string, participant: string, index: number) => `${location}\0${nameKey(participant)}\0${index}`;
 
 /** The one native pending preview: the audience/catch/epoch fence before send and inside presentation. */
-function preview(state: SquareState, owner: PresenceRecord, index: number) {
-  return nativePendingPreview(state, { location: owner.location, routeKind, sessionId: owner.session, participant: owner.participant, actIndex: index, epoch: owner.epoch, address: { sessionId: owner.session }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+function preview(facts: SquareRead, owner: PresenceRecord, index: number) {
+  return nativePendingPreview(facts, { location: owner.location, routeKind, sessionId: owner.session, participant: owner.participant, actIndex: index, epoch: owner.epoch, address: { sessionId: owner.session }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
 }
 
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, lifetime: AbortSignal): WakeTransportPort {
@@ -41,13 +41,13 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.
         if (!owner || index === undefined) return undefined;
         const square = await openSquare(owner.location, { hostLedger: ledger, env, signal });
         try {
-          const prepared = preview((await square.artifact.read(signal)).state, owner, index);
+          const { value: prepared } = await square.artifact.read((facts) => preview(facts, owner, index), signal);
           if (!prepared) return undefined;
           const row: NativeRow & { routeKind: typeof routeKind } = { location: owner.location, participant: owner.participant, session: target.sessionId,
             activity: request.activity, kind: 'wake', outcome: 'dispatching', routeKind, attemptN: request.attemptN, claimToken: request.claimToken,
             nativeDelivery: { harness: 'opencode', epoch: owner.epoch ?? 0, inputId: createNativeInputId(), payload: prepared.payload } };
           if (!await ledger.prepareNativeWake(row) || !await (beforeSend?.() ?? Promise.resolve(true)) || signal.aborted
-            || preview((await square.artifact.read(signal)).state, owner, index)?.payload !== prepared.payload) return undefined;
+            || (await square.artifact.read((facts) => preview(facts, owner, index)?.payload, signal)).value !== prepared.payload) return undefined;
           return { sending: sendNativeText(target, prepared.payload, { inputId: row.nativeDelivery.inputId, delivery: 'steer',
             timeoutMs: Math.max(1, deadline - Date.now()), signal }) };
         } finally { await closeOpenSquare(square); }
@@ -78,13 +78,13 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
       if (!owner || index === undefined) continue;
       const square = await openSquare(row.location, { hostLedger: ledger, env, signal });
       try {
-        const prepared = preview((await square.artifact.read(signal)).state, owner, index);
+        const { value: prepared } = await square.artifact.read((facts) => preview(facts, owner, index), signal);
         if (!prepared || prepared.payload !== row.nativeDelivery.payload) continue;
         const prior = await projectPresentationEvidence({ hostLedger: ledger, location: row.location, participant: row.participant, sessionId, activity: row.activity });
         if (presentationSuppressesWake(prior)) continue;
         await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId,
           activity: row.activity, sink: { present() {} }, markSeen: !prepared.clipped, signal,
-          current: (state) => !signal.aborted && preview(state, owner, index)?.payload === row.nativeDelivery.payload });
+          current: (facts) => !signal.aborted && preview(facts, owner, index)?.payload === row.nativeDelivery.payload });
       } finally { await closeOpenSquare(square); }
     }
   }, signal);

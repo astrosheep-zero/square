@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { formatActivityId } from '../../dist/square-core.js';
-import { loadSquare, writeSquareFile } from '../../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
 import { Square } from '../../dist/index.js';
 import { cmdListSquares } from '../../dist/list.js';
 import { closeOpenSquare } from '../../dist/open-square.js';
@@ -397,7 +397,7 @@ test('history hides read bookkeeping acts except in time and context windows', a
   // Production never appends `read`; the artifact carries it only when an older
   // or foreign writer recorded that an activity was consumed. Pin that shape
   // directly so the archive's read filtering stays observable.
-  const state = await loadSquare(file);
+  const state = (await readSquareSnapshot(file)).state;
   const readIndex = (state.acts.at(-1)?.index ?? -1) + 1;
   const readAt = (state.acts.at(-1)?.at ?? 0) + 1000;
   await writeSquareFile(file, {
@@ -842,7 +842,7 @@ test('historical body-bearing done events remain readable without becoming catch
   assert.doesNotMatch(caught.stdout, /@Bob lowered the hand/);
 
   // Old artifacts can contain a done body even though new departures are bodyless.
-  const historical = await loadSquare(file);
+  const historical = (await readSquareSnapshot(file)).state;
   historical.acts.push({ kind: 'done', actor: 'Bob', at: 6000, body: 'final note', index: historical.runtime.nextActIndex++ });
   await writeSquareFile(file, historical);
   const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });

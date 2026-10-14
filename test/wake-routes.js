@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { canonicalPath } from '../dist/canonical-path.js';
 import { nameKey } from '../dist/model.js';
 import { closeOpenSquare } from '../dist/open-square.js';
-import { dropSessionWakeRoutesFromState, publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS } from '../dist/routes.js';
+import { dropSessionWakeRoutes, publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS } from '../dist/routes.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 
 async function withArtifact(location, fn) {
@@ -23,7 +23,7 @@ async function withArtifact(location, fn) {
 export async function readWakeRoutes(opts = {}) {
   const now = opts.now ?? Date.now();
   const canonicalLocation = opts.location === undefined ? undefined : await canonicalPath(opts.location);
-  const routes = await withArtifact(canonicalLocation, async (square) => (await square.artifact.read()).state.routes ?? []) ?? [];
+  const routes = await withArtifact(canonicalLocation, async (square) => (await square.artifact.read((facts) => facts.routes())).value) ?? [];
   const filtered = routes.filter((route) => (opts.participant === undefined || nameKey(route.participant) === nameKey(opts.participant)) && (opts.sessionId === undefined || route.sessionId === opts.sessionId) && (!opts.freshOnly || now - route.updatedAt < ROUTE_FRESH_MS));
   const canonicalized = await Promise.all(filtered.map(async (route) => ({ ...route, location: await canonicalPath(route.location), address: { ...route.address } })));
   return canonicalLocation === undefined ? canonicalized : canonicalized.filter((route) => route.location === canonicalLocation);
@@ -40,5 +40,5 @@ export async function retireWakeRoute(route, opts = {}) {
 }
 
 export async function retireWakeRoutesForSession(artifact, route, opts = {}) {
-  await artifact.transact((state) => { dropSessionWakeRoutesFromState(state, route.location, route.sessionId, opts.expectedEpoch); return { state, result: undefined }; });
+  await artifact.transact((facts) => dropSessionWakeRoutes(facts, route.location, route.sessionId, opts.expectedEpoch));
 }

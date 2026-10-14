@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { loadSquare } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact.js';
 import { Square, SquareError } from '../dist/index.js';
 
 function tempSquarePath() {
@@ -45,7 +45,7 @@ test('build persists a square that reopens through the facade', async () => {
   assert.equal(snapshot.held, null);
   await closeSquare(square);
 
-  const persisted = await loadSquare(squarePath);
+  const persisted = (await readSquareSnapshot(squarePath)).state;
   assert.equal(persisted.hardCap, 3);
   assert.deepEqual(persisted.acts, []);
 
@@ -347,7 +347,7 @@ test('stored say omits mention reach while bell persists explicitly', async () =
   await alice.express('mention @Bob', { force: true, mentions: ['Bob'] });
   await bob.express('bell line', { force: true, reach: 'bell' });
   await closeSquare(square);
-  const persisted = await loadSquare(squarePath);
+  const persisted = (await readSquareSnapshot(squarePath)).state;
   assert.equal(persisted.acts[2].reach, undefined);
   assert.equal(persisted.acts[3].reach, 'bell');
   assert.doesNotMatch(JSON.stringify(persisted), /beside/);
