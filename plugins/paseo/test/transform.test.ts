@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { squareMessageSchema } from "../shared/message.ts";
+import { squareHeadline, squareMessageSchema } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
-const items = [
-  { square: "design", description: "rei spoke your name (aoi)" },
-  { square: "design", description: "rei answered you (aoi)" },
+const items: Parameters<typeof squareHeadline>[0][] = [
+  { square: "design", actor: "rei", route: "mention", description: "rei spoke your name (aoi)" },
+  { square: "design", actor: "rei", route: "reply", description: "rei answered you (aoi)" },
 ];
 function row(overrides: Partial<ToolRow> = {}): ToolRow {
   return {
@@ -46,4 +46,13 @@ test("ordinary tools, unrelated custom messages, and unusable content stay untou
   assert.equal(project(row({ metadata: { synthetic: true, customType: "other" } })), undefined);
   assert.equal(project(row({ detail: { type: "unknown", input: "square", output: text } })), undefined);
   assert.equal(project(row({ detail: { type: "plain_text" } })), undefined);
+});
+
+test("headline is human-facing when actor and route are present, else falls back", () => {
+  assert.equal(squareHeadline(items[0]), "rei mentioned you");
+  assert.equal(squareHeadline(items[1]), "rei replied to you");
+  assert.equal(squareHeadline({ ...items[0], route: "attention" }), "New from rei");
+  assert.equal(squareHeadline({ ...items[0], route: "bell" }), "rei called everyone");
+  // Messages from Square <0.3.71 carry only the agent-voice description.
+  assert.equal(squareHeadline({ square: "design", description: "rei spoke your name (aoi)" }), "rei spoke your name (aoi)");
 });

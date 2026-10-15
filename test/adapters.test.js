@@ -486,8 +486,8 @@ test('Pi square card collapses to who reached you and where, and expands to the 
   const theme = { fg: (_color, text) => `<${text}>` };
   const details = pendingCardDetails([membership([note({ route: 'bell' }), note({ actor: 'Cara', route: 'reply' })])]);
   assert.deepEqual(details.items, [
-    { square: 'SQUARE', description: 'Alice rang the bell · everyone’s attention' },
-    { square: 'SQUARE', description: 'Cara answered you (Bob)' },
+    { square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'bell', description: 'Alice rang the bell · everyone’s attention' },
+    { square: 'SQUARE', actor: 'Cara', recipient: 'Bob', route: 'reply', description: 'Cara answered you (Bob)' },
   ]);
   assert.equal(pendingCardDetails([membership([])]), undefined);
 
@@ -650,7 +650,7 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, true, 'the human sees one collapsible card instead of a separate notify');
-      assert.deepEqual(sent[0].message.details, { items: [{ square: 'SQUARE', description: 'Alice spoke your name (Bob)' }] });
+      assert.deepEqual(sent[0].message.details, { items: [{ square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'mention', description: 'Alice spoke your name (Bob)' }] });
       assert.deepEqual(notified, [], 'the card replaces the transient notify');
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(

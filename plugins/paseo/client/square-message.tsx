@@ -1,8 +1,16 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { copyText, Icon, useToast } from "@getpaseo/plugin/client/react-native";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
-import type { SquareMessageData } from "../shared/message";
+import { squareHeadline, type SquareMessageData } from "../shared/message";
+
+function withOpacity(color: string, opacity: number): string {
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/iu.exec(color);
+  if (hex === null) return color;
+  const value = hex[1]!.length === 3 ? [...hex[1]!].map((part) => part + part).join("") : hex[1]!;
+  const alpha = Math.round(opacity * 255).toString(16).padStart(2, "0");
+  return `#${value}${alpha}`;
+}
 
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
@@ -11,77 +19,87 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const first = items?.[0];
   const muted = theme.colors.foregroundMuted;
   const foreground = theme.colors.foreground;
-  const padding = layout.compact ? 12 : 16;
+  const padding = layout.compact ? 10 : 14;
+  const styles = useMemo(() => ({
+    marker: { color: theme.colors.accent, fontSize: 10, marginTop: 2 },
+    headline: { color: foreground, fontSize: 13, lineHeight: 19, flexShrink: 1 },
+    meta: { color: muted, fontSize: 11, lineHeight: 16, flexShrink: 1 },
+    bodyPanel: {
+      backgroundColor: theme.colors.surface1,
+      borderRadius: 12,
+      marginTop: 7,
+      marginLeft: 17,
+      overflow: "hidden" as const,
+    },
+    bodyText: {
+      color: foreground,
+      fontSize: 12,
+      lineHeight: 21,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      paddingHorizontal: layout.compact ? 12 : 14,
+      paddingTop: 12,
+    },
+  }), [expanded, foreground, layout.compact, muted, theme.colors.accent, theme.colors.surface1]);
 
   return (
-    <View style={{
-      backgroundColor: theme.colors.surface1,
-      borderRadius: 10,
-      overflow: "hidden",
-    }}>
+    <View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={first?.description ?? "Square context"}
+        accessibilityLabel={first !== undefined ? squareHeadline(first) : "Square context"}
         aria-expanded={expanded}
         onPress={() => setExpanded(value => !value)}
         style={({ pressed }) => ({
           flexDirection: "row",
-          alignItems: "center",
-          gap: 10,
-          paddingHorizontal: padding,
-          paddingVertical: 12,
-          opacity: pressed ? 0.7 : 1,
+          alignItems: "flex-start",
+          gap: 7,
+          paddingVertical: 2,
+          opacity: pressed ? 0.6 : 1,
         })}
       >
-        <Text style={{ color: theme.colors.accent, fontSize: 11 }}>■</Text>
+        <Text style={styles.marker}>■</Text>
         <View style={{
           flex: 1,
           minWidth: 0,
           flexDirection: layout.compact ? "column" : "row",
           alignItems: layout.compact ? "flex-start" : "center",
-          gap: layout.compact ? 3 : 12,
+          gap: layout.compact ? 2 : 8,
         }}>
-          <Text numberOfLines={layout.compact ? 2 : 1}
-            style={{ color: foreground, fontSize: 13, fontWeight: "500", lineHeight: 19, flexShrink: 1 }}>
-            {first?.description ?? "Square context"}
+          <Text numberOfLines={layout.compact ? 2 : 1} style={styles.headline}>
+            {first !== undefined ? squareHeadline(first) : "Square context"}
           </Text>
-          {first && <Text numberOfLines={1} style={{ color: muted, fontSize: 11, lineHeight: 16, flexShrink: 1 }}>
+          {first && <Text numberOfLines={1} style={styles.meta}>
             {first.square}{items && items.length > 1 ? ` · +${items.length - 1} more` : ""}
           </Text>}
         </View>
-        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={muted} />
+        <View style={{ marginTop: 3 }}><Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={muted} /></View>
       </Pressable>
-      {expanded && <View style={{
-        marginHorizontal: padding,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border,
-        paddingTop: 12,
-        paddingBottom: 12,
-        gap: 12,
-      }}>
-        <Text selectable style={{
-          color: foreground,
-          fontSize: 12,
-          lineHeight: 20,
-          fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-        }}>{text}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Copy Square content"
-          onPress={() => { void copyText(text).catch(() => toast.error("Could not copy Square content")); }}
-          style={({ pressed }) => ({
-            alignSelf: "flex-end",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 5,
-            paddingVertical: 4,
-            paddingHorizontal: 4,
-            opacity: pressed ? 0.6 : 1,
-          })}
-        >
-          <Icon name="Copy" size={12} color={muted} />
-          <Text style={{ color: muted, fontSize: 11 }}>Copy content</Text>
-        </Pressable>
+      {expanded && <View style={styles.bodyPanel}>
+        <Text selectable style={styles.bodyText}>{text}</Text>
+        <View style={{
+          marginHorizontal: layout.compact ? 12 : 14,
+          marginTop: 12,
+          borderTopWidth: 1,
+          borderTopColor: withOpacity(theme.colors.border, 0.55),
+          paddingVertical: 7,
+          flexDirection: "row",
+          justifyContent: "flex-end",
+        }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Copy Square content"
+            onPress={() => { void copyText(text).catch(() => toast.error("Could not copy Square content")); }}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+              paddingHorizontal: 2,
+              opacity: pressed ? 0.6 : 1,
+            })}
+          >
+            <Icon name="Copy" size={12} color={muted} />
+            <Text style={{ color: muted, fontSize: 11 }}>Copy content</Text>
+          </Pressable>
+        </View>
       </View>}
     </View>
   );

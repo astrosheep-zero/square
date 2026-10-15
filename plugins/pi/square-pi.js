@@ -35,6 +35,9 @@ function framePiMessage(content) {
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
     square: path.basename(membership.squarePath, '.square'),
+    actor: note.actor,
+    recipient: membership.name,
+    route: note.route,
     description: renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route }),
   })));
   return items.length === 0 ? undefined : { items };
