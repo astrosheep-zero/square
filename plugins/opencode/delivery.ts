@@ -3,7 +3,7 @@ import type { SquareRead, WakeTransportPort } from '../../ports.js';
 import { nameKey } from '../../model.js';
 import { nativePendingPreview, observeSessionPending, sessionInbox } from '../../inbox.js';
 import { hostLedgerForEnv } from '../../registry.js';
-import { openSquare } from '../../square-file-adapter.js';
+import { openSquare } from '../../open-square.js';
 import { closeOpenSquare } from '../../open-square.js';
 import { presentationSuppressesWake, projectPresentationEvidence } from '../../square-projections.js';
 import { presentPending } from '../../presentation-operations.js';

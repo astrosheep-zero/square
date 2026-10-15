@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readSquareSnapshot, emptyRuntimeState } from '../dist/artifact.js';
+import { createArtifactPort, readSquareSnapshot } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideAct } from '../dist/decisions.js';
-import { createMemoryCell } from '../dist/square-storage.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
 import { Square } from '../dist/index.js';
@@ -30,7 +30,7 @@ const standingState = () => makeState({
 });
 
 async function decide(state, input) {
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   try { return (await cell.read((facts) => decideAct(facts, input))).value; }
   finally { await cell.close(); }
 }

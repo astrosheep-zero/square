@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { withFileLock } from './file-lock.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
 import { hostLedgerForEnv } from './registry.js';

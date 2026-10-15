@@ -11,15 +11,15 @@ import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-na
 import { connect } from '../dist/packages/agent-delivery/src/index.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { observeClaudeDelivery } from '../dist/claude-delivery.js';
-import { emptyRuntimeState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { Square } from '../dist/square-application.js';
 import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { claimSessionTakeover } from '../dist/registry.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
-import { openSquare } from '../dist/square-file-adapter.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 
 const supported = { skip: process.platform !== 'darwin' };
 async function fixture(t, body = 'hello @Bob') {

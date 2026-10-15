@@ -6,8 +6,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { createSquareFile, readSquareSnapshot } from '../dist/artifact.js';
-import { createFileCell } from '../dist/square-storage.js';
+import { createArtifactPort, createSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const initial = () => ({ hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
@@ -16,7 +15,7 @@ async function fixture(t) {
   const file = path.join(dir, 'test.square');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   await createSquareFile(file, initial());
-  const port = createFileCell(file);
+  const port = createArtifactPort(file);
   t.after(() => port.close());
   return { file, port };
 }
@@ -94,8 +93,8 @@ test('two processes serialize unseen selection plus sparse receipt insertion wit
     w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 });
     w.land({ kind: 'say', actor: 'Alice', at: 2, body: 'one', mentions: ['Bob'] });
   });
-  const script = `import {createFileCell} from './dist/square-storage.js';
-    const p=createFileCell(process.argv[1]);
+  const script = `import {createArtifactPort} from './dist/artifact.js';
+    const p=createArtifactPort(process.argv[1]);
     const result=await p.transact(w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
     console.log(JSON.stringify(result));await p.close();`;
   const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
@@ -110,8 +109,8 @@ test('process death before commit recovers authority and derived landing indices
   const { file, port } = await fixture(t);
   await port.transact(w => { w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 }); });
   const before = await readSquareSnapshot(file);
-  const script = `import {createFileCell} from './dist/square-storage.js';
-    const p=createFileCell(process.argv[1]);await p.transact(w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
+  const script = `import {createArtifactPort} from './dist/artifact.js';
+    const p=createArtifactPort(process.argv[1]);await p.transact(w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
   const running = child(script, file);
   t.after(() => { if (!running.process.killed) running.process.kill('SIGKILL'); });
   let ready = false; running.process.stdout.on('data', s => { if (s.includes('ready')) ready = true; });
@@ -132,7 +131,7 @@ test('idle revision discovery has a positive control and never selects historica
   assert.equal(await port.changed(1, 80), false);
   assert.ok(queries.some(sql => /FROM square_meta/i.test(sql)), 'must actually observe authoritative revision');
   assert.equal(queries.some(sql => /payload_json|SELECT \* FROM activities/i.test(sql)), false);
-  const writer = createFileCell(file);
+  const writer = createArtifactPort(file);
   t.after(() => writer.close());
   await writer.transact(w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
   assert.equal(await port.changed(1, 1000), true);

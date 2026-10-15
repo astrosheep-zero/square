@@ -6,11 +6,55 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { observeFileVersion } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
-import { InternalSquareError, SquareError, type SquareState } from './model.js';
+import { InternalSquareError, SquareError, type BuildOptions } from './model.js';
 import type { SquareArtifactPort, SquareRead, SquareWrite } from './ports.js';
 import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
-import { APPLICATION_ID, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader } from './square-sqlite.js';
-export { createSquareState, emptyRuntimeState } from './square-state.js';
+import { APPLICATION_ID, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader, emptyRuntimeState, type SquareState } from './square-sqlite.js';
+
+const guideContents = new Map<string, string>();
+function readGuide(name: string): string {
+    if (!['participant', 'architect', 'brainstorm'].includes(name))
+        throw new SquareError('invalid_args', `Unknown square guide: ${name}`);
+    let content = guideContents.get(name);
+    if (content === undefined) {
+        content = fs.readFileSync(new URL(`../guides/${name}.md`, import.meta.url), 'utf8').trim();
+        guideContents.set(name, content);
+    }
+    return content;
+}
+function normalizedLines(value: string): string[] {
+    const normalized = value.replace(/\r\n/g, '\n').trim();
+    return normalized === '' ? [] : normalized.split('\n');
+}
+/** All build paths share configuration validation and lazy guide preparation. */
+export function prepareSquareBuild(options: Omit<BuildOptions, 'force'>, snippet: string): SquareState {
+    if (options.hardCap !== undefined && options.hardCap !== null
+        && (!Number.isSafeInteger(options.hardCap) || options.hardCap < 1))
+        throw new SquareError('invalid_args', 'hardCap must be a positive integer or null');
+    if (options.throttlePerMinute !== undefined
+        && (!Number.isSafeInteger(options.throttlePerMinute) || options.throttlePerMinute < 1))
+        throw new SquareError('invalid_args', 'throttlePerMinute must be a positive integer');
+    const guides = [readGuide('participant')];
+    if (options.template !== undefined)
+        guides.push(readGuide(options.template));
+    return {
+        hardCap: options.hardCap ?? null,
+        ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
+        preamble: normalizedLines(snippet), warmup: normalizedLines(guides.join('\n\n')),
+        acts: [], routes: [], runtime: emptyRuntimeState(),
+    };
+}
+/** File build owns publication and CLI conflict semantics, not host resources. */
+export async function createSquare(location: string, options: BuildOptions, snippet: string, signal?: AbortSignal): Promise<Pick<SquareState, 'hardCap' | 'throttlePerMinute'>> {
+    const state = prepareSquareBuild(options, snippet);
+    if (options.force) {
+        await writeSquareFile(location, state, signal);
+    } else if (!await createSquareFile(location, state, signal)) {
+        throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${location}\nPass -f to overwrite.`);
+    }
+    return { hardCap: state.hardCap, ...(state.throttlePerMinute === undefined ? {} : { throttlePerMinute: state.throttlePerMinute }) };
+}
+
 export interface DoctorProblem {
     kind: string;
     message: string;
@@ -315,6 +359,7 @@ async function initializeFile(location: string, state: SquareState, signal?: Abo
 /** New-format creation; initial authority is accepted only at this explicit boundary. */
 export async function createSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<boolean> {
     abort(signal);
+    location = await canonicalPath(location);
     requireSquareExtension(location);
     const temporary = await temporaryArtifact(location);
     try {
@@ -336,6 +381,7 @@ export async function createSquareFile(location: string, state: SquareState, sig
 }
 /** Explicit build --force / fixture import, never a runtime state-replacement callback. */
 export async function writeSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<void> {
+    location = await canonicalPath(location);
     if (await createSquareFile(location, state, signal))
         return;
     abort(signal);
@@ -390,7 +436,7 @@ export function observeSquareRevision(location: string): Promise<import('./file-
 }
 export async function diagnoseSquareFile(location: string): Promise<DiagnoseResult> {
     try {
-        return { problems: [], ...await inspectFile(location, inspectSqlite) };
+        return { problems: [], ...await inspectFile(await canonicalPath(location), inspectSqlite) };
     }
     catch (error) {
         if (error instanceof SquareError && error.facts?.reason === 'migration_required')

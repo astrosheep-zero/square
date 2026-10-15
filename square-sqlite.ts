@@ -1,9 +1,79 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, type StoredAct, type SquareState, type WatchLease } from './model.js';
+import { SquareError, nameKey, isWakeRouteKind, type ActivityObservation, type HardCap, type StoredAct, type WakeRoute, type WatchLease } from './model.js';
 import type { SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, RouteFact } from './ports.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
-import { validateLegacyFraming, migrationRecoveryCommand } from './square-state.js';
+/** Explicit import/export DTOs, not a runtime transaction model. */
+export interface SquareRuntimeState {
+    nextActIndex: number;
+    observations: Record<string, Record<string, ActivityObservation>>;
+    leases: Record<string, WatchLease>;
+}
+export interface SquareState {
+    hardCap: HardCap;
+    throttlePerMinute?: number;
+    preamble: string[];
+    warmup: string[];
+    acts: StoredAct[];
+    routes?: WakeRoute[];
+    runtime: SquareRuntimeState;
+}
+export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
+    return { nextActIndex, observations: {}, leases: {} };
+}
+
 export const APPLICATION_ID = 0x53515245;
+const V1_USER_VERSION = 1;
+export const V1_SNAPSHOT_TABLE = 'square_snapshot';
+const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
+const V1_SNAPSHOT_COLUMNS = [
+    { cid: 0, name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1, hidden: 0 },
+    { cid: 1, name: 'revision', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+    { cid: 2, name: 'state', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0, hidden: 0 },
+] as const;
+export interface LegacyFraming {
+    readonly applicationId: number;
+    readonly userVersion: number;
+    readonly journalMode: string;
+}
+/**
+ * The one recovery command for an owned legacy artifact, with a shell-quoted
+ * path. Kept beside framing recognition so the refusal and migration
+ * instruction cannot drift apart. This codec stays free of the renderer.
+ */
+export function migrationRecoveryCommand(location: string): string {
+    return `square --location '${location.replace(/'/g, `'\\''`)}' migrate`;
+}
+/**
+ * Read-only legacy framing: application id, format version, journal mode and the
+ * exact owned snapshot schema. It decodes no snapshot payload, writes no pragma
+ * and runs no DDL, so ordinary open can establish ownership before offering
+ * the migration command. Anything else is unrelated or unsupported, not repaired.
+ */
+export function validateLegacyFraming(database: DatabaseSync, applicationId: number, location = ''): LegacyFraming {
+    const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
+    if (identity.application_id !== applicationId) throw invalidArtifact('unrelated SQLite database.');
+    if (identity.user_version !== V1_USER_VERSION) throw invalidArtifact('unsupported SQLite format version.');
+    const journalMode = (database.prepare('PRAGMA journal_mode').get() as { journal_mode?: unknown }).journal_mode;
+    if (typeof journalMode !== 'string' || journalMode !== (location === ':memory:' ? 'memory' : 'delete')) throw invalidArtifact('unsupported journal mode.');
+    const objects = database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+        .all() as { type?: unknown; name?: unknown; tbl_name?: unknown; sql?: unknown }[];
+    if (objects.length !== 1) throw invalidArtifact('unsupported snapshot schema.');
+    const [object] = objects;
+    if (object.type !== 'table' || object.name !== V1_SNAPSHOT_TABLE || object.tbl_name !== V1_SNAPSHOT_TABLE
+        || typeof object.sql !== 'string' || normalizedLegacySql(object.sql) !== normalizedLegacySql(V1_SNAPSHOT_DDL)) throw invalidArtifact('unsupported snapshot schema.');
+    const columns = database.prepare('SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid')
+        .all(V1_SNAPSHOT_TABLE) as { cid?: unknown; name?: unknown; type?: unknown; notnull?: unknown; dflt_value?: unknown; pk?: unknown; hidden?: unknown }[];
+    if (columns.length !== V1_SNAPSHOT_COLUMNS.length || !columns.every((column, index) => {
+        const expected = V1_SNAPSHOT_COLUMNS[index];
+        return column.cid === expected.cid && column.name === expected.name && column.type === expected.type
+            && column.notnull === expected.notnull && column.dflt_value === expected.dflt_value
+            && column.pk === expected.pk && column.hidden === expected.hidden;
+    })) throw invalidArtifact('unsupported snapshot schema.');
+    return { applicationId, userVersion: V1_USER_VERSION, journalMode };
+}
+function normalizedLegacySql(sql: string): string {
+    return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
+}
 export const SCHEMA_SQL = `CREATE TABLE square_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
@@ -224,7 +294,7 @@ function routeKind(value: unknown): DirectedHead['route'] {
     requireFact(['mention', 'reply', 'attention', 'bell'].includes(string(value)));
     return value as DirectedHead['route'];
 }
-function lease(value: unknown): WatchLease {
+export function validateWatchLease(value: unknown): WatchLease {
     const l = shape(value, ['leaseId', 'heartbeatAt', 'expiresAt'], ['filter']);
     string(l.leaseId, true);
     requireFact(finite(l.expiresAt) >= finite(l.heartbeatAt));
@@ -476,7 +546,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         receiptAssignments: () => immutable(all('SELECT owner_json,act_index FROM receipts ORDER BY owner_json,act_index').map(r => ({ owner: decoded(r.owner_json, true), index: integer(r.act_index) }))),
         lease(name) {
             const r = one('SELECT * FROM catch_leases WHERE owner_json=?', [encode(owner(name))]);
-            return r ? immutable(lease({
+            return r ? immutable(validateWatchLease({
                 leaseId: decoded(r.lease_id_json, true), heartbeatAt: finite(r.heartbeat_at), expiresAt: finite(r.expires_at), ...(r.filter_json === null ? {} : { filter: json(r.filter_json) })
             })) : undefined;
         },
@@ -532,7 +602,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return count;
         },
         putLease(name, value) {
-            const l = lease(value), old = read.lease(name);
+            const l = validateWatchLease(value), old = read.lease(name);
             if (old && stableJson(old) === stableJson(l))
                 return false;
             const canonical = owner(name);
@@ -597,7 +667,7 @@ export function initializeSqlite(db: DatabaseSync, state: SquareState, revision 
     }
     for (const [owner, value] of Object.entries(state.runtime.leases)) {
         string(owner, true);
-        const l = lease(value);
+        const l = validateWatchLease(value);
         db.prepare('INSERT INTO catch_leases(owner_json,lease_id_json,heartbeat_at,expires_at,filter_json) VALUES(?,?,?,?,?)').run(encode(owner), encode(l.leaseId), l.heartbeatAt, l.expiresAt, l.filter === undefined ? null : encode(l.filter));
     }
     driver.replaceRoutes(routes);
@@ -617,7 +687,7 @@ export function exportSqliteState(db: DatabaseSync): SquareState {
     }
     for (const row of db.prepare('SELECT * FROM catch_leases').all() as Row[]) {
         const owner = decoded(row.owner_json, true);
-        Object.defineProperty(leases, owner, { value: lease({
+        Object.defineProperty(leases, owner, { value: validateWatchLease({
                 leaseId: decoded(row.lease_id_json, true), heartbeatAt: finite(row.heartbeat_at), expiresAt: finite(row.expires_at), ...(row.filter_json === null ? {} : { filter: json(row.filter_json) })
             }), enumerable: true });
     }

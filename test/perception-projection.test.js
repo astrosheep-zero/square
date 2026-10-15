@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { decideCatch } from '../dist/catch-decisions.js';
-import { emptyRuntimeState } from '../dist/artifact.js';
+import { createArtifactPort } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { directedTo, perceiveActivity } from '../dist/perception-projection.js';
 import { readCursor } from '../dist/runtime.js';
-import { createMemoryCell } from '../dist/square-storage.js';
 
 function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
   return {
@@ -18,7 +18,7 @@ function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
 }
 
 function memoryCell(acts, runtime) {
-  return createMemoryCell(squareState(acts, runtime));
+  return createArtifactPort(':memory:', squareState(acts, runtime));
 }
 
 test('catch and delivery share one settled audience across case and rejoin boundaries', async () => {

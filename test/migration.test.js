@@ -187,7 +187,7 @@ test('the frozen v1 writer agrees with the pinned shipped v1 writer', { skip: ga
 });
 
 test('v1 validation refuses a non-finite route number wherever it sits', async () => {
-  const module = await import(pathToFileURL(path.join(ROOT, 'dist', 'square-state.js')).href);
+  const module = await import(pathToFileURL(path.join(ROOT, 'dist', 'square-migration.js')).href);
   const { validateSquareState } = module;
 
   assert.doesNotThrow(() => validateSquareState(legacyFixtureState()));
@@ -239,6 +239,52 @@ test('migration preserves the whole v1 authority losslessly', { skip: gate(MIGRA
     assert.equal(normalizeLegacyState(exportSqliteState(database)), normalizeLegacyState(state));
   } finally {
     database.close();
+  }
+});
+
+test('migration preserves permissive legacy values and optional-field presence', { skip: gate(MIGRATION, MIGRATION_GATE) }, async (t) => {
+  const dir = fixtureDirectory(t);
+  const squarePath = path.join(dir, 'optional.square');
+  const state = legacyFixtureState();
+  delete state.throttlePerMinute;
+  state.acts.find((act) => act.index === 2).mentions = [''];
+  state.acts.find((act) => act.index === 11).mentions = [];
+  // v1 allowed a read fence beyond assigned history; it is not a receipt.
+  state.acts.find((act) => act.kind === 'read').through = 100;
+  state.runtime.leases.Bob.filter = {};
+  state.runtime.leases['dormant-key'].filter = { participants: [], mention: '' };
+  Object.defineProperty(state.runtime.leases, '__proto__', {
+    value: { leaseId: 'lone \uD800 NUL \u0000', heartbeatAt: 1.25, expiresAt: 2 }, enumerable: true,
+  });
+
+  writeV1Artifact(squarePath, state, 9);
+  const { migrateSquareFile } = await import('../dist/square-migration.js');
+  assert.equal((await migrateSquareFile(squarePath)).status, 'migrated');
+  const { database, driver, exportSqliteState } = await openV2(squarePath);
+  try {
+    assert.equal(driver.header().revision, 9);
+    // Full equality includes absent vs empty mentions/filter, owner spellings,
+    // ordered duplicate routes with extras, and Unicode/NUL strings.
+    assert.deepEqual(exportSqliteState(database), state);
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy validation retains envelope, ordering and assigned-reference errors', async () => {
+  const { validateSquareState } = await import('../dist/square-migration.js');
+  const malformed = 'Invalid square artifact: snapshot schema is malformed.';
+  const cases = [
+    [(state) => { state.unowned = true; }, malformed],
+    [(state) => { state.acts[1].index = state.acts[0].index; }, malformed],
+    [(state) => { state.acts.find((act) => act.reply !== undefined).reply = 11; }, malformed],
+    [(state) => { state.runtime.nextActIndex = 14; }, 'Invalid square artifact: nextActIndex is behind the activity history.'],
+    [(state) => { state.runtime.observations.Alice['act/20'] = { state: 'seen', at: 2 }; }, 'Invalid square artifact: runtime references an unassigned activity index.'],
+  ];
+  for (const [mutate, message] of cases) {
+    const state = legacyFixtureState();
+    mutate(state);
+    assert.throws(() => validateSquareState(state), { code: 'invalid_args', message });
   }
 });
 

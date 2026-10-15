@@ -4,8 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { createSquareFile, diagnoseSquareFile, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
-import { createFileCell, createMemoryCell } from '../dist/square-storage.js';
+import { createArtifactPort, createSquareFile, diagnoseSquareFile, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 
 const empty = () => ({ hardCap: null, preamble: ['topic'], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
 function location(t) {
@@ -16,7 +15,7 @@ function location(t) {
 async function cells(t) {
   const file = location(t);
   await createSquareFile(file, empty());
-  const ports = [createMemoryCell(empty()), createFileCell(file)];
+  const ports = [createArtifactPort(':memory:', empty()), createArtifactPort(file)];
   t.after(() => Promise.all(ports.map(p => p.close())));
   return ports;
 }
@@ -103,7 +102,7 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
   const file = location(t), db = new DatabaseSync(file);
   db.exec('PRAGMA application_id=1397838405; PRAGMA user_version=1; CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)');
   db.close();
-  const before = fs.readFileSync(file), port = createFileCell(file);
+  const before = fs.readFileSync(file), port = createArtifactPort(file);
   t.after(() => port.close());
   await assert.rejects(port.read(r => r.header()), e => e.code === 'invalid_args' && e.facts?.reason === 'migration_required' && /migrate/.test(e.message));
   await assert.rejects(writeSquareFile(file, empty()), /migration/);
@@ -114,7 +113,7 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
   const malformed = new DatabaseSync(file);
   try { malformed.exec('CREATE TABLE extra(note TEXT)'); } finally { malformed.close(); }
   await assert.rejects(port.revision(), e => e.code === 'invalid_args' && e.facts?.reason !== 'migration_required');
-  const missing = location(t), absent = createFileCell(missing);
+  const missing = location(t), absent = createArtifactPort(missing);
   t.after(() => absent.close());
   let called = false;
   await assert.rejects(absent.transact(() => { called = true; }), e => e.code === 'not_found');
@@ -125,7 +124,7 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
 test('selected-row corruption is isolated from header reads, while doctor inspects unrelated authority and indices', async t => {
   const file = location(t);
   await createSquareFile(file, empty());
-  const port = createFileCell(file);
+  const port = createArtifactPort(file);
   t.after(() => port.close());
   await port.transact(w => w.land({ kind: 'say', actor: 'Alice', at: 0, body: 'body' }));
   const db = new DatabaseSync(file);

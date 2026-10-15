@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { Square } from "../dist/index.js";
-import { createMemoryCell } from "../dist/square-storage.js";
-import { createSquareState, readSquareSnapshot } from "../dist/artifact.js";
+import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from "../dist/artifact.js";
 import { createSquareApplication } from "../dist/square-application.js";
 
 function aborted() {
@@ -136,7 +135,7 @@ test("idle catch aborts without consuming activity added later", async () => {
 });
 
 test("memory change wait removes abort listeners on normal settlement", async () => {
-  const cell = createMemoryCell(createSquareState({ force: false, hardCap: null }, "context"));
+  const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, "context"));
   const controller = new AbortController();
   const waiting = cell.changed(0, 60_000, controller.signal);
   await cell.transact((facts) => facts.putLease("Watcher", { leaseId: "lease", heartbeatAt: 1, expiresAt: 60_000 }));
@@ -146,8 +145,8 @@ test("memory change wait removes abort listeners on normal settlement", async ()
 });
 
 test("abort inside a transition before commit rolls back the whole change", async () => {
-  const initial = createSquareState({ force: false, hardCap: null }, "context");
-  const cell = createMemoryCell(initial);
+  const initial = prepareSquareBuild({ force: false, hardCap: null }, "context");
+  const cell = createArtifactPort(':memory:', initial);
   const controller = new AbortController();
   await assert.rejects(
     () => cell.transact((facts) => {
@@ -188,7 +187,7 @@ test("real host-ledger claim lock abort prevents queued ownership", async () => 
 });
 
 test("post-commit express preserves its result after response cancellation", async () => {
-  const { buildMemorySquare } = await import("../dist/square-file-adapter.js");
+  const { buildMemorySquare } = await import("../dist/open-square.js");
   const { join, express } = await import("../dist/square-actions.js");
   const open = buildMemorySquare({ markdown: "context" });
   const joined = await join(open, "Writer");
@@ -240,7 +239,7 @@ test("owned claim cleanup never removes rightful ownership", async () => {
 });
 
 test("post-commit catch preserves its result before return cancellation", async () => {
-  const { buildMemorySquare } = await import("../dist/square-file-adapter.js");
+  const { buildMemorySquare } = await import("../dist/open-square.js");
   const { join, express, catchUp } = await import("../dist/square-actions.js");
   const open = buildMemorySquare({ markdown: "context" });
   const alice = await join(open, "Alice");

@@ -1,6 +1,6 @@
 import { automaticSessionStart, operationEnv } from './automatic-session.js';
 import { claimSessionParticipant, hostLedgerForEnv } from './registry.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact } from './routes.js';
 import { Square } from './square-application.js';

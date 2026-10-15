@@ -6,20 +6,18 @@ import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { wakeGraceMs } from '../dist/notifications.js';
 import { pendingHead, pendingNotifications } from '../dist/delivery.js';
-import { createFileCell } from '../dist/square-storage.js';
 import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { upsertWakeRoute } from './wake-routes.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
 import { projectWakeEvidence, wakeIsEligible } from '../dist/wake-eligibility.js';
-import { openSquare } from '../dist/square-file-adapter.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { readCursor } from '../dist/runtime.js';
 
@@ -209,7 +207,7 @@ test('artifact roundtrip derives only directed pending attention', async () => {
   try {
     item.cli('Alice', ['express', '--force', '--mention', 'Bob', 'please review @Bob'], 30);
 
-    const artifact = createFileCell(item.squarePath);
+    const artifact = createArtifactPort(item.squarePath);
     const pending = (await artifact.read((facts) => pendingNotifications(facts, 'Bob'))).value;
     await artifact.close();
     assert.equal(pending.length, 1);
@@ -312,7 +310,7 @@ test('catch is the durable acknowledgement that closes pending attention for lat
     item.cli('Bob', ['catch', '--now'], 40);
     const caught = (await readSquareSnapshot(item.squarePath)).state;
     assert.equal(caught.runtime.observations.Bob[formatActivityId(act.index)].state, 'seen');
-    const artifact = createFileCell(item.squarePath);
+    const artifact = createArtifactPort(item.squarePath);
     const { value: afterCatch } = await artifact.read((facts) => ({ cursor: readCursor(facts, 'Bob'), pending: pendingNotifications(facts, 'Bob') }));
     await artifact.close();
     assert.ok(afterCatch.cursor >= act.index);
@@ -794,7 +792,7 @@ test('mid-dispatch generation, route, cancellation, consumption and presentation
         const adapter = acceptedAdapter(async () => {
           if (change === 'generation') await ledger.ensurePresence({ ...owner, epoch: 8 });
           if (change === 'route') {
-            const artifact = createFileCell(item.squarePath);
+            const artifact = createArtifactPort(item.squarePath);
             try { await artifact.transact((facts) => facts.replaceRoutes(facts.routes().map((route) => ({ ...route, address: { ...route.address, agentId: 'replacement' } })))); }
             finally { await artifact.close(); }
           }
@@ -803,7 +801,7 @@ test('mid-dispatch generation, route, cancellation, consumption and presentation
           if (change === 'presentation') await markPresentationEvidence(item, 'bob-session', act);
           if (change === 'superseded route') {
             await ledger.ensurePresence({ ...owner, session: 'replacement', epoch: 7 });
-            const artifact = createFileCell(item.squarePath);
+            const artifact = createArtifactPort(item.squarePath);
             try { await artifact.transact((facts) => {
               const routes = facts.routes();
               facts.replaceRoutes([...routes, { ...routes[0], sessionId: 'replacement', updatedAt: routes[0].updatedAt + 1 }]);

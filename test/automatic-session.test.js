@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { prepareSquareBuild, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 
 // Explicit fixture inspection only; automatic-session production paths never export authority.
 async function loadSquare(location) { return (await readSquareSnapshot(location)).state; }
@@ -17,15 +17,14 @@ import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from './wake-routes.js';
 import { takeover } from '../dist/square-actions.js';
-import { openSquare } from '../dist/square-file-adapter.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { Square } from '../dist/square-application.js';
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-auto-'));
   const cwd = path.join(root, 'workspace');
   const publicPath = path.join(cwd, '.square', 'PUBLIC.square');
   fs.mkdirSync(path.dirname(publicPath), { recursive: true });
-  await writeSquareFile(publicPath, await createSquareState({ force: true, hardCap: null }, 'Host context'));
+  await writeSquareFile(publicPath, await prepareSquareBuild({ force: true, hardCap: null }, 'Host context'));
   const env = {
     ...process.env,
     CLAUDE_CODE_SESSION_ID: '',
@@ -444,7 +443,7 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
     const { projectSessionBindings } = await import('../dist/square-projections.js');
     const { readParticipantOwner } = await import('../dist/registry.js');
     const { done } = await import('../dist/square-actions.js');
-    const { openSquare } = await import('../dist/square-file-adapter.js');
+    const { openSquare } = await import('../dist/open-square.js');
     const { closeOpenSquare } = await import('../dist/open-square.js');
     const { Square } = await import('../dist/square-application.js');
     const hostLedger = createHostLedgerPort({
@@ -536,7 +535,7 @@ test('Codex PostToolUse does not recreate a deleted root for a stale indexed squ
   const staleRoot = path.join(item.root, 'deleted-square-root');
   const stalePath = path.join(staleRoot, 'SQUARE.square');
   fs.mkdirSync(staleRoot, { recursive: true });
-  await writeSquareFile(stalePath, await createSquareState({ force: true, hardCap: null }, 'stale'));
+  await writeSquareFile(stalePath, await prepareSquareBuild({ force: true, hardCap: null }, 'stale'));
   const ledger = createHostLedgerPort({ rootPath: item.root });
   await ledger.ensurePresence({
     location: stalePath,

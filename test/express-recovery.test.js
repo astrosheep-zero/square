@@ -9,7 +9,7 @@ import test from 'node:test';
 import { activityRetryCommand, executeExpression } from '../dist/cli/express-presentation.js';
 import { renderActivityUncertain } from '../dist/presentation.js';
 import { SquareError } from '../dist/model.js';
-import { buildMemorySquare } from '../dist/square-file-adapter.js';
+import { buildMemorySquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
 import { Square } from '../dist/index.js';
 import { CLI, ROOT, run, withName, persistSquare, draftPathFrom, testEnv } from './square-cli-helpers.js';

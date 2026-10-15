@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { prepareSquareBuild, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { Square } from '../dist/square-application.js';
@@ -60,7 +60,7 @@ function memoryHostLedger() {
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-injected-ledger-'));
   const location = path.join(root, 'SQUARE.square');
-  await writeSquareFile(location, await createSquareState({ force: true, hardCap: null }, 'injected ledger'));
+  await writeSquareFile(location, await prepareSquareBuild({ force: true, hardCap: null }, 'injected ledger'));
   const env = {
     SQUARE_HOST_LEDGER_ROOT: path.join(root, 'env-ledger'),
     SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),

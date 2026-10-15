@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { emptyRuntimeState } from '../dist/artifact.js';
-import { createMemoryCell } from '../dist/square-storage.js';
+import { createArtifactPort } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { pendingNotifications, leaseOwnsNotification } from '../dist/delivery.js';
 import { perceiveActivity } from '../dist/perception-projection.js';
 import { decideCatch } from '../dist/catch-decisions.js';
@@ -12,7 +12,7 @@ import { formatActivityId } from '../dist/square-core.js';
 import { readCursor } from '../dist/runtime.js';
 
 async function trace(acts, select, observations = {}) {
-  const artifact = createMemoryCell({ hardCap: null, preamble: [], warmup: ['test'],
+  const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: ['test'],
     acts: acts.map((act, index) => ({ ...act, index })),
     runtime: { ...emptyRuntimeState(acts.length), nextActIndex: acts.length, observations },
   });

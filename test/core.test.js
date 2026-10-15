@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { directedSuffix } from '../dist/activity-feed.js';
-import { emptyRuntimeState } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideCatch } from '../dist/catch-decisions.js';
 import { coreHold, coreIgnore, coreListen, coreListening, coreParticipants, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
-import { createMemoryCell } from '../dist/square-storage.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence, history, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
 function makeState(overrides = {}) {
@@ -24,7 +24,7 @@ function makeState(overrides = {}) {
 }
 
 function memorySquare(overrides = {}, clock = () => 0) {
-  const cell = createMemoryCell(makeState(overrides));
+  const cell = createArtifactPort(':memory:', makeState(overrides));
   return { cell, square: { artifact: cell, clock, location: 'memory' } };
 }
 
@@ -42,7 +42,7 @@ test('participant lists share actual action and receipt times, including a fresh
     observations: { Reader: { 'act/2': { state: 'seen', at: 60000 } }, Returning: { 'act/0': { state: 'seen', at: 2 } } },
     leases: { Reader: { leaseId: 'watch', heartbeatAt: 179999, expiresAt: 200000 } },
   };
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   const square = { artifact: cell, clock: () => 180000, location: 'memory' };
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
@@ -150,7 +150,7 @@ test('directed pending attention survives an unrelated later receipt', async () 
     { kind: 'say', actor: 'Bob', at: 4, body: 'self activity' },
   ] });
   state.runtime = { nextActIndex: 4, observations: { Bob: { 'act/3': { state: 'seen', at: 4 } } }, leases: {} };
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   try {
     const facts = (await cell.read((read) => ({
       suffix: directedSuffix(read, 'Bob').map((activity) => activity.index),
@@ -172,7 +172,7 @@ test('presence rides on own activity or actor-bearing receipts, never orphan coo
     { kind: 'hold', at: 5, body: 'actorless hold' },
   ] });
   state.runtime = { nextActIndex: 5, observations: { Alice: { 'act/4': { state: 'seen', at: 50 } } }, leases: {} };
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   try {
     assert.equal((await cell.read((facts) => presenceAnchor(facts, 'Alice'))).value, 2);
   } finally {
@@ -202,7 +202,7 @@ test('host controls preserve the requesting actor and body', async () => {
 
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
-  const cell = createMemoryCell(makeState());
+  const cell = createArtifactPort(':memory:', makeState());
   const square = { artifact: cell, clock: () => (now += 1), location: 'memory' };
   try {
     await join(square, 'Alice');
@@ -333,7 +333,7 @@ test('mention and listening caps reject without enumerating the roster', async (
 
 test('listener landings append only real edge changes', async () => {
   let now = 10;
-  const cell = createMemoryCell(makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
+  const cell = createArtifactPort(':memory:', makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
   const square = { artifact: cell, clock: () => ++now, location: 'memory' };
   try {
     const first = await listen(square, 'Caller', 'aku/riko');
@@ -460,7 +460,7 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
     { kind: 'join', actor: 'Cara', at: 3 },
     ...Array.from({ length: 25 }, (_, index) => ({ kind: 'say', actor: index % 2 === 0 ? 'Bob' : 'Cara', at: index + 4, body: `message ${index} @Alice`, mentions: ['Alice'] })),
   ];
-  const first = createMemoryCell(makeState({ acts }));
+  const first = createArtifactPort(':memory:', makeState({ acts }));
   try {
     const page = (cell, options, at) => cell.transact((facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
     const one = await page(first, { limit: 10 }, 100);
@@ -474,7 +474,7 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
     await first.close();
   }
 
-  const gap = createMemoryCell(makeState({
+  const gap = createArtifactPort(':memory:', makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },

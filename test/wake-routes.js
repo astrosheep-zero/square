@@ -7,9 +7,8 @@ import fs from 'node:fs';
 
 import { canonicalPath } from '../dist/canonical-path.js';
 import { nameKey } from '../dist/model.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { dropSessionWakeRoutes, publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS } from '../dist/routes.js';
-import { openSquare } from '../dist/square-file-adapter.js';
 
 async function withArtifact(location, fn) {
   if (location === undefined) return undefined;

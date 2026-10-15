@@ -4,11 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
-import { createMemoryCell } from '../dist/square-storage.js';
+import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { hostLedgerForEnv, readParticipantOwner, sessionOwnsParticipant, squareAssignedParticipantName } from '../dist/registry.js';
-import { openSquare } from '../dist/square-file-adapter.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS, resolvePrimaryWakeRoute, sessionCanEndParticipant } from '../dist/routes.js';
 import { readWakeRoutes, retireWakeRoutesForSession, upsertWakeRoute } from './wake-routes.js';
@@ -137,7 +135,7 @@ test('publication preserves nonmatching route envelopes and order, collapses eve
   const location = '/square-route-facts.square';
   const matching = { location, participant: 'Bob', sessionId: 's', channel: 'paseo', kind: 'paseo', address: { a: '1', b: '2' }, updatedAt: 100 };
   const retained = { ...matching, participant: 'Alice', epoch: ['legacy'], note: { keep: true } };
-  const artifact = createMemoryCell({ ...emptyState(), routes: [matching, retained, { ...matching, participant: 'bOB' }] });
+  const artifact = createArtifactPort(':memory:', { ...emptyState(), routes: [matching, retained, { ...matching, participant: 'bOB' }] });
   try {
     await publishWakeRoute(artifact, matching, { at: 101 });
     const first = await artifact.read((facts) => facts.routes());
@@ -212,7 +210,7 @@ test('session ownership is exclusive session identity, not a refreshable updated
     ],
     runtime: { nextActIndex: 0, observations: {}, leases: {} },
   };
-  const artifact = createMemoryCell(state);
+  const artifact = createArtifactPort(':memory:', state);
   try {
     await artifact.read((facts) => {
       assert.equal(sessionCanEndParticipant(facts, location, 'shared', 'old-session'), false);
@@ -226,7 +224,7 @@ test('session ownership is exclusive session identity, not a refreshable updated
 });
 
 test('missing participant routes require current session proof before SessionEnd can write done', async () => {
-  const artifact = createMemoryCell(emptyState());
+  const artifact = createArtifactPort(':memory:', emptyState());
   try {
     await artifact.read((facts) => {
       assert.equal(sessionCanEndParticipant(facts, '/square.square', 'shared', 'old-session'), false);

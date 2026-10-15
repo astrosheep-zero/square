@@ -1,7 +1,7 @@
 import { automaticSessionStart, operationEnv } from '../../automatic-session.js';
 import { hostLedgerForEnv } from '../../registry.js';
 import { canonicalPath } from '../../canonical-path.js';
-import { openSquare } from '../../square-file-adapter.js';
+import { openSquare } from '../../open-square.js';
 import { closeOpenSquare } from '../../open-square.js';
 import { Square } from '../../square-application.js';
 import { connectNative, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';

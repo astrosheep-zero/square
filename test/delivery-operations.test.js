@@ -4,20 +4,19 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createSquareState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { join } from '../dist/square-actions.js';
 import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
-import { createMemoryCell } from '../dist/square-storage.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { openSquare } from '../dist/square-file-adapter.js';
+import { openSquare } from '../dist/open-square.js';
 
 test('global sweep progresses through suppression and unrelated writes without hydrating bodies or chasing new landings', async (t) => {
   t.mock.method(Date, 'now', () => 1005);
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-sweep-pages-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const location = path.join(root, 'S.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts = [
     { kind: 'join', actor: 'Alice', index: 0, at: 0 }, { kind: 'join', actor: 'Bob', index: 1, at: 0 },
     ...Array.from({ length: 105 }, (_, n) => ({ kind: 'say', actor: 'Alice', index: n + 2, at: 1000, mentions: ['Bob'], body: `withheld ${n}` })),
@@ -25,7 +24,7 @@ test('global sweep progresses through suppression and unrelated writes without h
   ];
   state.runtime.nextActIndex = 108;
   state.routes = [{ location, participant: 'Bob', sessionId: 'bob', channel: 'paseo', kind: 'paseo', address: { agentId: 'bob' }, updatedAt: 1 }];
-  const artifact = createMemoryCell(state);
+  const artifact = createArtifactPort(':memory:', state);
   t.after(() => artifact.close());
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'ledger') });
   await ledger.ensurePresence({ location, participant: 'Bob', session: 'bob', channel: 'paseo' });
@@ -62,7 +61,7 @@ test('dispatch remains roster-major rather than landed recipient order across gl
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-dispatch-order-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const location = path.join(root, 'S.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts = [
     { kind: 'join', actor: 'Alice', index: 0, at: 0 }, { kind: 'join', actor: 'Cara', index: 1, at: 0 }, { kind: 'join', actor: 'Bob', index: 2, at: 0 },
     { kind: 'say', actor: 'Alice', index: 3, at: 1, mentions: ['Bob', 'Cara'], body: 'first' },
@@ -70,7 +69,7 @@ test('dispatch remains roster-major rather than landed recipient order across gl
   ];
   state.runtime.nextActIndex = 5;
   state.routes = ['Cara', 'Bob'].map((participant) => ({ location, participant, sessionId: participant, channel: 'paseo', kind: 'paseo', address: { agentId: participant }, updatedAt: 1 }));
-  const artifact = createMemoryCell(state);
+  const artifact = createArtifactPort(':memory:', state);
   t.after(() => artifact.close());
   const ledger = new FileHostLedgerPort({ rootPath: path.join(root, 'ledger') });
   for (const participant of ['Cara', 'Bob']) await ledger.ensurePresence({ location, participant, session: participant, channel: 'paseo' });
@@ -185,7 +184,7 @@ test('wake attempts have exactly one acquisition path', async () => {
 test('activity-scoped wake results ignore older pending attention without routes', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-activity-scope-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -216,7 +215,7 @@ test('activity-scoped wake results ignore older pending attention without routes
 test('all not-capable candidates classify one attention and persist no attempts', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-all-not-capable-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -253,7 +252,7 @@ test('all not-capable candidates classify one attention and persist no attempts'
 test('concurrent sessions serialize one attention to one transport call', { concurrency: false }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-single-owner-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -290,7 +289,7 @@ test('concurrent sessions serialize one attention to one transport call', { conc
 test('a fresh terminal attempt prevents fallback when the projection clock is stale', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-fresh-terminal-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -325,7 +324,7 @@ test('a fresh terminal attempt prevents fallback when the projection clock is st
 test('a local binding matches its artifact route', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-binding-route-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -352,7 +351,7 @@ test('a local binding matches its artifact route', async () => {
 test('attention caught after claim is not sent', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-final-boundary-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -388,7 +387,7 @@ test('presentation claim is exclusive across concurrent executors', async () => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-claim-'));
   const location = path.join(root, 'SQUARE.square');
   const ledgerRoot = path.join(root, 'user-ledger');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -419,7 +418,7 @@ test('presentation evidence from an older session does not block a new binding',
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-session-'));
   const location = path.join(root, 'SQUARE.square');
   const ledgerRoot = path.join(root, 'user-ledger');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -552,7 +551,7 @@ test('expired presentation dispatching claim is reclaimed while presented is ter
 test('clipped presentation stays retryable and never records presented evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-presentation-clip-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -583,7 +582,7 @@ test('clipped presentation stays retryable and never records presented evidence'
 test('producer commits artifact before a repository presence permission failure', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-producer-presence-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   await writeSquareFile(location, state);
   let committedBeforeEnsure = false;
   const ledger = {
@@ -608,7 +607,7 @@ test('producer commits artifact before a repository presence permission failure'
 test('a failed candidate followed by an accepted candidate is accepted once for its attention', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-attention-result-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -647,7 +646,7 @@ test('a failed candidate followed by an accepted candidate is accepted once for 
 test('unknown outcome stops fallback across sessions and route kinds', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-unknown-owner-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -687,7 +686,7 @@ test('unknown outcome stops fallback across sessions and route kinds', async () 
 test('route ledger read failure stays attention-local when a later route accepts', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-route-read-failure-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -733,7 +732,7 @@ test('route ledger read failure stays attention-local when a later route accepts
 test('evidence release failures preserve error policy and leave the single attempt occupied', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-release-failure-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
@@ -779,7 +778,7 @@ test('evidence release failures preserve error policy and leave the single attem
 test('recovered ambiguous dispatch stops every fallback route', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-ambiguous-owner-'));
   const location = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, '');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, '');
   state.acts.push(
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },

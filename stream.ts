@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { SquareError } from './model.js';
-import { openSquare, observeSquareChanges } from './square-file-adapter.js';
-import { closeOpenSquare } from './open-square.js';
+import { observeSquareRevision } from './artifact.js';
+import { openSquare, closeOpenSquare } from './open-square.js';
 import { streamProjection, streamTailProjection } from './views.js';
 import type { OpenOptions, OperationControl, StreamApplicationOptions, StreamApplicationRecord } from './square-facade.js';
 
@@ -33,7 +33,7 @@ export function streamSquare(squarePath: string, options: StreamApplicationOptio
           const start = options.start ?? { kind: 'tail', last: 10 };
           let cursor = start.kind === 'after' ? start.after : -1;
           let initial = start.kind === 'tail' ? start : undefined;
-          const observer = await observeSquareChanges(squarePath);
+          const observer = await observeSquareRevision(squarePath);
           const close = () => observer.close();
           signal.addEventListener('abort', close, { once: true });
           try {

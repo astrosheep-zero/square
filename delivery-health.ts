@@ -4,7 +4,7 @@ import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
 import { projectWakeEvidence } from './wake-eligibility.js';
 import type { WakeAttempt, WakeReleaseDiagnostic } from './wake-evidence.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { readWakeReleaseDiagnostics } from './wake-attempts.js';
 

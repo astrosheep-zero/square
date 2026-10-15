@@ -4,7 +4,7 @@ import test from 'node:test';
 import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
 import { Square } from '../dist/square-application.js';
 import { catchUp } from '../dist/square-actions.js';
-import { createMemoryCell } from '../dist/square-storage.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence, toPublicActivity } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
@@ -44,7 +44,7 @@ function stateWithHistory(unrelatedSays, participants = 96) {
 }
 
 test('catch hydrates only its page while the remaining count is a bounded fact read', async () => {
-  const cell = createMemoryCell(stateWithHistory(900));
+  const cell = createArtifactPort(':memory:', stateWithHistory(900));
   const { counters, artifact } = instrumentCell(cell);
   const square = { artifact, clock: () => 2_000, location: 'memory' };
   try {
@@ -65,7 +65,7 @@ test('catch hydrates only its page while the remaining count is a bounded fact r
 test('recipient hot reads do not hydrate unrelated history as the square grows', async () => {
   const measurements = [];
   for (const unrelated of [900, 1_800]) {
-    const cell = createMemoryCell(stateWithHistory(unrelated));
+    const cell = createArtifactPort(':memory:', stateWithHistory(unrelated));
     const { counters, artifact } = instrumentCell(cell);
     try {
       const caught = await catchUp({ artifact, clock: () => 2_000, location: 'memory' }, 'P0');
@@ -93,7 +93,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     { kind: 'join', actor: 'P0', at: 1 },
     ...Array.from({ length: 900 }, (_value, index) => ({ kind: 'say', actor: 'Alice', at: index + 2, body: `dispatch ${index} @P0`, mentions: ['P0'] })),
   ];
-  const cell = createMemoryCell({
+  const cell = createArtifactPort(':memory:', {
     hardCap: null, preamble: [], warmup: ['test'],
     acts: acts.map((act, index) => ({ ...act, index })),
     runtime: { nextActIndex: acts.length, observations: {}, leases: {} },

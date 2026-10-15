@@ -5,15 +5,14 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
-import { createSquareState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
-import { createFileCell } from '../dist/square-storage.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { CLI, ROOT, testEnv, withName } from './square-cli-helpers.js';
 
 async function fixture(t, held = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-wait-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
-  const state = await createSquareState({ force: true, hardCap: null }, 'deadline wait');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, 'deadline wait');
   state.acts = [{ kind: 'join', actor: 'Host', index: 0, at: 1 }, { kind: 'join', actor: 'Bob', index: 1, at: 2 }];
   if (held) state.acts.push({ kind: 'hold', actor: 'Host', index: 2, at: 3, body: 'pause' });
   state.runtime.nextActIndex = state.acts.length;
@@ -57,7 +56,7 @@ test('CLI hold keeps its lease alive, pauses quiet expiry, then wakes on resume 
       await sleep(20);
     }
   })(), 'held catch did not renew its lease');
-  const cell = createFileCell(item.file);
+  const cell = createArtifactPort(item.file);
   try {
     await cell.transact((facts) => {
       facts.land({ kind: 'resume', actor: 'Host', at: Date.now() });

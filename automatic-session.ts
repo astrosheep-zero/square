@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-application.js';
 import { currentParticipant } from './views.js';

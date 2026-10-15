@@ -3,9 +3,8 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSquareFile } from '../dist/artifact.js';
+import { createSquareFile, createArtifactPort } from '../dist/artifact.js';
 import { createSquareApplication } from '../dist/square-application.js';
-import { createMemoryCell } from '../dist/square-storage.js';
 import { catchPresence, entryPresentation, history, selectHistory, NON_READ, queryParticipants, recoveryObservation, resolveParticipant, snapshot, queryStatus, streamProjection } from '../dist/views.js';
 
 const queryContext = { location: 'memory', now: 100_000, automaticDeliveryAvailable: false };
@@ -23,7 +22,7 @@ async function archiveApplication(t, state) {
     env: { ...process.env, SQUARE_REGISTRY: path.join(root, 'registry') } });
 }
 function measuredSquare(state) {
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   const reads = { batches: [], singles: [], directed: 0, ordinals: [] };
   const artifact = { ...cell, read(select, signal) {
     return cell.read((facts) => select(new Proxy(facts, { get(target, key) {

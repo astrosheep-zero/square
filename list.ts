@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { listPresentation } from './views.js';
 import { SquareError } from './model.js';

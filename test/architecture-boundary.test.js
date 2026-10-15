@@ -10,16 +10,18 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 function sourceFiles(dir, relative = '', recursive = true) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const nextRelative = path.join(relative, entry.name);
-    if (entry.isDirectory()) return recursive ? sourceFiles(path.join(dir, entry.name), nextRelative) : [];
-    return entry.name.endsWith('.ts') ? [nextRelative] : [];
+    if (entry.isDirectory()) return recursive && !['test', 'tests', 'node_modules'].includes(entry.name) ? sourceFiles(path.join(dir, entry.name), nextRelative) : [];
+    return /\.(?:ts|js|mjs)$/.test(entry.name) ? [nextRelative] : [];
   });
 }
 
-// Keep this aligned with tsconfig.json's production includes.
+// Include separately compiled native integrations, not just tsconfig's roots.
 const productionFiles = [
   ...sourceFiles(root, '', false),
   ...sourceFiles(path.join(root, 'cmd'), 'cmd'),
   ...sourceFiles(path.join(root, 'cli'), 'cli'),
+  ...sourceFiles(path.join(root, 'plugins'), 'plugins'),
+  ...sourceFiles(path.join(root, 'packages/agent-delivery/src'), 'packages/agent-delivery/src'),
 ].sort();
 const productionSources = new Map(
   productionFiles.map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]),
@@ -41,16 +43,49 @@ test('normal runtime has one fact path, with no retired whole-state bridge', () 
   const retired = ['SquareDoc', 'createSquareDoc', 'readDocument', 'transactSquareSnapshot', 'deriveDeliveryModel', 'replayLandedAudiences', 'cloneState'];
   const leaks = retired.flatMap((identifier) => ownershipLeaks(identifier, []));
   assert.deepEqual(leaks, [], `retired whole-state runtime API:\n${leaks.join('\n')}`);
-  const stateOwners = ['model.ts', 'square-state.ts', 'artifact.ts', 'square-storage.ts', 'square-sqlite.ts', 'square-file-adapter.ts', 'square-migration.ts'];
+  const stateOwners = ['artifact.ts', 'square-sqlite.ts', 'square-migration.ts'];
   assert.deepEqual(ownershipLeaks('SquareState', stateOwners), []);
 });
 
-test('artifact storage has one production import boundary', () => {
-  const bypasses = filesContaining(
-    /from ['"](?:\.\.\/)*artifact\.js['"]/,
-    ['artifact.ts', 'square-storage.ts'],
-  );
-  assert.deepEqual(bypasses, [], `production modules bypass square-storage.ts: ${bypasses.join(', ')}`);
+function resolvedTarget(file, module) {
+  return path.posix.normalize(path.posix.join(path.posix.dirname(file), module)).replace(/\.js$/, '.ts');
+}
+
+function storageLeaks(sources) {
+  const artifactBindings = new Map([
+    ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
+    ['square-application.ts', ['createSquare', 'diagnoseSquareFile']],
+    ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
+    ['stream.ts', ['observeSquareRevision']],
+    ['square-migration.ts', ['openExistingSquareDatabase', 'inSqliteTransaction']],
+  ]);
+  const leaks = [];
+  for (const [file, source] of sources) {
+    for (const edge of moduleEdges(file, source)) {
+      if (!edge.module.startsWith('.')) continue;
+      const target = resolvedTarget(file, edge.module);
+      if (target === 'artifact.ts') {
+        const allowed = artifactBindings.get(file) ?? [];
+        const allowedTypes = file === 'square-facade.ts' ? ['DiagnoseResult'] : [];
+        if (edge.names.some(name => !allowed.includes(name)) || edge.types.some(name => !allowedTypes.includes(name)))
+          leaks.push(`${file} -> ${target}`);
+      }
+      if (target === 'square-sqlite.ts' && !['artifact.ts', 'square-migration.ts'].includes(file))
+        leaks.push(`${file} -> ${target}`);
+    }
+  }
+  return leaks.sort();
+}
+
+test('resolved imports preserve artifact and SQL ownership across native integrations', () => {
+  assert.ok(productionSources.has('plugins/opencode/delivery.ts'));
+  assert.ok(productionSources.has('packages/agent-delivery/src/opencode-native.ts'));
+  assert.deepEqual(storageLeaks(productionSources), []);
+  assert.deepEqual(storageLeaks(new Map([
+    ['native.ts', "import { createArtifactPort } from './artifact.js';"],
+    ['plugins/opencode/helper.ts', "export { createSqliteDriver } from '../../square-sqlite.js';"],
+    ['open-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
+  ])), ['native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
 });
 
 test('one canonicalizer owns square location keys', () => {
@@ -63,7 +98,7 @@ test('one canonicalizer owns square location keys', () => {
 });
 
 test('SQLite artifact rows stay private to storage framing and explicit migration', () => {
-  const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-state.ts', 'square-migration.ts'];
+  const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-migration.ts'];
   assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts']), []);
   const driver = productionSources.get('square-sqlite.ts') ?? '';
   assert.match(driver, /CREATE TABLE landed_audience/);
@@ -80,22 +115,20 @@ test('artifact callbacks are synchronous typed capabilities, not replacement sna
   assert.doesNotMatch(source, /SquareState|state\?:/);
 });
 
-test('raw file state APIs stay inside storage and the file artifact adapter', () => {
-  const storageAndFileAdapter = ['square-storage.ts', 'square-file-adapter.ts'];
-  const leaks = [
-    ...ownershipLeaks('probeSquareFile', storageAndFileAdapter),
-    ...ownershipLeaks('createMemoryCell', storageAndFileAdapter),
-    ...ownershipLeaks('createFileCell', storageAndFileAdapter),
-  ];
-  assert.deepEqual(leaks, [], `raw file state API escaped its owner boundary:\n${leaks.join('\n')}`);
+test('pure landing depends only on domain facts and syntax', () => {
+  const edges = moduleEdges('square-domain.ts', productionSources.get('square-domain.ts'));
+  for (const edge of edges) {
+    assert.ok(['./model.js', './ports.js'].includes(edge.module), edge.module);
+    if (edge.module === './ports.js') assert.deepEqual(edge.names, []);
+  }
 });
 
 test('the artifact contract comes from ports.ts alone', () => {
-  const storage = productionSources.get('square-storage.ts') ?? '';
+  const storage = productionSources.get('artifact.ts') ?? '';
   assert.match(
     storage,
     /import type \{[^}]*\bSquareArtifactPort\b[^}]*\} from '\.\/ports\.js';/,
-    'square-storage.ts must implement the declared SquareArtifactPort',
+    'artifact.ts must implement the declared SquareArtifactPort',
   );
   const duplicateContracts = filesContaining(
     /(?:interface|type)\s+\w*(?:Cell|ArtifactPort)\b/,
@@ -143,7 +176,7 @@ test('decisions and perception use domain facts, outside host and storage operat
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'square-file-adapter.ts', 'inbox.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The application owner is the only entry into participant execution.
   const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-application.ts']);
@@ -216,7 +249,7 @@ function transportLeaks(sources, roots) {
         if (edge.module === '<dynamic>') leaks.push(`unbounded import: ${trail.join(' -> ')}`);
         continue;
       }
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), edge.module)).replace(/\.js$/, '.ts');
+      const target = resolvedTarget(file, edge.module);
       if (target === 'square-application.ts') continue;
       if (target === 'square-facade.ts') {
         if (edge.names.length > 0) leaks.push(`DTO runtime import: ${[...trail, target].join(' -> ')}`);
@@ -257,7 +290,7 @@ test('transport boundary catches hidden execution behind helpers and limits nati
   const sources = new Map([
     ['cli/program.ts', "import './nested.js';"],
     ['cli/nested.ts', "import './render.js';"],
-    ['cli/render.ts', "export { history } from '../views.js'; export { createFileCell } from '../square-storage.js';"],
+    ['cli/render.ts', "export { history } from '../views.js'; export { createArtifactPort } from '../artifact.js';"],
     ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
     ['mcp.ts', "import { automaticSessionStart } from './automatic-session.js';"],
   ]);
@@ -265,7 +298,7 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     'integration exception exceeded: mcp.ts -> automatic-session.ts (automaticSessionStart)',
     'private binding: presentation.ts -> runtime.ts (nowMs)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
-    'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> square-storage.ts',
+    'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',
   ]);
 });

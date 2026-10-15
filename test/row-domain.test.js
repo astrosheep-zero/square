@@ -18,7 +18,7 @@ import { decideCatch } from '../dist/catch-decisions.js';
 import { formatActivityId, parseActivityId } from '../dist/model.js';
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
 import { SCHEMA_SQL } from '../dist/square-sqlite.js';
-import { createFileCell, createMemoryCell, createSquareSnapshot, writeSquareSnapshot } from '../dist/square-storage.js';
+import { createArtifactPort, createSquareFile, writeSquareFile } from '../dist/artifact.js';
 import { snapshot } from '../dist/views.js';
 import * as legacy from './fixtures/legacy-square-core.js';
 
@@ -276,8 +276,8 @@ test('the frozen oracle labels stay a mechanical rearrangement of its verbatim r
 
 test('landing one activity at a time reproduces the frozen v1 replay', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createMemoryCell(fixtureState([]));
-  const imported = createMemoryCell(fixtureState(acts));
+  const port = createArtifactPort(':memory:', fixtureState([]));
+  const imported = createArtifactPort(':memory:', fixtureState(acts));
   try {
     const returned = await port.transact((facts) => acts.map((act) => facts.land(act)));
     assert.deepEqual(returned.value.map((act) => act.index), acts.map((act) => act.index));
@@ -296,7 +296,7 @@ test('landing one activity at a time reproduces the frozen v1 replay', async () 
 });
 
 test('importing a gapped v1-shaped snapshot rebuilds the same maintained indices', async () => {
-  const port = createMemoryCell(fixtureState(GAPPED_ACTS));
+  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   try {
     const maintained = await maintainedIndices(port, GAPPED_ACTS);
     compareWithFrozenReplay(maintained, GAPPED_ACTS);
@@ -311,11 +311,11 @@ test('importing a gapped v1-shaped snapshot rebuilds the same maintained indices
 test('a file-backed v2 artifact agrees with memory and with the frozen replay', async (t) => {
   const directory = makeDirectory(t);
   const location = path.join(directory, 'SQUARE.square');
-  assert.equal(await createSquareSnapshot(location, fixtureState(GAPPED_ACTS)), true);
-  assert.equal(await createSquareSnapshot(location, fixtureState(GAPPED_ACTS)), false, 'create is race-safe');
+  assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), true);
+  assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), false, 'create is race-safe');
 
-  const file = createFileCell(location);
-  const memory = createMemoryCell(fixtureState(GAPPED_ACTS));
+  const file = createArtifactPort(location);
+  const memory = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   try {
     const fromFile = await maintainedIndices(file, GAPPED_ACTS);
     compareWithFrozenReplay(fromFile, GAPPED_ACTS);
@@ -325,8 +325,8 @@ test('a file-backed v2 artifact agrees with memory and with the frozen replay', 
     await memory.close();
   }
 
-  await writeSquareSnapshot(location, fixtureState(stored(SEQUENTIAL_SOURCE)));
-  const replaced = createFileCell(location);
+  await writeSquareFile(location, fixtureState(stored(SEQUENTIAL_SOURCE)));
+  const replaced = createArtifactPort(location);
   try {
     const fromFile = await maintainedIndices(replaced, stored(SEQUENTIAL_SOURCE));
     assert.equal(fromFile.header.lastActIndex, SEQUENTIAL_SOURCE.length - 1);
@@ -338,7 +338,7 @@ test('a file-backed v2 artifact agrees with memory and with the frozen replay', 
 
 test('audience priority is bell > mention > reply > attention, with self and ignore rules', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createMemoryCell(fixtureState([]));
+  const port = createArtifactPort(':memory:', fixtureState([]));
   try {
     await land(port, acts);
     const audience = async (index) => (await port.read((facts) => facts.audience(index))).value;
@@ -360,7 +360,7 @@ test('audience priority is bell > mention > reply > attention, with self and ign
 });
 
 test('sparse receipts keep exact orphan coordinates and exact owner spelling', async () => {
-  const port = createMemoryCell(fixtureState(GAPPED_ACTS));
+  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   try {
     const version = (await port.read((facts) => facts.header().revision)).value;
     const written = await port.transact((facts) => facts.markSeen('alice', [1, 2, 17, 19], T0 + 100));
@@ -408,7 +408,7 @@ test('sparse receipts keep exact orphan coordinates and exact owner spelling', a
 
 test('cursor and presence distinguish nonaddressed progress, holes, reads and orphan receipts', async () => {
   const acts = stored(CURSOR_SOURCE);
-  const port = createMemoryCell(fixtureState([]));
+  const port = createArtifactPort(':memory:', fixtureState([]));
   const probe = async (name) => (await port.read((facts) => ({
     cursor: readCursor(facts, name),
     presence: presenceAnchor(facts, name),
@@ -445,7 +445,7 @@ test('cursor and presence distinguish nonaddressed progress, holes, reads and or
 
 test('catch filters before limiting, repeats exact catches, and reports truthful remaining', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createMemoryCell(fixtureState([]));
+  const port = createArtifactPort(':memory:', fixtureState([]));
   try {
     await land(port, acts);
 
@@ -462,7 +462,7 @@ test('catch filters before limiting, repeats exact catches, and reports truthful
     await port.close();
   }
 
-  const exactPort = createMemoryCell(fixtureState(stored(SEQUENTIAL_SOURCE)));
+  const exactPort = createArtifactPort(':memory:', fixtureState(stored(SEQUENTIAL_SOURCE)));
   try {
     const none = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { from: ['Bob'], limit: 1 }, T0 + 600))).value;
     assert.deepEqual(none.activities, [], 'Bob never addresses Carol');
@@ -487,7 +487,7 @@ test('catch filters before limiting, repeats exact catches, and reports truthful
 });
 
 test('a pre-rejoin catch sees earlier holes while pending discovery stops at the latest join', async () => {
-  const port = createMemoryCell(fixtureState(REJOIN_ACTS));
+  const port = createArtifactPort(':memory:', fixtureState(REJOIN_ACTS));
   try {
     const beforeCatch = (await port.read((facts) => ({
       historical: facts.directed('Alice', { unseenOnly: true }, { edge: 'oldest', limit: 10 }).items.map((head) => head.index),
@@ -516,7 +516,7 @@ test('a pre-rejoin catch sees earlier holes while pending discovery stops at the
 });
 
 test('history context selects neighboring existing positions across gaps', async () => {
-  const port = createMemoryCell(fixtureState(GAPPED_ACTS));
+  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   try {
     const context = async (centers, before, after) => (await port.read((facts) => facts.contextIndexes(centers, before, after))).value;
     assert.deepEqual(await context([14], 3, 3), [5, 8, 11, 14, 20, 23, 25], 'neighbors are existing positions, not coordinate arithmetic');
@@ -529,7 +529,7 @@ test('history context selects neighboring existing positions across gaps', async
 });
 
 test('the detached snapshot closure answers exactly, survives later writes and close', async () => {
-  const port = createMemoryCell(fixtureState(GAPPED_ACTS));
+  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   await port.transact((facts) => {
     facts.markSeen('Alice', [25], T0 + 900);
     facts.markSeen('ghost', [1], T0 + 950);

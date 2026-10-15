@@ -23,8 +23,6 @@ export interface WakeRoute {
   updatedAt: number;
 }
 
-export interface ReceiverRoute extends WakeRoute {}
-
 export type SquareErrorCode =
   | 'invalid_name'
   | 'invalid_args'
@@ -93,7 +91,6 @@ export interface BuildOptions {
 }
 
 export type StoredAct = Act & { index: number; at: number };
-export type StoredActHead = StoredAct extends infer T ? T extends StoredAct ? Omit<T, 'body' | 'through' | 'index'> : never : never;
 
 export type ObservationState = 'seen';
 
@@ -131,22 +128,6 @@ export interface InboxMembership {
   catchLease?: WatchLease;
 }
 
-export interface SquareRuntimeState {
-  nextActIndex: number;
-  observations: Record<string, Record<string, ActivityObservation>>;
-  leases: Record<string, WatchLease>;
-}
-
-export interface SquareState {
-  hardCap: HardCap;
-  throttlePerMinute?: number;
-  preamble: string[];
-  warmup: string[];
-  acts: StoredAct[];
-  routes?: ReceiverRoute[];
-  runtime: SquareRuntimeState;
-}
-
 export interface WatchOptions {
   id?: ActivityId;
   participants?: string[];
@@ -159,12 +140,6 @@ export interface WatchOptions {
 
 export type PublicAct = Extract<StoredAct, { kind: 'say' | 'done' }>;
 export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' }>;
-
-export interface HoldState {
-  active: boolean;
-  at?: number;
-  reason?: string;
-}
 
 export function formatHardCap(hardCap: HardCap): string {
   return hardCap === null ? '-1' : String(hardCap);
@@ -183,10 +158,6 @@ export function nameKey(name: string): string {
 
 export function sameName(a: string, b: string): boolean {
   return nameKey(a) === nameKey(b);
-}
-
-export function findParticipantName(participants: string[], name: string): string | undefined {
-  return participants.find((participant) => sameName(participant, name));
 }
 
 /** One name grapheme: Unicode letters, digits, marks, hyphens, or underscores (no isolated variation selectors), or a complete RGI emoji. Shared by name validation and body @mention scanning. */

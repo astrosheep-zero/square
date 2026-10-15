@@ -7,7 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { emptyRuntimeState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';

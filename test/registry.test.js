@@ -19,13 +19,11 @@ import {
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { canonicalPath } from '../dist/canonical-path.js';
 import { sessionIdsFromEnvironment } from '../dist/participant-identity.js';
-import { writeSquareFile, createSquareState } from '../dist/artifact.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile } from '../dist/artifact.js';
 import { done, join, takeover } from '../dist/square-actions.js';
 import { Square } from '../dist/square-application.js';
-import { openSquare } from '../dist/square-file-adapter.js';
-import { closeOpenSquare } from '../dist/open-square.js';
+import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { streamProjection, streamTailProjection } from '../dist/views.js';
-import { createMemoryCell } from '../dist/square-storage.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -87,7 +85,7 @@ test('concurrent kick losers claim no ownership and mutate no artifact lifecycle
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-loser-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'kick'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'kick'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -145,7 +143,7 @@ test('a refused takeover lifecycle withdraws only its provisional claim token', 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-rollback-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'rollback'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'rollback'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -202,7 +200,7 @@ test('a stale takeover observation cannot append a lifecycle after a newer takeo
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-stale-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'stale'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'stale'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -258,7 +256,7 @@ test('self-takeover success leaves exactly one current owner', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-self-kick-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'self'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'self'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -312,7 +310,7 @@ test('self-takeover lifecycle refusal preserves the old owner and foreign joins 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-self-kick-refusal-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'self'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'self'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -370,7 +368,7 @@ test('a stale done paused across a completed takeover refuses and appends nothin
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-done-fence-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'fence'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'fence'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -425,7 +423,7 @@ test('a takeover cannot append when the old owner completed first', async () => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-after-done-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'fence'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'fence'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -472,7 +470,7 @@ test('invalid join name validates before any ownership claim', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-invalid-join-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'invalid'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'invalid'));
     const env = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -501,7 +499,7 @@ test('invalid takeover name performs no ownership mutation', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-invalid-kick-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'invalid'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'invalid'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -538,7 +536,7 @@ test('takeover of a never-joined participant refuses before any ownership claim'
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-unknown-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await createSquareState({ force: true, hardCap: null }, 'unknown'));
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'unknown'));
     const base = {
       SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
       CLAUDE_CODE_SESSION_ID: '',
@@ -776,7 +774,7 @@ function streamState(acts) {
 }
 
 async function withStreamSquare(state, action) {
-  const cell = createMemoryCell(state);
+  const cell = createArtifactPort(':memory:', state);
   try {
     return await action({ artifact: cell, clock: Date.now, location: 'memory' });
   } finally {

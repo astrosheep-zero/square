@@ -13,7 +13,8 @@ import installedSquarePiExtension, {
   renderPiInbox,
   renderSquareCard,
 } from '../plugins/pi/square-pi.js';
-import { emptyRuntimeState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
   CLAUDE_PLUGIN_ID,

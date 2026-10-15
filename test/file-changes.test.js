@@ -6,8 +6,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { observeFileVersion, observeFileMetadata } from '../dist/file-changes.js';
-import { createSquareState, writeSquareFile, observeSquareRevision, readSquareRevision } from '../dist/artifact.js';
-import { createFileCell } from '../dist/square-storage.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision, readSquareRevision } from '../dist/artifact.js';
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'square-change-test-'));
@@ -81,9 +80,9 @@ test('an edge during a shared read is rechecked, including a waiter arriving aft
 
 test('unavailable watches reconcile without loading history', async (t) => {
   const file = fixture(t);
-  await writeSquareFile(file, await createSquareState({ force: true, hardCap: null }, 'fallback'));
+  await writeSquareFile(file, await prepareSquareBuild({ force: true, hardCap: null }, 'fallback'));
   t.mock.method(fs, 'watch', () => { throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' }); });
-  const cell = createFileCell(file);
+  const cell = createArtifactPort(file);
   t.after(() => cell.close());
   const baseline = await cell.revision();
   const waiting = cell.changed(baseline, 4_000);
@@ -117,7 +116,7 @@ test('missing revisions stay quiet across reconciliation and wake on return', as
   assert.equal(await quiet, false);
 
   const appeared = observer.changed(null, 4_000);
-  await writeSquareFile(file, createSquareState({ force: true, hardCap: null }, 'returned'));
+  await writeSquareFile(file, prepareSquareBuild({ force: true, hardCap: null }, 'returned'));
   assert.equal(await appeared, true);
   assert.equal(await observer.read(), 0);
   const removed = observer.changed(0, 1_000);

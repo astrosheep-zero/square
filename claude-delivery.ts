@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { hostLedgerForEnv } from './registry.js';
 import type { EvidenceRecord, HostLedgerPort, PresenceRecord } from './host-ledger.js';

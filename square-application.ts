@@ -8,8 +8,7 @@ import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-
 import { directedSuffix } from './activity-feed.js';
 import { assertLiveOwner } from './participant-host.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
-import { buildMemorySquare, buildSquare, createSquare, openSquare } from './square-file-adapter.js';
-import { closeOpenSquare, type OpenSquare } from './open-square.js';
+import { buildMemorySquare, buildSquare, openSquare, closeOpenSquare, type OpenSquare } from './open-square.js';
 import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
 import {
   recoveryObservation, currentParticipant, entryPresentation, eventPresentation,
@@ -22,7 +21,7 @@ import { sessionIdsFromEnvironment } from './participant-identity.js';
 import { createDefaultWakeTransport, wakeGraceMs } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
-import { diagnoseSquareFile } from './square-storage.js';
+import { createSquare, diagnoseSquareFile } from './artifact.js';
 import { migrateSquareFile } from './square-migration.js';
 import { discoverSquares, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT } from './list.js';
 import { streamSquare } from './stream.js';
@@ -461,21 +460,12 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       checkControl(control);
       const squarePath = location();
       const now = clock();
-      const hardCap = input.hardCap ?? null;
-      if (hardCap !== null && (!Number.isSafeInteger(hardCap) || hardCap < 1)) {
-        throw new SquareError('invalid_args', 'hardCap must be a positive integer or null');
-      }
-      if (input.throttlePerMinute !== undefined
-        && (!Number.isSafeInteger(input.throttlePerMinute) || input.throttlePerMinute < 1)) {
-        throw new SquareError('invalid_args', 'throttlePerMinute must be a positive integer');
-      }
-      await createSquare(squarePath, {
-        hardCap, throttlePerMinute: input.throttlePerMinute,
+      const configuration = await createSquare(squarePath, {
+        hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
         template: input.template, force: input.force ?? false,
       }, input.markdown, control?.signal);
       return {
-        data: { location: squarePath, hardCap,
-          ...(input.throttlePerMinute === undefined ? {} : { throttlePerMinute: input.throttlePerMinute }) },
+        data: { location: squarePath, ...configuration },
         projection: { location: squarePath, standingCount: 0, held: false, now,
           automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(env) },
       };

@@ -1,6 +1,6 @@
 import { type InboxMembership, nameKey } from './model.js';
 import type { PresentationProjection, SessionBindingProjection, SquareRead } from './ports.js';
-import { openSquareArtifact, observeSquareChanges } from './square-file-adapter.js';
+import { createArtifactPort, observeSquareRevision } from './artifact.js';
 import { hostLedgerForEnv } from './registry.js';
 import { type VersionObserver } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
@@ -65,7 +65,7 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
 }
 
 async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal) {
-  const artifact = openSquareArtifact(binding.location, signal);
+  const artifact = createArtifactPort(binding.location, undefined, signal);
   try {
     return await artifact.read((facts): InboxMembership | undefined => {
       const projection = projectPresentation(facts, binding);
@@ -155,7 +155,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
           }
           for (const file of paths) {
             if (artifacts.has(file)) continue;
-            const observer = await observeSquareChanges(file);
+            const observer = await observeSquareRevision(file);
             if (signal.aborted) { observer.close(); return []; }
             artifacts.set(file, { observer, inbox: new Map() });
           }

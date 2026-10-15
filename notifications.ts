@@ -7,7 +7,7 @@ import {
 } from './delivery.js';
 import { SquareError } from './model.js';
 import { displayAttentionPath } from './attention-presentation.js';
-import { openSquare } from './square-file-adapter.js';
+import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';

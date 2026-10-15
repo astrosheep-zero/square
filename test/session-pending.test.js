@@ -5,8 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createSquareState, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
-import { createFileCell } from '../dist/square-storage.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
 import { createHostLedgerPort, FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { observeSessionPending, sessionInbox } from '../dist/inbox.js';
 
@@ -17,7 +16,7 @@ async function fixture(t, leaseMs, hasPending = true) {
   const ledgerRoot = path.join(root, 'ledger');
   fs.mkdirSync(ledgerRoot);
   const ledger = createHostLedgerPort({ rootPath: ledgerRoot });
-  const state = await createSquareState({ force: true, hardCap: null }, 'pending');
+  const state = await prepareSquareBuild({ force: true, hardCap: null }, 'pending');
   state.acts = [
     { kind: 'join', actor: 'Alice', index: 0, at: 1 },
     { kind: 'join', actor: 'Bob', index: 1, at: 2 },
@@ -61,7 +60,7 @@ test('catch lease expiry wakes notification eligibility without an artifact writ
 
 test('unrelated ledger changes reuse unchanged history while local activity still notifies', async (t) => {
   const item = await fixture(t, undefined, false);
-  const cell = createFileCell(item.file);
+  const cell = createArtifactPort(item.file);
   t.after(() => cell.close());
   await item.bind();
   const waiting = armedWait(item.observer, {}, 2_500);
@@ -126,7 +125,7 @@ test('presentation-only evidence invalidates eligibility; failed evidence cannot
   await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'failed' });
   await sleep(100);
   assert.equal(resolved, false);
-  const cell = createFileCell(item.file);
+  const cell = createArtifactPort(item.file);
   try { await cell.transact((facts) => facts.land({ kind: 'resume', at: Date.now() })); }
   finally { await cell.close(); }
   assert.equal((await retry.pending)[0].notifications[0].actIndex, 2);
@@ -155,7 +154,7 @@ test('a stale binding does not rescan the ledger on missing-artifact reconciliat
 test('an unreadable binding stays quiet across reconciliation and restores delivery on repair', async (t) => {
   const item = await fixture(t);
   const saved = fs.readFileSync(item.file);
-  const cell = createFileCell(item.file);
+  const cell = createArtifactPort(item.file);
   try { await cell.transact((facts) => facts.markSeen('Bob', [2], Date.now())); }
   finally { await cell.close(); }
   const corruptFile = path.join(path.dirname(item.file), 'CORRUPT.square');
@@ -193,7 +192,7 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   let now = 1000;
   t.mock.method(Date, 'now', () => now);
   const item = await fixture(t, undefined, false);
-  const cell = createFileCell(item.file);
+  const cell = createArtifactPort(item.file);
   t.after(() => cell.close());
   await cell.transact((facts) => {
     facts.land({ kind: 'join', actor: 'Cara', at: now });
