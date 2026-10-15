@@ -18,8 +18,7 @@ import {
 import { hasAutomaticDeliveryIdentity, hostLedgerForEnv, localParticipantName, localSessionIdentities, presenceEpoch, readParticipantOwner } from './registry.js';
 import { projectSessionBindings } from './square-projections.js';
 import { sessionIdsFromEnvironment } from './participant-identity.js';
-import { createDefaultWakeTransport, wakeGraceMs } from './notifications.js';
-import { sweepPending } from './delivery-operations.js';
+import { createDefaultWakeTransport } from './notifications.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createSquare, diagnoseSquareFile } from './artifact.js';
 import { migrateSquareFile } from './square-migration.js';
@@ -207,7 +206,7 @@ function caughtResult({ selection, stop }: CatchCompletion): CatchResult {
   };
 }
 
-/** Leases, quiet waiting, selection and sweep form one lifecycle for both APIs. */
+/** Leases, quiet waiting and selection form one lifecycle for both APIs. */
 async function catchOwned(square: OpenSquare, requested: string, options: CatchApplicationOptions = {}, control?: OperationControl): Promise<CatchCompletion> {
   let name = requested, subject: 'caller' | 'filter' = 'caller';
   let leaseId: string | undefined;
@@ -223,16 +222,6 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchA
     if (leaseId !== undefined) {
       await releaseWatchLease(square, name, leaseId).catch(() => undefined);
       leaseId = undefined;
-    }
-    if (!control?.signal?.aborted && stop !== 'replaced' && stop !== 'already-active'
-      && (waitStarted || selected.activities.length > 0) && square.location !== 'memory'
-      && square.hostLedger !== undefined && square.env?.SQUARE_DISABLE_PASEO_WAKE !== '1') {
-      try {
-        await sweepPending({
-          artifact: square.artifact, hostLedger: square.hostLedger, location: square.location,
-          now: square.clock(), graceMs: wakeGraceMs(square.env), limit: 8,
-        });
-      } catch { /* a completed receipt is not conditional on notification enrichment */ }
     }
     return { selection: selected, stop: terminal, waitStarted, replaced };
   }

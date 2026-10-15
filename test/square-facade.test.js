@@ -7,6 +7,8 @@ import test from 'node:test';
 import { Square, SquareError } from '../dist/index.js';
 import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { sweepPending } from '../dist/delivery-operations.js';
+import { wakeGraceMs } from '../dist/notifications.js';
 import { ROUTE_FRESH_MS } from '../dist/routes.js';
 import { upsertWakeRoute } from './wake-routes.js';
 
@@ -371,4 +373,67 @@ test('recognize returns only the current locally bound participant without chang
     else process.env.SQUARE_REGISTRY = previousRegistry;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a completed catch reads no sweep evidence and leaves unrelated eligible work selectable', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-catch-completion-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const env = {
+    ...process.env,
+    SQUARE_HOST_LEDGER_ROOT: path.join(root, 'host-ledger'),
+    SQUARE_REGISTRY: path.join(root, 'sessions.ndjsonl'),
+    SQUARE_ROUTES: path.join(root, 'routes.ndjsonl'),
+    SQUARE_PRESENTED: path.join(root, 'presented.ndjsonl'),
+    SQUARE_WAKE_ATTEMPTS: path.join(root, 'wake-attempts.ndjsonl'),
+    CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '',
+    SQUARE_DISABLE_PASEO_WAKE: '0',
+  };
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const built = await Square.build({ path: squarePath, markdown: 'context', env });
+  const alice = await built.join('Alice');
+  await built.join('Bob');
+  await built.join('Carol');
+  const forBob = await alice.express('for Bob @Bob', { force: true, mentions: ['Bob'] });
+  const forCarol = await alice.express('for Carol @Carol', { force: true, mentions: ['Carol'] });
+  await built.close();
+
+  // Bob's attention is genuine eligible wake work: a live route and a live owner session.
+  await upsertWakeRoute({
+    location: squarePath, participant: 'Bob', sessionId: 'bob-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'bob-session' },
+  }, { env });
+  await createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT })
+    .ensurePresence({ location: squarePath, participant: 'Bob', session: 'bob-session', channel: 'paseo' });
+
+  // Wake evidence is the sweep's input. Recording only evidence access keeps this
+  // probe about notification selection, not about the ownership reads catch needs.
+  const EVIDENCE_ACCESS = new Set(['listEvidence', 'listWakeAttempts', 'claimWakeAttempt']);
+  const evidenceReads = [];
+  const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT });
+  const observed = new Proxy(ledger, {
+    get(target, key) {
+      const member = target[key];
+      if (typeof member !== 'function') return member;
+      return (...args) => {
+        if (EVIDENCE_ACCESS.has(String(key))) evidenceReads.push(String(key));
+        return member.apply(target, args);
+      };
+    },
+  });
+  const square = await Square.at({ path: squarePath, hostLedger: observed, env });
+  t.after(() => square.close());
+  const carol = await square.join('Carol');
+  evidenceReads.length = 0;
+  const caught = await carol.catch();
+  assert.deepEqual(caught.activities.map((activity) => activity.id), [forCarol.activity.id]);
+  assert.equal(caught.remaining, 0);
+  assert.deepEqual(evidenceReads, []);
+
+  // Bob's unrelated work is genuinely selectable: the same recorder sees the real
+  // selector read evidence and return his activity once completion is out of the way.
+  const selected = await sweepPending({
+    artifact: square.square.artifact, hostLedger: observed, location: squarePath,
+    now: Date.now() + 10_000, graceMs: wakeGraceMs(env), limit: 8,
+  });
+  assert.equal(evidenceReads.includes('listEvidence'), true);
+  assert.deepEqual(selected, [Number(forBob.activity.id.slice('act/'.length))]);
 });
