@@ -23,6 +23,8 @@ The command exercises both 1,800 and 18,000 unrelated historical activities. Eac
 | Discovery p95 seconds | 1.870 | 1.877 | 1.877 | 1.897 |
 | Five-second idle CPU seconds, aggregate | 3.181 | 3.241 | 3.594 | 3.088 |
 
+These historical SQL/busy counts combined artifact SQL with host-ledger file-lock SQL; “busy errors/retries” counted thrown busy errors, not independently observed retries. They cannot be compared directly with the origin-separated counters now in the benchmark. Rerun both runtimes with the same new script. Its `ledgerSql` reports host-root SQL (including lock databases), separately from artifact SQL. Returned SQL string/blob bytes are not physical I/O or full JSON decode measurements; SQLite's zero instrumented filesystem bytes is a transport change, not a performance gain.
+
 Idle body hydration and ledger bytes remained zero. Each discovery and catch phase hydrated 300 activity bodies. The original 20-second discovery deadline and derived phase guard were unchanged.
 
 The candidate removes a discarded catch-completion sweep and combines postcommit identity publication around one fresh presence observation. Admission remains a separate ownership check. Source changes also consolidate duplicate native connection-option declarations; those type changes do not account for the performance result. Production TypeScript across the three changes is net -57 lines without formatting compression. The benchmark repair is separately net -1 tooling line.

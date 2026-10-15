@@ -59,6 +59,21 @@ const flag = (name) => process.argv.includes(name);
 // ---------------------------------------------------------------------------------------------
 // SQL instrumentation
 //
+// Artifact `sql` keeps its historical buckets: successful prepares plus exec calls, writes at
+// prepare/exec time, returned hydration strings in UTF-8 bytes. `busy`/`commits` are artifact-only.
+// Host-root connections (including *.lock databases) go ONLY to `ledgerSql`:
+//   prepareAttempts counts prepare calls (including failures); execCalls counts exec batches;
+//   statementExecutions counts all/get/run/iterate calls, NOT preparations;
+//   readExecutions/writeExecutions count SELECT/mutating execution calls (a batch counts once);
+//   rows/returnedBytes count returned rows and UTF-8 string/blob bytes, not JSON decoding or I/O;
+//   presenceRows counts rows returned by SELECTs touching host_presence (not lock-table SQL);
+//   busy counts thrown busy/locked errors, including prepare and deferred iterator errors;
+//   commitAttempts/commitBusy/commitMs measure explicit COMMIT calls, not inferred retries.
+// Parent totals include setup/controls; worker totals are cumulative; phase totals exclude setup.
+// `ledger` counts instrumented fs.promises calls and readFile/writeFile bytes, NOT SQLite I/O.
+// Its readOps/readBytes prove the file data path. SQLite zero fs bytes is not a performance gain.
+// Old mixed-origin reports are not comparable: rerun BOTH runtimes with this same script.
+//
 // v2 keeps body once in activities.payload_json; heads never select a body. We classify each
 // prepared/exec'd statement by the tables it touches and whether it hydrates payload. Counts are
 // statements, not free-form promises: a caller must own a positive control proving the counters
@@ -101,8 +116,18 @@ function emptySqlCounters() {
   return { prepared: 0, statements, writes: 0, rows: 0, headRows: 0, hydratedRows: 0, hydratedBytes: 0 };
 }
 
+function emptyLedgerSqlCounters() {
+  return { prepareAttempts: 0, execCalls: 0, statementExecutions: 0, readExecutions: 0, writeExecutions: 0, rows: 0, returnedBytes: 0, presenceRows: 0, busy: 0, commitAttempts: 0, commitBusy: 0, commitMs: 0 };
+}
+
+function sumLedgerSql(counters) {
+  const total = emptyLedgerSqlCounters();
+  for (const counter of counters) for (const key of Object.keys(total)) total[key] += counter.ledgerSql[key];
+  return total;
+}
+
 function emptyCounters() {
-  return { sql: emptySqlCounters(), busy: 0, commits: { attempts: 0, busy: 0, ms: 0 }, ledger: { ops: 0, bytes: 0 }, watch: 0 };
+  return { sql: emptySqlCounters(), ledgerSql: emptyLedgerSqlCounters(), busy: 0, commits: { attempts: 0, busy: 0, ms: 0 }, ledger: { ops: 0, bytes: 0, readOps: 0, readBytes: 0 }, watch: 0 };
 }
 
 function isBusyError(error) {
@@ -168,6 +193,22 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
   const counters = emptyCounters();
   const bucketOfStatement = new WeakMap();
   const isLedgerPath = ledgerPathMatcher(ledgerRoot);
+  const origins = new WeakMap();
+  const originOf = (database) => {
+    if (!origins.has(database)) origins.set(database, isLedgerPath(database.location()) ? 'ledger' : 'artifact');
+    return origins.get(database);
+  };
+  const metadata = (database, sql) => {
+    const origin = originOf(database);
+    const text = String(sql).replace(/\s+/g, ' ');
+    return {
+      origin, bucket: origin === 'artifact' ? classifySql(sql) : undefined,
+      read: /^\s*SELECT\b/i.test(text),
+      write: /(?:^|;)\s*(insert|update|delete|replace|create|drop|alter)\b/i.test(text),
+      presence: /\bhost_presence\b/i.test(text),
+      commit: /^\s*COMMIT\s*;?\s*$/i.test(text),
+    };
+  };
   const originals = {
     prepare: DatabaseSync.prototype.prepare,
     exec: DatabaseSync.prototype.exec,
@@ -179,62 +220,103 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
     promises: {},
   };
 
-  const recordRow = (bucket, row) => {
+  const recordRow = (meta, row) => {
     if (row === undefined || row === null) return;
+    if (meta.origin === 'ledger') {
+      counters.ledgerSql.rows++;
+      if (meta.read && meta.presence) counters.ledgerSql.presenceRows++;
+      for (const value of Object.values(row)) {
+        counters.ledgerSql.returnedBytes += typeof value === 'string' ? Buffer.byteLength(value, 'utf8')
+          : value instanceof Uint8Array ? value.byteLength : 0;
+      }
+      return;
+    }
     counters.sql.rows++;
-    if (bucket === 'hydrated') {
+    if (meta.bucket === 'hydrated') {
       counters.sql.hydratedRows++;
       for (const value of Object.values(row)) {
         if (typeof value === 'string') counters.sql.hydratedBytes += Buffer.byteLength(value, 'utf8');
       }
-    } else if (bucket === 'heads') {
+    } else if (meta.bucket === 'heads') {
       counters.sql.headRows++;
     }
   };
-  const guard = (fn) => function (...args) {
-    try { return fn.apply(this, args); }
-    catch (error) { if (isBusyError(error)) counters.busy++; throw error; }
+  const onError = (meta, error) => {
+    if (!isBusyError(error)) return;
+    if (meta.origin === 'ledger') counters.ledgerSql.busy++;
+    else counters.busy++;
+  };
+  const execute = (meta, fn) => {
+    const host = meta.origin === 'ledger';
+    if (host) {
+      if (meta.read) counters.ledgerSql.readExecutions++;
+      if (meta.write) counters.ledgerSql.writeExecutions++;
+    }
+    const started = performance.now();
+    if (meta.commit) {
+      if (host) counters.ledgerSql.commitAttempts++;
+      else counters.commits.attempts++;
+    }
+    try { return fn(); }
+    catch (error) {
+      onError(meta, error);
+      if (meta.commit && isBusyError(error)) {
+        if (host) counters.ledgerSql.commitBusy++;
+        else counters.commits.busy++;
+      }
+      throw error;
+    } finally {
+      if (meta.commit) {
+        if (host) counters.ledgerSql.commitMs += performance.now() - started;
+        else counters.commits.ms += performance.now() - started;
+      }
+    }
+  };
+  const metaOf = (statement) => {
+    const meta = bucketOfStatement.get(statement);
+    assert.ok(meta, 'SQL statement was prepared before instrumentation; origin is unknown');
+    return meta;
   };
 
   DatabaseSync.prototype.prepare = function (sql, ...args) {
-    const statement = originals.prepare.call(this, sql, ...args);
-    const bucket = classifySql(sql);
-    bucketOfStatement.set(statement, bucket);
-    counters.sql.prepared++;
-    counters.sql.statements[bucket]++;
-    if (isMutatingSql(sql)) counters.sql.writes++;
+    const meta = metadata(this, sql);
+    if (meta.origin === 'ledger') counters.ledgerSql.prepareAttempts++;
+    let statement;
+    try { statement = originals.prepare.call(this, sql, ...args); }
+    catch (error) { onError(meta, error); throw error; }
+    bucketOfStatement.set(statement, meta);
+    if (meta.origin === 'artifact') {
+      counters.sql.prepared++;
+      counters.sql.statements[meta.bucket]++;
+      if (isMutatingSql(sql)) counters.sql.writes++;
+    }
     return statement;
   };
   DatabaseSync.prototype.exec = function (sql, ...args) {
-    const bucket = classifySql(sql);
-    counters.sql.statements[bucket]++;
-    if (isMutatingSql(sql)) counters.sql.writes++;
-    const commit = /^\s*COMMIT\s*;?\s*$/i.test(sql);
-    const started = performance.now();
-    if (commit) counters.commits.attempts++;
-    try { return originals.exec.call(this, sql, ...args); }
-    catch (error) {
-      if (isBusyError(error)) { counters.busy++; if (commit) counters.commits.busy++; }
-      throw error;
-    } finally { if (commit) counters.commits.ms += performance.now() - started; }
+    const meta = metadata(this, sql);
+    if (meta.origin === 'ledger') counters.ledgerSql.execCalls++;
+    else {
+      counters.sql.statements[meta.bucket]++;
+      if (isMutatingSql(sql)) counters.sql.writes++;
+    }
+    return execute(meta, () => originals.exec.call(this, sql, ...args));
   };
-  StatementSync.prototype.all = guard(function (...args) {
-    const rows = originals.all.apply(this, args);
-    const bucket = bucketOfStatement.get(this) ?? 'other';
-    for (const row of rows) recordRow(bucket, row);
-    return rows;
-  });
-  StatementSync.prototype.get = guard(function (...args) {
-    const row = originals.get.apply(this, args);
-    recordRow(bucketOfStatement.get(this) ?? 'other', row);
-    return row;
-  });
-  StatementSync.prototype.run = guard(function (...args) { return originals.run.apply(this, args); });
-  StatementSync.prototype.iterate = function (...args) {
-    const bucket = bucketOfStatement.get(this) ?? 'other';
-    const inner = originals.iterate.apply(this, args);
-    return (function* () { for (const row of inner) { recordRow(bucket, row); yield row; } })();
-  };
+  for (const method of ['all', 'get', 'run', 'iterate']) {
+    StatementSync.prototype[method] = function (...args) {
+      const meta = metaOf(this);
+      if (meta.origin === 'ledger') counters.ledgerSql.statementExecutions++;
+      const result = execute(meta, () => originals[method].apply(this, args));
+      if (method === 'all') for (const row of result) recordRow(meta, row);
+      else if (method === 'get') recordRow(meta, result);
+      else if (method === 'iterate') {
+        return (function* () {
+          try { for (const row of result) { recordRow(meta, row); yield row; } }
+          catch (error) { onError(meta, error); throw error; }
+        })();
+      }
+      return result;
+    };
+  }
 
   const ledgerMethods = ['readFile', 'writeFile', 'appendFile', 'mkdir', 'rm', 'rename', 'open', 'stat', 'lstat', 'readdir', 'access', 'copyFile', 'unlink'];
   for (const method of ledgerMethods) {
@@ -251,7 +333,10 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
       const result = original.call(this, target, ...rest);
       if (method !== 'readFile' || typeof target !== 'string') return result;
       return Promise.resolve(result).then((value) => {
-        counters.ledger.bytes += typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : (value?.length ?? 0);
+        const bytes = typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : (value?.length ?? 0);
+        counters.ledger.bytes += bytes;
+        counters.ledger.readOps++;
+        counters.ledger.readBytes += bytes;
         return value;
       });
     };
@@ -289,8 +374,8 @@ function diffCounters(before, after) {
   out.sql.hydratedBytes = after.sql.hydratedBytes - before.sql.hydratedBytes;
   out.busy = after.busy - before.busy;
   for (const field of ['attempts', 'busy', 'ms']) out.commits[field] = after.commits[field] - before.commits[field];
-  out.ledger.ops = after.ledger.ops - before.ledger.ops;
-  out.ledger.bytes = after.ledger.bytes - before.ledger.bytes;
+  for (const key of Object.keys(out.ledgerSql)) out.ledgerSql[key] = after.ledgerSql[key] - before.ledgerSql[key];
+  for (const key of Object.keys(out.ledger)) out.ledger[key] = after.ledger[key] - before.ledger[key];
   out.watch = after.watch - before.watch;
   return out;
 }
@@ -510,6 +595,8 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
   let readyCount = 0;
   let phase = 'setup';
   const phaseReports = { idle: [], discovered: [], catch: [], done: [] };
+  let controls;
+  let ledgerTransport = 'unknown';
   try {
     const file = path.join(root, 'BENCHMARK.square');
     const ledgerRoot = path.join(root, 'ledger');
@@ -535,7 +622,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
     const controlIndex = actors.length; // first unrelated say
     await open.artifact.read((facts) => facts.activities([controlIndex]));
     const bodyDelta = diffCounters(bodyBefore, snap());
-    const controls = {
+    controls = {
       seedWriteStatements: { total: afterSeed.sql.writes, expectedAtLeast: actors.length + history },
       headerReads,
       hydratedRows: bodyDelta.sql.hydratedRows,
@@ -553,7 +640,20 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
     }
     const ledgerSetupOps = snap().ledger.ops;
     controls.ledgerSetupOps = ledgerSetupOps;
-    assert.ok(ledgerSetupOps >= workerCount, `positive control: ledger instrumentation must observe presence writes (saw ${ledgerSetupOps})`);
+    // Read an existing seeded binding: no probe participants or writes alter the workload.
+    // Lock DB SQL is not evidence of SQLite data storage; host_presence rows are.
+    const ledgerProbeBefore = snap();
+    const probePresence = await ledger.listPresence({ location: file, participant: participants[0], session: 'bench-0' });
+    const ledgerProbe = diffCounters(ledgerProbeBefore, snap());
+    controls.ledgerProbe = ledgerProbe;
+    assert.equal(probePresence.length, 1, 'positive control: seeded presence must be readable through the port');
+    assert.equal(probePresence[0].participant, participants[0]);
+    assert.equal(probePresence[0].session, 'bench-0');
+    const sqlData = ledgerProbe.ledgerSql.presenceRows > 0 && ledgerProbe.ledgerSql.returnedBytes > 0;
+    const fileData = ledgerProbe.ledger.readOps > 0 && ledgerProbe.ledger.readBytes > 0;
+    assert.notEqual(sqlData, fileData, 'positive control: exactly one observed ledger data-read transport is required');
+    ledgerTransport = sqlData ? 'sqlite' : 'file';
+    controls.ledgerTransport = ledgerTransport;
 
     const argsFor = (index) => [
       '--worker', file, ledgerRoot, 'bench-' + index,
@@ -683,6 +783,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           legacyWholeStateTotal: sum(idleCounters, (c) => c.sql.statements.legacyWholeState),
           ledgerOpsTotal: sum(idleCounters, (c) => c.ledger.ops),
           busyTotal: sum(idleCounters, (c) => c.busy),
+          ledgerSql: sumLedgerSql(idleCounters),
         },
         discovery: latencies.length === 0 ? null : {
           commitMs: commit.finishedAt - commit.startedAt,
@@ -699,6 +800,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           hydratedBytesTotal: result.discovered === undefined ? 0 : sum(discoveryDelta, (c) => c.sql.hydratedBytes),
           ledgerOpsTotal: result.discovered === undefined ? 0 : sum(discoveryDelta, (c) => c.ledger.ops),
           busyTotal: result.discovered === undefined ? 0 : sum(discoveryDelta, (c) => c.busy),
+          ledgerSql: sumLedgerSql(discoveryDelta),
         },
         catch: result.catches === undefined ? null : {
           caughtPerWorker: { min: Math.min(...result.catches.map((item) => item.caught)), max: Math.max(...result.catches.map((item) => item.caught)) },
@@ -716,10 +818,13 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           writesTotal: sum(catchDelta, (c) => c.sql.writes),
           busyTotal: sum(catchDelta, (c) => c.busy),
           ledgerOpsTotal: sum(catchDelta, (c) => c.ledger.ops),
+          ledgerSql: sumLedgerSql(catchDelta),
         },
       },
-      sql: { ...finalCounters.sql, busy: finalCounters.busy },
-      ledger: finalCounters.ledger,
+      sql: { ...finalCounters.sql, busy: finalCounters.busy, commits: finalCounters.commits },
+      ledger: { ...finalCounters.ledger, transport: ledgerTransport, fsBytesComparable: ledgerTransport === 'file' },
+      ledgerSql: finalCounters.ledgerSql,
+      workerLedgerSql: sumLedgerSql((result.catches ?? result.discovered ?? result.idle).map((item) => item.counters)),
       workers: perWorker,
     };
     if (mode !== 'session' || !active) {
@@ -734,6 +839,11 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
     // Failure is evidence too. Report only counters actually received, never invent missing workers.
     const received = Object.fromEntries(Object.entries(phaseReports).map(([name, reports]) => {
       const actual = reports.filter(Boolean);
+      const deltas = reports.flatMap((report, index) => {
+        if (!report?.counters) return [];
+        const before = report.baselineCounters ?? (name === 'discovered' ? phaseReports.idle[index]?.counters : undefined);
+        return before ? [diffCounters(before, report.counters)] : [];
+      });
       return [name, {
         reportedWorkers: actual.length,
         discoveredWorkers: actual.filter((report) => report.discovered > 0).length,
@@ -743,10 +853,16 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
         cumulativeHydratedRows: actual.reduce((sum, report) => sum + (report.counters?.sql.hydratedRows ?? 0), 0),
         cumulativeHydratedBytes: actual.reduce((sum, report) => sum + (report.counters?.sql.hydratedBytes ?? 0), 0),
         cumulativeBusy: actual.reduce((sum, report) => sum + (report.counters?.busy ?? 0), 0),
+        cumulativeLedgerSql: sumLedgerSql(actual.filter((report) => report.counters).map((report) => report.counters)),
+        ledgerSql: sumLedgerSql(deltas),
+        ledgerBytes: deltas.reduce((sum, delta) => sum + delta.ledger.bytes, 0),
+        ledgerOps: deltas.reduce((sum, delta) => sum + delta.ledger.ops, 0),
         failures: actual.flatMap((report) => report.failure === undefined ? [] : [report.failure]),
       }];
     }));
-    console.error(JSON.stringify({ failed: true, error: error.message, workerCount, history, phase, readyCount, received }, null, 2));
+    console.error(JSON.stringify({ failed: true, error: error.message, workerCount, history, phase, readyCount, controls,
+      ledger: { ...snap().ledger, transport: ledgerTransport, fsBytesComparable: ledgerTransport === 'file' },
+      ledgerSql: snap().ledgerSql, received }, null, 2));
     throw error;
   } finally {
     clearTimeout(guard);
@@ -770,6 +886,8 @@ function compareRuns(runs) {
     catchHydratedRows: runs.map((run) => pick(run, ['phases', 'catch', 'hydratedRowsTotal'])),
     discoveryLatencyP50: runs.map((run) => pick(run, ['phases', 'discovery', 'latencyMs', 'p50'])),
     catchBusy: runs.map((run) => pick(run, ['phases', 'catch', 'busyTotal'])),
+    catchLedgerSql: runs.map((run) => pick(run, ['phases', 'catch', 'ledgerSql'])),
+    ledgerTransport: runs.map((run) => run.ledger.transport),
     legacyWholeState: runs.map((run) => run.sql.statements.legacyWholeState),
     seedMs: runs.map((run) => run.seed.ms),
   };
@@ -833,7 +951,8 @@ async function selfTest() {
 
   const dbFile = path.join(os.tmpdir(), `square-benchmark-selftest-${process.pid}.db`);
   fs.rmSync(dbFile, { force: true });
-  const instrumentation = installInstrumentation({});
+  const ledgerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'square-benchmark-ledger-'));
+  const instrumentation = installInstrumentation({ ledgerRoot });
   try {
     const db = new DatabaseSync(dbFile);
     db.exec('CREATE TABLE activities (act_index INTEGER PRIMARY KEY, payload_json TEXT NOT NULL)');
@@ -861,15 +980,89 @@ async function selfTest() {
     holder.close();
     contender.close();
 
-    // Ledger counters.
-    const ledgerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'square-benchmark-ledger-'));
-    const ledger = installInstrumentation({ ledgerRoot });
-    try {
-      await fs.promises.writeFile(path.join(ledgerRoot, 'presence.ndjsonl'), '{"v":1}\n');
-      await fs.promises.readFile(path.join(ledgerRoot, 'presence.ndjsonl'), 'utf8');
-      assert.ok(ledger.counters.ledger.ops >= 2, `self-test control: ledger ops counted (saw ${ledger.counters.ledger.ops})`);
-      assert.ok(ledger.counters.ledger.bytes > 0, 'self-test control: ledger bytes counted');
-    } finally { ledger.uninstall(); fs.rmSync(ledgerRoot, { recursive: true, force: true }); }
+    assert.deepEqual(instrumentation.counters.ledgerSql, emptyLedgerSqlCounters(), 'artifact SQL must not enter host counters');
+
+    // Host SQL is isolated, counted at execution (including statement reuse), and returns bytes.
+    const hostFile = path.join(ledgerRoot, 'host-ledger.sqlite');
+    const host = new DatabaseSync(hostFile);
+    const hostBefore = instrumentation.snapshot();
+    host.exec('CREATE TABLE host_presence (participant TEXT, payload BLOB)');
+    host.prepare('INSERT INTO host_presence VALUES (?, ?)').run('Reader0', new Uint8Array([1, 2, 3]));
+    const select = host.prepare('SELECT * FROM host_presence');
+    assert.equal(select.get().participant, 'Reader0');
+    assert.equal([...select.iterate()].length, 1);
+    const hostDelta = diffCounters(hostBefore, instrumentation.snapshot());
+    assert.equal(hostDelta.ledgerSql.prepareAttempts, 2);
+    assert.equal(hostDelta.ledgerSql.execCalls, 1);
+    assert.equal(hostDelta.ledgerSql.statementExecutions, 3);
+    assert.equal(hostDelta.ledgerSql.readExecutions, 2);
+    assert.equal(hostDelta.ledgerSql.writeExecutions, 2);
+    assert.equal(hostDelta.ledgerSql.rows, 2);
+    assert.equal(hostDelta.ledgerSql.presenceRows, 2);
+    assert.equal(hostDelta.ledgerSql.returnedBytes, 20); // 2 * (7 UTF-8 bytes + 3 blob bytes)
+    assert.deepEqual(hostDelta.sql, emptySqlCounters(), 'host SQL must not enter artifact buckets/rows/writes');
+    assert.equal(hostDelta.busy, 0);
+    assert.deepEqual(hostDelta.commits, { attempts: 0, busy: 0, ms: 0 });
+
+    // Lock databases belong to the host origin too, but are not data-transport evidence.
+    const lock = new DatabaseSync(path.join(ledgerRoot, 'presence.ndjsonl.lock'));
+    const lockBefore = instrumentation.snapshot();
+    lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE; CREATE TABLE __square_file_lock (id INTEGER)');
+    lock.exec('COMMIT;');
+    const lockDelta = diffCounters(lockBefore, instrumentation.snapshot());
+    assert.equal(lockDelta.ledgerSql.execCalls, 2);
+    assert.equal(lockDelta.ledgerSql.writeExecutions, 1);
+    assert.equal(lockDelta.ledgerSql.commitAttempts, 1);
+    assert.equal(lockDelta.ledgerSql.presenceRows, 0);
+    assert.deepEqual(lockDelta.sql, emptySqlCounters());
+    lock.close();
+
+    const rival = new DatabaseSync(hostFile);
+    rival.exec('PRAGMA busy_timeout=0');
+    host.exec('PRAGMA busy_timeout=0');
+    const insert = rival.prepare('INSERT INTO host_presence VALUES (?, ?)');
+    const iterator = rival.prepare('SELECT * FROM host_presence').iterate();
+    const cold = new DatabaseSync(hostFile); // no schema cache: prepare itself must read the DB
+    cold.exec('PRAGMA busy_timeout=0');
+    host.exec('BEGIN EXCLUSIVE');
+    const busyBeforeHost = instrumentation.snapshot();
+    assert.throws(() => cold.prepare('SELECT * FROM host_presence'), isBusyError);
+    assert.throws(() => insert.run('blocked', null), isBusyError);
+    assert.throws(() => iterator.next(), isBusyError); // error occurs after iterate() returned
+    const hostBusy = diffCounters(busyBeforeHost, instrumentation.snapshot());
+    assert.equal(hostBusy.ledgerSql.busy, 3, 'prepare, execution and deferred iterator busy counted once each');
+    assert.equal(hostBusy.busy, 0, 'host contention must not count as artifact busy');
+    host.exec('ROLLBACK');
+    cold.close();
+
+    // A reader prevents a writer's commit; retry calls are visible, not guessed from busy counts.
+    host.exec('BEGIN');
+    host.prepare('SELECT * FROM host_presence').all();
+    rival.exec('BEGIN IMMEDIATE');
+    insert.run('Reader1', null);
+    const commitBefore = instrumentation.snapshot();
+    assert.throws(() => rival.exec('COMMIT'), isBusyError);
+    host.exec('ROLLBACK');
+    rival.exec('COMMIT');
+    const commits = diffCounters(commitBefore, instrumentation.snapshot());
+    assert.equal(commits.ledgerSql.commitAttempts, 2);
+    assert.equal(commits.ledgerSql.commitBusy, 1);
+    assert.equal(commits.ledgerSql.busy, 1);
+    assert.equal(commits.busy, 0);
+    assert.deepEqual(commits.commits, { attempts: 0, busy: 0, ms: 0 });
+    rival.close();
+    host.close();
+
+    // File transport measures actual readFile results, independently of lock SQL.
+    const fsBefore = instrumentation.snapshot();
+    await fs.promises.writeFile(path.join(ledgerRoot, 'presence.ndjsonl'), '{"v":1}\n');
+    await fs.promises.readFile(path.join(ledgerRoot, 'presence.ndjsonl'), 'utf8');
+    const fsDelta = diffCounters(fsBefore, instrumentation.snapshot());
+    assert.equal(fsDelta.ledger.ops, 2);
+    assert.equal(fsDelta.ledger.bytes, 16);
+    assert.equal(fsDelta.ledger.readOps, 1);
+    assert.equal(fsDelta.ledger.readBytes, 8);
+    assert.deepEqual(fsDelta.ledgerSql, emptyLedgerSqlCounters());
 
     // fs.watch disable leaves an inert watcher.
     const hints = installInstrumentation({ disableWatch: true });
@@ -881,6 +1074,7 @@ async function selfTest() {
   } finally {
     instrumentation.uninstall();
     fs.rmSync(dbFile, { force: true });
+    fs.rmSync(ledgerRoot, { recursive: true, force: true });
   }
   console.log('benchmark self-test ok');
 }
