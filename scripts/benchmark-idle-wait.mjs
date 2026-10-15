@@ -73,7 +73,19 @@ const flag = (name) => process.argv.includes(name);
 // (IMMEDIATE/EXCLUSIVE) acquisition modes, not inferred mutation counts. Per connection:
 //   acquireMs = first BEGIN attempt -> successful BEGIN return (including busy retry gaps);
 //   holdMs = successful BEGIN return -> first COMMIT attempt (wall time, not just SQL);
+//   holdPrepareMs = synchronous prepare-call duration during this transaction's hold interval
+//     (after successful BEGIN, before first COMMIT), including failed prepares. This is wall
+//     time, not CPU. Rolled-back transactions contribute no committed sample.
 //   commitMs = first COMMIT attempt -> successful COMMIT return (including retry gaps).
+//   commitExecMs = sum of synchronous wrapped COMMIT call durations; subdivided into
+//     commitBusyExecMs, commitSuccessExecMs and commitErrorExecMs by each call's outcome.
+//   commitGapMs = sum of gaps from one COMMIT call's end to the next call's start.
+// Thus commitMs = commitExecMs + commitGapMs for each committed sample (within rounding).
+// holdPrepareMs and the commit subdivisions overlap their parent stages; do not add all sample
+// fields together. Only acquireMs + holdMs + commitMs is the three-stage transaction span.
+// Gaps include retry sleeps, scheduling and wrapper/caller work between attempts. Synchronous
+// call durations include wrapper overhead and any off-CPU time within the call: they cannot
+// isolate fsync, filesystem/lock waiting, SQLite CPU, or process scheduling from one another.
 // Only committed, standalone-control transactions yield timing samples. Rollbacks and non-busy
 // failed BEGINs reset pending state; busy BEGINs retain the first attempt on that connection.
 // Batched control calls (e.g. PRAGMA; BEGIN; CREATE TABLE in lock DBs) cannot expose the inner
@@ -82,7 +94,10 @@ const flag = (name) => process.argv.includes(name);
 // Timing samples grow with completed transactions, never with SQL statements/history rows.
 // Phase timing samples are attributed at successful COMMIT, including any earlier acquisition.
 // Artifact sql.executionMs accumulates execution-call duration per bucket (not prepare time or
-// decoding). Transaction hold includes runtime decoding and event-loop gaps; it is NOT SQL time.
+// decoding); sql.prepareMs accumulates synchronous prepare-call duration, including failures,
+// per bucket. Ledger prepare time remains separate in ledgerSql.prepareMs. These wall-clock
+// durations cannot identify CPU vs off-CPU time. Transaction hold includes runtime decoding
+// and event-loop gaps; it is NOT SQL time.
 // Parent totals include setup/controls; worker totals are cumulative; phase totals exclude setup.
 // `ledger` counts instrumented fs.promises calls and readFile/writeFile bytes, NOT SQLite I/O.
 // Its readOps/readBytes prove the file data path. SQLite zero fs bytes is not a performance gain.
@@ -96,6 +111,7 @@ const flag = (name) => process.argv.includes(name);
 // ---------------------------------------------------------------------------------------------
 
 const SQL_BUCKETS = ['header', 'heads', 'hydrated', 'receipts', 'leases', 'routes', 'participants', 'attention', 'audience', 'legacyWholeState', 'schema', 'other'];
+const COMMIT_TIMING_FIELDS = ['commitExecMs', 'commitBusyExecMs', 'commitSuccessExecMs', 'commitErrorExecMs', 'commitGapMs'];
 const TABLE_BUCKETS = [
   ['square_meta', 'header'],
   ['receipts', 'receipts'],
@@ -127,11 +143,11 @@ export function isMutatingSql(sql) {
 function emptySqlCounters() {
   const statements = {};
   for (const bucket of SQL_BUCKETS) statements[bucket] = 0;
-  return { prepared: 0, statements, executionMs: Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, 0])), writes: 0, rows: 0, headRows: 0, hydratedRows: 0, hydratedBytes: 0 };
+  return { prepared: 0, statements, executionMs: Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, 0])), prepareMs: Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, 0])), writes: 0, rows: 0, headRows: 0, hydratedRows: 0, hydratedBytes: 0 };
 }
 
 function emptyLedgerSqlCounters() {
-  return { prepareAttempts: 0, execCalls: 0, statementExecutions: 0, readExecutions: 0, writeExecutions: 0, rows: 0, returnedBytes: 0, presenceRows: 0, busy: 0, commitAttempts: 0, commitBusy: 0, commitMs: 0 };
+  return { prepareAttempts: 0, prepareMs: 0, execCalls: 0, statementExecutions: 0, readExecutions: 0, writeExecutions: 0, rows: 0, returnedBytes: 0, presenceRows: 0, busy: 0, commitAttempts: 0, commitBusy: 0, commitMs: 0 };
 }
 
 function sumLedgerSql(counters) {
@@ -300,10 +316,15 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
       }
     } else if (control.action === 'commit') {
       const current = transactions.get(database);
-      if (current?.beganAt !== undefined && current.firstCommitAt === undefined) current.firstCommitAt = at;
+      if (current?.beganAt !== undefined) {
+        if (current.firstCommitAt === undefined) {
+          current.firstCommitAt = at;
+          for (const field of COMMIT_TIMING_FIELDS) current[field] = 0;
+        } else current.commitGapMs += at - current.lastCommitEnded;
+      }
     }
   };
-  const transactionResult = (meta, ended, succeeded, error) => {
+  const transactionResult = (meta, started, ended, succeeded, error) => {
     const control = meta.control;
     if (control === undefined || control.action === 'batch') return;
     const database = meta.database, counts = counters.transactions[meta.origin];
@@ -319,17 +340,26 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
       } else {
         mode.begun++;
         current.beganAt = ended;
+        current.holdPrepareMs = 0;
       }
-    } else if (control.action === 'commit' && succeeded) {
+    } else if (control.action === 'commit') {
       if (current?.beganAt !== undefined && current.firstCommitAt !== undefined) {
-        counts[current.mode].committed++;
-        counts[current.mode].samples.push({
-          acquireMs: current.beganAt - current.firstBeginAt,
-          holdMs: current.firstCommitAt - current.beganAt,
-          commitMs: ended - current.firstCommitAt,
-        });
-      } else counts.untrackedCommits++;
-      transactions.delete(database);
+        const elapsed = ended - started;
+        current.commitExecMs += elapsed;
+        current[succeeded ? 'commitSuccessExecMs' : isBusyError(error) ? 'commitBusyExecMs' : 'commitErrorExecMs'] += elapsed;
+        current.lastCommitEnded = ended;
+        if (succeeded) {
+          counts[current.mode].committed++;
+          counts[current.mode].samples.push({
+            acquireMs: current.beganAt - current.firstBeginAt,
+            holdMs: current.firstCommitAt - current.beganAt,
+            holdPrepareMs: current.holdPrepareMs,
+            commitMs: ended - current.firstCommitAt,
+            ...Object.fromEntries(COMMIT_TIMING_FIELDS.map((field) => [field, current[field]])),
+          });
+        }
+      } else if (succeeded) counts.untrackedCommits++;
+      if (succeeded) transactions.delete(database);
     } else if (control.action === 'rollback') {
       if (succeeded) {
         if (current?.beganAt !== undefined) counts[current.mode].rolledBack++;
@@ -370,7 +400,7 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
         if (host) counters.ledgerSql.commitMs += elapsed;
         else counters.commits.ms += elapsed;
       }
-      transactionResult(meta, ended, succeeded, failure);
+      transactionResult(meta, started, ended, succeeded, failure);
     }
   };
   const metaOf = (statement) => {
@@ -383,8 +413,16 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
     const meta = metadata(this, sql);
     if (meta.origin === 'ledger') counters.ledgerSql.prepareAttempts++;
     let statement;
+    const started = performance.now();
     try { statement = originals.prepare.call(this, sql, ...args); }
     catch (error) { onError(meta, error); throw error; }
+    finally {
+      const elapsed = performance.now() - started;
+      if (meta.origin === 'ledger') counters.ledgerSql.prepareMs += elapsed;
+      else counters.sql.prepareMs[meta.bucket] += elapsed;
+      const current = transactions.get(this);
+      if (current?.beganAt !== undefined && current.firstCommitAt === undefined) current.holdPrepareMs += elapsed;
+    }
     bucketOfStatement.set(statement, meta);
     if (meta.origin === 'artifact') {
       counters.sql.prepared++;
@@ -470,6 +508,7 @@ function diffCounters(before, after) {
   for (const bucket of SQL_BUCKETS) {
     out.sql.statements[bucket] = after.sql.statements[bucket] - before.sql.statements[bucket];
     out.sql.executionMs[bucket] = after.sql.executionMs[bucket] - before.sql.executionMs[bucket];
+    out.sql.prepareMs[bucket] = after.sql.prepareMs[bucket] - before.sql.prepareMs[bucket];
   }
   for (const origin of ['artifact', 'ledger']) {
     for (const mode of ['read', 'write']) {
@@ -497,6 +536,10 @@ function sumSqlExecutionMs(counters) {
   return Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, counters.reduce((total, counter) => total + counter.sql.executionMs[bucket], 0)]));
 }
 
+function sumSqlPrepareMs(counters) {
+  return Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, counters.reduce((total, counter) => total + counter.sql.prepareMs[bucket], 0)]));
+}
+
 function transactionSummary(counters) {
   return Object.fromEntries(['artifact', 'ledger'].map((origin) => {
     const total = {};
@@ -506,7 +549,7 @@ function transactionSummary(counters) {
       total[mode] = Object.fromEntries(Object.keys(emptyTransactionCounts()).filter((key) => key !== 'samples')
         .map((key) => [key, entries.reduce((sum, entry) => sum + entry[key], 0)]));
       total[mode].timedCommits = samples.length;
-      for (const field of ['acquireMs', 'holdMs', 'commitMs']) {
+      for (const field of ['acquireMs', 'holdMs', 'holdPrepareMs', 'commitMs', ...COMMIT_TIMING_FIELDS]) {
         const values = samples.map((sample) => sample[field]);
         total[mode][field] = values.length === 0 ? null : { total: values.reduce((sum, value) => sum + value, 0), ...latencySummary(values) };
       }
@@ -982,6 +1025,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           closeMs: latencySummary(result.catches.map((item) => item.closeMs)),
           transactions: transactionSummary(catchDelta),
           sqlExecutionMs: sumSqlExecutionMs(catchDelta),
+          sqlPrepareMs: sumSqlPrepareMs(catchDelta),
           headerStatementsTotal: sum(catchDelta, (c) => c.sql.statements.header),
           ledgerBytesTotal: sum(catchDelta, (c) => c.ledger.bytes),
           commitAttempts: sum(catchDelta, (c) => c.commits.attempts),
@@ -1040,6 +1084,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
         ledgerSql: sumLedgerSql(deltas),
         transactions: transactionSummary(deltas),
         sqlExecutionMs: sumSqlExecutionMs(deltas),
+        sqlPrepareMs: sumSqlPrepareMs(deltas),
         ledgerBytes: deltas.reduce((sum, delta) => sum + delta.ledger.bytes, 0),
         ledgerOps: deltas.reduce((sum, delta) => sum + delta.ledger.ops, 0),
         failures: actual.flatMap((report) => report.failure === undefined ? [] : [report.failure]),
@@ -1074,6 +1119,7 @@ function compareRuns(runs) {
     catchLedgerSql: runs.map((run) => pick(run, ['phases', 'catch', 'ledgerSql'])),
     catchTransactions: runs.map((run) => pick(run, ['phases', 'catch', 'transactions'])),
     catchSqlExecutionMs: runs.map((run) => pick(run, ['phases', 'catch', 'sqlExecutionMs'])),
+    catchSqlPrepareMs: runs.map((run) => pick(run, ['phases', 'catch', 'sqlPrepareMs'])),
     ledgerTransport: runs.map((run) => run.ledger.transport),
     legacyWholeState: runs.map((run) => run.sql.statements.legacyWholeState),
     seedMs: runs.map((run) => run.seed.ms),
@@ -1112,6 +1158,14 @@ async function runParent() {
 // ---------------------------------------------------------------------------------------------
 
 async function selfTest() {
+  const assertCommitSplit = (sample) => {
+    for (const field of ['commitMs', 'holdPrepareMs', ...COMMIT_TIMING_FIELDS]) assert.ok(Number.isFinite(sample[field]) && sample[field] >= 0, `${field} must be a nonnegative duration`);
+    assert.ok(sample.holdPrepareMs <= sample.holdMs, 'held prepare time is a subset of hold wall time');
+    const tolerance = 1e-6;
+    assert.ok(Math.abs(sample.commitMs - sample.commitExecMs - sample.commitGapMs) < tolerance, 'commit wall = synchronous calls + inter-call gaps');
+    assert.ok(Math.abs(sample.commitExecMs - sample.commitBusyExecMs - sample.commitSuccessExecMs - sample.commitErrorExecMs) < tolerance, 'synchronous calls split by outcome');
+    assert.ok(sample.commitSuccessExecMs > 0, 'a committed sample includes its successful call');
+  };
   // Classification.
   const cases = [
     ['SELECT revision, next_act_index FROM square_meta WHERE id = 1', 'header', false],
@@ -1151,10 +1205,17 @@ async function selfTest() {
     assert.ok(hydrationDelta.sql.hydratedRows >= 1, 'self-test control: hydrated rows counted');
     assert.ok(hydrationDelta.sql.hydratedBytes > 0, 'self-test control: hydrated bytes counted');
     assert.ok(hydrationDelta.sql.executionMs.hydrated > 0, 'hydration execution duration counted');
+    assert.ok(hydrationDelta.sql.prepareMs.hydrated > 0, 'hydration prepare duration counted separately');
     assert.ok(instrumentation.counters.sql.executionMs.schema > 0, 'schema execution duration counted');
     const headsBefore = instrumentation.snapshot();
     db.prepare('SELECT act_index FROM activities').all();
     assert.ok(diffCounters(headsBefore, instrumentation.snapshot()).sql.executionMs.heads > 0, 'head execution duration counted');
+    const failedPrepareBefore = instrumentation.snapshot();
+    assert.throws(() => db.prepare('SELECT missing_column FROM activities'), /no such column/i);
+    const failedPrepare = diffCounters(failedPrepareBefore, instrumentation.snapshot());
+    assert.ok(failedPrepare.sql.prepareMs.heads > 0, 'failed prepares contribute wall time');
+    assert.equal(failedPrepare.sql.prepared, 0, 'historical successful-prepare count stays unchanged');
+    assert.equal(failedPrepare.sql.executionMs.heads, 0, 'preparation is not statement execution');
     db.close();
 
     // Busy positive control: a held write lock must be observed, not silently dropped.
@@ -1188,6 +1249,10 @@ async function selfTest() {
     assert.equal(acquisition.transactions.artifact.write.samples.length, 1);
     assert.ok(acquisition.transactions.artifact.write.samples[0].acquireMs >= acquisitionGapEnd - acquisitionGapStart, 'acquisition includes busy retry gaps');
     assert.ok(acquisition.transactions.artifact.write.samples[0].holdMs >= 0);
+    assertCommitSplit(acquisition.transactions.artifact.write.samples[0]);
+    assert.equal(acquisition.transactions.artifact.write.samples[0].commitGapMs, 0, 'one COMMIT has no inter-call gap');
+    assert.equal(acquisition.transactions.artifact.write.samples[0].commitBusyExecMs, 0);
+    assert.equal(acquisition.transactions.artifact.write.samples[0].holdPrepareMs, 0, 'pre-acquisition prepares cannot enter hold time');
 
     // Even a refused ROLLBACK resets a pending, failed BEGIN before a later acquisition.
     holder.exec('BEGIN IMMEDIATE');
@@ -1242,6 +1307,7 @@ async function selfTest() {
     assert.equal(hostDelta.ledgerSql.rows, 2);
     assert.equal(hostDelta.ledgerSql.presenceRows, 2);
     assert.equal(hostDelta.ledgerSql.returnedBytes, 20); // 2 * (7 UTF-8 bytes + 3 blob bytes)
+    assert.ok(hostDelta.ledgerSql.prepareMs > 0, 'host prepare duration stays in host counters');
     assert.deepEqual(hostDelta.sql, emptySqlCounters(), 'host SQL must not enter artifact buckets/rows/writes');
     assert.equal(hostDelta.busy, 0);
     assert.deepEqual(hostDelta.commits, { attempts: 0, busy: 0, ms: 0 });
@@ -1276,6 +1342,7 @@ async function selfTest() {
     assert.throws(() => iterator.next(), isBusyError); // error occurs after iterate() returned
     const hostBusy = diffCounters(busyBeforeHost, instrumentation.snapshot());
     assert.equal(hostBusy.ledgerSql.busy, 3, 'prepare, execution and deferred iterator busy counted once each');
+    assert.ok(hostBusy.ledgerSql.prepareMs > 0, 'busy host prepare time is included');
     assert.equal(hostBusy.busy, 0, 'host contention must not count as artifact busy');
     host.exec('ROLLBACK');
     cold.close();
@@ -1286,6 +1353,11 @@ async function selfTest() {
     host.prepare('SELECT * FROM host_presence').all();
     rival.exec('BEGIN IMMEDIATE');
     insert.run('Reader1', null);
+    const heldPrepareBefore = instrumentation.snapshot();
+    rival.prepare('SELECT COUNT(*) AS n FROM host_presence').get();
+    assert.throws(() => rival.prepare('SELECT missing_column FROM host_presence'), /no such column/i);
+    const heldPrepareMs = diffCounters(heldPrepareBefore, instrumentation.snapshot()).ledgerSql.prepareMs;
+    assert.ok(heldPrepareMs > 0);
     const commitBefore = instrumentation.snapshot();
     assert.throws(() => rival.exec('COMMIT'), isBusyError);
     const commitGapStart = performance.now();
@@ -1305,11 +1377,48 @@ async function selfTest() {
     assert.equal(transactionDelta.transactions.ledger.write.committed, 1);
     assert.equal(transactionDelta.transactions.ledger.write.samples.length, 1);
     assert.ok(transactionDelta.transactions.ledger.write.samples[0].commitMs >= commitGapEnd - commitGapStart, 'commit timing includes retry gaps');
+    const commitSample = transactionDelta.transactions.ledger.write.samples[0];
+    assertCommitSplit(commitSample);
+    assert.ok(Math.abs(commitSample.holdPrepareMs - heldPrepareMs) < 1e-6, 'held successful and failed prepare attempts belong to this transaction only');
+    assert.ok(commitSample.commitGapMs >= commitGapEnd - commitGapStart, 'retry sleep belongs to inter-call gap, not synchronous call time');
+    assert.ok(commitSample.commitBusyExecMs > 0, 'blocked synchronous COMMIT is measured');
+    assert.equal(commitSample.commitErrorExecMs, 0);
+    assert.ok(Math.abs(commitSample.commitExecMs - commits.ledgerSql.commitMs) < 1e-6, 'tracked host call total agrees with existing explicit COMMIT timing');
     assert.deepEqual(transactionDelta.transactions.artifact, emptyTransactions().artifact, 'origins retain independent transaction boundaries');
     const timingSummary = transactionSummary([transactionDelta]);
     assert.equal(timingSummary.ledger.write.timedCommits, 1);
     assert.equal(timingSummary.ledger.write.commitMs.p95, transactionDelta.transactions.ledger.write.samples[0].commitMs);
     assert.equal(timingSummary.ledger.read.commitMs, null, 'rolled-back transactions supply no commit sample');
+    for (const field of ['holdPrepareMs', ...COMMIT_TIMING_FIELDS]) {
+      assert.equal(timingSummary.ledger.write[field].total, commitSample[field]);
+      assert.equal(timingSummary.ledger.write[field].p95, commitSample[field]);
+      assert.equal(timingSummary.ledger.read[field], null);
+    }
+
+    // A busy COMMIT followed by rollback contributes no committed timing and cannot leak into
+    // a fresh transaction on the same connection.
+    const rollbackBefore = instrumentation.snapshot();
+    host.exec('BEGIN');
+    host.prepare('SELECT * FROM host_presence').all();
+    rival.exec('BEGIN IMMEDIATE');
+    insert.run('rolled back', null);
+    rival.prepare('SELECT COUNT(*) AS n FROM host_presence').get();
+    assert.throws(() => rival.exec('COMMIT'), isBusyError);
+    await sleep(5);
+    rival.exec('ROLLBACK');
+    host.exec('ROLLBACK');
+    rival.exec('BEGIN IMMEDIATE');
+    insert.run('after rollback', null);
+    rival.exec('COMMIT');
+    const afterRollback = diffCounters(rollbackBefore, instrumentation.snapshot());
+    assert.equal(afterRollback.transactions.ledger.write.rolledBack, 1);
+    assert.equal(afterRollback.transactions.ledger.write.samples.length, 1);
+    const freshSample = afterRollback.transactions.ledger.write.samples[0];
+    assertCommitSplit(freshSample);
+    assert.equal(freshSample.commitGapMs, 0);
+    assert.equal(freshSample.commitBusyExecMs, 0, 'rolled-back busy call must not enter a later sample');
+    assert.equal(freshSample.holdPrepareMs, 0, 'rolled-back prepare time must not enter a later sample');
+    assert.ok(afterRollback.ledgerSql.commitMs > freshSample.commitExecMs, 'global call timings retain rolled-back attempts, committed samples do not');
     rival.close();
     host.close();
 
