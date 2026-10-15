@@ -63,6 +63,62 @@ test("application opens abort under an exclusive lock without deferred mutation"
   }
 });
 
+test("cancelled force-build leaves no rebuild behind after the artifact lock is released", async (t) => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-build-cancel-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const location = path.join(root, "SQUARE.square");
+  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
+  const application = createSquareApplication({ cwd: root, env, squarePath: location });
+  await application.build({ markdown: "original", hardCap: 7 });
+  const before = await readSquareSnapshot(location);
+  const lock = new DatabaseSync(location);
+  lock.exec("BEGIN EXCLUSIVE");
+  const controller = new AbortController();
+  const pending = application.build({ markdown: "must not replace original", hardCap: 2, force: true }, { signal: controller.signal });
+  const abort = setTimeout(() => controller.abort(new Error("force-build cancelled")), 50);
+  let deadline;
+  try {
+    await Promise.race([
+      assert.rejects(pending, /force-build cancelled/),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("force-build ignored cancellation while locked")), 1000); }),
+    ]);
+  } finally {
+    clearTimeout(abort);
+    clearTimeout(deadline);
+    lock.exec("ROLLBACK");
+    lock.close();
+    await Promise.allSettled([pending]);
+  }
+  assert.deepEqual(await readSquareSnapshot(location), before);
+  assert.deepEqual((await fs.readdir(root)).filter((name) => name.endsWith(".tmp")), []);
+});
+
+test("a newly published build keeps its result when cancellation follows the link", async (t) => {
+  const fs = (await import("node:fs")).default;
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "square-build-committed-"));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  const location = path.join(root, "SQUARE.square");
+  const controller = new AbortController();
+  const link = fs.promises.link;
+  fs.promises.link = async (...args) => {
+    await link(...args);
+    controller.abort(new Error("late response cancellation"));
+  };
+  try {
+    const app = createSquareApplication({ cwd: root, env: {}, squarePath: location });
+    const result = await app.build({ markdown: "published", hardCap: 3 }, { signal: controller.signal });
+    assert.equal(result.data.location, location);
+    assert.equal(result.data.hardCap, 3);
+  } finally { fs.promises.link = link; }
+  assert.equal(controller.signal.aborted, true);
+  assert.equal((await readSquareSnapshot(location)).state.hardCap, 3);
+});
+
 test("idle catch aborts without consuming activity added later", async () => {
   const square = Square.inMemory({ markdown: "context" });
   const alice = await square.join("Alice");

@@ -1,46 +1,25 @@
-import { formatActivityId, parseActivityId, type ActivityId, type Perception } from './square-core.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { compareParticipantActivity, coreParticipants, coreStatus, resolveKnownName, unreadActivitySummaries } from './decisions.js';
 import { SquareError, nameKey, type ActivitiesOptions, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
-import { inSquareCount, presenceAnchor, readCursor, rosterNames, watchTerminalStatus } from './runtime.js';
+import { inSquareCount, presenceAnchor, readCursor, rosterNames } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
-import { directedSuffix } from './activity-feed.js';
 import { compileSearchPattern } from './search.js';
-import type { Activity, HistoryQuery, OperationControl, ParticipantStatus, SquareSnapshot } from './square-facade.js';
+import type {
+  Activity, ApplicationOutcome, ApplicationError, ArchiveRecord, HistoryQuery, HistoryApplicationQuery, HistoryApplicationData,
+  OperationControl, ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsPresentation, SquareSnapshot,
+  RecoveryObservation, EntryPresentation, HistoryPresentation, ListPresentation, StatusPresentation, CatchPresence, StreamProjection, EventPresentation,
+} from './square-facade.js';
+export type { RecoveryObservation, EntryPresentation, HistoryPresentation, ListPresentation, StatusPresentation, CatchPresence, StreamProjection } from './square-facade.js';
 
 const PAGE_SIZE = 100;
+export const HISTORY_DEFAULT_LIMIT = 10;
+export const HISTORY_MAX_LIMIT = 100;
+const STATUS_HERE_WINDOW_MS = 30 * 60_000;
+const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
 const NON_READ = ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore'] as const;
 const ARCHIVE = new Set(['join', 'done', 'say', 'hold', 'resume']);
-
-export interface ActivityPresentation {
-  readonly name: string; readonly roster: readonly string[]; readonly pendingPublic: readonly StoredAct[];
-  readonly sayNumbers: Readonly<Record<number, number>>; readonly perceptions: Readonly<Record<number, Perception>>;
-  readonly activitySummaries: ReturnType<typeof unreadActivitySummaries>;
-  readonly participantCount: number; readonly held: boolean; readonly holdReason?: string;
-  readonly ownActivityCount: number; readonly hardCap: number | null;
-}
-export interface EntryPresentation {
-  readonly joined: boolean; readonly joinedBefore: boolean; readonly scene: string; readonly context: string; readonly joinContext: string;
-  readonly recentActivities: readonly StoredAct[]; readonly perceptions: Readonly<Record<number, Perception>>;
-  readonly sayNumbers: Readonly<Record<number, number>>; readonly participantCount: number;
-}
-export interface HistoryPresentation {
-  readonly activities: readonly StoredAct[]; readonly sayNumbers: Readonly<Record<number, number>>;
-  readonly presenceAnchors: Readonly<Record<number, readonly string[]>>; readonly participantCount: number;
-  readonly totalMatches: number; readonly publicBefore: boolean; readonly publicAfter: boolean;
-}
-export interface ListPresentation { readonly context: readonly string[]; readonly participants: readonly string[]; readonly activities: number; }
-export interface StatusPresentation {
-  readonly status: ReturnType<typeof coreStatus>; readonly latestActNumber?: number; readonly latestPerception?: Perception;
-  readonly joins: readonly { readonly activity: StoredAct; readonly rejoined: boolean }[]; readonly joinCount: number;
-}
-export interface WatchPresentation {
-  readonly activities: readonly StoredAct[]; readonly sayNumbers: Readonly<Record<number, number>>; readonly participantCount: number;
-  readonly presence: { readonly participants: ReturnType<typeof coreParticipants>; readonly now: number };
-  readonly ownActivityCount: number; readonly hardCap: number | null; readonly terminalStatus?: 'capped' | 'quorum';
-}
-export interface StreamProjection { readonly activities: readonly { readonly activity: StoredAct; readonly route?: string }[]; readonly cursor: number; readonly hasMore: boolean; }
 
 /** The one StoredAct-to-public-Activity field mapping. Rejects read and actorless acts. */
 export function toPublicActivity(stored: StoredAct): Activity {
@@ -58,7 +37,7 @@ export function parseRequiredActivityId(id: ActivityId): number {
 }
 
 /** Traverse relational candidates in one transaction; only search hydrates unselected bodies. */
-function selectHistory(facts: SquareRead, opts: ActivitiesOptions, hideRead: boolean, kinds?: ActivityFilter['kinds']): Omit<HistoryPresentation, 'presenceAnchors' | 'participantCount' | 'sayNumbers'> {
+function selectHistory(facts: SquareRead, opts: ActivitiesOptions, hideRead: boolean, kinds?: ActivityFilter['kinds']): Pick<HistoryPresentation, 'activities' | 'totalMatches' | 'publicBefore' | 'publicAfter'> {
   const actors = (opts.participants ?? []).map((name) => resolveKnownName(facts, name));
   const recipient = opts.mention == null ? undefined : resolveKnownName(facts, opts.mention);
   const pattern = opts.grep ?? opts.fixed;
@@ -114,17 +93,44 @@ function facadeHistoryOptions(query: HistoryQuery): ActivitiesOptions {
   return { participants: query.from === undefined ? undefined : [...query.from], grep: query.grep, fixed: query.fixed,
     mention: query.mention, afterIndex, beforeIndex, order: query.order, lastN: query.limit };
 }
+function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
+  return activities.flatMap((activity) => activity.kind === 'read' || activity.actor === undefined ? [] : [toPublicActivity(activity)]);
+}
 export async function history(square: OpenSquare, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> {
-  return (await square.artifact.read((facts) => selectHistory(facts, facadeHistoryOptions(query), true).activities.map(toPublicActivity), control?.signal)).value;
+  return (await square.artifact.read((facts) => publicActivities(selectHistory(facts, facadeHistoryOptions(query), true).activities), control?.signal)).value;
+}
+/** Application history is bounded independently of participant selection; SDK archive defaults stay separate. */
+export async function applicationHistory(square: OpenSquare, query: HistoryApplicationQuery = {}, control?: OperationControl): Promise<ApplicationOutcome<HistoryApplicationData, HistoryPresentation>> {
+  if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT)) {
+    throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
+  }
+  if (query.grep !== undefined && query.fixed !== undefined) throw new SquareError('invalid_args', 'History cannot combine regular-expression and literal search');
+  if (query.grep === '' || query.fixed === '') throw new SquareError('invalid_args', 'History search requires non-empty text');
+  if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
+  for (const count of [query.contextBefore, query.contextAfter]) {
+    if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');
+  }
+  const atIndexes = query.at?.length ? query.at.map(parseRequiredActivityId) : undefined;
+  const projection = await historyPresentation(square, {
+    ...facadeHistoryOptions(query), after: query.since, atIndexes,
+    beforeContext: query.contextBefore, afterContext: query.contextAfter,
+    lastN: query.limit ?? (atIndexes === undefined ? HISTORY_DEFAULT_LIMIT : null),
+  }, control);
+  if (query.limit === undefined && atIndexes !== undefined && projection.totalMatches > HISTORY_MAX_LIMIT) {
+    const error: ApplicationError = new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`);
+    Object.assign(error, { operation: { operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: projection.totalMatches } } });
+    throw error;
+  }
+  return { data: { activities: publicActivities(projection.activities) }, projection };
 }
 export function participantHistory(square: OpenSquare, _name: string, query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> {
   return history(square, query.limit === undefined ? { ...query, limit: 10 } : query, control);
 }
 export async function resolveParticipant(square: OpenSquare, name: string, control?: OperationControl) {
-  return (await square.artifact.read((facts) => ({ name: resolveKnownName(facts, name), roster: rosterNames(facts) }), control?.signal)).value;
+  return (await square.artifact.read((facts) => ({ name: resolveKnownName(facts, name) }), control?.signal)).value;
 }
-export async function currentParticipant(square: OpenSquare, name: string): Promise<string | undefined> {
-  return (await square.artifact.read((facts) => { const p = facts.participant(name); return p?.joined ? p.name : undefined; })).value;
+export async function currentParticipant(square: OpenSquare, name: string, control?: OperationControl): Promise<string | undefined> {
+  return (await square.artifact.read((facts) => { const p = facts.participant(name); return p?.joined ? p.name : undefined; }, control?.signal)).value;
 }
 function statuses(facts: SquareRead, now: number): ParticipantStatus[] {
   return coreParticipants(facts, now).filter((p) => p.state !== 'not joined').map((p) => {
@@ -146,23 +152,14 @@ export async function snapshot(square: OpenSquare, control?: OperationControl): 
       participants: statuses(facts, square.clock()), delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
   }, control?.signal)).value;
 }
-export async function standingCount(square: OpenSquare): Promise<number> {
-  return (await square.artifact.read(inSquareCount)).value;
-}
-export async function joinFacts(square: OpenSquare, name: string, control?: OperationControl) {
-  return (await square.artifact.read((facts) => ({ participant: facts.participant(name), participantCount: facts.roster().filter((p) => p.joined || p.done).length, standingCount: inSquareCount(facts) }), control?.signal)).value;
-}
-export async function activityPresentation(square: OpenSquare, name: string): Promise<ActivityPresentation> {
+export async function recoveryObservation(square: OpenSquare, name: string, control?: OperationControl): Promise<RecoveryObservation> {
   return (await square.artifact.read((facts) => {
     const known = resolveKnownName(facts, name), hold = facts.hold();
-    const pendingPublic = directedSuffix(facts, known);
-    return { name: known, roster: rosterNames(facts), pendingPublic, sayNumbers: facts.sayOrdinals(pendingPublic.map((act) => act.index)),
-      perceptions: Object.fromEntries(pendingPublic.map((act) => [act.index, 'full' as const])),
-      activitySummaries: unreadActivitySummaries(facts, known, square.clock()), participantCount: inSquareCount(facts), held: hold.active,
+    return { name: known, roster: rosterNames(facts), activitySummaries: unreadActivitySummaries(facts, known, square.clock()), participantCount: inSquareCount(facts), held: hold.active,
       ...(hold.reason === undefined ? {} : { holdReason: hold.reason }), ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
-  })).value;
+  }, control?.signal)).value;
 }
-export async function entryPresentation(square: OpenSquare, name: string, lastN: number | null = 10): Promise<EntryPresentation> {
+export async function entryPresentation(square: OpenSquare, name: string, lastN: number | null = HISTORY_DEFAULT_LIMIT, control?: OperationControl): Promise<EntryPresentation> {
   return (await square.artifact.read((facts) => {
     const header = facts.header(), p = facts.participant(name);
     const recentActivities = selectHistory(facts, { lastN }, false, ['say', 'done']).activities;
@@ -170,10 +167,10 @@ export async function entryPresentation(square: OpenSquare, name: string, lastN:
       scene: header.warmup.join('\n').trim(), context: header.preamble.join('\n').trim(),
       joinContext: (header.preamble.at(-1) === '---' ? header.preamble.slice(0, -1) : header.preamble).join('\n').trim(), recentActivities,
       perceptions: Object.fromEntries(recentActivities.map((a) => [a.index, perceiveActivity(facts, a, name)])),
-      sayNumbers: facts.sayOrdinals(recentActivities.map((a) => a.index)), participantCount: inSquareCount(facts) };
-  })).value;
+      sayNumbers: facts.sayOrdinals(recentActivities.map((a) => a.index)), participantCount: inSquareCount(facts), held: facts.hold().active };
+  }, control?.signal)).value;
 }
-export async function historyPresentation(square: OpenSquare, options: ActivitiesOptions): Promise<HistoryPresentation> {
+export async function historyPresentation(square: OpenSquare, options: ActivitiesOptions, control?: OperationControl): Promise<HistoryPresentation> {
   return (await square.artifact.read((facts) => {
     const hideRead = options.atIndexes === undefined && options.beforeContext === undefined && options.afterContext === undefined && options.after === undefined;
     const selected = selectHistory(facts, options, hideRead), indexes = selected.activities.map((a) => a.index);
@@ -182,48 +179,69 @@ export async function historyPresentation(square: OpenSquare, options: Activitie
       const anchor = presenceAnchor(facts, p.name);
       if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(p.name);
     }
-    return { ...selected, sayNumbers: facts.sayOrdinals(indexes), presenceAnchors, participantCount: inSquareCount(facts) };
-  })).value;
+    const visibleActivities = selected.activities.filter((activity) => ARCHIVE.has(activity.kind));
+    const direction = options.afterIndex === undefined ? 'before' as const : 'after' as const;
+    const hasMore = direction === 'before' ? selected.publicBefore : selected.publicAfter;
+    const limit = options.lastN ?? null;
+    const cursor = visibleActivities.length === 0 ? undefined : direction === 'before'
+      ? Math.min(...visibleActivities.map((activity) => activity.index)) : Math.max(...visibleActivities.map((activity) => activity.index));
+    return { ...selected, visibleActivities, sayNumbers: facts.sayOrdinals(indexes), presenceAnchors, participantCount: inSquareCount(facts), held: facts.hold().active,
+      ...(limit === null || cursor === undefined || !hasMore ? {} : { continuation: { direction, cursor: formatActivityId(cursor), limit } }),
+      bounds: { limit, maxLimit: HISTORY_MAX_LIMIT, contextWindow: options.atIndexes !== undefined } };
+  }, control?.signal)).value;
 }
-export async function participantsPresentation(square: OpenSquare): Promise<ReturnType<typeof coreParticipants>> {
-  return (await square.artifact.read((facts) => coreParticipants(facts, square.clock()))).value;
+function classifyPresence(participants: readonly ParticipantSummary[], now: number): PresenceClassification {
+  const here = participants.filter((participant) => participant.state === 'active' && (participant.presence === 'watching'
+    || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= STATUS_HERE_WINDOW_MS)));
+  const hereNames = new Set(here.map((participant) => participant.name));
+  return { orderedHere: [...here.filter((participant) => participant.presence === 'watching'), ...here.filter((participant) => participant.presence !== 'watching')],
+    lingeringCount: participants.filter((participant) => participant.state === 'active' && !hereNames.has(participant.name)).length,
+    classificationByName: Object.fromEntries(participants.map((participant) => [participant.name, participant.state === 'done' ? 'done'
+      : participant.state === 'not joined' ? 'not-joined' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
 }
-export async function listPresentation(square: OpenSquare): Promise<ListPresentation> {
+export async function participantsPresentation(square: OpenSquare, control?: OperationControl): Promise<ParticipantsPresentation> {
+  return (await square.artifact.read((facts) => {
+    const now = square.clock(), participants = coreParticipants(facts, now);
+    return { participants, ...classifyPresence(participants, now), now, standingCount: inSquareCount(facts), held: facts.hold().active };
+  }, control?.signal)).value;
+}
+export async function listPresentation(square: OpenSquare, control?: OperationControl): Promise<ListPresentation> {
   return (await square.artifact.read((facts) => {
     const participants = facts.roster().filter((p) => p.joined).map((p) => {
       const receiptAt = facts.receiptFacts(p.name, p.lastJoinIndex ?? -1).latestAt;
       return { name: p.name, lastActiveAt: receiptAt === undefined ? p.lastActiveAt : Math.max(p.lastActiveAt ?? -Infinity, receiptAt) };
     }).sort(compareParticipantActivity).map((p) => p.name);
     return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
-  })).value;
+  }, control?.signal)).value;
 }
-export async function statusPresentation(square: OpenSquare, viewer = ''): Promise<StatusPresentation> {
+export async function statusPresentation(square: OpenSquare, viewer = '', control?: OperationControl): Promise<StatusPresentation> {
   return (await square.artifact.read((facts) => {
     const status = coreStatus(facts, square.clock()), afterIndex = status.latestAct?.index ?? -1;
     const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({ activity,
       rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0 }));
-    return { status, joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }),
-      ...(status.latestAct === undefined ? {} : { latestPerception: perceiveActivity(facts, status.latestAct, viewer) }),
+    const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
+    return { status, joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }), ...classifyPresence(status.participants, status.now),
+      viewer: canonicalViewer, attentionNames: status.participants.filter((participant) => canonicalViewer === '' || nameKey(participant.name) === nameKey(canonicalViewer)).map((participant) => participant.name),
+      ...(status.latestAct === undefined ? {} : { latestPerception: perceiveActivity(facts, status.latestAct, canonicalViewer) }),
       ...(status.latestAct?.kind === 'say' ? { latestActNumber: facts.sayOrdinals([status.latestAct.index])[status.latestAct.index] } : {}) };
-  })).value;
+  }, control?.signal)).value;
 }
-export async function eventPresentation(square: OpenSquare, id: ActivityId) {
+export async function eventPresentation(square: OpenSquare, id: ActivityId, control?: OperationControl): Promise<EventPresentation> {
   return (await square.artifact.read((facts) => {
     const activity = facts.activity(parseRequiredActivityId(id));
     if (activity === undefined) throw new SquareError('invalid_args', `Unknown activity id: ${id}`);
     return { activity, participantCount: inSquareCount(facts), held: facts.hold().active };
-  })).value;
+  }, control?.signal)).value;
 }
-export async function watchPresentation(square: OpenSquare, name: string, caughtIds: readonly ActivityId[] = []): Promise<WatchPresentation> {
+export async function catchPresence(square: OpenSquare, control?: OperationControl): Promise<CatchPresence> {
   return (await square.artifact.read((facts) => {
-    const known = resolveKnownName(facts, name), now = square.clock(), terminalStatus = watchTerminalStatus(facts, known);
-    const indexes = caughtIds.map(parseRequiredActivityId);
-    return { activities: facts.activities(indexes), sayNumbers: facts.sayOrdinals(indexes), participantCount: inSquareCount(facts),
-      presence: { participants: coreParticipants(facts, now), now }, ownActivityCount: facts.participant(known)!.sayCount,
-      hardCap: facts.header().hardCap, ...(terminalStatus === undefined ? {} : { terminalStatus }) };
-  })).value;
+    const now = square.clock();
+    const participants = coreParticipants(facts, now).filter((participant) => participant.state === 'done' || participant.presence === 'watching'
+      || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
+    return { participants, now };
+  }, control?.signal)).value;
 }
-export async function streamProjection(square: OpenSquare, cursor: number, recipient?: string): Promise<StreamProjection> {
+export async function streamProjection(square: OpenSquare, cursor: number, recipient?: string, control?: OperationControl): Promise<StreamProjection> {
   return (await square.artifact.read((facts) => {
     const page = facts.activityHeads({ afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE });
     const heads = page.items.flatMap((head) => {
@@ -234,13 +252,13 @@ export async function streamProjection(square: OpenSquare, cursor: number, recip
       const route = heads.find((h) => h.index === activity.index)!.route;
       return { activity, ...(route === undefined ? {} : { route }) };
     }), cursor: page.items.at(-1)?.index ?? cursor, hasMore: page.hasMore };
-  })).value;
+  }, control?.signal)).value;
 }
-export async function streamTailProjection(square: OpenSquare, last = 10, recipient?: string): Promise<StreamProjection> {
+export async function streamTailProjection(square: OpenSquare, last = HISTORY_DEFAULT_LIMIT, recipient?: string, control?: OperationControl): Promise<StreamProjection> {
   return (await square.artifact.read((facts) => {
     if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
     const heads = last === 0 ? [] : recipient === undefined ? facts.activityHeads({}, { edge: 'newest', limit: last }).items : facts.directed(recipient, {}, { edge: 'newest', limit: last }).items;
     return { activities: facts.activities(heads.map((h) => h.index)).map((activity) => ({ activity,
       ...(recipient === undefined ? {} : { route: facts.directedAt(recipient, activity.index)!.route }) })), cursor: facts.header().lastActIndex, hasMore: false };
-  })).value;
+  }, control?.signal)).value;
 }

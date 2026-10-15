@@ -21,7 +21,7 @@ import { canonicalPath } from '../dist/canonical-path.js';
 import { sessionIdsFromEnvironment } from '../dist/participant-identity.js';
 import { writeSquareFile, createSquareState } from '../dist/artifact.js';
 import { done, join, takeover } from '../dist/square-actions.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
 import { streamProjection, streamTailProjection } from '../dist/views.js';

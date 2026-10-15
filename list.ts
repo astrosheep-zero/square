@@ -1,181 +1,78 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { probeSquare } from './square-file-adapter.js';
+import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { listPresentation } from './views.js';
-import { formatRelativeTime } from './time.js';
-import { participantIdentity, quoteShell } from './presentation.js';
-import { style } from './tty-style.js';
+import { SquareError } from './model.js';
+import type { DiscoveryApplicationData, DiscoveryApplicationOptions, OpenOptions, OperationControl, SquareListItem } from './square-facade.js';
 
-interface SquareListItem {
-  path: string;
-  lastActiveAt: number;
-  context: string[];
-  participants: string[];
-  activities: number;
-}
-
-const DEFAULT_LIST_DEPTH = 4;
-const MAX_LIST_DEPTH = 16;
-const DEFAULT_LIST_LIMIT = 20;
-const MAX_LIST_LIMIT = 100;
+export const DEFAULT_LIST_DEPTH = 4;
+export const MAX_LIST_DEPTH = 16;
+export const DEFAULT_LIST_LIMIT = 20;
+export const MAX_LIST_LIMIT = 100;
 const LIST_DISCOVERY_BUDGET = 10_000;
-const CONTEXT_PREVIEW_LINES = 2;
-const PARTICIPANT_PREVIEW_COUNT = 3;
-const DISPLAY_CHARACTER_LIMIT = 160;
 const LIST_SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 
-async function readSquareListItem(filePath: string, root: string): Promise<SquareListItem | null> {
-  let stat: fs.Stats;
+async function readSquareListItem(filePath: string, root: string, options: OpenOptions, control?: OperationControl): Promise<SquareListItem | null> {
+  if (!filePath.endsWith('.square')) return null;
   try {
-    stat = await fs.promises.stat(filePath);
-  } catch {
+    control?.signal?.throwIfAborted();
+    const stat = await fs.promises.stat(filePath);
+    const square = await openSquare(filePath, { ...options, env: options.env ?? {}, signal: control?.signal }, control);
+    const projection = await listPresentation(square, control).finally(() => closeOpenSquare(square));
+    return {
+      path: path.relative(root, filePath) || path.basename(filePath),
+      lastActiveAt: stat.mtimeMs,
+      context: [...projection.context].map((line) => line.trim()).filter(Boolean),
+      participants: [...projection.participants],
+      activities: projection.activities,
+    };
+  } catch (error) {
+    control?.signal?.throwIfAborted();
+    // A vanished, unreadable or undecodable candidate does not abort discovery.
     return null;
   }
-
-  const square = await probeSquare(filePath);
-  if (square === undefined) return null;
-  const projection = await listPresentation(square).finally(() => closeOpenSquare(square));
-
-  const relative = path.relative(root, filePath) || path.basename(filePath);
-  return {
-    path: relative,
-    lastActiveAt: stat.mtimeMs,
-    context: [...projection.context].map((line) => line.trim()).filter(Boolean),
-    participants: [...projection.participants],
-    activities: projection.activities,
-  };
 }
 
-interface SquareListDiscovery {
-  items: SquareListItem[];
-  stopped: boolean;
-}
-
-async function collectSquareList(root: string, maxDepth: number): Promise<SquareListDiscovery> {
+/** Bounded deterministic discovery. Only the application calls this private operation. */
+export async function discoverSquares(root: string, options: DiscoveryApplicationOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): Promise<DiscoveryApplicationData> {
+  const depth = options.depth ?? DEFAULT_LIST_DEPTH;
+  const limit = options.limit ?? DEFAULT_LIST_LIMIT;
+  if (!Number.isSafeInteger(depth) || depth < 0 || depth > MAX_LIST_DEPTH
+    || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT
+    || (options.after !== undefined && (options.after.length === 0 || path.isAbsolute(options.after)))) {
+    throw new SquareError('invalid_args', 'Invalid discovery depth, limit or relative cursor');
+  }
   const items: SquareListItem[] = [];
   let examined = 0;
   let stopped = false;
 
-  async function walk(dir: string, depth: number): Promise<void> {
+  async function walk(dir: string, level: number): Promise<void> {
+    control?.signal?.throwIfAborted();
     if (stopped) return;
-
     let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
-      // Directory vanished or became unreadable mid-walk — skip it, don't abort the scan.
-      return;
-    }
-
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+    catch { control?.signal?.throwIfAborted(); return; }
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
+      control?.signal?.throwIfAborted();
       if (stopped) return;
-      examined += 1;
-      if (examined === LIST_DISCOVERY_BUDGET) stopped = true;
-
+      if (++examined === LIST_DISCOVERY_BUDGET) stopped = true;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!stopped && depth < maxDepth && !LIST_SKIP_DIRS.has(entry.name)) await walk(fullPath, depth + 1);
-        continue;
+        if (!stopped && level < depth && !LIST_SKIP_DIRS.has(entry.name)) await walk(fullPath, level + 1);
+      } else if (entry.isFile()) {
+        const item = await readSquareListItem(fullPath, root, openOptions, control);
+        if (item !== null) items.push(item);
       }
-      if (!entry.isFile()) continue;
-
-      const item = await readSquareListItem(fullPath, root);
-      if (item) items.push(item);
     }
   }
 
   await walk(root, 0);
-  return { items: items.sort((a, b) => a.path.localeCompare(b.path)), stopped };
-}
-
-function characterPreview(value: string): string {
-  const characters = Array.from(value);
-  return characters.length <= DISPLAY_CHARACTER_LIMIT ? value : `${characters.slice(0, DISPLAY_CHARACTER_LIMIT - 1).join('')}…`;
-}
-
-function renderSquareList(items: SquareListItem[], stopped: boolean, depth: number, limit: number, after?: string): string {
-  const page = after === undefined ? items : items.filter((item) => item.path.localeCompare(after) > 0);
-  const shownItems = page.slice(0, limit);
-  if (items.length === 0) {
-    return [`(no squares found)`, ...(stopped ? [style('dim', `○ the walk stopped early — deeper squares may still be hiding`)] : [])].join('\n') + '\n';
-  }
-
-  const now = Date.now();
-  const lines = ['squares'];
-  for (const item of shownItems) {
-    const glyph = item.activities > 0 ? '●' : style('dim', '○');
-    lines.push(`${glyph} ${characterPreview(item.path)}${style('dim', ` · ${formatRelativeTime(item.lastActiveAt, now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`)}`);
-
-    const shownContext = item.context.slice(0, CONTEXT_PREVIEW_LINES);
-    if (shownContext.length === 0) {
-      lines.push(`  ${style('dim', 'context')} · (none)`);
-    } else {
-      shownContext.forEach((line, index) => lines.push(`  ${index === 0 ? style('dim', 'context') : '       '} · ${characterPreview(line)}`));
-      const hiddenContext = item.context.length - shownContext.length;
-      if (hiddenContext > 0) lines.push(style('dim', `          · … ${hiddenContext} more ${hiddenContext === 1 ? 'line' : 'lines'}`));
-    }
-
-    const shownParticipants = item.participants.slice(0, PARTICIPANT_PREVIEW_COUNT);
-    const hiddenParticipants = item.participants.length - shownParticipants.length;
-    const participantNames = shownParticipants.length === 0 ? 'nobody' : shownParticipants.map((participant) => participantIdentity(characterPreview(participant))).join(' · ');
-    lines.push(`  ${style('dim', 'participants')} · ${participantNames}${hiddenParticipants > 0 ? style('dim', ` · … ${hiddenParticipants} more`) : ''}`);
-  }
-  const hiddenItems = page.length - shownItems.length;
-  if (hiddenItems > 0) {
-    const cursor = shownItems.at(-1)?.path;
-    lines.push(style('dim', stopped ? '  … more squares' : `  … ${hiddenItems} more ${hiddenItems === 1 ? 'square' : 'squares'}`));
-    if (cursor !== undefined) lines.push(`square list --depth ${depth} --limit ${limit} --after ${quoteShell(cursor)}`);
-  }
-  if (stopped) lines.push(style('dim', `○ the walk stopped early — deeper squares may still be hiding`));
-  return lines.join('\n') + '\n';
-}
-
-interface ListOptions {
-  depth: number;
-  limit: number;
-  after?: string;
-}
-
-function parseListOptions(args: string[], usage: () => void): ListOptions {
-  let depth = DEFAULT_LIST_DEPTH;
-  let limit = DEFAULT_LIST_LIMIT;
-  let after: string | undefined;
-
-  for (let index = 0; index < args.length; index += 2) {
-    const option = args[index];
-    const value = args[index + 1];
-    if (value === undefined || (option !== '--depth' && option !== '--limit' && option !== '--after')) {
-      usage();
-      return { depth, limit };
-    }
-    if (option === '--after') {
-      if (after !== undefined || value.length === 0 || path.isAbsolute(value)) {
-        usage();
-        return { depth, limit };
-      }
-      after = value;
-      continue;
-    }
-    if (!/^\d+$/.test(value)) {
-      usage();
-      return { depth, limit };
-    }
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || (option === '--depth' ? parsed > MAX_LIST_DEPTH : parsed === 0 || parsed > MAX_LIST_LIMIT)) {
-      usage();
-      return { depth, limit };
-    }
-    if (option === '--depth') depth = parsed;
-    else limit = parsed;
-  }
-  return { depth, limit, after };
-}
-
-export async function cmdListSquares(args: string[], usage: () => void): Promise<void> {
-  const options = parseListOptions(args, usage);
-  const discovery = await collectSquareList(process.cwd(), options.depth);
-  process.stdout.write(renderSquareList(discovery.items, discovery.stopped, options.depth, options.limit, options.after));
+  const page = items.sort((a, b) => a.path.localeCompare(b.path))
+    .filter((item) => options.after === undefined || item.path.localeCompare(options.after) > 0);
+  const selected = page.slice(0, limit);
+  const remaining = page.length - selected.length;
+  return { items: selected, total: items.length, stopped, remaining, ...(remaining > 0 ? { next: selected.at(-1)!.path } : {}) };
 }

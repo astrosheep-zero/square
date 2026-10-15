@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { entryPresentation, history, historyPresentation, snapshot, statusPresentation, streamProjection } from '../dist/views.js';
+import { applicationHistory, catchPresence, entryPresentation, history, historyPresentation, participantsPresentation, recoveryObservation, resolveParticipant, snapshot, statusPresentation, streamProjection } from '../dist/views.js';
 
 function fixture(acts, observations = {}) {
   return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
@@ -24,6 +24,34 @@ function measuredSquare(state) {
   } };
   return { square: { artifact, location: 'memory', clock: () => 100_000 }, reads, cell };
 }
+
+test('recovery observes caller gates and bounded unread previews without selecting an expression feed', async () => {
+  const acts = [
+    { kind: 'join', actor: 'Alice', at: 0, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 1, index: 1 },
+    { kind: 'say', actor: 'Bob', at: 2, index: 2, body: 'own', mentions: [] },
+  ];
+  for (let index = 3; index <= 10; index++) acts.push({ kind: 'say', actor: 'Alice', at: index, index, body: String(index), mentions: ['Bob'] });
+  acts.push({ kind: 'hold', actor: 'Bob', at: 11, index: 11, body: 'pause' });
+  const state = fixture(acts);
+  state.hardCap = 5;
+  const { square, reads, cell } = measuredSquare(state);
+  try {
+    const before = (await cell.read((facts) => facts.receiptAssignments())).value;
+    assert.deepEqual(await resolveParticipant(square, 'BOB'), { name: 'Bob' });
+    const recovered = await recoveryObservation(square, 'BOB');
+    assert.deepEqual(recovered, {
+      name: 'Bob', roster: ['Alice', 'Bob'], participantCount: 2,
+      held: true, holdReason: 'pause', ownActivityCount: 1, hardCap: 5,
+      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_990,
+        previews: [8, 9, 10].map((index) => ({ number: index - 2, act: acts[index], perception: 'full' })),
+      }],
+    });
+    assert.deepEqual(reads.batches, [[8, 9, 10]]);
+    assert.deepEqual(reads.ordinals, []);
+    assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
+  } finally { await cell.close(); }
+});
 
 test('entry hydrates only its newest public page and numbers lifetime says', async () => {
   const acts = [{ kind: 'join', actor: 'Alice', at: 0, index: 0 }, { kind: 'join', actor: 'Bob', at: 1, index: 1 }];
@@ -57,6 +85,9 @@ test('history keeps traversing audience pages through empty intersections and li
     assert.equal(selected.publicBefore, true);
     assert.equal(selected.publicAfter, false);
     assert.equal(selected.sayNumbers[209], 2);
+    assert.deepEqual(selected.visibleActivities.map((activity) => activity.index), [209]);
+    assert.deepEqual(selected.continuation, { direction: 'before', cursor: 'act/209', limit: 1 });
+    assert.deepEqual(selected.bounds, { limit: 1, maxLimit: 100, contextWindow: false });
     assert.equal(reads.directed, 3);
     assert.deepEqual(reads.batches.filter((ids) => ids.length > 0), [[208, 209], [209]]);
     const byId = await history(square, { mention: 'Bob', grep: '^act/208$', limit: 1 });
@@ -78,6 +109,12 @@ test('context uses existing activity positions while facade omits read and CLI r
   try {
     const raw = await historyPresentation(square, { atIndexes: [50], beforeContext: 1, afterContext: 1, lastN: null });
     assert.deepEqual(raw.activities.map((a) => a.index), [7, 50, 80]);
+    assert.deepEqual(raw.visibleActivities.map((a) => a.index), [7, 80]);
+    assert.deepEqual(raw.bounds, { limit: null, maxLimit: 100, contextWindow: true });
+    const application = await applicationHistory(square, { at: ['act/50'], contextBefore: 1, contextAfter: 1 });
+    assert.deepEqual(application.projection.activities.map((activity) => activity.index), [7, 50, 80]);
+    assert.deepEqual(application.data.activities.map((activity) => activity.id), ['act/7']);
+    assert.equal(application.projection.continuation, undefined);
     const ordinary = await historyPresentation(square, { lastN: 3 });
     assert.deepEqual(ordinary.activities.map((a) => a.index), [7, 80, 101]);
     const facade = await history(square, { before: 'act/80', limit: 3 });
@@ -109,6 +146,8 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
     assert.deepEqual(reads.singles, [3]);
     const own = await statusPresentation(square, 'ALICE');
     assert.equal(own.latestPerception, 'full');
+    assert.equal(own.viewer, 'Alice');
+    assert.deepEqual(own.attentionNames, ['Alice']);
   } finally { await cell.close(); }
 });
 
@@ -148,5 +187,35 @@ test('recipient stream advances a raw page without bodies and retains seen pre-r
     assert.equal(historical.cursor, 104);
     assert.equal(historical.hasMore, false);
     assert.deepEqual(reads.batches, [[], [102]]);
+  } finally { await cell.close(); }
+});
+
+test('presence classifications and nearby watch participants are settled by projections without writes', async () => {
+  const now = 100_000;
+  const state = fixture([
+    { kind: 'join', actor: 'Old', at: now - 9 * 60 * 60_000, index: 0 },
+    { kind: 'join', actor: 'Watcher', at: now - 9 * 60 * 60_000, index: 1 },
+    { kind: 'join', actor: 'Lingering', at: now - 60 * 60_000, index: 2 },
+    { kind: 'join', actor: 'Recent', at: now - 1000, index: 3 },
+    { kind: 'join', actor: 'Done', at: now - 9 * 60 * 60_000, index: 4 },
+    { kind: 'done', actor: 'Done', at: now - 9 * 60 * 60_000, index: 5 },
+  ]);
+  state.runtime.leases.Watcher = { leaseId: 'watching', heartbeatAt: now, expiresAt: now + 60_000 };
+  const { square, reads, cell } = measuredSquare(state);
+  try {
+    const before = (await cell.read((facts) => ({ receipts: facts.receiptAssignments(), lease: facts.lease('Watcher'), header: facts.header() }))).value;
+    const participants = await participantsPresentation(square);
+    const status = await statusPresentation(square, 'Recent');
+    assert.deepEqual(participants.classificationByName, { Old: 'lingering', Watcher: 'here', Lingering: 'lingering', Recent: 'here', Done: 'done' });
+    assert.deepEqual(participants.orderedHere.map((participant) => participant.name), ['Watcher', 'Recent']);
+    assert.equal(participants.lingeringCount, 2);
+    assert.deepEqual(status.classificationByName, participants.classificationByName);
+    assert.deepEqual(status.orderedHere, participants.orderedHere);
+    const bodyReads = { batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length };
+    const presence = await catchPresence(square);
+    assert.deepEqual(new Set(presence.participants.map((participant) => participant.name)), new Set(['Watcher', 'Lingering', 'Recent', 'Done']));
+    assert.equal(presence.now, now);
+    assert.deepEqual({ batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length }, bodyReads);
+    assert.deepEqual((await cell.read((facts) => ({ receipts: facts.receiptAssignments(), lease: facts.lease('Watcher'), header: facts.header() }))).value, before);
   } finally { await cell.close(); }
 });

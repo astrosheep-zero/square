@@ -292,14 +292,14 @@ async function temporaryArtifact(location: string): Promise<string> {
     await handle.close();
     return temporary;
 }
-async function initializeFile(location: string, state: SquareState): Promise<void> {
+async function initializeFile(location: string, state: SquareState, signal?: AbortSignal): Promise<void> {
     const db = new DatabaseSync(location);
     try {
         db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL');
         await inSqliteTransaction(db, true, () => { }, () => {
             initializeSqlite(db, state);
             db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=2`);
-        });
+        }, signal);
     }
     finally {
         db.close();
@@ -313,11 +313,13 @@ async function initializeFile(location: string, state: SquareState): Promise<voi
     }
 }
 /** New-format creation; initial authority is accepted only at this explicit boundary. */
-export async function createSquareFile(location: string, state: SquareState): Promise<boolean> {
+export async function createSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<boolean> {
+    abort(signal);
     requireSquareExtension(location);
     const temporary = await temporaryArtifact(location);
     try {
-        await initializeFile(temporary, state);
+        await initializeFile(temporary, state, signal);
+        abort(signal);
         try {
             await fs.promises.link(temporary, location);
             return true;
@@ -333,12 +335,13 @@ export async function createSquareFile(location: string, state: SquareState): Pr
     }
 }
 /** Explicit build --force / fixture import, never a runtime state-replacement callback. */
-export async function writeSquareFile(location: string, state: SquareState): Promise<void> {
-    if (await createSquareFile(location, state))
+export async function writeSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<void> {
+    if (await createSquareFile(location, state, signal))
         return;
+    abort(signal);
     const db = openExistingSquareDatabase(location);
     try {
-        await retrySqliteBusy(() => validateSqliteHeader(db, location));
+        await retrySqliteBusy(() => validateSqliteHeader(db, location), signal);
         db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
         await inSqliteTransaction(db, true, () => validateSqliteHeader(db, location), () => {
             const revision = createSqliteDriver(db).header().revision;
@@ -347,7 +350,7 @@ export async function writeSquareFile(location: string, state: SquareState): Pro
             for (const table of ['landed_audience', 'attention', 'participants', 'routes', 'catch_leases', 'receipts', 'activities', 'square_meta'])
                 db.exec(`DROP TABLE ${table}`);
             initializeSqlite(db, state, revision + 1);
-        });
+        }, signal);
     }
     finally {
         db.close();

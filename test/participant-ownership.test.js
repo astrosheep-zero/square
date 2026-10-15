@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 
 /**
  * The injected in-memory host ledger: presence rows in a list, with one in-process

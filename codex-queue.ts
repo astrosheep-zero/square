@@ -28,10 +28,13 @@ export function sendCodexQueue(
   { threadId, message }: CodexQueueRequest,
   opts: { args?: string[]; bin?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): void {
+  // The explicit bin wins. Otherwise a supplied env decides the executable and the child
+  // environment; it never falls back to the ambient process env for a key it omits.
+  const env = opts.env ?? process.env;
   const result = spawnSync(
-    opts.bin ?? process.env.SQUARE_CODEX_BIN ?? 'codex',
+    opts.bin ?? env.SQUARE_CODEX_BIN ?? 'codex',
     [...(opts.args ?? []), 'queue', '--thread', threadId, '--message', message],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env: opts.env ?? process.env },
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env },
   );
   if (result.error) {
     const messageText = result.error.message;

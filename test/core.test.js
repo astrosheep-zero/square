@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { history, historyPresentation, listPresentation, participantsPresentation, statusPresentation, watchPresentation } from '../dist/views.js';
+import { catchPresence, history, historyPresentation, listPresentation, participantsPresentation, statusPresentation } from '../dist/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -47,9 +47,9 @@ test('participant lists share actual action and receipt times, including a fresh
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
     const projections = [
-      await participantsPresentation(square),
+      (await participantsPresentation(square)).participants,
       (await statusPresentation(square)).status.participants,
-      (await watchPresentation(square, 'Reader')).presence.participants,
+      (await catchPresence(square)).participants,
     ];
     for (const participants of projections) {
       assert.deepEqual(participants.map((p) => [p.name, p.lastActiveAt]), expected);
@@ -110,7 +110,7 @@ test('unknown participant errors identify only the requested name', async () => 
   const expectedReasons = ['never_joined', 'not_standing', 'never_joined'];
   for (const [index, attempt] of cases.entries()) {
     await assert.rejects(attempt, (error) => {
-      assert.match(error.message, /✕ @Eve (?:has never stepped into this square|is not standing in this square)/);
+      assert.match(error.message, /^@Eve (?:has never stepped into this square|is not standing in this square)/);
       assert.match(error.message, /@Eve/);
       assert.doesNotMatch(error.message, /Expected one of|@Alice/);
       // Recovery reads this fact; the wording above is free to change.

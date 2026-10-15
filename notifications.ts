@@ -36,11 +36,11 @@ interface ProcessNotificationOptions {
   now?: () => number;
 }
 
-export async function defaultWakeAdapters(): Promise<WakeAdapter[]> {
+export async function defaultWakeAdapters(env: NodeJS.ProcessEnv = process.env): Promise<WakeAdapter[]> {
   const adapters: WakeAdapter[] = [];
   try {
     const { CodexQueueAdapter } = await import('./codex-queue.js');
-    adapters.push(new CodexQueueAdapter());
+    adapters.push(new CodexQueueAdapter({ env }));
   } catch {
     // Codex is unavailable only when this build omits its local adapter.
   }
@@ -59,7 +59,7 @@ export async function createDefaultWakeTransport(
   env: NodeJS.ProcessEnv = process.env,
   suppliedAdapters?: readonly WakeAdapter[],
 ): Promise<WakeTransportPort> {
-  const adapters = suppliedAdapters ?? await defaultWakeAdapters();
+  const adapters = suppliedAdapters ?? await defaultWakeAdapters(env);
   const { createClaudeWakeTransport } = await import('./claude-delivery.js');
   return createWakeTransport(
     suppliedAdapters === undefined && env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,

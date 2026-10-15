@@ -51,9 +51,11 @@ export interface SquareErrorFacts {
   activityUnsent?: true;
   /** Why a name could not be resolved: never in the roster, no longer standing in it, a bell
    * colliding with a mention, an @name that matches nobody, or an activity catch cannot address. */
-  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'unmatched_mention' | 'not_addressed' | 'migration_required';
+  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'unmatched_mention' | 'not_addressed' | 'migration_required' | 'explicit_reach_required' | 'invalid_reply' | 'invalid_done_body';
   /** The activity id a `catch --id` refusal named. */
   activityId?: string;
+  /** Requested recipient spellings, without parsing presentation copy. */
+  targets?: readonly string[];
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
   activityExists?: boolean;
   pending?: number;
@@ -63,6 +65,7 @@ export interface SquareErrorFacts {
 }
 
 class SquareErrorBase<Code extends string> extends Error {
+  operation?: import('./square-facade.js').ApplicationFailureDetail;
   constructor(
     public code: Code,
     message: string,

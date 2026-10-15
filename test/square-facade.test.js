@@ -278,6 +278,74 @@ test('listener facade commits only edge changes and exposes canonical listener s
   await square.close();
 });
 
+test('SDK express reenters a departed handle once and SDK catch avoids application body projections', async (t) => {
+  let at = 0;
+  const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
+  t.after(() => square.close());
+  const alice = await square.join('Alice');
+  const bob = await square.join('Bob');
+  await alice.done();
+  // Instrument only read capabilities on this test-owned resource. Mutation
+  // hydration belongs in the transaction; SDK calls must not hydrate another
+  // full body projection merely to throw it away.
+  const artifact = square.square.artifact;
+  const read = artifact.read.bind(artifact);
+  const projectionReads = [];
+  t.mock.method(artifact, 'read', (select, signal) => read((facts) => select(new Proxy(facts, {
+    get(target, key) {
+      const method = target[key];
+      return (...args) => {
+        if (key === 'activities' || key === 'sayOrdinals' || key === 'receiptAssignments') projectionReads.push(key);
+        return method.apply(target, args);
+      };
+    },
+  })), signal));
+  const expressed = await alice.express('back once', { force: true, mentions: ['Bob'] });
+  assert.equal(expressed.activity.id, 'act/4');
+  assert.deepEqual(projectionReads, []);
+  const caught = await bob.catch();
+  assert.deepEqual(caught.activities.map((activity) => activity.id), [expressed.activity.id]);
+  assert.deepEqual(projectionReads, []);
+  const stale = await bob.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+  assert.deepEqual(stale, { activities: [], consumedThrough: expressed.activity.id, idleExpired: true, remaining: 0 });
+  assert.deepEqual(projectionReads, []);
+  t.mock.restoreAll();
+  assert.deepEqual((await square.history()).map((activity) => activity.kind), ['join', 'join', 'done', 'join', 'say']);
+  assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), true);
+});
+
+test('path-backed SDK uses default wake delivery unless an injected port overrides it', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-sdk-wake-'));
+  const squarePath = path.join(root, 'SQUARE.square');
+  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger'), SQUARE_REGISTRY: path.join(root, 'registry.ndjsonl'),
+    CLAUDE_CODE_SESSION_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '',
+    CODEX_THREAD_ID: 'sdk-default-session', SQUARE_DISABLE_PASEO_WAKE: '1' };
+  const square = await Square.build({ path: squarePath, markdown: 'default SDK wake', env });
+  let overridden;
+  t.after(async () => {
+    await overridden?.close();
+    await square.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const alice = await square.join('Alice');
+  await square.join('Bob');
+  // An absent Stop boundary prevents external sending while still proving that
+  // the default transport, rather than an undefined port, ran its real adapter.
+  const first = await alice.express('default adapter', { force: true, mentions: ['Bob'] });
+  assert.deepEqual(first.delivery, { attempted: 1, accepted: 0, failed: 1, unknown: 0, notCapable: 0 });
+  const requests = [];
+  overridden = await Square.at({ path: squarePath, env, wakeTransport: {
+    async attempt(request, _timeout, beforeSend) {
+      assert.equal(await beforeSend(), true);
+      requests.push(request);
+      return { outcome: 'accepted' };
+    },
+  } });
+  const second = await (await overridden.join('Alice')).express('injected adapter', { force: true, mentions: ['Bob'] });
+  assert.deepEqual(second.delivery, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
+  assert.deepEqual(requests.map((request) => [request.participant, request.activity]), [['Bob', second.activity.id]]);
+});
+
 test('recognize returns only the current locally bound participant without changing presence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-recognize-'));
   const squarePath = path.join(root, 'SQUARE.square');

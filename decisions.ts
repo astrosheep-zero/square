@@ -1,5 +1,5 @@
 import {
-  SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type Act, type StoredAct, type Reach, type HardCap, sameName, nameKey, validateName,
+  SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type Act, type StoredAct, type Reach, sameName, nameKey, validateName,
 } from './model.js';
 import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
@@ -8,13 +8,13 @@ import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './squa
 import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
-export interface UnreadActivitySummary { name: string; count: number; latestActivityAgeMs: number; previews: UnreadActivityPreview[] }
-export interface UnreadActivityPreview { number: number; act: Extract<StoredAct, { kind: 'say' }>; perception: Perception }
+import type { ParticipantSummary as ParticipantStatus, StatusObservation as StatusResult, UnreadActivitySummary } from './square-facade.js';
+export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, StatusObservation as StatusResult, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
   validateName(name);
   const known = facts.participant(name)?.name;
-  if (known === undefined) throw new SquareError('invalid_args', `✕ ${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
+  if (known === undefined) throw new SquareError('invalid_args', `${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
   return known;
 }
 export interface DecideJoinResult { joinedName: string; addParticipant: boolean; joinAct?: TimedAct<'join'> }
@@ -92,7 +92,7 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
-export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {
+export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean; requireExplicitReach?: boolean }): ActDecision {
   const { now, force, body, reach, reply } = input;
   const current = resolveStanding(facts, input.name, true);
   const name = current.name;
@@ -108,7 +108,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
   for (const requested of input.mentions ?? []) {
     validateActivityName(requested);
     const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
-    if (resolved === undefined) throw activityRefusal('invalid_args', `✕ ${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing' });
+    if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
     addMention(resolved);
   }
   if (input.noMention !== true) {
@@ -122,17 +122,19 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
       const notStanding = unmatched.filter((candidate) => resolveNameAt(body, candidate, names) !== undefined);
       const unknown = unmatched.filter((candidate) => !notStanding.includes(candidate));
       const lines: string[] = [];
-      if (unknown.length > 0) lines.push(`✕ ${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
-      if (notStanding.length > 0) lines.push(`✕ ${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
-      lines.push('  · wrap literal @text in backticks, or pass --no-mention to land bare');
-      throw activityRefusal('invalid_args', lines.join('\n'), { reason: 'unmatched_mention' });
+      if (unknown.length > 0) lines.push(`${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
+      if (notStanding.length > 0) lines.push(`${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
+      throw activityRefusal('invalid_args', lines.join('\n'), { reason: 'unmatched_mention', targets: unmatched.map((candidate) => candidate.token) });
     }
   }
-  if (reach === 'bell' && mentionNames.length > 0) throw activityRefusal('invalid_args', '✕ a bell cannot be combined with a mention — remove --mention or the @name in the body.', { reason: 'bell_mention_conflict' });
+  if (reach === 'bell' && mentionNames.length > 0) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: mentionNames });
+  if (input.requireExplicitReach && reach !== 'bell' && mentionNames.length === 0 && reply === undefined && input.noMention !== true) {
+    throw activityRefusal('invalid_args', 'Express needs a recipient, reply, bell, or explicit bare reach', { reason: 'explicit_reach_required' });
+  }
   const header = facts.header();
   if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
     const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
-    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`);
+    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`, { reason: 'invalid_reply', activityId: label, activityExists: false });
   }
   const replyAuthor = reply === undefined ? undefined : facts.activity(reply)?.actor;
   const replyAuthorNotHere = replyAuthor === undefined || sameName(replyAuthor, name) || facts.participant(replyAuthor)?.joined ? undefined : replyAuthor;
@@ -160,7 +162,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
 }
 
 export function validateDoneBody(body: unknown): void {
-  if (body !== undefined && body !== '') throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving');
+  if (body !== undefined && body !== '') throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving', { reason: 'invalid_done_body' });
 }
 export function coreDone(facts: SquareRead, name: string, body: string, now: number): TimedAct<'done'> {
   validateDoneBody(body);
@@ -196,32 +198,8 @@ export function coreResume(facts: SquareRead, actor: string, now: number): Timed
   return { kind: 'resume', actor: current.name, at: now };
 }
 
-export type CorePresenceState = 'never-joined' | 'active' | 'watching' | 'done';
-export interface ParticipantStatus {
-  name: string;
-  state: 'active' | 'done' | 'not joined';
-  listening: readonly string[];
-  activityCount: number;
-  lastActiveAt: number | undefined;
-  presence: CorePresenceState;
-  unreadActivityCount: number;
-  pendingMentionCount: number;
-}
 export function compareParticipantActivity(a: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>, b: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>): number {
   return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
-}
-export interface StatusResult {
-  hardCap: HardCap;
-  throttlePerMinute: number | undefined;
-  activeCount: number;
-  doneCount: number;
-  holdActive: boolean;
-  holdReason: string | undefined;
-  holdActor: string | undefined;
-  holdAt: number | undefined;
-  participants: ParticipantStatus[];
-  latestAct: StoredAct | undefined;
-  now: number;
 }
 export function coreParticipants(facts: SquareRead, now: number): ParticipantStatus[] {
   return facts.roster().map((current): ParticipantStatus => {

@@ -4,9 +4,8 @@ import { z } from 'zod/v4';
 import { SquareError, isSquareError } from './model.js';
 import { operationEnv } from './automatic-session.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { createSquareApplication, type ExpressApplicationOptions, type SquareApplication, type SquareApplicationContext } from './square-application.js';
-import type { Activity, CatchOptions, HistoryQuery, OperationControl } from './square-facade.js';
-import { toPublicActivity } from './views.js';
+import { createSquareApplication } from './square-application.js';
+import type { ApplicationFailureDetail, ApplicationOutcome, CatchApplicationOptions, ExpressApplicationOptions, HistoryApplicationQuery, OperationControl, SquareApplication, SquareApplicationContext } from './square-facade.js';
 
 type JsonObject = Record<string, unknown>;
 interface ToolDefinition { name: string; description: string; inputSchema: z.ZodObject<z.ZodRawShape, z.core.$strict>; }
@@ -33,52 +32,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: z.object({}).strict() },
 ];
 
-function isObject(value: unknown): value is JsonObject { return value !== null && typeof value === 'object' && !Array.isArray(value); }
-function publicActivity(activity: Activity): JsonObject { return { ...activity }; }
-
-function publicResult(name: string, value: unknown): unknown {
-  if (name === 'status') {
-    const result = value as Awaited<ReturnType<SquareApplication['status']>>;
-    const state = result.status;
-    const { latestAct, participants, ...rest } = state;
-    return {
-      hardCap: rest.hardCap,
-      ...(rest.throttlePerMinute === undefined ? {} : { throttlePerMinute: rest.throttlePerMinute }),
-      activeCount: rest.activeCount,
-      doneCount: rest.doneCount,
-      hold: rest.holdActive ? { by: rest.holdActor, ...(rest.holdReason === undefined ? {} : { reason: rest.holdReason }), ...(rest.holdAt === undefined ? {} : { at: rest.holdAt }) } : null,
-      participants: participants.filter((participant) => participant.state !== 'not joined').map((participant) => ({ name: participant.name, state: participant.state, presence: participant.presence, activityCount: participant.activityCount, ...(participant.lastActiveAt === undefined ? {} : { lastActiveAt: participant.lastActiveAt }), unreadActivityCount: participant.unreadActivityCount, pendingMentionCount: participant.pendingMentionCount, listening: participant.listening })),
-      ...(latestAct === undefined ? {} : { latestActivity: publicActivity(toPublicActivity(latestAct)) }),
-      now: rest.now,
-    };
-  }
-  if (name === 'express' || name === 'hold' || name === 'resume' || name === 'done') {
-    const result = value as { activity?: Activity | null; waited?: boolean; replyAuthorNotHere?: string };
-    return { ...(result.activity === undefined ? {} : { activity: result.activity === null ? null : publicActivity(result.activity) }), ...(result.waited === undefined ? {} : { waited: result.waited }), ...(result.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: result.replyAuthorNotHere }) };
-  }
-  if (name === 'history') return { activities: value };
-  if (name === 'participants') return { participants: value };
-  if (name === 'listening') return { listening: value };
-  return value;
-}
-
-function operation(app: SquareApplication, name: string, args: JsonObject, control: OperationControl): Promise<unknown> {
+function operation(app: SquareApplication, name: string, args: JsonObject, control: OperationControl): Promise<ApplicationOutcome<object, unknown>> {
   switch (name) {
     case 'join': return app.join({ takeover: args.takeover as boolean | undefined }, control);
     case 'express': {
       const { body, noWait, ...options } = args;
       return app.express(body as string, { ...options, noWait } as ExpressApplicationOptions, control);
     }
-    case 'catch': return app.catch(args as CatchOptions, control);
-    case 'history': return app.history(args as HistoryQuery, control);
+    case 'catch': return app.catch(args as CatchApplicationOptions, control);
+    case 'history': return app.history(args as HistoryApplicationQuery, control);
     case 'listen': return app.listen(args.target as string, control);
     case 'ignore': return app.ignore(args.target as string, control);
     case 'listening': return app.listening(control);
     case 'hold': return app.hold(args.reason as string | undefined, control);
     case 'resume': return app.resume(control);
     case 'done': return app.done(undefined, control);
-    case 'status': return app.status();
-    case 'participants': return app.participants();
+    case 'status': return app.status(undefined, control);
+    case 'participants': return app.participants(control);
     default: throw new SquareError('invalid_args', `Unknown tool: ${name}`);
   }
 }
@@ -100,9 +70,8 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             ? operationEnv('opencode', opencodeSessionId, baseEnv)
             : baseEnv;
         const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant });
-        const value = await operation(app, tool.name, operationArgs, { signal: extra.signal });
-        const projected = publicResult(tool.name, value);
-        const structuredContent = isObject(projected) ? projected : { result: projected };
+        const outcome = await operation(app, tool.name, operationArgs, { signal: extra.signal });
+        const structuredContent = outcome.data as JsonObject;
         return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
       } catch (error) {
         const normalized = extra.signal.aborted
@@ -110,7 +79,9 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           : isSquareError(error)
             ? { code: error.code, message: error.message, ...(error.facts === undefined ? {} : { facts: error.facts }) }
             : { code: 'internal', message: error instanceof Error ? error.message : String(error) };
-        return { isError: true, content: [{ type: 'text', text: JSON.stringify(normalized) }], structuredContent: { error: normalized } };
+        const operation = error instanceof Error ? (error as Error & { operation?: ApplicationFailureDetail }).operation : undefined;
+        const failure = operation === undefined ? normalized : { ...normalized, operation };
+        return { isError: true, content: [{ type: 'text', text: JSON.stringify(failure) }], structuredContent: { error: failure } };
       }
     });
   }

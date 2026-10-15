@@ -15,7 +15,7 @@ export interface CatchDecision {
 }
 export const CATCH_DEFAULT_LIMIT = 10;
 export const CATCH_MAX_LIMIT = 100;
-function catchLimit(value: number | undefined): number {
+export function catchLimit(value: number | undefined): number {
   const limit = value ?? CATCH_DEFAULT_LIMIT;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > CATCH_MAX_LIMIT) {
     throw new SquareError('invalid_args', `Catch limit must be a positive integer no greater than ${CATCH_MAX_LIMIT}.`);

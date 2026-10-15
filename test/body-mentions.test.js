@@ -5,7 +5,7 @@ import { readSquareSnapshot, emptyRuntimeState } from '../dist/artifact.js';
 import { decideAct } from '../dist/decisions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
-import { activityRetryCommand } from '../dist/activity.js';
+import { activityRetryCommand } from '../dist/cli/express-presentation.js';
 import { Square } from '../dist/index.js';
 import { persistSquare, run, withName } from './square-cli-helpers.js';
 
@@ -100,7 +100,7 @@ test('body @names union with --mention and dedupe case-insensitively', async () 
   assert.deepEqual(decision.act.mentions, ['Cara', 'Bob']);
 });
 
-test('an unmatched body @name is rejected with a two-tier message and an escape hint', async () => {
+test('an unmatched body @name identifies its targets without domain CLI guidance', async () => {
   const state = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -112,8 +112,9 @@ test('an unmatched body @name is rejected with a two-tier message and an escape 
     () => decide(state, { name: 'Alice', body: '@Bob @Eve listen up', force: true, now: 10 }),
     (error) => /@Eve does not match anyone in this square/.test(error.message)
       && /@Bob is not standing in this square/.test(error.message)
-      && /--no-mention/.test(error.message)
-      && /backticks/.test(error.message),
+      && error.facts?.reason === 'unmatched_mention'
+      && JSON.stringify(error.facts?.targets) === JSON.stringify(['Bob', 'Eve'])
+      && !/--no-mention|backticks/.test(error.message),
   );
 });
 

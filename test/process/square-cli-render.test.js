@@ -9,10 +9,8 @@ import test from 'node:test';
 import { formatActivityId } from '../../dist/square-core.js';
 import { readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
 import { Square } from '../../dist/index.js';
-import { cmdListSquares } from '../../dist/list.js';
-import { closeOpenSquare } from '../../dist/open-square.js';
-import { probeSquare } from '../../dist/square-file-adapter.js';
-import { listPresentation } from '../../dist/views.js';
+import { createSquareApplication } from '../../dist/square-application.js';
+import { listCommand } from '../../dist/cli/observation-commands.js';
 import {
   ROOT,
   CLI,
@@ -996,9 +994,9 @@ test('list pages a deterministic relative-path order without overlap', async () 
   assert.equal(secondPaths.some((item) => firstPaths.includes(item)), false);
 });
 
-test('list keeps page-more boolean when deterministic discovery stops', async () => {
+test('list keeps page-more boolean when deterministic discovery stops', async (t) => {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-list-budget-')));
-  const originalCwd = process.cwd();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = Array.from({ length: 21 }, (_value, index) => `a${String(index).padStart(2, '0')}.square`);
   for (const relativePath of paths) {
     const square = await Square.build({ path: path.join(root, relativePath), markdown: `${relativePath}\n`, hardCap: 3 });
@@ -1013,28 +1011,13 @@ test('list keeps page-more boolean when deterministic discovery stops', async ()
     })),
   ].reverse();
   const originalReaddir = fs.promises.readdir;
-  const originalWrite = process.stdout.write;
-  const output = [];
-
-  try {
-    process.chdir(root);
-    fs.promises.readdir = async (directory) => {
-      assert.equal(directory, root);
-      return entries;
-    };
-    process.stdout.write = (chunk) => {
-      output.push(String(chunk));
-      return true;
-    };
-    await cmdListSquares([], () => assert.fail('list should not reject valid defaults'));
-  } finally {
-    fs.promises.readdir = originalReaddir;
-    process.stdout.write = originalWrite;
-    process.chdir(originalCwd);
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-
-  const listed = output.join('');
+  // Force the discovery budget through real directory input, not a canned
+  // application result. Execute the live CLI command with explicit coordinates.
+  t.mock.method(fs.promises, 'readdir', async (directory, ...args) => {
+    return directory === root ? entries : originalReaddir(directory, ...args);
+  });
+  const context = { cwd: root, env: testEnv(), homeDir: os.homedir(), command: 'list' };
+  const listed = await listCommand.execute(listCommand.parse([], context), context);
   assert.match(listed, /^  … more squares$/m);
   assert.match(listed, /square list --depth 4 --limit 20 --after 'a19\.square'/);
   assert.match(listed, /the walk stopped early — deeper squares may still be hiding/);
@@ -1077,12 +1060,11 @@ test('list clips displayed path, context, and names without truncating its proje
   await square.join(longName);
   await square.close();
 
-  const projectionSquare = await probeSquare(file);
-  assert.ok(projectionSquare);
-  const projection = await listPresentation(projectionSquare);
-  assert.ok(projection.context.includes(longContext));
-  assert.ok(projection.participants.includes(longName));
-  await closeOpenSquare(projectionSquare);
+  const discovered = await createSquareApplication({ cwd, env: testEnv() }).discover({});
+  const item = discovered.data.items.find((candidate) => candidate.path === longPath);
+  assert.ok(item, 'application discovery retains the complete relative path');
+  assert.ok(item.context.includes(longContext));
+  assert.ok(item.participants.includes(longName));
 
   const listed = run(['list'], { cwd });
   assert.equal(listed.status, 0, listed.stderr);

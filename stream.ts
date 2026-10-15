@@ -1,57 +1,80 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { once } from 'node:events';
-
-import { quoteShell } from './presentation.js';
+import fs from 'node:fs/promises';
+import { SquareError } from './model.js';
 import { openSquare, observeSquareChanges } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { streamProjection, streamTailProjection } from './views.js';
+import type { OpenOptions, OperationControl, StreamApplicationOptions, StreamApplicationRecord } from './square-facade.js';
 
-export type StreamStart =
-  | { readonly kind: 'tail'; readonly last: number }
-  | { readonly kind: 'after'; readonly after: number };
+/** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
+export function streamSquare(squarePath: string, options: StreamApplicationOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): AsyncIterable<StreamApplicationRecord> {
+  return {
+    [Symbol.asyncIterator]() {
+      const disposal = new AbortController();
+      const signal = control?.signal === undefined ? disposal.signal : AbortSignal.any([control.signal, disposal.signal]);
+      const iterationControl = { ...control, signal };
+      const records = observe();
+      return {
+        next: () => records.next(),
+        return() {
+          disposal.abort();
+          return records.return(undefined);
+        },
+      };
 
-/** Machine-readable tailing stays available; interactive terminal rendering was retired. */
-export async function cmdStreamNdjson(squarePath: string, recipient?: string, start: StreamStart = { kind: 'tail', last: 10 }): Promise<void> {
-  if (!fs.existsSync(squarePath)) {
-    process.stderr.write(`square not found: ${squarePath}\n`);
-    process.exitCode = 2;
-    return;
-  }
-  let cursor = start.kind === 'after' ? start.after : -1;
-  let initial = start.kind === 'tail' ? start : undefined;
-  const observer = await observeSquareChanges(squarePath);
-  try {
-    while (true) {
-      const generation = observer.generation;
-      try {
-        const baseline = await observer.read();
-        const square = await openSquare(squarePath);
-        let hasMore;
+      async function* observe(): AsyncGenerator<StreamApplicationRecord, void, unknown> {
         try {
-          const projection = initial === undefined
-            ? await streamProjection(square, cursor, recipient)
-            : await streamTailProjection(square, initial.last, recipient);
-          for (const item of projection.activities) {
-            const line = { seq: item.activity.index, square: squarePath, ...item.activity,
-              ...(item.route === undefined ? {} : { route: item.route }) };
-            if (!process.stdout.write(`${JSON.stringify(line)}\n`)) await once(process.stdout, 'drain');
+          signal.throwIfAborted();
+          try { await fs.stat(squarePath); }
+          catch {
+            signal.throwIfAborted();
+            throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
           }
-          cursor = projection.cursor;
-          initial = undefined;
-          hasMore = projection.hasMore;
-        } finally { await closeOpenSquare(square); }
-        if (!hasMore) await observer.changed(baseline, Infinity);
-      } catch {
-        // Repair/replacement is a storage hint, not a reason to scan history on a timer.
-        await observer.hinted(generation, Infinity);
+          signal.throwIfAborted();
+          const start = options.start ?? { kind: 'tail', last: 10 };
+          let cursor = start.kind === 'after' ? start.after : -1;
+          let initial = start.kind === 'tail' ? start : undefined;
+          const observer = await observeSquareChanges(squarePath);
+          const close = () => observer.close();
+          signal.addEventListener('abort', close, { once: true });
+          try {
+            signal.throwIfAborted();
+            while (true) {
+              const generation = observer.generation;
+              let baseline: number | null;
+              let projection;
+              try {
+                baseline = await observer.read(signal);
+                const square = await openSquare(squarePath, { ...openOptions, env: openOptions.env ?? {}, signal }, iterationControl);
+                try {
+                  projection = initial === undefined
+                    ? await streamProjection(square, cursor, options.recipient, iterationControl)
+                    : await streamTailProjection(square, initial.last, options.recipient, iterationControl);
+                } finally { await closeOpenSquare(square); }
+              } catch (error) {
+                signal.throwIfAborted();
+                if (error instanceof SquareError && error.code === 'invalid_args') throw error;
+                // Repair/replacement is a hint, not a reason to scan history on a timer.
+                await observer.hinted(generation, Infinity, signal);
+                continue;
+              }
+              for (const item of projection.activities) {
+                signal.throwIfAborted();
+                yield { seq: item.activity.index, square: squarePath, ...item.activity,
+                  ...(item.route === undefined ? {} : { route: item.route }) };
+              }
+              cursor = projection.cursor;
+              initial = undefined;
+              if (!projection.hasMore) await observer.changed(baseline, Infinity, signal);
+            }
+          } finally {
+            signal.removeEventListener('abort', close);
+            observer.close();
+          }
+        } catch (error) {
+          // Iterator disposal is completion; a caller cancellation still rejects the pull.
+          if (!disposal.signal.aborted || control?.signal?.aborted || error !== signal.reason) throw error;
+        }
       }
-    }
-  } finally { observer.close(); }
-}
-
-export async function cmdStream(squarePath: string): Promise<void> {
-  process.stderr.write('✕ interactive stream was removed\n');
-  process.stderr.write(`square --location ${quoteShell(path.resolve(squarePath))} stream --ndjson\n`);
-  process.exitCode = 2;
+    },
+  };
 }

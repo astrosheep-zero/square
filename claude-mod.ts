@@ -3,7 +3,7 @@ import { claimSessionParticipant, hostLedgerForEnv } from './registry.js';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact } from './routes.js';
-import { Square } from './square-wiring.js';
+import { Square } from './square-application.js';
 import { observeClaudeDelivery, type ClaudeBinding } from './claude-delivery.js';
 import { processActNotificationsOnce } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';

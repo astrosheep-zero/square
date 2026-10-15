@@ -2,9 +2,7 @@ import os from 'node:os';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
-import { createHostLedgerPort } from '../host-ledger-file-adapter.js';
-import { projectSessionBindings } from '../square-projections.js';
-import { sessionIdsFromEnvironment } from '../participant-identity.js';
+import { createSquareApplication } from '../square-application.js';
 
 export interface CommandContext {
   cwd: string;
@@ -100,12 +98,6 @@ export function parseNameList(value: string, flag: string): string[] {
   return names;
 }
 
-export function requireParticipant(name: string | undefined): string {
-  if (!name) fail('✕ missing required option: --as <name>');
-  validateName(name);
-  return name;
-}
-
 const LOCATION_REQUIRED_COMMANDS = new Set([
   'build',
   'stream',
@@ -150,10 +142,6 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
     }
   }
   const command = args[0];
-  if (name === undefined) {
-    const configured = process.env.SQUARE_PARTICIPANT_NAME?.trim();
-    if (configured) name = configured;
-  }
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
   const configuredLocation = process.env.SQUARE_LOCATION?.trim();
@@ -162,15 +150,6 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
     fail(`✕ ${command} needs a square location\nsquare ls`);
   }
   const squarePath = requestedPath ?? configured;
-  if (name === undefined && squarePath !== undefined && command !== undefined && locationIsRequired(command)) {
-    const bindings = (await Promise.all(sessionIdsFromEnvironment().map((sessionId) => projectSessionBindings({
-      hostLedger: createHostLedgerPort(),
-      location: squarePath,
-      sessionId,
-    })))).flat();
-    const names = new Set(bindings.map((binding) => binding.participant));
-    name = names.size === 1 ? [...names][0] : undefined;
-  }
   return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
 }
 
@@ -180,6 +159,10 @@ export function locationIsRequired(command: string): boolean {
 
 export function defaultContext(command: string, squarePath?: string, name?: string): CommandContext {
   return { command, cwd: process.cwd(), env: { ...process.env }, squarePath, name, homeDir: os.homedir() };
+}
+
+export function applicationFor(context: CommandContext) {
+  return createSquareApplication({ cwd: context.cwd, env: context.env, squarePath: context.squarePath, participant: context.name });
 }
 
 export function requireSquarePath(context: CommandContext): string {

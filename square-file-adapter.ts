@@ -24,14 +24,15 @@ import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 export async function createSquare(
   squarePath: string,
   options: BuildOptions & { hardCap: HardCap },
-  snippet: string
+  snippet: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const state = createSquareState(options, snippet);
   if (options.force) {
-    await writeSquareSnapshot(squarePath, state);
+    await writeSquareSnapshot(squarePath, state, signal);
     return;
   }
-  if (!await createSquareSnapshot(squarePath, state)) {
+  if (!await createSquareSnapshot(squarePath, state, signal)) {
     throw new InternalSquareError('conflict', `Refusing to overwrite existing square: ${squarePath}\nPass -f to overwrite.`);
   }
 }
@@ -100,14 +101,14 @@ export async function buildSquare(squarePath: string, options: SquareBuildOption
       force: false,
       hardCap: options.hardCap ?? null,
       ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
-    }, options.markdown);
+    }, options.markdown, options.signal);
   } catch (error) {
     if (error instanceof InternalSquareError && error.code === 'conflict') {
       throw new SquareError('io', `Cannot build over an existing square at ${squarePath}`);
     }
     throw error;
   }
-  return openSquare(squarePath, options);
+  return openSquare(squarePath, { ...options, signal: undefined });
 }
 
 export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {

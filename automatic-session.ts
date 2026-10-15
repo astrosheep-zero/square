@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
-import { Square } from './square-wiring.js';
+import { Square } from './square-application.js';
 import { entryPresentation } from './views.js';
 import { automaticParticipant, harnessSessionSources, type AutomaticProvider } from './participant-identity.js';
 import { SquareError } from './model.js';

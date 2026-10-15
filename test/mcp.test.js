@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { createSquareApplication } from '../dist/square-application.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
@@ -208,12 +208,12 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   child.stdin.end();
   assert.deepEqual(await disconnected, [0, null], stderr);
   await app.resume();
-  assert.equal((await app.history()).some((activity) => activity.body === 'orphan expression'), false);
+  assert.equal((await app.history()).data.activities.some((activity) => activity.body === 'orphan expression'), false);
   const writer = createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' }, participant: 'writer' });
   await writer.join();
   const expressed = await writer.express('after disconnect', { force: true, mentions: ['disconnected'] });
   const caught = await app.catch();
-  assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
+  assert.ok(caught.data.activities.some((activity) => activity.id === expressed.data.activity.id));
 });
 
 test('square mcp-server speaks newline-delimited JSON-RPC on stdio', async () => {

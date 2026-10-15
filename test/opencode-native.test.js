@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import plugin from '../dist/plugins/opencode/index.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 import { readSquareSnapshot } from '../dist/artifact.js';
 import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';
 

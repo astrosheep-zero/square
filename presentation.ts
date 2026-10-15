@@ -1,13 +1,12 @@
-import { type StoredAct, type PublicAct, type RoomChangeAct, sameName } from './model.js';
+import { type StoredAct, type PublicAct, type RoomChangeAct, sameName, isSquareError } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { audienceIncludes, audienceOf, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
-import { actId, HELD_WAIT_BUDGET_MS } from './runtime.js';
+import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
+import { HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
-import type { UnreadActivitySummary, ParticipantStatus } from './decisions.js';
-import { compareParticipantActivity } from './decisions.js';
+import type { UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
 import { grepSnippet } from './search.js';
 import { style } from './tty-style.js';
 
@@ -36,7 +35,7 @@ interface ActivityLimitOptions extends ParticipantOutputOptions {
 interface ActivityBlockedOptions extends ParticipantOutputOptions {
   retryCommand: string;
   forceCommand: string;
-  activitySummaries: UnreadActivitySummary[];
+  activitySummaries: readonly UnreadActivitySummary[];
   draftPath?: string;
 }
 
@@ -59,7 +58,7 @@ interface ExpressNoWaitOptions extends ParticipantOutputOptions {
 interface WatchStatusOptions extends ParticipantOutputOptions {
   status: WatchStatus;
   idleMs?: number;
-  presence?: { participants: ParticipantStatus[]; now: number };
+  presence?: { participants: readonly ParticipantSummary[]; now: number };
   showCatchHint?: boolean;
   ownActivityCount?: number;
   hardCap?: number | null;
@@ -98,6 +97,12 @@ export function formatRefusal(
   return withPathOutput(squarePath, body, { ...opts, plain: true });
 }
 
+export function refusalText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const marked = isSquareError(error) && ['never_joined', 'not_standing', 'unmatched_mention'].includes(error.facts?.reason ?? '');
+  return marked ? text.split('\n').map((line) => `✕ ${line}`).join('\n') : text;
+}
+
 export function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -133,12 +138,7 @@ function formatAge(ms: number | undefined): string {
   return `${Math.floor(ms / 1000)}s`;
 }
 
-const PRESENCE_WINDOW_MS = 8 * 60 * 60 * 1000;
-
-export function renderPresenceLines(participants: ParticipantStatus[], now: number, limit = 5): string[] {
-  const recent = participants
-    .filter((p) => p.state === 'done' || p.presence === 'watching' || (p.lastActiveAt !== undefined && now - p.lastActiveAt <= PRESENCE_WINDOW_MS))
-    .sort(compareParticipantActivity);
+export function renderPresenceLines(recent: readonly ParticipantSummary[], now: number, limit = 5): string[] {
 
   const shown = recent.slice(0, limit);
   if (shown.length === 0) return [style('dim', '  ○ nobody nearby')];
@@ -250,17 +250,17 @@ function renderEventCliFacts(
       const body = renderedBody(event.body, maxBody);
       const mention = opts.mention;
       const mentionSuffix =
-        mention !== undefined && audienceIncludes(audienceOf(event), mention)
+        mention !== undefined && (event.reach === 'bell' || event.mentions?.some((name) => sameName(name, mention)))
           ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
-      const replySuffix = event.reply === undefined ? '' : ` · replies to ${actId(event.reply)}`;
-      const meta = ` #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
+      const replySuffix = event.reply === undefined ? '' : ` · replies to ${formatActivityId(event.reply)}`;
+      const meta = ` #${opts.actNumber ?? 1} · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
       return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
       return {
-        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${actId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
+        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
         bodyClipped: body.clipped,
       };
     }
@@ -280,9 +280,8 @@ function renderPresenceOnlySay(
   event: Extract<StoredAct, { kind: 'say' }>,
   opts: { now?: number; actNumber?: number } = {}
 ): string {
-  const audience = audienceOf(event);
-  const targets = audience.kind === 'bell' ? [] : audience.names;
-  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${actId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
+  const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
+  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, opts.now)}`);
   if (targets.length === 0) {
     return `● ${participantIdentity(event.actor)}${meta}`;
   }
@@ -327,7 +326,7 @@ function withDraftInput(command: string, draftPath: string | undefined): string 
   return draftPath === undefined ? command : `${command} < ${quoteShell(draftPath)}`;
 }
 
-function renderUnreadSummary(opts: { activitySummaries: UnreadActivitySummary[]; viewer: string }): string[] {
+function renderUnreadSummary(opts: { activitySummaries: readonly UnreadActivitySummary[]; viewer: string }): string[] {
   const visibleSummaries = opts.activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
   const remainingSummaries = opts.activitySummaries.length - visibleSummaries.length;
   return [
@@ -441,7 +440,7 @@ export function renderPresenceAnchor(names: readonly string[]): string {
 const GREP_PREVIEW_CHARS = 160;
 
 export function renderGrepActivitiesView(
-  visible: StoredAct[],
+  visible: readonly StoredAct[],
   totalMatches: number,
   noTruncate: boolean | undefined,
   squarePath: string,
@@ -457,7 +456,7 @@ export function renderGrepActivitiesView(
 
   for (const act of publicVisible) {
     const rawBody = act.body ?? '';
-    const header = `${style('dim', actId(act.index))} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
+    const header = `${style('dim', formatActivityId(act.index))} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
     if (perception?.(act) === 'presence') {
       chunks.push(header);
       continue;
@@ -485,9 +484,9 @@ export function renderGrepActivitiesView(
   }
 
   if (publicVisible.length === 1) {
-    chunks.push(`${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
+    chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
   } else if (truncated && publicVisible.length > 1) {
-    chunks.push(`${commandPrefix(squarePath)} history --at ${actId(publicVisible[0].index)} -C 2 --no-truncate`);
+    chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --no-truncate`);
   }
   return chunks.join('\n\n');
 }
@@ -570,14 +569,4 @@ export function renderDoctorClean(): string {
 
 export function renderDoctorUnfixable(reason: string): string {
   return ['✕ unreadable artifact', `  · ${truncateExternalDiagnostic(reason)}`].join('\n');
-}
-
-export function renderWatchOutput(
-  publicItems: PublicAct[],
-  sayNumbers: Readonly<Record<number, number>>,
-  opts: { mention?: string; viewer: string; perceptions: ReadonlyMap<number, Perception> }
-): string {
-  return publicItems.map((act) => renderAmbientEvent(act, opts.viewer, {
-    actNumber: sayNumbers[act.index], mention: opts.mention, perception: opts.perceptions.get(act.index),
-  })).filter(Boolean).join('\n\n') + '\n';
 }

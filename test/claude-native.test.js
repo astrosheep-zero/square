@@ -13,7 +13,7 @@ import { runClaudeMod } from '../dist/claude-mod.js';
 import { observeClaudeDelivery } from '../dist/claude-delivery.js';
 import { emptyRuntimeState, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { claimSessionTakeover } from '../dist/registry.js';

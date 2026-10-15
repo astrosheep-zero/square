@@ -11,18 +11,18 @@ function newLease(leaseId: string, at: number, options: WatchOptions): WatchLeas
   return { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter).length === 0 ? {} : { filter }) };
 }
 
-export async function acquireWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions): Promise<WatchLeaseStart> {
+export async function acquireWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions, signal?: AbortSignal): Promise<WatchLeaseStart> {
   const at = square.clock();
   const { value } = await square.artifact.transact<WatchLeaseStart>((facts) => {
     const known = resolveKnownName(facts, name); const existing = freshWatchLease(facts, known, at);
     if (existing !== undefined && !options.replace) return { type: 'active', lease: existing };
     facts.putLease(known, newLease(leaseId, at, options));
     return { type: 'started', leaseId, replaced: existing !== undefined, heartbeatAt: at };
-  });
+  }, signal);
   return value;
 }
 
-export async function pulseWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions, heartbeatDue: boolean): Promise<WatchLeasePulse> {
+export async function pulseWatchLease(square: OpenSquare, name: string, leaseId: string, options: WatchOptions, heartbeatDue: boolean, signal?: AbortSignal): Promise<WatchLeasePulse> {
   const at = square.clock();
   const { value } = await square.artifact.transact<WatchLeasePulse>((facts) => {
     const known = resolveKnownName(facts, name); const lease = freshWatchLease(facts, known, at);
@@ -34,13 +34,13 @@ export async function pulseWatchLease(square: OpenSquare, name: string, leaseId:
     if (!heartbeatDue) return { type };
     facts.putLease(known, newLease(leaseId, at, options));
     return { type, heartbeatAt: at };
-  });
+  }, signal);
   return value;
 }
 
 export async function releaseWatchLease(square: OpenSquare, name: string, leaseId: string | undefined): Promise<void> {
   if (leaseId !== undefined) await square.artifact.transact((facts) => facts.removeLease(resolveKnownName(facts, name), leaseId));
 }
-export async function ownsWatchLease(square: OpenSquare, name: string, leaseId: string): Promise<boolean> {
-  return (await square.artifact.read((facts) => freshWatchLease(facts, resolveKnownName(facts, name), square.clock())?.leaseId === leaseId)).value;
+export async function ownsWatchLease(square: OpenSquare, name: string, leaseId: string, signal?: AbortSignal): Promise<boolean> {
+  return (await square.artifact.read((facts) => freshWatchLease(facts, resolveKnownName(facts, name), square.clock())?.leaseId === leaseId, signal)).value;
 }

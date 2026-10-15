@@ -18,7 +18,7 @@ import { readWakeRoutes, retireWakeRoute, upsertWakeRoute } from './wake-routes.
 import { takeover } from '../dist/square-actions.js';
 import { openSquare } from '../dist/square-file-adapter.js';
 import { closeOpenSquare } from '../dist/open-square.js';
-import { Square } from '../dist/square-wiring.js';
+import { Square } from '../dist/square-application.js';
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-auto-'));
   const cwd = path.join(root, 'workspace');
@@ -413,7 +413,7 @@ test('old shutdown paused across a replacement cannot mark the new owner done', 
     const { done } = await import('../dist/square-actions.js');
     const { openSquare } = await import('../dist/square-file-adapter.js');
     const { closeOpenSquare } = await import('../dist/open-square.js');
-    const { Square } = await import('../dist/square-wiring.js');
+    const { Square } = await import('../dist/square-application.js');
     const hostLedger = createHostLedgerPort({
       rootPath: env.SQUARE_HOST_LEDGER_ROOT ?? path.dirname(env.SQUARE_REGISTRY),
     });

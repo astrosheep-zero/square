@@ -1,5 +1,4 @@
-import { migrateSquareFile } from '../square-migration.js';
-import { diagnoseSquareFile } from '../square-storage.js';
+import { createSquareApplication } from '../square-application.js';
 import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 
 import { requireSquarePath, type CommandSpec, usage } from './context.js';
@@ -20,14 +19,14 @@ export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
   },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const outcome = await migrateSquareFile(squarePath);
+    const { data: outcome, projection } = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath }).migrate();
     const body = outcome.status === 'migrated' && outcome.counts !== undefined
       ? [
         '✓ migrated to row storage',
         `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
       ].join('\n')
       : '· already format 2 — nothing changed';
-    return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };
+    return { output: withPathOutput(squarePath, body, { participantCount: projection.standingCount }) };
   },
   present(result) {
     process.stdout.write(result.output);
@@ -41,7 +40,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const diagnosis = await diagnoseSquareFile(squarePath);
+    const { data: diagnosis, projection } = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath }).diagnose();
     if (diagnosis.migrationRequired !== undefined) {
       return { output: withPathOutput(squarePath, `${diagnosis.migrationRequired}\n`), exitCode: 2 };
     }
@@ -56,7 +55,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     }
     return {
       output: withPathOutput(squarePath, renderDoctorClean(), {
-        participantCount: diagnosis.standingCount,
+        participantCount: projection.standingCount,
       }),
     };
   },

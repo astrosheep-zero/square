@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -144,10 +145,127 @@ test('decisions and perception use domain facts, outside host and storage operat
 test('product adapters stay behind the facade and close boundary', () => {
   const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'square-file-adapter.ts', 'inbox.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
-  // The application layer coordinates the same actions the facade forwards to; product
-  // adapters (CLI, harnesses, mods) must still reach participant mutation through Square.
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-wiring.ts', 'square-application.ts']);
+  // The application owner is the only entry into participant execution.
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-application.ts']);
   assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
-  const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, ['square-wiring.ts']);
+  const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, []);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);
+});
+
+function moduleEdges(file, source) {
+  const edges = [];
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  function visit(node) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = ts.isImportDeclaration(node) ? node.importClause : node.exportClause;
+      const typeOnly = !!node.isTypeOnly || !!clause?.isTypeOnly;
+      const bindings = ts.isImportDeclaration(node) ? clause?.namedBindings : clause;
+      const elements = bindings && (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) ? bindings.elements : undefined;
+      const names = elements
+        ? elements.filter((element) => !typeOnly && !element.isTypeOnly).map((element) => (element.propertyName ?? element.name).text)
+        : typeOnly ? [] : ['*'];
+      const types = elements
+        ? elements.filter((element) => typeOnly || element.isTypeOnly).map((element) => (element.propertyName ?? element.name).text)
+        : typeOnly ? ['*'] : [];
+      if (ts.isImportDeclaration(node) && clause?.name) (typeOnly ? types : names).push('default');
+      edges.push({ module: node.moduleSpecifier.text, names, types });
+    }
+    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
+      const arg = node.arguments[0];
+      edges.push({ module: arg && ts.isStringLiteral(arg) ? arg.text : '<dynamic>', names: ['*'], types: [] });
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  return edges;
+}
+
+// These are edge exceptions, not directories exempt from scrutiny. Native runtime
+// entrypoints end this product-operation traversal; no ordinary CLI helper does.
+const integrationEdges = new Map([
+  ['cli/harness-command.ts -> harness.ts', ['executeHarnessTarget', 'harnessTargets']],
+  ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
+  ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHookAsync']],
+  ['mcp.ts -> automatic-session.ts', ['operationEnv']],
+]);
+const pureBindings = new Map([
+  ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
+  ['runtime.ts', ['HELD_WAIT_BUDGET_MS']],
+  ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
+  ['participant-identity.ts', ['participantIdentity']],
+  ['search.ts', ['grepSnippet']],
+]);
+const pureTypeBindings = new Map([
+  ['square-core.ts', ['ActivityId', 'Perception', 'Reach']],
+  ['model.ts', ['HardCap', 'BuildOptions', 'RoomChangeAct', 'StoredAct', 'PublicAct']],
+]);
+const integrationTypeBindings = new Map([
+  ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],
+]);
+const presentationHelpers = new Set(['presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
+
+function transportLeaks(sources, roots) {
+  const visited = new Set(), leaks = [];
+  function traverse(file, trail) {
+    if (visited.has(file)) return;
+    visited.add(file);
+    const source = sources.get(file);
+    if (source === undefined) { leaks.push(`missing helper: ${trail.join(' -> ')}`); return; }
+    for (const edge of moduleEdges(file, source)) {
+      if (!edge.module.startsWith('.')) {
+        if (edge.module === '<dynamic>') leaks.push(`unbounded import: ${trail.join(' -> ')}`);
+        continue;
+      }
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), edge.module)).replace(/\.js$/, '.ts');
+      if (target === 'square-application.ts') continue;
+      if (target === 'square-facade.ts') {
+        if (edge.names.length > 0) leaks.push(`DTO runtime import: ${[...trail, target].join(' -> ')}`);
+        continue;
+      }
+      const exception = integrationEdges.get(`${file} -> ${target}`);
+      if (exception !== undefined) {
+        const allowedTypes = integrationTypeBindings.get(`${file} -> ${target}`) ?? [];
+        if (edge.names.some((name) => !exception.includes(name)) || edge.types.some((name) => !allowedTypes.includes(name))) leaks.push(`integration exception exceeded: ${file} -> ${target} (${[...edge.names, ...edge.types].join(', ')})`);
+        continue;
+      }
+      const pure = pureBindings.get(target);
+      if (pure !== undefined) {
+        const allowedTypes = pureTypeBindings.get(target) ?? [];
+        if (edge.names.some((name) => !pure.includes(name)) || edge.types.some((name) => !allowedTypes.includes(name))) leaks.push(`private binding: ${file} -> ${target} (${[...edge.names, ...edge.types].join(', ')})`);
+        // These mixed modules are terminal syntax boundaries, not permission to
+        // reach their execution dependencies or import namespaces from them.
+        continue;
+      }
+      if (target.startsWith('cli/') || presentationHelpers.has(target) || target === 'mcp.ts') traverse(target, [...trail, target]);
+      else leaks.push(`private execution import: ${[...trail, target].join(' -> ')}`);
+    }
+  }
+  for (const file of roots) traverse(file, [file]);
+  return leaks.sort();
+}
+
+test('CLI/MCP and every reachable presentation helper use the application owner, not private execution', () => {
+  const roots = productionFiles.filter((file) => file.startsWith('cli/')).concat(['mcp.ts', 'presentation.ts']);
+  const leaks = transportLeaks(productionSources, roots);
+  assert.deepEqual(leaks, [], `transport boundary escaped transitively:\n${leaks.join('\n')}`);
+});
+
+test('transport boundary catches hidden execution behind helpers and limits native and syntax exceptions', () => {
+  assert.deepEqual(transportLeaks(new Map([
+    ['presentation.ts', "import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js'; import { HELD_WAIT_BUDGET_MS } from './runtime.js';"],
+  ]), ['presentation.ts']), []);
+  const sources = new Map([
+    ['cli/program.ts', "import './nested.js';"],
+    ['cli/nested.ts', "import './render.js';"],
+    ['cli/render.ts', "export { history } from '../views.js'; export { createFileCell } from '../square-storage.js';"],
+    ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
+    ['mcp.ts', "import { automaticSessionStart } from './automatic-session.js';"],
+  ]);
+  assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
+    'integration exception exceeded: mcp.ts -> automatic-session.ts (automaticSessionStart)',
+    'private binding: presentation.ts -> runtime.ts (nowMs)',
+    'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
+    'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> square-storage.ts',
+    'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',
+  ]);
 });

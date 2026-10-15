@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { activityRetryCommand } from '../dist/activity.js';
+import { activityRetryCommand, executeExpression } from '../dist/cli/express-presentation.js';
 import { renderActivityUncertain } from '../dist/presentation.js';
 import { SquareError } from '../dist/model.js';
 import { buildMemorySquare } from '../dist/square-file-adapter.js';
@@ -60,25 +62,37 @@ test('a refused recipient is dropped from the printed retry instead of being sug
   }
 });
 
-test('a rejected reply keeps the recipient, the exact stdin, and points at history', async () => {
+test('missing and malformed replies are dropped from runnable recovery while recipients and raw drafts survive', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
   for (const reply of ['act/999', 'not-an-id']) {
     const body = `reply body \r\nwith 'quotes'\r\n`;
+    const before = (await says(file)).length;
     const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
     assert.equal(result.status, 2, result.stderr);
     const saved = recovery(result, body);
     assert.equal(saved.commands.length, 1);
     assert.match(saved.commands[0], /express --no-wait/);
     assert.ok(saved.commands[0].includes("--mention 'Bob'"));
-    assert.ok(saved.commands[0].includes(`--reply ${reply === 'not-an-id' ? "'not-an-id'" : reply}`));
-    assert.doesNotMatch(saved.commands[0], /--force/);
-    assert.match(saved.output, /participants/);
+    assert.doesNotMatch(saved.commands[0], /--reply|--force/);
     assert.match(saved.output, /history --limit 10/);
-    assert.match(saved.output, /correct the problem above before retrying/);
-    assert.equal((await says(file)).length, 0);
+    assert.match(saved.output, /choose a valid --reply from history, or send without a reply/);
+    if (reply === 'act/999') {
+      assert.match(saved.output, /Invalid --reply: act\/999 is not in this square's history/);
+      assert.doesNotMatch(saved.output, /expected an activity id like act\/12/);
+    } else {
+      assert.match(saved.output, /Invalid --reply: expected an activity id like act\/12/);
+    }
+    assert.equal((await says(file)).length, before);
+    const retry = executeRecovery(saved.commands[0]);
+    assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+    const landed = await says(file);
+    assert.equal(landed.length, before + 1);
+    assert.equal(landed.at(-1).body, body.replace(/\r\n/g, '\n').trim());
+    assert.deepEqual(landed.at(-1).mentions, ['Bob']);
+    assert.equal(landed.at(-1).reply, undefined);
   }
 });
 
@@ -193,6 +207,43 @@ test('only admission rejection proves a failed express unsent; post-commit failu
     assert.doesNotMatch(rendered, / express |--force|< '\/tmp\/draft.md'/);
   }
   await square.artifact.close();
+});
+
+test('a failed application clock cannot prevent raw draft saving or landed reconciliation', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-draft-clock-'));
+  const file = path.join(root, 'SQUARE.square');
+  const raw = "  exact raw body\r\nwith 'quotes'\r\n";
+  const clockFailure = new Error('projection clock unavailable');
+  const error = Object.assign(new Error(clockFailure.message), {
+    operation: { operation: 'express', participant: 'Alice', expressEffect: 'landed', landedId: 'act/2' },
+  });
+  const now = t.mock.fn(() => { throw clockFailure; });
+  let output = '';
+  const stderr = t.mock.method(process.stderr, 'write', (text) => { output += text; return true; });
+  const previousExit = process.exitCode;
+  let draftAtRecovery;
+  try {
+    await executeExpression({
+      now,
+      async express() { throw error; },
+      async recovery() {
+        const drafts = fs.readdirSync(path.join(root, 'drafts'));
+        draftAtRecovery = fs.readFileSync(path.join(root, 'drafts', drafts[0]), 'utf8');
+        throw clockFailure;
+      },
+    }, file, 'Alice', raw, { noMention: true });
+    assert.equal(process.exitCode, 1);
+    assert.equal(now.mock.callCount(), 0);
+    assert.equal(draftAtRecovery, raw);
+    assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);
+    assert.match(output, /act\/2/);
+    assert.match(output, /history .*--no-truncate/);
+    assert.doesNotMatch(output, / express |--force|< /);
+  } finally {
+    stderr.mock.restore();
+    process.exitCode = previousExit;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('selected artifact corruption never advertises a safely unsent activity', async () => {

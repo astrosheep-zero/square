@@ -7,11 +7,11 @@ export async function diagnoseSquareFile(location: string): ReturnType<typeof di
     return diagnoseArtifactFile(await canonicalPath(location));
 }
 /** Explicit fixture import, never a runtime state replacement callback. */
-export async function writeSquareSnapshot(location: string, state: SquareState): Promise<void> {
-    await writeSquareFile(await canonicalPath(location), state);
+export async function writeSquareSnapshot(location: string, state: SquareState, signal?: AbortSignal): Promise<void> {
+    await writeSquareFile(await canonicalPath(location), state, signal);
 }
-export async function createSquareSnapshot(location: string, state: SquareState): Promise<boolean> {
-    return createSquareFile(await canonicalPath(location), state);
+export async function createSquareSnapshot(location: string, state: SquareState, signal?: AbortSignal): Promise<boolean> {
+    return createSquareFile(await canonicalPath(location), state, signal);
 }
 /** In-memory SQLite shares row selectors, the domain transition and transaction lifecycle. */
 export function createMemoryCell(initial: SquareState): SquareArtifactPort {

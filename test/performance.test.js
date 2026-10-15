@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderWatchOutput } from '../dist/presentation.js';
+import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
+import { Square } from '../dist/square-application.js';
 import { catchUp } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { watchPresentation } from '../dist/views.js';
+import { catchPresence } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
@@ -86,7 +87,7 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
   assert.equal(measurements[0].headReads, measurements[1].headReads, 'selector cost must not scale with unrelated history');
 });
 
-test('watch hydrates only the caught page and settled rendering asks the artifact for nothing', async () => {
+test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0 },
     { kind: 'join', actor: 'P0', at: 1 },
@@ -99,46 +100,72 @@ test('watch hydrates only the caught page and settled rendering asks the artifac
   });
   const { counters, artifact } = instrumentCell(cell);
   const square = { artifact, clock: () => 100_000, location: 'memory' };
+  const measurements = () => structuredClone(counters);
   try {
+    const caught = await catchUp(square, 'P0');
     const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
-    const watch = await watchPresentation(square, 'P0', caughtIds);
-    assert.equal(watch.activities.length, 10);
-    assert.equal(Object.keys(watch.sayNumbers).length, 10);
+    assert.deepEqual(caught.activities.map((activity) => activity.id), caughtIds);
+    assert.equal(caught.remaining, 890);
+    assert.equal(caught.observation.standingCount, 2);
+    assert.deepEqual(caught.observation.activities.map((activity) => activity.index), caughtIds.map((id) => Number(id.slice(4))));
+    assert.deepEqual(caught.observation.sayNumbers, Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [index + 2, index + 1])));
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))));
 
-    const settled = await watchPresentation(square, 'P0');
-    assert.deepEqual(settled.activities, []);
-    assert.deepEqual(counters.hydrated.at(-1), [], 'a settled watch without a caught page hydrates no bodies');
+    const presence = await catchPresence(square);
+    assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
+    // Compose real transaction selection and real optional presence facts using
+    // the application outcome shape; no projection stub reads or rebuilds a feed.
+    const { observation, ...data } = caught;
+    const outcome = { data, projection: { ...observation, presence,
+      location: 'memory', participant: 'P0',
+      automaticDeliveryAvailable: false, waitStarted: false, replaced: false,
+    } };
+    const beforeRender = measurements();
+    const output = renderCatchOutcome('memory', outcome);
+    assert.equal(output.exitCode, 0);
+    assert.match(output.stdout, /dispatch 0 @P0/);
+    assert.doesNotMatch(output.stdout, /dispatch 899 @P0/);
+    assert.match(output.stdout, /890 matching activities remain/);
+    assert.deepEqual(measurements(), beforeRender);
 
-    const beforeRender = structuredClone({ reads: counters.reads, transacts: counters.transacts, hydrated: counters.hydrated, counts: counters.counts });
-    const perceptions = new Map(watch.activities.map((activity) => [activity.index, 'full']));
-    const output = renderWatchOutput(watch.activities, watch.sayNumbers, { viewer: 'P0', perceptions });
-    assert.match(output, /dispatch 0 @P0/);
-    assert.doesNotMatch(output, /dispatch 899 @P0/);
-    assert.deepEqual({ reads: counters.reads, transacts: counters.transacts, hydrated: counters.hydrated, counts: counters.counts }, beforeRender);
+    // A valid sender filter with no matching pending activity settles empty;
+    // unrelated remaining activity cannot force body hydration for that result.
+    const settled = await catchUp(square, 'P0', { from: ['P0'] });
+    assert.deepEqual(settled.activities, []);
+    assert.deepEqual(settled.observation.activities, []);
+    assert.deepEqual(settled.observation.sayNumbers, {});
+    assert.equal(settled.observation.standingCount, 2);
+    assert.deepEqual(counters.hydrated.at(-1), []);
+    const { observation: emptyObservation, ...emptyData } = settled;
+    const emptyOutcome = { data: emptyData, projection: { ...emptyObservation, presence,
+      location: 'memory', participant: 'P0',
+      automaticDeliveryAvailable: false, stop: 'empty-now', waitStarted: false, replaced: false,
+    } };
+    const beforeEmptyRender = measurements();
+    const emptyOutput = renderCatchOutcome('memory', emptyOutcome, { from: ['P0'] });
+    assert.equal(emptyOutput.exitCode, 0);
+    assert.doesNotMatch(emptyOutput.stdout, /dispatch \d+ @P0/);
+    assert.deepEqual(measurements(), beforeEmptyRender);
   } finally {
     await cell.close();
   }
 });
 
-test('a terminal watch hydrates no bodies at all', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 0 },
-    { kind: 'join', actor: 'P0', at: 1 },
-    { kind: 'say', actor: 'P0', at: 2, body: 'only say' },
-  ];
-  const cell = createMemoryCell({
-    hardCap: 1, preamble: [], warmup: ['test'],
-    acts: acts.map((act, index) => ({ ...act, index })),
-    runtime: { nextActIndex: acts.length, observations: {}, leases: {} },
-  });
-  const { counters, artifact } = instrumentCell(cell);
+test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async () => {
+  const resource = Square.inMemory({ markdown: 'test', hardCap: 1, clock: () => 100 });
   try {
-    const watch = await watchPresentation({ artifact, clock: () => 100, location: 'memory' }, 'P0');
-    assert.equal(watch.terminalStatus, 'capped');
-    assert.deepEqual(watch.activities, []);
+    await resource.join('Alice');
+    const participant = await resource.join('P0');
+    await participant.express('only say', { force: true });
+    const cell = resource.square.artifact;
+    const before = (await cell.read((facts) => facts.receiptAssignments())).value;
+    const { counters, artifact } = instrumentCell(cell);
+    resource.square.artifact = artifact;
+    const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+    assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0 });
     assert.equal(counters.hydrated.flat().length, 0);
+    assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
   } finally {
-    await cell.close();
+    await resource.close();
   }
 });
