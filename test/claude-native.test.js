@@ -225,6 +225,30 @@ test('reload preserves generation; cancellation suppresses old callbacks and uns
   assert.equal(await seen(f, 4), 'seen');
 });
 
+test('a retired token vetoes a mixed live frame before any admission or presentation', supported, async (t) => {
+  const f = await fixture(t);
+  await dispatch(f);
+  const liveText = await payload(f);
+  assert.deepEqual(await observeClaudeDelivery('claude-test', liveText, 'guard', f.env), { recognized: true, current: true });
+  const claim = await f.ledger.claimWakeAttempt({ attention: { squarePath: f.squarePath, recipient: 'Bob', actIndex: 99 }, session: 'claude-test', routeKind: 'claude-native', leaseMs: 100 });
+  assert.equal(claim.status, 'acquired');
+  const retiredText = `[square-inbox:${claim.claimToken}]\nstale\n[/square-inbox:${claim.claimToken}]`;
+  const correlation = { location: f.squarePath, participant: 'Bob', session: 'claude-test', activity: 'act/99', kind: 'wake', routeKind: 'claude-native', claimToken: claim.claimToken, attemptN: claim.attemptN, nativeDelivery: { harness: 'claude', payload: retiredText, endpoint: f.coordinate.endpoint, epoch: 1 } };
+  await f.ledger.prepareNativeWake({ ...correlation, outcome: 'dispatching' });
+  await f.ledger.appendEvidence({ ...correlation, outcome: 'unknown' });
+  const row = (await f.ledger.listEvidence({ activity: 'act/99' }))[0];
+  assert.equal(await f.ledger.retireEvidenceIfUnchanged(row), true);
+  const prior = await evidence(f);
+  for (const operation of ['guard', 'admitted', 'stored']) {
+    assert.deepEqual(await observeClaudeDelivery('claude-test', `${liveText}\n${retiredText}`, operation, f.env), { recognized: true, current: false });
+    assert.deepEqual(await evidence(f), prior);
+    assert.equal(await seen(f), undefined);
+  }
+  // The veto is frame-scoped, not a permanent suppression of the live correlation.
+  await stored(f, liveText);
+  assert.equal(await seen(f), 'seen');
+});
+
 test('pinned end epochs retire all manual memberships but never remove a replacement', supported, async (t) => {
   const f = await fixture(t);
   const newer = { ...f.env, CLAUDE_CODE_SESSION_ID: 'claude-test' };

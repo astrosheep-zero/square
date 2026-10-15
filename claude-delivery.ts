@@ -87,15 +87,18 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
   }, signal);
 }
 
-/** Authority comes only from bound memberships and the existing attempt ledger. */
+/** Retired tokens veto a frame; only live correlations and bound memberships confer authority. */
 export async function observeClaudeDelivery(sessionId: string, text: string, operation: 'guard' | 'admitted' | 'stored', env: NodeJS.ProcessEnv = process.env): Promise<{ recognized: boolean; current: boolean }> {
   const ledger = hostLedgerForEnv(env);
   return ledger.withClaimLock(async () => {
     const tokens = nativeTokens(text);
-    const rows = (await ledger.listEvidence({ kind: 'wake', session: sessionId })).filter((row) => row.nativeDelivery?.harness === 'claude' && row.claimToken && tokens.includes(row.claimToken) && ['dispatching', 'unknown', 'accepted'].includes(row.outcome));
+    const { deliveries: rows, retired } = await ledger.lookupNativeTokens({ harness: 'claude', session: sessionId, tokens });
+    // A stale token vetoes the entire frame, including a mixed current/stale frame,
+    // before admission, artifact reads or presentation can confer any authority.
+    if (retired.length) return { recognized: true, current: false };
     let current = false;
     for (const row of rows) {
-      if (row.nativeDelivery?.harness !== 'claude') continue;
+      if (row.nativeDelivery?.harness !== 'claude' || !['dispatching', 'unknown', 'accepted'].includes(row.outcome)) continue;
       const native = row.nativeDelivery;
       const pending = await currentDelivery(row, ledger).catch(() => undefined);
       if (!pending || !text.includes(native.payload)) continue;

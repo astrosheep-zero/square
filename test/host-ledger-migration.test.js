@@ -255,7 +255,7 @@ test('global CLI verify/migrate require no location or participant and report on
   const root = await rootFor(t);
   const help = cli(root, ['ledger', '--help']);
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Usage: square ledger <verify\|migrate>/);
+  assert.match(help.stdout, /Usage: square ledger <verify\|migrate\|gc>/);
   assert.doesNotMatch(help.stdout.split('\n')[0], /--location/);
   const empty = cli(root, ['ledger', 'verify']);
   assert.equal(empty.status, 0, empty.stderr);

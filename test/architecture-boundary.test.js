@@ -56,6 +56,7 @@ function storageLeaks(sources) {
     ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
     ['square-application.ts', ['createSquare', 'diagnoseSquareFile']],
     ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
+    ['ledger-maintenance.ts', ['createArtifactPort']],
     ['stream.ts', ['observeSquareRevision']],
     ['square-migration.ts', ['openExistingSquareDatabase']],
   ]);
@@ -193,7 +194,7 @@ test('decisions and perception use domain facts, outside host and storage operat
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'ledger-maintenance.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The application owner is the only entry into participant execution.
   const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-application.ts']);
@@ -238,6 +239,7 @@ const integrationEdges = new Map([
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHookAsync']],
   ['mcp.ts -> automatic-session.ts', ['operationEnv']],
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['verifyHostLedger', 'migrateHostLedger']],
+  ['cli/ledger-command.ts -> ledger-maintenance.ts', ['gcHostLedger']],
 ]);
 const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
@@ -253,6 +255,7 @@ const pureTypeBindings = new Map([
 const integrationTypeBindings = new Map([
   ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['HostLedgerReport']],
+  ['cli/ledger-command.ts -> ledger-maintenance.ts', ['LedgerMaintenanceReport']],
 ]);
 const presentationHelpers = new Set(['presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
 

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { withFileLock as acquireFileLock, type FileLockOptions } from './file-lock.js';
 import { nameKey } from './model.js';
 import { formatActivityId } from './square-core.js';
@@ -8,7 +9,7 @@ import { hostLedgerRoot } from './host-ledger-root.js';
 import { observeFileMetadata, observeFileVersion, type VersionObserver } from './file-changes.js';
 import { canonicalPath, canonicalPathSync } from './canonical-path.js';
 import { LEDGER_FILENAME, LEDGER_RETENTION, withLedger, readLedgerRevisions } from './host-ledger-sqlite.js';
-import type { HostLedgerPort, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, ClaimResult, WakeAttemptClaim, WakeAttemptClaimInput, WakeAttemptLookup } from './host-ledger.js';
+import type { HostLedgerPort, PresenceRecord, PresenceKey, PresenceLookup, PresenceResult, PresenceClaimResult, EvidenceRecord, EvidenceClaim, EvidenceRelease, EvidenceLookup, NativeTokenLookup, NativeTokenResult, ClaimResult, WakeAttemptClaim, WakeAttemptClaimInput, WakeAttemptLookup } from './host-ledger.js';
 const LOCK = { retryMs: 10 } as const;
 
 // The claim fence deliberately spans asynchronous artifact/native work, never a ledger transaction.
@@ -26,8 +27,8 @@ function identity(v: { location: string; participant: string; session: string; c
   return JSON.stringify([v.location, nameKey(v.participant), v.session, v.channel, v.activity, v.kind]);
 }
 function durableWake(record: object): boolean {
-  const row = record as { kind?: string; outcome?: string };
-  return row.kind === 'wake' && ['accepted', 'unknown', 'dispatching'].includes(row.outcome ?? '');
+  const row = record as Partial<EvidenceRecord>;
+  return row.kind === 'wake' && (['accepted', 'unknown', 'dispatching'].includes(row.outcome ?? '') || row.nativeDelivery?.harness === 'claude');
 }
 function finishWake(current: EvidenceRecord, outcome: 'accepted' | 'failed' | 'released' | 'unknown', details: Partial<EvidenceRecord> = {}): EvidenceRecord {
   const { expiresAt: _expiresAt, ownerPid: _ownerPid, unknownSource: _unknownSource, ...rest } = current;
@@ -275,6 +276,20 @@ export class FileHostLedgerPort implements HostLedgerPort {
   async listEvidence(i: EvidenceLookup = {}): Promise<readonly EvidenceRecord[]> {
     const location = i.location === undefined ? undefined : await canonicalPath(i.location);
     return withLedger(this.root, false, (tx) => tx.evidence({ ...i, location, participant: i.participant || undefined, session: i.session || undefined, activity: i.activity || undefined, kind: i.kind || undefined }, i.now ?? this.clock()).map(({ record }) => record), []);
+  }
+  async retireEvidenceIfUnchanged(expected: EvidenceRecord): Promise<boolean> {
+    if (expected.outcome === 'dispatching') return false;
+    // Compare the persisted coordinate verbatim; maintenance canonicalizes only its artifact proof.
+    return withLedger(this.root, true, (tx) => {
+      const current = tx.evidence({ location: expected.location, participant: expected.participant, session: expected.session, activity: expected.activity, kind: expected.kind,
+        claimToken: expected.claimToken, includeExpired: true, includeReleased: true }, this.clock(), true)
+        .find(({ record }) => isDeepStrictEqual(record, expected));
+      return current !== undefined && tx.retireEvidence(current);
+    }, false);
+  }
+  lookupNativeTokens(input: NativeTokenLookup): Promise<NativeTokenResult> {
+    if (!input.tokens.length) return Promise.resolve({ deliveries: [], retired: [] });
+    return withLedger(this.root, false, tx => tx.nativeTokens(input), { deliveries: [], retired: [] });
   }
 }
 export function createHostLedgerPort(o: HostLedgerFileAdapterOptions = {}): FileHostLedgerPort { return new FileHostLedgerPort(o); }

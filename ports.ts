@@ -5,6 +5,8 @@ export type {
   EvidenceRelease,
   EvidenceLookup,
   EvidenceRecord,
+  NativeTokenLookup,
+  NativeTokenResult,
   HostLedgerPort,
   PresenceKey,
   PresenceLookup,

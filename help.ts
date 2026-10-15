@@ -90,9 +90,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['For the selected square artifact only; there is no --check, --backup or --force.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write.'],
   },
   {
-    names: ['ledger'], usage: 'ledger <verify|migrate>', usesSquare: false, group: 'maintenance',
-    summary: 'Verify or explicitly convert the machine-local host ledger.',
-    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty.', 'migrate: stop every Square host first, then convert legacy NDJSON without deleting sources or overwriting a destination.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'Migration does not stop or restart hosts. No --force, repair, or automatic conversion.'],
+    names: ['ledger'], usage: 'ledger <verify|migrate|gc>', usesSquare: false, group: 'maintenance',
+    summary: 'Verify, convert, or reclaim the machine-local host ledger.',
+    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty. An older or unsupported database is refused with the migrate command and is never upgraded by verify.', 'migrate: stop every Square host first, then convert legacy NDJSON, or upgrade an older SQLite ledger in place. Sources, records, order and observer revisions are preserved; an existing current ledger is an untouched no-op.', 'gc [--dry-run]: reclaim old wake/presentation evidence only where the square artifact proves the recipient is closed — the activity reached them and catch receipted it or they later rejoined. Dispatching, lifecycle and unprovable rows are retained. Deleted rows free reusable pages, not file size (no VACUUM); retired Claude recognition tokens keep growing in total.', 'Run gc with --dry-run first: it reports eligible, retired, cas-miss and unreadable-artifact counts without writing. Eligible rows are candidates only: a changed record or an unusable Claude correlation is retained.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'These commands never stop, restart, install into or schedule hosts; conversion and schema upgrade are never automatic. No --force or repair.'],
   },
 ];
 

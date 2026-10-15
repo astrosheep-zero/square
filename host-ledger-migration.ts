@@ -7,14 +7,14 @@ import { withFileLock } from './file-lock.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import {
   LEDGER_FILENAME, initializeLedger, insertLedgerRecord, ledgerRecordColumns,
-  setLedgerRevisions, validateLedger, verifyLedger,
+  setLedgerRevisions, upgradeLedger, validateLedger, verifyLedger,
 } from './host-ledger-sqlite.js';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 
 type Kind = 'presence' | 'evidence';
 export interface LedgerSourceReport { records: number; ignored: number; rejected: number; sha256: string | null }
 export interface HostLedgerReport {
-  status: 'empty' | 'legacy' | 'sqlite' | 'migrated';
+  status: 'empty' | 'legacy' | 'sqlite' | 'migrated' | 'upgraded';
   presence: number;
   evidence: number;
   presenceRevision?: number;
@@ -37,6 +37,10 @@ async function exists(file: string): Promise<boolean> {
   try { await fs.lstat(file); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
+/** Generic and payload-free: the only supported remedy is offline conversion under stopped hosts. */
+function verificationFailure(): Error {
+  return new Error('Host ledger database verification failed; destination left untouched.\nStop all Square hosts, then run: square ledger migrate');
+}
 async function verifyDatabase(file: string, signal?: AbortSignal): Promise<HostLedgerReport> {
   abort(signal);
   let db: DatabaseSync | undefined;
@@ -46,7 +50,7 @@ async function verifyDatabase(file: string, signal?: AbortSignal): Promise<HostL
     return { status: 'sqlite', ...counts };
   } catch {
     abort(signal);
-    throw new Error('Host ledger database verification failed; destination left untouched.');
+    throw verificationFailure();
   } finally { db?.close(); }
 }
 interface LegacySource { rows: object[]; report: LedgerSourceReport; firstRejectedLine?: number }
@@ -98,59 +102,94 @@ export async function verifyHostLedger(options: HostLedgerMaintenanceOptions = {
   if (await exists(destination)) return verifyDatabase(destination, options.signal);
   return sourceReport(await readSources(root, options.signal));
 }
+/** The fixed offline fence: ownership claim, then both legacy source locks, in that order. */
+function withOfflineLocks<T>(root: string, signal: AbortSignal | undefined, body: () => Promise<T>): Promise<T> {
+  const lockOptions = { retryMs: 10, signal };
+  return withFileLock(path.join(root, 'presence-claim.lock'), lockOptions, () =>
+    withFileLock(path.join(root, 'presence.ndjsonl.lock'), lockOptions, () =>
+      withFileLock(path.join(root, 'evidence.ndjsonl.lock'), lockOptions, body)))
+    .catch((error) => { abort(signal); throw error; });
+}
+
+/**
+ * Under the offline fence: a current ledger verifies read-only, an older SQLite format is upgraded in
+ * place through the explicit transaction owner, and anything else is refused without repair.
+ */
+async function currentFormat(root: string, signal?: AbortSignal): Promise<HostLedgerReport> {
+  const destination = path.join(root, LEDGER_FILENAME);
+  try { return await verifyDatabase(destination, signal); }
+  catch { abort(signal); }
+  if (!await exists(destination)) throw verificationFailure();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(destination);
+    const upgraded = await inSqliteTransaction(db, true, () => {}, () => upgradeLedger(db!), signal);
+    db.close(); db = undefined;
+    return { ...await verifyDatabase(destination, signal), status: upgraded ? 'upgraded' : 'sqlite' };
+  } catch {
+    abort(signal);
+    throw verificationFailure();
+  } finally { db?.close(); }
+}
+
 /** Offline only: locks fence compatible writers, but do not prove hosts have stopped. */
 export async function migrateHostLedger(options: HostLedgerMaintenanceOptions = {}): Promise<HostLedgerReport> {
   const root = rootFor(options), signal = options.signal;
   abort(signal);
   const destination = path.join(root, LEDGER_FILENAME);
-  if (await exists(destination)) return verifyDatabase(destination, signal);
+  if (await exists(destination)) {
+    try { return await verifyDatabase(destination, signal); }
+    catch { abort(signal); }
+    // An older SQLite format is upgraded offline; a current ledger stays a read-only no-op.
+    return withOfflineLocks(root, signal, () => currentFormat(root, signal));
+  }
   if (!await exists(path.join(root, 'presence.ndjsonl')) && !await exists(path.join(root, 'evidence.ndjsonl'))) {
     return { status: 'empty', presence: 0, evidence: 0 };
   }
-  const lockOptions = { retryMs: 10, signal };
-  return withFileLock(path.join(root, 'presence-claim.lock'), lockOptions, () =>
-    withFileLock(path.join(root, 'presence.ndjsonl.lock'), lockOptions, () =>
-      withFileLock(path.join(root, 'evidence.ndjsonl.lock'), lockOptions, async (): Promise<HostLedgerReport> => {
-        if (await exists(destination)) return verifyDatabase(destination, signal);
-        const sources = await readSources(root, signal);
-        const report = sourceReport(sources);
-        if (!report.ready) {
-          const rejected = (['presence', 'evidence'] as const).filter((kind) => sources[kind].report.rejected > 0)
-            .map((kind) => `${kind}: ${sources[kind].report.rejected} rejected (first line ${sources[kind].firstRejectedLine})`);
-          throw new Error(`Unsafe legacy records; conversion refused. ${rejected.join('; ')}.`);
-        }
-        const temporary = await fs.mkdtemp(path.join(root, '.host-ledger-migrate-'));
-        const file = path.join(temporary, LEDGER_FILENAME);
-        let db: DatabaseSync | undefined;
-        try {
-          abort(signal);
-          // The temporary connection remains under the ledger root, including journals.
-          await fs.writeFile(file, '', { flag: 'wx', mode: 0o600 });
-          db = new DatabaseSync(file);
-          initializeLedger(db);
-          await inSqliteTransaction(db, true, () => {}, () => {
-            for (const kind of ['presence', 'evidence'] as const) {
-              for (const row of sources[kind].rows) { abort(signal); insertLedgerRecord(db!, kind, row); }
-            }
-            setLedgerRevisions(db!, { presence: report.presence ? 1 : 0, evidence: report.evidence ? 1 : 0 });
-          }, signal);
-          db.close(); db = undefined;
-          const verified = await verifyDatabase(file, signal);
-          if (verified.presence !== report.presence || verified.evidence !== report.evidence) {
-            throw new Error('Host ledger import counts do not match; conversion refused.');
-          }
-          abort(signal);
-          try { await fs.link(file, destination); }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'EEXIST') return await verifyDatabase(destination, signal);
-            throw error;
-          }
-          const directory = await fs.open(root, 'r');
-          try { await directory.sync(); } finally { await directory.close(); }
-          return { ...verified, status: 'migrated', sources: report.sources };
-        } finally {
-          db?.close();
-          await fs.rm(temporary, { recursive: true, force: true });
-        }
-      }))).catch((error) => { abort(signal); throw error; });
+  return withOfflineLocks(root, signal, () => convertLegacy(root, destination, signal));
+}
+
+/** The offline NDJSON import: build, verify and publish a new database without touching sources. */
+async function convertLegacy(root: string, destination: string, signal?: AbortSignal): Promise<HostLedgerReport> {
+  if (await exists(destination)) return currentFormat(root, signal);
+  const sources = await readSources(root, signal);
+  const report = sourceReport(sources);
+  if (!report.ready) {
+    const rejected = (['presence', 'evidence'] as const).filter((kind) => sources[kind].report.rejected > 0)
+      .map((kind) => `${kind}: ${sources[kind].report.rejected} rejected (first line ${sources[kind].firstRejectedLine})`);
+    throw new Error(`Unsafe legacy records; conversion refused. ${rejected.join('; ')}.`);
+  }
+  const temporary = await fs.mkdtemp(path.join(root, '.host-ledger-migrate-'));
+  const file = path.join(temporary, LEDGER_FILENAME);
+  let db: DatabaseSync | undefined;
+  try {
+    abort(signal);
+    // The temporary connection remains under the ledger root, including journals.
+    await fs.writeFile(file, '', { flag: 'wx', mode: 0o600 });
+    db = new DatabaseSync(file);
+    initializeLedger(db);
+    await inSqliteTransaction(db, true, () => {}, () => {
+      for (const kind of ['presence', 'evidence'] as const) {
+        for (const row of sources[kind].rows) { abort(signal); insertLedgerRecord(db!, kind, row); }
+      }
+      setLedgerRevisions(db!, { presence: report.presence ? 1 : 0, evidence: report.evidence ? 1 : 0 });
+    }, signal);
+    db.close(); db = undefined;
+    const verified = await verifyDatabase(file, signal);
+    if (verified.presence !== report.presence || verified.evidence !== report.evidence) {
+      throw new Error('Host ledger import counts do not match; conversion refused.');
+    }
+    abort(signal);
+    try { await fs.link(file, destination); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return await verifyDatabase(destination, signal);
+      throw error;
+    }
+    const directory = await fs.open(root, 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+    return { ...verified, status: 'migrated', sources: report.sources };
+  } finally {
+    db?.close();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 }
