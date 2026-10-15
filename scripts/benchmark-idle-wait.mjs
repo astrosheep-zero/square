@@ -386,6 +386,14 @@ function percentile(values, fraction) {
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
 }
 
+// p50/p95/max over completed samples only. A step that never ran (missing participant, thrown
+// call) contributes no sample; null means "not measured", never a fabricated zero.
+function latencySummary(values) {
+  const samples = values.filter((value) => typeof value === 'number' && Number.isFinite(value));
+  if (samples.length === 0) return null;
+  return { p50: percentile(samples, 0.5), p95: percentile(samples, 0.95), max: Math.max(...samples) };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Runtime entrypoints (loaded lazily so --self-test needs no build)
 // ---------------------------------------------------------------------------------------------
@@ -492,22 +500,44 @@ async function runWorker(runtime) {
       let first;
       let second;
       let failure;
+      // Per-step catch timings, alongside the unchanged whole-phase wallMs. Each one is recorded
+      // only when that step actually completed.
+      let openMs;
+      let recognizeMs;
+      let firstCatchMs;
+      let secondCatchMs;
+      let closeMs;
+      const openStarted = performance.now();
       const square = await runtime.Square.at({ path: file, env });
+      openMs = performance.now() - openStarted;
       try {
+        const recognizeStarted = performance.now();
         const participant = await square.recognize(env);
+        recognizeMs = performance.now() - recognizeStarted;
         if (participant === null) failure = 'recognize returned no participant';
         else {
+          const firstStarted = performance.now();
           first = await participant.catch({ limit: 10 });
+          firstCatchMs = performance.now() - firstStarted;
+          const secondStarted = performance.now();
           second = await participant.catch({ limit: 10 });
+          secondCatchMs = performance.now() - secondStarted;
         }
       } catch (error) {
         failure = error.message;
       } finally {
+        const closeStarted = performance.now();
         await square.close();
+        closeMs = performance.now() - closeStarted;
       }
       process.send({
         phase: 'catch',
         failure,
+        openMs,
+        recognizeMs,
+        firstCatchMs,
+        secondCatchMs,
+        closeMs,
         caught: first?.activities.length ?? 0,
         reconsume: second?.activities.length ?? 0,
         remaining: first?.remaining ?? -1,
@@ -807,6 +837,11 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           reconsumeTotal: sum(result.catches, (item) => item.reconsume),
           cpuMsTotal: sum(result.catches, (item) => item.cpuMs),
           wallMs: { p50: percentile(result.catches.map((item) => item.wallMs), 0.5), p95: percentile(result.catches.map((item) => item.wallMs), 0.95), max: Math.max(...result.catches.map((item) => item.wallMs)) },
+          openMs: latencySummary(result.catches.map((item) => item.openMs)),
+          recognizeMs: latencySummary(result.catches.map((item) => item.recognizeMs)),
+          firstCatchMs: latencySummary(result.catches.map((item) => item.firstCatchMs)),
+          secondCatchMs: latencySummary(result.catches.map((item) => item.secondCatchMs)),
+          closeMs: latencySummary(result.catches.map((item) => item.closeMs)),
           headerStatementsTotal: sum(catchDelta, (c) => c.sql.statements.header),
           ledgerBytesTotal: sum(catchDelta, (c) => c.ledger.bytes),
           commitAttempts: sum(catchDelta, (c) => c.commits.attempts),
@@ -850,6 +885,13 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
         caught: actual.reduce((sum, report) => sum + (report.caught ?? 0), 0),
         reconsume: actual.reduce((sum, report) => sum + (report.reconsume ?? 0), 0),
         cpuMs: actual.reduce((sum, report) => sum + (report.cpuMs ?? 0), 0),
+        timingsMs: {
+          open: latencySummary(actual.map((report) => report.openMs)),
+          recognize: latencySummary(actual.map((report) => report.recognizeMs)),
+          firstCatch: latencySummary(actual.map((report) => report.firstCatchMs)),
+          secondCatch: latencySummary(actual.map((report) => report.secondCatchMs)),
+          close: latencySummary(actual.map((report) => report.closeMs)),
+        },
         cumulativeHydratedRows: actual.reduce((sum, report) => sum + (report.counters?.sql.hydratedRows ?? 0), 0),
         cumulativeHydratedBytes: actual.reduce((sum, report) => sum + (report.counters?.sql.hydratedBytes ?? 0), 0),
         cumulativeBusy: actual.reduce((sum, report) => sum + (report.counters?.busy ?? 0), 0),

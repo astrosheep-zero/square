@@ -8,13 +8,13 @@ function isBusy(error: unknown): boolean {
   return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
 /** Yield rather than blocking the process while another connection owns SQLite. */
-export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSignal): Promise<T> {
+export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSignal, retryMs = 25): Promise<T> {
   for (;;) {
     abort(signal);
     try { return operation(); }
     catch (error) {
       if (!isBusy(error)) throw error;
-      try { await sleep(25, undefined, { signal }); }
+      try { await sleep(retryMs, undefined, { signal }); }
       catch (error) { abort(signal); throw error; }
     }
   }
@@ -35,7 +35,9 @@ export async function inSqliteTransaction<T>(db: DatabaseSync, write: boolean, v
       void Promise.resolve(result).catch(() => undefined);
       throw new TypeError('SQLite transaction callbacks must be synchronous.');
     }
-    await retrySqliteBusy(() => db.exec('COMMIT'), signal);
+    // A busy commit still owns the writer lock. Retry promptly once readers leave;
+    // acquisition contenders keep the longer backoff above.
+    await retrySqliteBusy(() => db.exec('COMMIT'), signal, 1);
     begun = false;
     return result;
   } catch (error) {
