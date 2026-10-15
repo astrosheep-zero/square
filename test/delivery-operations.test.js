@@ -586,6 +586,7 @@ test('producer commits artifact before a repository presence permission failure'
   await writeSquareFile(location, state);
   let committedBeforeEnsure = false;
   const ledger = {
+    listPresence: async () => [],
     ensurePresence: async () => {
       const snapshot = (await readSquareSnapshot(location)).state;
       committedBeforeEnsure = snapshot.acts.length > 0;

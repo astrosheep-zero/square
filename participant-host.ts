@@ -1,6 +1,7 @@
-import type { HostLedgerPort, PresenceChannel, SquareArtifactPort } from './ports.js';
-import { presenceEpoch, readParticipantOwner, sessionOwnsParticipant } from './registry.js';
+import type { HostLedgerPort, PresenceChannel, PresenceRecord, SquareArtifactPort } from './ports.js';
+import { currentOwner, presenceEpoch, sessionOwnsParticipant } from './registry.js';
 import { firstHarnessSession } from './participant-identity.js';
+import { canonicalPath } from './canonical-path.js';
 import { defaultWakeRouteCapabilities, publishWakeRoute, retireWakeRouteFromArtifact, resolvePrimaryWakeRoute, ROUTE_FRESH_MS, type WakeBoundaryProvider, type WakeRoute } from './routes.js';
 
 export interface HostContext {
@@ -24,18 +25,14 @@ export async function identityRouteDraft(context: HostContext, participant: stri
   return resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
 }
 
-async function currentOwnerEpoch(context: HostContext, participant: string): Promise<number | undefined> {
-  const hostLedger = context.hostLedger;
-  if (hostLedger === undefined || context.location === undefined || context.location === 'memory') return undefined;
-  const owner = await readParticipantOwner(context.location, participant, hostLedger);
-  return owner === undefined ? undefined : presenceEpoch(owner);
-}
-
-export async function publishIdentityRoute(context: HostContext, participant: string, epoch?: number): Promise<void> {
-  const route = await identityRouteDraft(context, participant);
-  if (route === undefined) return;
-  const ownerEpoch = epoch ?? await currentOwnerEpoch(context, participant);
-  await publishWakeRoute(context.artifact, { ...route, ...(ownerEpoch === undefined ? {} : { epoch: ownerEpoch }) }, { at: context.clock(), requireCurrentSession: true }).catch(() => undefined);
+/** One postcommit host observation; presence and route publication fail independently. */
+export async function publishCommittedIdentity(context: HostContext, participant: string, epoch?: number): Promise<void> {
+  const observed = await ensureLocalPresence(context, participant, epoch).catch(() => undefined);
+  if (observed === undefined) return;
+  try {
+    const route = await identityRouteDraft(context, participant);
+    if (route !== undefined) await publishWakeRoute(context.artifact, { ...route, ...observed }, { at: context.clock(), requireCurrentSession: true });
+  } catch { /* Optional route enrichment cannot undo the committed activity. */ }
 }
 
 export async function retireIdentityRoute(context: HostContext, participant: string, expectedEpoch?: number): Promise<void> {
@@ -57,31 +54,37 @@ export async function assertLiveOwner(context: HostContext, participant: string,
   return sessionOwnsParticipant(context.location, participant, identity.session, hostLedger, expectedEpoch);
 }
 
-/** Presence is best effort and runs only after the artifact mutation commits. */
-export async function ensureLocalPresence(context: HostContext, participant: string, epoch?: number): Promise<void> {
+/** Best-effort postcommit presence; a returned epoch also witnesses a readable host observation. */
+export async function ensureLocalPresence(context: HostContext, participant: string, epoch?: number): Promise<{ readonly epoch?: number } | undefined> {
   if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return;
   const identity = processIdentity(context.env ?? process.env);
-  const ownerEpoch = epoch ?? await currentOwnerEpoch(context, participant);
-  const now = context.clock();
-  // Semantic publish: an unexpired presence row already stands when it carries the same owner epoch.
+  const now = Date.now();
+  let existing: readonly PresenceRecord[];
   try {
-    const existing = await context.hostLedger.listPresence({ location: context.location, participant, session: identity.session, now });
-    if (existing.some((row) => row.channel === identity.channel
-      && now - (row.updatedAt ?? 0) < ROUTE_FRESH_MS
-      && (ownerEpoch === undefined || presenceEpoch(row) === ownerEpoch))) return;
-  } catch { /* fall through to the best-effort ensure below */ }
-  const result = await context.hostLedger.ensurePresence({
-    location: context.location,
-    participant,
-    session: identity.session,
-    channel: identity.channel,
-    // Presence rows are host-ledger wall-time evidence; the square clock belongs to artifact activities.
-    updatedAt: Date.now(),
-    ...(ownerEpoch === undefined || ownerEpoch <= 0 ? {} : { epoch: ownerEpoch }),
-  }).catch((error) => ({
-    status: 'degraded' as const,
-    record: { location: context.location!, participant, session: identity.session, channel: identity.channel },
-    error,
-  }));
-  if (result.status === 'degraded') process.stderr.write(`! host presence degraded: ${result.error instanceof Error ? result.error.message : String(result.error)}\n`);
+    existing = await context.hostLedger.listPresence({ location: await canonicalPath(context.location), participant, now });
+  } catch (error) {
+    process.stderr.write(`! host presence degraded: ${error instanceof Error ? error.message : String(error)}\n`);
+    return;
+  }
+  const owner = currentOwner(existing);
+  const ownerEpoch = epoch ?? (owner === undefined ? undefined : presenceEpoch(owner));
+  const observed = ownerEpoch === undefined ? {} : { epoch: ownerEpoch };
+  // A fresh exact local binding at the observed (or explicit claim) generation already stands.
+  if (existing.some((row) => row.session === identity.session && row.channel === identity.channel
+    && now - (row.updatedAt ?? 0) < ROUTE_FRESH_MS
+    && (ownerEpoch === undefined || presenceEpoch(row) === ownerEpoch))) return observed;
+  try {
+    const result = await context.hostLedger.ensurePresence({
+      location: context.location,
+      participant,
+      session: identity.session,
+      channel: identity.channel,
+      updatedAt: Date.now(),
+      ...(ownerEpoch === undefined || ownerEpoch <= 0 ? {} : { epoch: ownerEpoch }),
+    });
+    if (result.status === 'degraded') throw result.error;
+  } catch (error) {
+    process.stderr.write(`! host presence degraded: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+  return observed;
 }

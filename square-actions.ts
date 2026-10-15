@@ -8,18 +8,13 @@ import { decideCatch, type CatchSelection } from './catch-decisions.js';
 import { inSquareCount } from './runtime.js';
 import { claimSessionParticipant, claimSessionTakeover, presenceEpoch, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
 import type { HostLedgerPort } from './host-ledger.js';
-import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
+import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishCommittedIdentity, retireIdentityRoute, type HostContext } from './participant-host.js';
 import { applyWakeRoute, dropEndedSessionWakeRoutes, dropParticipantWakeRoutes, dropSessionWakeRoutes, sessionCanEndParticipant } from './routes.js';
 import { parseRequiredActivityId, toPublicActivity } from './views.js';
 
 export interface OperationContext extends HostContext { readonly wakeTransport?: WakeTransportPort }
 export type { OwnershipFenceOptions };
 
-/** Host enrichment is best effort after an authoritative artifact commit. */
-async function publishCommittedPresence(square: OperationContext, name: string, epoch?: number): Promise<void> {
-  await ensureLocalPresence(square, name, epoch).catch(() => undefined);
-  await publishIdentityRoute(square, name, epoch).catch(() => undefined);
-}
 function throwIfAborted(control?: OperationControl): void { if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted'); }
 export function catchUp(square: OperationContext, name: string, options?: CatchOptions, control?: OperationControl): Promise<CatchSelection>;
 export function catchUp(square: OperationContext, name: string, options: CatchOptions, control: OperationControl | undefined, leaseId: string): Promise<CatchSelection | null>;
@@ -32,7 +27,7 @@ export async function catchUp(square: OperationContext, name: string, options: C
     if (leaseId !== undefined && facts.lease(name)?.leaseId !== leaseId) return null;
     return decideCatch(facts, name, options, square.clock());
   }, control?.signal)).value;
-  if (selected !== null) await publishCommittedPresence(square, selected.participant);
+  if (selected !== null) await publishCommittedIdentity(square, selected.participant);
   return selected;
 }
 
@@ -80,7 +75,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
     if (hostLedger !== undefined) await releaseSessionParticipantClaim(hostLedger, ownershipClaim).catch(() => undefined);
     throw error;
   }
-  await publishCommittedPresence(square, committed.name, epoch);
+  await publishCommittedIdentity(square, committed.name, epoch);
   return {
     name: committed.name, activity: committed.stored === null ? null : toPublicActivity(committed.stored),
     participantCount: committed.participantCount, reconnected: false,
@@ -118,14 +113,14 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
     }, async (claim) => {
       throwIfAborted(control);
       const committed = await commitLifecycle();
-      await publishCommittedPresence(square, committed.name, claim.epoch);
+      await publishCommittedIdentity(square, committed.name, claim.epoch);
       return committed;
     }, control?.signal);
     if (outcome.status === 'busy') throw new SquareError('already_joined', `${participantIdentity(name)} already stands here — another session holds the name`);
     return { name: outcome.result.name, activities: outcome.result.stored.map(toPublicActivity), participantCount: outcome.result.participantCount, epoch: outcome.epoch };
   }
   const committed = await commitLifecycle();
-  await publishCommittedPresence(square, committed.name);
+  await publishCommittedIdentity(square, committed.name);
   return { name: committed.name, activities: committed.stored.map(toPublicActivity), participantCount: committed.participantCount };
 }
 
@@ -143,9 +138,9 @@ export async function implicitJoin(square: OperationContext, name: string, contr
     }
     return { name: decision.joinedName, state: decision.state, stored: decision.joinAct === undefined ? null : facts.land(decision.joinAct) };
   }, control?.signal)).value;
-  await ensureLocalPresence(square, committed.name);
+  if (committed.stored !== null) await publishCommittedIdentity(square, committed.name);
+  else await ensureLocalPresence(square, committed.name);
   if (committed.state === 'done') await retireIdentityRoute(square, committed.name);
-  else if (committed.stored !== null) await publishIdentityRoute(square, committed.name);
   return { name: committed.name, state: committed.state, activity: committed.stored === null ? null : toPublicActivity(committed.stored) };
 }
 
@@ -192,7 +187,7 @@ export async function express(square: OperationContext, name: string, body: stri
       ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }),
     };
   }, control?.signal)).value;
-  await publishCommittedPresence(square, name);
+  await publishCommittedIdentity(square, name);
   const delivery = square.wakeTransport !== undefined && square.hostLedger !== undefined && square.location !== undefined && square.location !== 'memory'
     ? await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, activity: committed.stored.index, now })
       .catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }))

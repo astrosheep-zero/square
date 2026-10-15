@@ -15,14 +15,10 @@ export interface WakeRouteCapabilities {
   readonly canUse: (kind: WakeRouteKind, address: Readonly<Record<string, string>>) => boolean;
 }
 export async function defaultWakeRouteCapabilities(hostLedger?: import('./host-ledger.js').HostLedgerPort): Promise<WakeRouteCapabilities> {
-  let userCapable = hostLedger !== undefined;
-  if (hostLedger !== undefined) {
-    try { await hostLedger.listPresence({ now: Date.now() }); } catch { userCapable = false; }
-  }
   const available = new Set<WakeRouteKind>();
   try { const { CodexQueueAdapter } = await import('./codex-queue.js'); available.add(new CodexQueueAdapter().kind); } catch { /* optional */ }
   try { const { PaseoAdapter } = await import('./paseo-delivery.js'); available.add(new PaseoAdapter().kind); } catch { /* optional */ }
-  return { canUse: (kind, address) => userCapable && available.has(kind) && Object.values(address).every((value) => value.trim() !== '') };
+  return { canUse: (kind, address) => hostLedger !== undefined && available.has(kind) && Object.values(address).every((value) => value.trim() !== '') };
 }
 export function resolvePrimaryWakeRoute(boundary: WakeBoundary, env: NodeJS.ProcessEnv, capabilities: WakeRouteCapabilities): Omit<WakeRoute, 'updatedAt'> | undefined {
   const paseoAgentId = env.PASEO_AGENT_ID?.trim();

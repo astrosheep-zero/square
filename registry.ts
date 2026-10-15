@@ -11,7 +11,7 @@ export function presenceEpoch(record: PresenceRecord | undefined): number {
   return typeof record?.epoch === 'number' && Number.isSafeInteger(record.epoch) && record.epoch > 0 ? record.epoch : 0;
 }
 /** The current owner: the highest epoch wins, then the most recently updated row. */
-function currentOwner(rows: readonly PresenceRecord[]): PresenceRecord | undefined {
+export function currentOwner(rows: readonly PresenceRecord[]): PresenceRecord | undefined {
   return [...rows].sort((left, right) => presenceEpoch(right) - presenceEpoch(left) || (right.updatedAt ?? 0) - (left.updatedAt ?? 0))[0];
 }
 export async function localParticipantName(squarePath: string, hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> { const canonical = await canonicalPath(squarePath); const names = new Set((await Promise.all(localSessionIdentities(env).map(async (identity) => (await hostLedger.listPresence({ location: canonical, session: identity.sessionId })).map((row) => row.participant)))).flat()); return names.size === 1 ? [...names][0] : undefined; }
