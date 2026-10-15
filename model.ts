@@ -147,27 +147,6 @@ export interface SquareState {
   runtime: SquareRuntimeState;
 }
 
-export interface ActivitiesOptions {
-  lastN?: number | null;
-  participants?: string[];
-  /** Exclusive lower bound on act.at (ms). Alias of --since. */
-  after?: number;
-  /** Exclusive lower bound on stable act index (--after act/<index>). */
-  afterIndex?: number;
-  /** Exclusive upper bound on stable act index (--before act/<index>). */
-  beforeIndex?: number;
-  /** Center act indexes for context windows (--at). */
-  atIndexes?: number[];
-  beforeContext?: number;
-  afterContext?: number;
-  mention?: string;
-  grep?: string;
-  fixed?: string;
-  order?: 'asc' | 'desc';
-  format?: string[];
-  json?: boolean;
-}
-
 export interface WatchOptions {
   id?: ActivityId;
   participants?: string[];

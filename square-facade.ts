@@ -179,16 +179,6 @@ export interface EntryPresentation {
   readonly sayNumbers: Readonly<Record<number, number>>; readonly participantCount: number; readonly held: boolean;
 }
 export interface HistoryContinuation { readonly direction: 'before' | 'after'; readonly cursor: ActivityId; readonly limit: number; }
-export interface HistoryBounds { readonly limit: number | null; readonly maxLimit: number; readonly contextWindow: boolean; }
-export interface HistoryPresentation {
-  readonly activities: readonly ArchiveRecord[]; readonly sayNumbers: Readonly<Record<number, number>>;
-  readonly presenceAnchors: Readonly<Record<number, readonly string[]>>; readonly participantCount: number; readonly held: boolean;
-  readonly totalMatches: number; readonly publicBefore: boolean; readonly publicAfter: boolean;
-  /** Ordinary terminal history visibility and stable continuation are owner policy. */
-  readonly visibleActivities: readonly ArchiveRecord[];
-  readonly continuation?: HistoryContinuation;
-  readonly bounds: HistoryBounds;
-}
 export interface ListPresentation { readonly context: readonly string[]; readonly participants: readonly string[]; readonly activities: number; }
 export interface StatusObservation {
   readonly hardCap: number | null; readonly throttlePerMinute: number | undefined;
@@ -241,7 +231,15 @@ export interface CatchProjection extends SquareContextProjection, ExpressionObse
   readonly replaced?: boolean;
   readonly enrichmentUnavailable?: true;
 }
-export interface HistoryProjection extends SquareContextProjection, HistoryPresentation {}
+export interface HistoryProjection extends SquareContextProjection {
+  readonly activities: readonly ArchiveRecord[];
+  readonly sayNumbers: Readonly<Record<number, number>>;
+  readonly presenceAnchors: Readonly<Record<number, readonly string[]>>;
+  readonly totalMatches: number;
+  /** Ordinary terminal history visibility and stable continuation are owner policy. */
+  readonly visibleActivities: readonly ArchiveRecord[];
+  readonly continuation?: HistoryContinuation;
+}
 export interface ListenerProjection extends SquareContextProjection { readonly participant: string; readonly target: string; readonly requestedTarget: string; }
 export interface EventPresentation { readonly activity: ArchiveRecord; readonly participantCount: number; readonly held: boolean; }
 export interface LifecycleProjection extends SquareContextProjection, EventPresentation { readonly delivery?: DeliveryResult; }

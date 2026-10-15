@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError, isSquareError, nameKey, validateName, type WatchOptions } from './model.js';
 import { validateDoneBody } from './decisions.js';
-import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount } from './runtime.js';
+import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
 import { assertLiveOwner } from './participant-host.js';
@@ -12,9 +12,9 @@ import { buildMemorySquare, buildSquare, createSquare, openSquare } from './squa
 import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
 import {
-  recoveryObservation, applicationHistory, currentParticipant, entryPresentation, eventPresentation,
-  history, participantHistory, participants, resolveParticipant, snapshot, statusPresentation,
-  participantsPresentation, catchPresence, toPublicActivity,
+  recoveryObservation, currentParticipant, entryPresentation, eventPresentation,
+  history, participants, resolveParticipant, snapshot, statusPresentation,
+  participantsPresentation, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
 } from './views.js';
 import { hasAutomaticDeliveryIdentity, hostLedgerForEnv, localParticipantName, localSessionIdentities, presenceEpoch, readParticipantOwner } from './registry.js';
 import { projectSessionBindings } from './square-projections.js';
@@ -322,7 +322,9 @@ class ParticipantHandle implements Participant {
   async catch(options?: CatchApplicationOptions, control?: OperationControl): Promise<CatchResult> {
     return caughtResult(await catchOwned(this.square, this.name, options, control));
   }
-  history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return participantHistory(this.square, this.name, query, control); }
+  history(query: HistoryQuery = {}, control?: OperationControl): Promise<Activity[]> {
+    return history(this.square, query.limit === undefined ? { ...query, limit: HISTORY_DEFAULT_LIMIT } : query, control);
+  }
   hold(reason?: string, control?: OperationControl): Promise<ExpressResult> { return hold(this.square, this.name, reason, control); }
   resume(control?: OperationControl): Promise<ExpressResult> { return resume(this.square, this.name, control); }
   done(body?: string, control?: OperationControl): Promise<ExpressResult> { return done(this.square, this.name, body, {}, control); }
@@ -519,13 +521,40 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         };
       }, control);
     },
-    history(query, control) {
+    history(query = {}, control) {
       return scoped(async (square) => {
-        const { data, projection } = await applicationHistory(square, query, control);
-        return {
-          data,
-          projection: { ...observedContext(square, projection.participantCount, projection.held), ...projection },
-        };
+        if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT)) {
+          throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
+        }
+        if (query.grep !== undefined && query.fixed !== undefined) throw new SquareError('invalid_args', 'History cannot combine regular-expression and literal search');
+        if (query.grep === '' || query.fixed === '') throw new SquareError('invalid_args', 'History search requires non-empty text');
+        if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
+        for (const count of [query.contextBefore, query.contextAfter]) {
+          if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');
+        }
+        const limit = query.limit ?? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT);
+        const kinds = query.at?.length || query.contextBefore !== undefined || query.contextAfter !== undefined || query.since !== undefined ? undefined : NON_READ;
+        return (await square.artifact.read((facts) => {
+          const selected = selectHistory(facts, query, limit, kinds);
+          if (limit === null && selected.totalMatches > HISTORY_MAX_LIMIT) {
+            throw failure(new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`), {
+              operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: selected.totalMatches },
+            });
+          }
+          const indexes = selected.activities.map((activity) => activity.index);
+          const presenceAnchors: Record<number, string[]> = {};
+          for (const participant of facts.roster()) {
+            const anchor = presenceAnchor(facts, participant.name);
+            if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
+          }
+          return {
+            data: { activities: publicActivities(selected.activities) },
+            projection: {
+              ...observedContext(square, inSquareCount(facts), facts.hold().active), ...selected,
+              sayNumbers: facts.sayOrdinals(indexes), presenceAnchors,
+            },
+          };
+        }, control?.signal)).value;
       }, control);
     },
     listen: (target, control) => listener('listen', target, control),

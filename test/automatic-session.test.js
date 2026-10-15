@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { createSquareState, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 
 // Explicit fixture inspection only; automatic-session production paths never export authority.
@@ -67,6 +68,38 @@ test('automatic sessions target PUBLIC.square only and join idempotently across 
   assert.equal(squareState.acts.filter((act) => act.kind === 'join').length, 1);
   assert.equal(squareState.acts.some((act) => JSON.stringify(act).includes('thread-1')), false);
   assert.equal(automaticParticipant('codex', 'thread-1', item.env), `codex-${crypto.createHash('sha256').update('thread-1').digest('hex').slice(0, 12)}`);
+});
+test('automatic admission checks standing without hydrating historical activity', { concurrency: false }, async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rmSync(item.root, { recursive: true, force: true }));
+  const state = await loadSquare(item.publicPath);
+  state.acts = [
+    { kind: 'join', actor: 'unbound', at: 0, index: 0 },
+    { kind: 'say', actor: 'unbound', at: 1, index: 1, body: 'archive only', mentions: [] },
+  ];
+  state.runtime.nextActIndex = 2;
+  await writeSquareFile(item.publicPath, state);
+  // A poisoned historical payload makes accidental entry/history hydration fail,
+  // while typed participant/header reads remain valid. No protocol is mocked.
+  const database = new DatabaseSync(item.publicPath);
+  try { database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":42}'); }
+  finally { database.close(); }
+  await withEnv(item.env, async (env) => {
+    await assert.rejects(automaticSessionStart('pi', 'new-session', item.cwd, { ...env, SQUARE_PARTICIPANT_NAME: 'unbound' }),
+      (error) => error.code === 'already_joined');
+    assert.deepEqual(await hostLedgerForEnv(env).listPresence({ participant: 'unbound' }), []);
+    const fresh = { ...env, SQUARE_PARTICIPANT_NAME: 'fresh' };
+    assert.equal(await automaticSessionStart('pi', 'new-session', item.cwd, fresh), undefined);
+    assert.equal(await automaticSessionStart('pi', 'new-session', item.cwd, fresh), undefined);
+    const owner = await readParticipantOwner(item.publicPath, 'fresh', hostLedgerForEnv(env));
+    assert.equal(owner.session, 'new-session');
+    assert.equal(owner.epoch, 1);
+  });
+  const square = await Square.at({ path: item.publicPath, env: item.env });
+  try {
+    await assert.rejects(square.history(), (error) => error.code === 'invalid_args' && /Invalid square artifact: row is malformed/.test(error.message));
+  }
+  finally { await square.close(); }
 });
 test('automatic session end writes ordinary done for its bound owner', { concurrency: false }, async () => {
   const item = await fixture();

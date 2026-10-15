@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { catchPresence, history, historyPresentation, listPresentation, participantsPresentation, statusPresentation } from '../dist/views.js';
+import { catchPresence, history, selectHistory, listPresentation, participantsPresentation, statusPresentation } from '../dist/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -411,7 +411,7 @@ test('activity history after a timestamp excludes older public activity', async 
     ],
   });
   try {
-    const selected = (await historyPresentation(square, { after: 3500 })).activities;
+    const selected = (await cell.read((facts) => selectHistory(facts, { since: 3500 }, 10, undefined))).value.activities;
     assert.deepEqual(selected.map((activity) => ({ index: activity.index, kind: activity.kind })), [{ index: 3, kind: 'done' }]);
   } finally {
     await cell.close();
@@ -428,7 +428,7 @@ test('activity history at indexes unions their context windows', async () => {
     ],
   });
   try {
-    const selected = (await historyPresentation(square, { atIndexes: [2, 3], beforeContext: 0, afterContext: 0 })).activities;
+    const selected = (await cell.read((facts) => selectHistory(facts, { at: ['act/2', 'act/3'], contextBefore: 0, contextAfter: 0 }, null, undefined))).value.activities;
     assert.deepEqual(selected.map((activity) => activity.index), [2, 3]);
   } finally {
     await cell.close();

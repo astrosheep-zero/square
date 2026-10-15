@@ -4,7 +4,7 @@ import path from 'node:path';
 import { openSquare } from './square-file-adapter.js';
 import { closeOpenSquare } from './open-square.js';
 import { Square } from './square-application.js';
-import { entryPresentation } from './views.js';
+import { currentParticipant } from './views.js';
 import { automaticParticipant, harnessSessionSources, type AutomaticProvider } from './participant-identity.js';
 import { SquareError } from './model.js';
 import { projectSessionBindings } from './square-projections.js';
@@ -51,17 +51,17 @@ export async function automaticSessionStart(provider: AutomaticProvider, session
   const name = automaticParticipant(provider, sessionId, env);
   const hostLedger = hostLedgerForEnv(env);
   let bindings: readonly PresenceRecord[];
-  let entry: Awaited<ReturnType<typeof entryPresentation>>;
+  let standing: string | undefined;
   try {
     bindings = await hostLedger.listPresence({ location: squarePath, participant: name });
-    entry = await entryPresentation(reader, name);
+    standing = await currentParticipant(reader, name);
   } finally {
     await closeOpenSquare(reader);
   }
   if (bindings.some((binding) => binding.session !== sessionId)) {
     throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   }
-  if (entry.joined && !bindings.some((binding) => binding.session === sessionId)) {
+  if (standing !== undefined && !bindings.some((binding) => binding.session === sessionId)) {
     throw new SquareError('already_joined', `✕ ${name} already stands here — another session holds the name`);
   }
   const scopedEnv = operationEnv(provider, sessionId, env);
