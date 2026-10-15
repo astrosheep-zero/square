@@ -13,8 +13,8 @@ import { closeOpenSquare, type OpenSquare } from './open-square.js';
 import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
 import {
   recoveryObservation, currentParticipant, entryPresentation, eventPresentation,
-  history, participants, resolveParticipant, snapshot, statusPresentation,
-  participantsPresentation, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
+  history, participants, resolveParticipant, snapshot, queryStatus,
+  queryParticipants, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
 } from './views.js';
 import { hasAutomaticDeliveryIdentity, hostLedgerForEnv, localParticipantName, localSessionIdentities, presenceEpoch, readParticipantOwner } from './registry.js';
 import { projectSessionBindings } from './square-projections.js';
@@ -572,40 +572,14 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     async status(viewer, control) {
       checkControl(control);
       const selectedViewer = viewer ?? await actor().catch(() => '');
-      return scoped(async (square) => {
-        const projection = await statusPresentation(square, selectedViewer, control);
-        const status = projection.status;
-        const latest = status.latestAct;
-        return {
-          data: {
-            hardCap: status.hardCap,
-            ...(status.throttlePerMinute === undefined ? {} : { throttlePerMinute: status.throttlePerMinute }),
-            activeCount: status.activeCount, doneCount: status.doneCount,
-            hold: status.holdActive ? {
-              ...(status.holdActor === undefined ? {} : { by: status.holdActor }),
-              ...(status.holdReason === undefined ? {} : { reason: status.holdReason }),
-              ...(status.holdAt === undefined ? {} : { at: status.holdAt }),
-            } : null,
-            participants: status.participants.filter((p) => p.state !== 'not joined'),
-            ...(latest === undefined || latest.actor === undefined || latest.kind === 'read'
-              ? {} : { latestActivity: toPublicActivity(latest) }),
-            now: status.now,
-          },
-          projection: {
-            ...observedContext(square, status.activeCount, status.holdActive, projection.viewer || undefined, status.now),
-            ...projection,
-          },
-        };
-      }, control);
+      return scoped(async (square) => (await square.artifact.read((facts) => queryStatus(facts, {
+        location: square.location, now: square.clock(), automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(square.env),
+      }, selectedViewer), control?.signal)).value, control);
     },
     participants(control) {
-      return scoped(async (square) => {
-        const result = await participantsPresentation(square, control);
-        return {
-          data: { participants: result.participants },
-          projection: { ...observedContext(square, result.standingCount, result.held, undefined, result.now), ...result },
-        };
-      }, control);
+      return scoped(async (square) => (await square.artifact.read((facts) => queryParticipants(facts, {
+        location: square.location, now: square.clock(), automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(square.env),
+      }), control?.signal)).value, control);
     },
     async diagnose(control) {
       checkControl(control);

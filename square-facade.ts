@@ -120,7 +120,12 @@ export interface ParticipantSummary {
   readonly unreadActivityCount: number;
   readonly pendingMentionCount: number;
 }
-export interface StatusApplicationData extends Pick<StatusObservation, 'hardCap' | 'activeCount' | 'doneCount' | 'participants' | 'now'> {
+export interface StatusApplicationData {
+  readonly hardCap: number | null;
+  readonly activeCount: number;
+  readonly doneCount: number;
+  readonly participants: readonly ParticipantSummary[];
+  readonly now: number;
   readonly throttlePerMinute?: number;
   readonly hold: { readonly by?: string; readonly reason?: string; readonly at?: number } | null;
   readonly latestActivity?: Activity;
@@ -180,28 +185,11 @@ export interface EntryPresentation {
 }
 export interface HistoryContinuation { readonly direction: 'before' | 'after'; readonly cursor: ActivityId; readonly limit: number; }
 export interface ListPresentation { readonly context: readonly string[]; readonly participants: readonly string[]; readonly activities: number; }
-export interface StatusObservation {
-  readonly hardCap: number | null; readonly throttlePerMinute: number | undefined;
-  readonly activeCount: number; readonly doneCount: number; readonly holdActive: boolean;
-  readonly holdReason: string | undefined; readonly holdActor: string | undefined; readonly holdAt: number | undefined;
-  readonly participants: readonly ParticipantSummary[]; readonly latestAct: ArchiveRecord | undefined; readonly now: number;
-}
 export interface PresenceClassification {
-  /** Active participants, watching first, then recent signs of life; no presentation clipping. */
-  readonly orderedHere: readonly ParticipantSummary[];
+  /** Names in canonical data, watching first, then recent signs of life; no presentation clipping. */
+  readonly orderedHereNames: readonly string[];
   readonly lingeringCount: number;
   readonly classificationByName: Readonly<Record<string, 'here' | 'lingering' | 'done' | 'not-joined'>>;
-}
-export interface ParticipantsPresentation extends ParticipantsApplicationData, PresenceClassification {
-  readonly now: number;
-  readonly standingCount: number;
-  readonly held: boolean;
-}
-export interface StatusPresentation extends PresenceClassification {
-  readonly status: StatusObservation; readonly latestActNumber?: number; readonly latestPerception?: Perception;
-  readonly joins: readonly { readonly activity: ArchiveRecord; readonly rejoined: boolean }[]; readonly joinCount: number;
-  readonly attentionNames: readonly string[];
-  readonly viewer: string;
 }
 export interface CatchPresence {
   readonly participants: readonly ParticipantSummary[];
@@ -243,8 +231,17 @@ export interface HistoryProjection extends SquareContextProjection {
 export interface ListenerProjection extends SquareContextProjection { readonly participant: string; readonly target: string; readonly requestedTarget: string; }
 export interface EventPresentation { readonly activity: ArchiveRecord; readonly participantCount: number; readonly held: boolean; }
 export interface LifecycleProjection extends SquareContextProjection, EventPresentation { readonly delivery?: DeliveryResult; }
-export interface StatusProjection extends SquareContextProjection, StatusPresentation {}
-export interface ParticipantsProjection extends SquareContextProjection, ParticipantsPresentation {}
+export interface StatusProjection extends SquareContextProjection, PresenceClassification {
+  /** Full roster size, including never-joined names omitted from status data. */
+  readonly knownParticipantCount: number;
+  readonly latestActNumber?: number;
+  readonly latestPerception?: Perception;
+  readonly joins: readonly { readonly activity: ArchiveRecord; readonly rejoined: boolean }[];
+  readonly joinCount: number;
+  readonly attentionNames: readonly string[];
+  readonly viewer: string;
+}
+export interface ParticipantsProjection extends SquareContextProjection, PresenceClassification {}
 
 export interface SquareApplication {
   now(): number;

@@ -1,5 +1,5 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { compareParticipantActivity, coreParticipants, coreStatus, resolveKnownName, unreadActivitySummaries } from './decisions.js';
+import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries } from './decisions.js';
 import { SquareError, nameKey, type StoredAct } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
@@ -7,11 +7,11 @@ import { inSquareCount, readCursor, rosterNames } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
 import { compileSearchPattern } from './search.js';
 import type {
-  Activity, ArchiveRecord, HistoryQuery, HistoryApplicationQuery, HistoryContinuation,
-  OperationControl, ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsPresentation, SquareSnapshot,
-  RecoveryObservation, EntryPresentation, ListPresentation, StatusPresentation, CatchPresence, StreamProjection, EventPresentation,
+  Activity, ApplicationOutcome, ArchiveRecord, HistoryQuery, HistoryApplicationQuery, HistoryContinuation,
+  OperationControl, ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsApplicationData, ParticipantsProjection, SquareSnapshot,
+  RecoveryObservation, EntryPresentation, ListPresentation, StatusApplicationData, StatusProjection, SquareContextProjection, CatchPresence, StreamProjection, EventPresentation,
 } from './square-facade.js';
-export type { RecoveryObservation, EntryPresentation, ListPresentation, StatusPresentation, CatchPresence, StreamProjection } from './square-facade.js';
+export type { RecoveryObservation, EntryPresentation, ListPresentation, CatchPresence, StreamProjection } from './square-facade.js';
 
 const PAGE_SIZE = 100;
 export const HISTORY_DEFAULT_LIMIT = 10;
@@ -150,16 +150,16 @@ function classifyPresence(participants: readonly ParticipantSummary[], now: numb
   const here = participants.filter((participant) => participant.state === 'active' && (participant.presence === 'watching'
     || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= STATUS_HERE_WINDOW_MS)));
   const hereNames = new Set(here.map((participant) => participant.name));
-  return { orderedHere: [...here.filter((participant) => participant.presence === 'watching'), ...here.filter((participant) => participant.presence !== 'watching')],
+  return { orderedHereNames: [...here.filter((participant) => participant.presence === 'watching'), ...here.filter((participant) => participant.presence !== 'watching')].map((participant) => participant.name),
     lingeringCount: participants.filter((participant) => participant.state === 'active' && !hereNames.has(participant.name)).length,
     classificationByName: Object.fromEntries(participants.map((participant) => [participant.name, participant.state === 'done' ? 'done'
       : participant.state === 'not joined' ? 'not-joined' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
 }
-export async function participantsPresentation(square: OpenSquare, control?: OperationControl): Promise<ParticipantsPresentation> {
-  return (await square.artifact.read((facts) => {
-    const now = square.clock(), participants = coreParticipants(facts, now);
-    return { participants, ...classifyPresence(participants, now), now, standingCount: inSquareCount(facts), held: facts.hold().active };
-  }, control?.signal)).value;
+type ParticipantQueryContext = Pick<SquareContextProjection, 'location' | 'now' | 'automaticDeliveryAvailable'>;
+export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext): ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection> {
+  const participants = coreParticipants(facts, context.now);
+  return { data: { participants }, projection: { ...context, ...classifyPresence(participants, context.now),
+    standingCount: inSquareCount(facts), held: facts.hold().active } };
 }
 export async function listPresentation(square: OpenSquare, control?: OperationControl): Promise<ListPresentation> {
   return (await square.artifact.read((facts) => {
@@ -170,17 +170,37 @@ export async function listPresentation(square: OpenSquare, control?: OperationCo
     return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
   }, control?.signal)).value;
 }
-export async function statusPresentation(square: OpenSquare, viewer = '', control?: OperationControl): Promise<StatusPresentation> {
-  return (await square.artifact.read((facts) => {
-    const status = coreStatus(facts, square.clock()), afterIndex = status.latestAct?.index ?? -1;
-    const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({ activity,
-      rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0 }));
-    const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
-    return { status, joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }), ...classifyPresence(status.participants, status.now),
-      viewer: canonicalViewer, attentionNames: status.participants.filter((participant) => canonicalViewer === '' || nameKey(participant.name) === nameKey(canonicalViewer)).map((participant) => participant.name),
-      ...(status.latestAct === undefined ? {} : { latestPerception: perceiveActivity(facts, status.latestAct, canonicalViewer) }),
-      ...(status.latestAct?.kind === 'say' ? { latestActNumber: facts.sayOrdinals([status.latestAct.index])[status.latestAct.index] } : {}) };
-  }, control?.signal)).value;
+export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = ''): ApplicationOutcome<StatusApplicationData, StatusProjection> {
+  const { data: { participants }, projection } = queryParticipants(facts, context);
+  const header = facts.header(), hold = facts.hold();
+  const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
+  const latestAct = latest === undefined ? undefined : facts.activity(latest.index);
+  const afterIndex = latestAct?.index ?? -1;
+  const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({ activity,
+    rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0 }));
+  const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
+  return {
+    data: {
+      hardCap: header.hardCap,
+      ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
+      activeCount: projection.standingCount, doneCount: participants.filter((p) => p.state === 'done').length,
+      hold: hold.active ? {
+        ...(hold.actor === undefined ? {} : { by: hold.actor }),
+        ...(hold.reason === undefined ? {} : { reason: hold.reason }),
+        ...(hold.at === undefined ? {} : { at: hold.at }),
+      } : null,
+      participants: participants.filter((p) => p.state !== 'not joined'), now: context.now,
+      ...(latestAct === undefined || latestAct.actor === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
+    },
+    projection: {
+      ...projection, knownParticipantCount: participants.length, viewer: canonicalViewer,
+      ...(canonicalViewer === '' ? {} : { participant: canonicalViewer }),
+      joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }),
+      attentionNames: participants.filter((p) => canonicalViewer === '' || nameKey(p.name) === nameKey(canonicalViewer)).map((p) => p.name),
+      ...(latestAct === undefined ? {} : { latestPerception: perceiveActivity(facts, latestAct, canonicalViewer) }),
+      ...(latestAct?.kind === 'say' ? { latestActNumber: facts.sayOrdinals([latestAct.index])[latestAct.index] } : {}),
+    },
+  };
 }
 export async function eventPresentation(square: OpenSquare, id: ActivityId, control?: OperationControl): Promise<EventPresentation> {
   return (await square.artifact.read((facts) => {

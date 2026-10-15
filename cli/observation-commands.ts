@@ -501,9 +501,9 @@ export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const { projection: presentation } = await application(context).status(context.name);
-    const result = presentation.status;
-    const orderedHere = presentation.orderedHere;
+    const { data: result, projection: presentation } = await application(context).status(context.name);
+    const participantsByName = new Map(result.participants.map((participant) => [participant.name, participant]));
+    const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
     const lingering = presentation.lingeringCount;
     const people: string[] = [];
     if (result.activeCount === 0) {
@@ -535,26 +535,26 @@ export const statusCommand: CommandSpec<undefined, string> = {
       }
       if (lingering > 0) people.push(`  ○ … ${lingering} lingering`);
       if (unshown > 0) {
-        people.push(`${result.participants.length <= PARTICIPANTS_MAX_LIMIT
-          ? participantsLimitCommand(squarePath, result.participants.length)
+        people.push(`${presentation.knownParticipantCount <= PARTICIPANTS_MAX_LIMIT
+          ? participantsLimitCommand(squarePath, presentation.knownParticipantCount)
           : `${commandPrefix(squarePath)} participants`}`);
       }
     }
     const cap = result.hardCap === null ? 'unlimited' : `${result.hardCap} each`;
-    const holdTime = result.holdAt === undefined ? 'just now' : formatRelativeTime(result.holdAt, result.now);
-    const hold = result.holdActive
-      ? `· ${result.holdActor === undefined ? 'someone' : participantIdentity(result.holdActor)} raised a hand${result.holdReason ? ` — ${result.holdReason}` : ''}${style('dim', ` · ${holdTime}`)}`
+    const holdTime = result.hold?.at === undefined ? 'just now' : formatRelativeTime(result.hold.at, result.now);
+    const hold = result.hold !== null
+      ? `· ${result.hold.by === undefined ? 'someone' : participantIdentity(result.hold.by)} raised a hand${result.hold.reason ? ` — ${result.hold.reason}` : ''}${style('dim', ` · ${holdTime}`)}`
       : undefined;
-    const visible = result.latestAct === undefined
+    const visible = result.latestActivity === undefined
       ? { text: '', bodyClipped: false }
-      : renderAmbientEventFacts(result.latestAct, presentation.viewer, {
+      : renderAmbientEventFacts(result.latestActivity, presentation.viewer, {
           now: result.now,
           preview: 200,
           actNumber: presentation.latestActNumber,
           perception: presentation.latestPerception,
         });
     const latest = visible.text === ''
-      ? [result.latestAct === undefined
+      ? [result.latestActivity === undefined
         ? '  ○ no public activity yet'
         : '  · the latest words were meant for other ears']
       : [`  ${visible.text.replace(/\n/g, '\n  ')}`];
@@ -564,8 +564,8 @@ export const statusCommand: CommandSpec<undefined, string> = {
       latest.push(style('dim', `  → ${participantIdentity(activity.actor!)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, result.now)}`));
     }
     if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
-    if (visible.bodyClipped && result.latestAct !== undefined) {
-      latest.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(result.latestAct.index)} -C 2 --no-truncate`);
+    if (visible.bodyClipped && result.latestActivity !== undefined) {
+      latest.push(`${commandPrefix(squarePath)} history --at ${result.latestActivity.id} -C 2 --no-truncate`);
     }
     const counts = [
       `${orderedHere.length} here`,

@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { catchPresence, history, selectHistory, listPresentation, participantsPresentation, statusPresentation } from '../dist/views.js';
+import { catchPresence, history, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -47,8 +47,8 @@ test('participant lists share actual action and receipt times, including a fresh
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
     const projections = [
-      (await participantsPresentation(square)).participants,
-      (await statusPresentation(square)).status.participants,
+      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.data.participants,
+      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.data.participants,
       (await catchPresence(square)).participants,
     ];
     for (const participants of projections) {

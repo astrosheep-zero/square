@@ -352,7 +352,7 @@ test('configured and discovered status viewers perceive directed activity withou
   const before = (await readSquareSnapshot(squarePath)).state;
   const presenceBefore = await ledger.listPresence({ location: squarePath });
   const configured = createSquareApplication({ cwd, squarePath, env: { ...env, SQUARE_PARTICIPANT_NAME: 'alice' } });
-  const discovered = createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: 'viewer-session' } });
+  const discovered = createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: 'viewer-session', SQUARE_PARTICIPANT_NAME: '' } });
   for (const viewer of [configured, discovered]) {
     const result = await viewer.status();
     assert.equal(result.projection.viewer, 'Alice');
@@ -366,6 +366,10 @@ test('configured and discovered status viewers perceive directed activity withou
   const explicit = await configured.status('Cara');
   assert.equal(explicit.projection.viewer, 'Cara');
   assert.equal(explicit.projection.latestPerception, 'presence');
+  const blank = await configured.status('');
+  assert.equal(blank.projection.viewer, '');
+  assert.equal(blank.projection.participant, undefined);
+  assert.equal(blank.projection.latestPerception, 'presence');
   const ambient = await createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: '' } }).status();
   assert.equal(ambient.projection.viewer, '');
   assert.equal(ambient.projection.latestPerception, 'presence');

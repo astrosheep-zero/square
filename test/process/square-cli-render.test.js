@@ -63,6 +63,10 @@ test('status previews ten active participants and links to the complete roster',
       await participant.express(`recent activity from ${name}`, { force: true });
     }
   }, { hardCap: 100 });
+  // Historical actor facts need not have a join; status filters them, participants does not.
+  const historical = (await readSquareSnapshot(file)).state;
+  historical.acts.push({ kind: 'read', actor: 'Reserved', at: 0, through: 0, index: historical.runtime.nextActIndex++ });
+  await writeSquareFile(file, historical);
 
   const status = run(withName(file, 'Viewer', ['status']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(status.status, 0, status.stderr);
@@ -71,12 +75,14 @@ test('status previews ten active participants and links to the complete roster',
   assert.equal(participantRows.length, 10);
   assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) is nearby ·/)?.[1]), peers.slice(2).reverse());
   assert.match(status.stdout, /^  ○ … 3 more here$/m);
-  assert.ok(status.stdout.includes(`square --location '${file}' participants --limit 13\n`));
+  assert.ok(status.stdout.includes(`square --location '${file}' participants --limit 14\n`));
+  assert.doesNotMatch(status.stdout, /Reserved/);
   assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
 
   const participants = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(participants.status, 0, participants.stderr);
-  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] /.test(line)).length, 13);
+  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] /.test(line)).length, 14);
+  assert.match(participants.stdout, /Reserved · not joined/);
   assert.match(participants.stdout, /Peer01/);
   assert.match(participants.stdout, /Peer12/);
   assert.doesNotMatch(participants.stdout, /@Peer/);

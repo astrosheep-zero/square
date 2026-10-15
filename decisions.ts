@@ -8,8 +8,8 @@ import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './squa
 import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
-import type { ParticipantSummary as ParticipantStatus, StatusObservation as StatusResult, UnreadActivitySummary } from './square-facade.js';
-export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, StatusObservation as StatusResult, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
+import type { ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
+export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
   validateName(name);
@@ -217,14 +217,4 @@ export function coreParticipants(facts: SquareRead, now: number): ParticipantSta
       pendingMentionCount: current.joined ? facts.directedCount(current.name, { afterIndex: current.lastJoinIndex ?? -1, unseenOnly: true }) : 0,
     };
   }).sort(compareParticipantActivity);
-}
-export function coreStatus(facts: SquareRead, now: number): StatusResult {
-  const header = facts.header(), hold = facts.hold(), roster = facts.roster();
-  const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
-  return {
-    hardCap: header.hardCap, throttlePerMinute: header.throttlePerMinute,
-    activeCount: roster.filter((item) => item.joined).length, doneCount: roster.filter((item) => item.done).length,
-    holdActive: hold.active, holdReason: hold.reason, holdActor: hold.actor, holdAt: hold.at,
-    participants: coreParticipants(facts, now), latestAct: latest === undefined ? undefined : facts.activity(latest.index), now,
-  };
 }
