@@ -50,5 +50,6 @@ test('aborting a queued presence claim does not acquire or write an owner', asyn
     return result;
   });
   await held;
-  assert.equal(fsSync.existsSync(path.join(ledgerRoot, 'presence.ndjsonl')), false);
+  assert.deepEqual(await port.listPresence({ location: record.location }), []);
+  assert.equal(fsSync.existsSync(path.join(ledgerRoot, 'presence-claim.lock')), true);
 });

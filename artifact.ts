@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { retrySqliteBusy, inSqliteTransaction } from './sqlite-transaction.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -73,9 +74,6 @@ function requireSquareExtension(location: string): void {
     if (!location.endsWith('.square'))
         throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${location}`);
 }
-function isBusy(error: unknown): boolean {
-    return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
-}
 function storageError(error: unknown, location: string): unknown {
     if (!(error instanceof Error) || error instanceof SquareError || error instanceof InternalSquareError)
         return error;
@@ -101,64 +99,12 @@ function abort(signal?: AbortSignal): void {
     if (signal?.aborted)
         throw signal.reason ?? new Error('Square artifact operation aborted');
 }
-export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSignal): Promise<T> {
-    while (true) {
-        abort(signal);
-        try {
-            return operation();
-        }
-        catch (error) {
-            if (!isBusy(error))
-                throw error;
-            try {
-                await sleep(25, undefined, { signal });
-            }
-            catch (error) {
-                abort(signal);
-                throw error;
-            }
-        }
-    }
-}
 function synchronous(value: unknown): void {
     if (value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as {
         then?: unknown;
     }).then === 'function') {
         void Promise.resolve(value).catch(() => undefined);
         throw new TypeError('Square artifact callbacks must be synchronous.');
-    }
-}
-/** Acquisition may retry; after change starts, only COMMIT retries, retaining its result. */
-export async function inSqliteTransaction<T>(db: DatabaseSync, write: boolean, validate: () => void, change: () => T, signal?: AbortSignal): Promise<T> {
-    let begun = false;
-    try {
-        await retrySqliteBusy(() => {
-            db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
-            begun = true;
-            try {
-                validate();
-            }
-            catch (error) {
-                db.exec('ROLLBACK');
-                begun = false;
-                throw error;
-            }
-        }, signal);
-        abort(signal);
-        const result = change();
-        synchronous(result);
-        await retrySqliteBusy(() => db.exec('COMMIT'), signal);
-        begun = false;
-        return result;
-    }
-    catch (error) {
-        if (begun) {
-            try {
-                db.exec('ROLLBACK');
-            }
-            catch { /* retain the original failure */ }
-        }
-        throw error;
     }
 }
 const readMethods: readonly (keyof SquareRead)[] = [

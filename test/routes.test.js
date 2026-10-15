@@ -10,6 +10,7 @@ import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { express, join } from '../dist/square-actions.js';
 import { publishWakeRoute, retireWakeRouteFromArtifact, ROUTE_FRESH_MS, resolvePrimaryWakeRoute, sessionCanEndParticipant } from '../dist/routes.js';
 import { readWakeRoutes, retireWakeRoutesForSession, upsertWakeRoute } from './wake-routes.js';
+import { seedLedger } from './host-ledger-fixtures.js';
 
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-routes-')); return { root, env: { SQUARE_HOST_LEDGER_ROOT: path.join(root, 'user') } }; }
 
@@ -39,10 +40,8 @@ test('callable routes are read from receiver-owned square artifact', async () =>
   } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
 });
 /** A persisted presence row carrying a stale `route` key is ignored on read: no migration, no route authority. */
-async function writeStalePresenceRow(env, row) {
-  await fs.promises.mkdir(env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
-  const file = path.join(await fs.promises.realpath(env.SQUARE_HOST_LEDGER_ROOT), 'presence.ndjsonl');
-  await fs.promises.writeFile(file, `${JSON.stringify({ v: 1, ...row })}\n`, { flag: 'a' });
+function writeStalePresenceRow(env, row) {
+  seedLedger(env.SQUARE_HOST_LEDGER_ROOT, { presence: [{ v: 1, ...row }] });
 }
 test('local presence cannot plant a callable route', async () => {
   const item = fixture();

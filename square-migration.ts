@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-import { inSqliteTransaction, openExistingSquareDatabase } from './artifact.js';
+import { openExistingSquareDatabase } from './artifact.js';
+import { inSqliteTransaction } from './sqlite-transaction.js';
 import { canonicalPath } from './canonical-path.js';
 import { isWakeRouteKind, type StoredAct } from './model.js';
 import { parseActivityId } from './square-core.js';

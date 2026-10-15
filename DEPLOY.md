@@ -46,6 +46,14 @@ See [Square for Paseo](plugins/paseo/README.md) for requirements and development
 
 ## Update
 
+For a legacy NDJSON host ledger, stop **all** Square hosts before upgrading.
+Do not mix old and new processes. After updating the package, with hosts still
+stopped, run `square ledger verify`, `square ledger migrate`, then
+`square ledger verify`. Only then start the updated hosts together. These
+commands never stop or restart hosts for you. See [host ledger](guides/host-ledger.md)
+for source preservation, refusal behavior and backup guidance. An existing valid
+SQLite ledger needs no conversion; ordinary empty-root reads create nothing.
+
 ```bash
 npm install -g @astrosheep/square@latest
 square install --all -f
@@ -65,6 +73,12 @@ admission, cancellation, and native custody limits. Other harnesses retain
 their existing installation and delivery paths.
 
 ## Square persistence
+
+The user-level host ledger is a separate `host-ledger.sqlite`, also using
+DELETE/FULL. `square ledger verify` is read-only and needs no square location
+or participant. `square ledger migrate` is the explicit offline NDJSON converter;
+it never overwrites an existing destination or modifies legacy source bytes.
+Do not roll back to retained NDJSON files after SQLite writes have begun.
 
 Each `.square` artifact is a transactional SQLite database using DELETE journal
 mode and FULL synchronous writes. Legacy artifact formats are not migrated.

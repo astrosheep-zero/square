@@ -6,6 +6,17 @@ import path from 'node:path';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { projectBoundaryEligibility } from '../dist/square-projections.js';
 import { projectWakeEvidence, projectWakeEligibility, wakeIsEligible } from '../dist/wake-eligibility.js';
+import { interceptLedgerSql, rewriteLedgerRecord, seedLedger } from './host-ledger-fixtures.js';
+
+/** Evidence row reads only: revision, schema and fixture statements are not the measurement. */
+function countEvidenceReads(t, root) {
+  const reads = [];
+  interceptLedgerSql(t, root, (_method, sql) => {
+    if (/SELECT seq,row_json FROM host_evidence/.test(sql ?? '')) reads.push(sql);
+    return undefined;
+  });
+  return reads;
+}
 
 const location = '/square/one.square';
 const route = (overrides = {}) => ({ location, participant: 'Bob', sessionId: 's', channel: 'paseo', kind: 'paseo', address: { agentId: 'a', extra: 'b' }, updatedAt: 10, extra: {}, ...overrides });
@@ -23,7 +34,6 @@ const request = (overrides = {}) => ({ location, participant: 'bob', actor: 'Ali
 test('boundary eligibility reads evidence once for 16 memberships and indexes scoped suppression', async (t) => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'square-projection-')));
   try {
-    const file = path.join(root, 'evidence.ndjsonl');
     let activityReads = 0;
     const inbox = Array.from({ length: 16 }, (_, index) => ({
       squarePath: path.relative(process.cwd(), path.join(root, `square-${index}.square`)), name: 'bOB',
@@ -43,15 +53,10 @@ test('boundary eligibility reads evidence once for 16 memberships and indexes sc
     });
     // A foreign square cannot suppress the same activity id in any membership.
     rows.push({ ...rows[0], location: path.join(root, 'other.square'), activity: 'act/4' });
-    await fs.writeFile(file, rows.map((row) => JSON.stringify(row)).join('\n'));
-    const readFile = fs.readFile;
-    let reads = 0;
-    t.mock.method(fs, 'readFile', async (target, ...args) => {
-      if (target === file) reads += 1;
-      return readFile(target, ...args);
-    });
+    seedLedger(root, { evidence: rows });
+    const reads = countEvidenceReads(t, root);
     const pending = await projectBoundaryEligibility({ hostLedger: createHostLedgerPort({ rootPath: root, now: () => 100 }), sessionId: 's', inbox });
-    assert.equal(reads, 1);
+    assert.equal(reads.length, 1);
     assert.equal(activityReads, 16 * 3);
     assert.equal(pending.length, 16);
     assert.deepEqual(pending.map((membership) => membership.notifications.map((notification) => notification.actIndex)), Array.from({ length: 16 }, () => [4]));
@@ -61,31 +66,23 @@ test('boundary eligibility reads evidence once for 16 memberships and indexes sc
 test('wake evidence reads all kinds once per fresh projection', async (t) => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'square-projection-')));
   try {
-    const file = path.join(root, 'evidence.ndjsonl');
     const ledger = createHostLedgerPort({ rootPath: root, now: () => 100 });
     await ledger.ensurePresence(owner());
-    const rows = [
+    seedLedger(root, { evidence: [
       { v: 1, ...record() },
       { v: 1, ...record({ kind: 'presentation', session: 's', outcome: 'clipped' }) },
       { v: 1, ...record({ kind: 'lifecycle', session: 's', outcome: 'presented' }) },
-    ];
-    await fs.writeFile(file, rows.map((row) => JSON.stringify(row)).join('\n'));
-    const readFile = fs.readFile;
-    let reads = 0;
-    t.mock.method(fs, 'readFile', async (target, ...args) => {
-      if (target === file) reads += 1;
-      return readFile(target, ...args);
-    });
+    ] });
+    const reads = countEvidenceReads(t, root);
     const input = { ...snapshot(), hostLedger: ledger, now: 100 };
     delete input.owners;
     const first = (await projectWakeEvidence(input)).evidence('Bob', 2);
-    assert.equal(reads, 1);
+    assert.equal(reads.length, 1);
     assert.equal(first.presented, true);
     assert.deepEqual(first.attempts.map((attempt) => attempt.outcome), ['failed']);
-    rows[1].outcome = 'failed';
-    await fs.writeFile(file, rows.map((row) => JSON.stringify(row)).join('\n'));
+    rewriteLedgerRecord(root, 'evidence', 2, { outcome: 'failed' });
     assert.equal(wakeIsEligible((await projectWakeEvidence(input)).evidence('Bob', 2)), true);
-    assert.equal(reads, 2);
+    assert.equal(reads.length, 2);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -93,11 +90,12 @@ test('empty boundaries skip evidence reads; pending boundary and wake projection
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'square-projection-')));
   try {
     const ledger = createHostLedgerPort({ rootPath: root, now: () => 100 });
+    // The read must reach storage: a missing ledger short-circuits before any statement.
+    seedLedger(root, { presence: [{ v: 1, location, participant: 'Bob', session: 's', channel: 'pi', updatedAt: 100 }] });
     const failure = Object.assign(new Error('evidence read failed'), { code: 'EIO' });
-    const readFile = fs.readFile;
-    t.mock.method(fs, 'readFile', async (target, ...args) => {
-      if (target === path.join(root, 'evidence.ndjsonl')) throw failure;
-      return readFile(target, ...args);
+    interceptLedgerSql(t, root, (_method, sql) => {
+      if (/SELECT seq,row_json FROM host_evidence/.test(sql ?? '')) throw failure;
+      return undefined;
     });
     assert.deepEqual(await projectBoundaryEligibility({ hostLedger: ledger, sessionId: 's', inbox: [] }), []);
     await assert.rejects(projectBoundaryEligibility({ hostLedger: ledger, sessionId: 's', inbox: [{ squarePath: location, name: 'Bob', notifications: [{ actIndex: 2, actor: 'Alice', at: 10, route: 'mention', body: 'hello' }] }] }), failure);

@@ -3,11 +3,13 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
 import plugin from '../dist/plugins/opencode/index.js';
 import { Square } from '../dist/square-application.js';
 import { readSquareSnapshot } from '../dist/artifact.js';
 import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';
+import { interceptLedgerSql, ledgerDatabasePath } from './host-ledger-fixtures.js';
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 4000;
@@ -124,14 +126,12 @@ test('v2 native body admission is not presentation; exact prepared primary conte
 test('a transient receiver ledger failure recovers on reconciliation without plugin reload', async (t) => {
   let failures = 0;
   const f = await fixture(t, async () => {
-    const readFile = fs.readFile;
-    const evidencePath = path.join(await fs.realpath(process.env.SQUARE_HOST_LEDGER_ROOT), 'evidence.ndjsonl');
-    t.mock.method(fs, 'readFile', async (file, ...args) => {
-      if (file === evidencePath && failures === 0) {
-        failures++;
+    interceptLedgerSql(t, process.env.SQUARE_HOST_LEDGER_ROOT, () => {
+      if (failures === 0) {
+        failures += 1;
         throw Object.assign(new Error('one-shot evidence read failure'), { code: 'EIO' });
       }
-      return readFile(file, ...args);
+      return undefined;
     });
   });
   await waitFor(() => failures === 1);
@@ -149,25 +149,41 @@ test('queued cancellation survives receiver settlement and binding replacement f
   const f = await fixture(t);
   const old = await f.express('cancel this BODY');
   await waitFor(async () => (await f.evidence()).some((row) => row.activity === `act/${old}` && row.outcome === 'accepted'));
-  let release;
-  const blocked = new Promise((resolve) => { release = resolve; });
-  let entered = false;
-  const readFile = fs.readFile;
-  t.mock.method(fs, 'readFile', async (file, ...args) => {
-    if (!entered && file.endsWith('/presence.ndjsonl')) {
-      entered = true;
-      await blocked;
+  // A real SQLite write lock stalls reconciliation inside its own busy retry; a
+  // synchronous SQL mock cannot block, only fail. Observe the retry reaching
+  // storage instead of guessing with sleeps.
+  const lock = new DatabaseSync(ledgerDatabasePath(process.env.SQUARE_HOST_LEDGER_ROOT));
+  t.after(() => { try { lock.close(); } catch { /* already closed by normal cleanup */ } });
+  lock.exec('PRAGMA busy_timeout=0');
+  for (let attempt = 0; ; attempt += 1) {
+    try { lock.exec('BEGIN EXCLUSIVE'); break; }
+    catch (error) { if (attempt >= 100) throw error; await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  let reachedStorage = false;
+  let refusedRead = false;
+  interceptLedgerSql(t, process.env.SQUARE_HOST_LEDGER_ROOT, (method, sql) => {
+    const text = sql ?? '';
+    if (method === 'exec' && /PRAGMA synchronous=FULL/.test(text)) reachedStorage = true;
+    if (!refusedRead && /SELECT seq,row_json FROM host_presence/.test(text)) {
+      refusedRead = true;
       throw Object.assign(new Error('one-shot presence read failure'), { code: 'EIO' });
     }
-    return readFile(file, ...args);
+    return undefined;
   });
-  const preparation = f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
-  await waitFor(() => entered);
-  f.events.emit('event', { type: 'session.execution.interrupted', data: { sessionID: 'opencode-fixture', reason: 'user' } });
-  // Let the aborted receiver settle while cancellation is queued behind the blocked reconciliation.
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  release();
+  let preparation;
+  try {
+    preparation = f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+    preparation.catch(() => {});
+    await waitFor(() => reachedStorage);
+    f.events.emit('event', { type: 'session.execution.interrupted', data: { sessionID: 'opencode-fixture', reason: 'user' } });
+    // Let the aborted receiver settle while cancellation is queued behind the blocked reconciliation.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    lock.exec('ROLLBACK');
+    lock.close();
+  }
   await preparation;
+  assert.equal(refusedRead, true, 'the queued reconciliation must meet the injected read failure');
   await waitFor(async () => (await f.ledger.listPresence({ session: 'opencode-fixture' })).some((owner) => owner.cancelledThrough >= old));
   await f.reload();
   await f.context(f.sent[0]);

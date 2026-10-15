@@ -7,6 +7,7 @@ import test from 'node:test';
 import { formatActivityId } from '../dist/square-core.js';
 import { readWakeReleaseDiagnostics, redactWakeDiagnostic } from '../dist/wake-attempts.js';
 import { readWakeAttempts, recordWakeAttempt } from './wake-attempt-fixtures.js';
+import { readLedgerRecords, seedLedger } from './host-ledger-fixtures.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,17 +38,16 @@ function row(item, overrides = {}) {
   };
 }
 
-test('canonical wake evidence reads ignore malformed, expired and future rows', async () => {
+test('canonical wake evidence reads ignore expired and future rows', async () => {
   const item = fixture();
   const now = 8 * DAY_MS;
-  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), [
-    '{bad json',
-    JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
-    JSON.stringify(row(item, { at: now + 1 })),
-    JSON.stringify(row(item, { at: now - DAY_MS, outcome: 'unknown', signature: undefined })),
-    JSON.stringify(row(item, { at: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attemptN: 2 })),
-  ].join('\n'));
+  // Only raw storage seeding can place rows outside the visibility window.
+  seedLedger(item.env.SQUARE_HOST_LEDGER_ROOT, { evidence: [
+    row(item, { at: now - 7 * DAY_MS - 1 }),
+    row(item, { at: now + 1 }),
+    row(item, { at: now - DAY_MS, outcome: 'unknown', signature: undefined }),
+    row(item, { at: now - 7 * DAY_MS, outcome: 'accepted', signature: undefined, attemptN: 2 }),
+  ] });
 
   assert.deepEqual((await readWakeAttempts({ env: item.env, now })).map((attempt) => [attempt.outcome, attempt.attemptN]), [
     ['unknown', 1], ['accepted', 2],
@@ -95,15 +95,13 @@ test('wake diagnostics redact nested credentials while retaining safe presence f
   });
 });
 
-test('a wake attempt write drops expired and malformed ledger rows', async () => {
+test('a wake attempt write drops expired ledger rows', async () => {
   const item = fixture();
   const now = Date.now();
-  fs.mkdirSync(item.env.SQUARE_HOST_LEDGER_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), [
-    '{bad json',
-    JSON.stringify(row(item, { at: now - 7 * DAY_MS - 1 })),
-    JSON.stringify(row(item, { at: now - DAY_MS, attemptN: 2 })),
-  ].join('\n'));
+  seedLedger(item.env.SQUARE_HOST_LEDGER_ROOT, { evidence: [
+    row(item, { at: now - 7 * DAY_MS - 1 }),
+    row(item, { at: now - DAY_MS, attemptN: 2 }),
+  ] });
 
   await recordWakeAttempt({
     at: now,
@@ -114,7 +112,7 @@ test('a wake attempt write drops expired and malformed ledger rows', async () =>
     signature: 'new_route_failure',
   }, item.env);
 
-  const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const rows = readLedgerRecords(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence');
   assert.deepEqual(rows.map((entry) => entry.attemptN), [2, 3]);
   fs.rmSync(item.root, { recursive: true, force: true });
 });

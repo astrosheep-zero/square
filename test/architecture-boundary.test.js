@@ -57,7 +57,7 @@ function storageLeaks(sources) {
     ['square-application.ts', ['createSquare', 'diagnoseSquareFile']],
     ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
     ['stream.ts', ['observeSquareRevision']],
-    ['square-migration.ts', ['openExistingSquareDatabase', 'inSqliteTransaction']],
+    ['square-migration.ts', ['openExistingSquareDatabase']],
   ]);
   const leaks = [];
   for (const [file, source] of sources) {
@@ -72,6 +72,10 @@ function storageLeaks(sources) {
       }
       if (target === 'square-sqlite.ts' && !['artifact.ts', 'square-migration.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
+      if (target === 'host-ledger-sqlite.ts' && !['host-ledger-file-adapter.ts', 'host-ledger-migration.ts'].includes(file))
+        leaks.push(`${file} -> ${target}`);
+      if (target === 'sqlite-transaction.ts' && !['artifact.ts', 'square-migration.ts', 'host-ledger-sqlite.ts', 'host-ledger-migration.ts'].includes(file))
+        leaks.push(`${file} -> ${target}`);
     }
   }
   return leaks.sort();
@@ -85,7 +89,9 @@ test('resolved imports preserve artifact and SQL ownership across native integra
     ['native.ts', "import { createArtifactPort } from './artifact.js';"],
     ['plugins/opencode/helper.ts', "export { createSqliteDriver } from '../../square-sqlite.js';"],
     ['open-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
-  ])), ['native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
+    ['cli/hidden.ts', "import { withLedger } from '../host-ledger-sqlite.js';"],
+    ['decisions.ts', "import { inSqliteTransaction } from './sqlite-transaction.js';"],
+  ])), ['cli/hidden.ts -> host-ledger-sqlite.ts', 'decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
 });
 
 test('one canonicalizer owns square location keys', () => {
@@ -99,13 +105,24 @@ test('one canonicalizer owns square location keys', () => {
 
 test('SQLite artifact rows stay private to storage framing and explicit migration', () => {
   const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-migration.ts'];
-  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts']), []);
+  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts', 'host-ledger-sqlite.ts', 'host-ledger-migration.ts', 'sqlite-transaction.ts']), []);
   const driver = productionSources.get('square-sqlite.ts') ?? '';
   assert.match(driver, /CREATE TABLE landed_audience/);
   assert.doesNotMatch(driver, /CREATE (?:TRIGGER|VIEW|VIRTUAL TABLE)/);
-  for (const identifier of ['square_snapshot', 'square_meta', 'landed_audience', 'application_id', 'user_version']) {
+  for (const identifier of ['square_snapshot', 'square_meta', 'landed_audience']) {
     assert.deepEqual(ownershipLeaks(identifier, boundary), [], `${identifier} escaped the artifact boundary`);
   }
+  for (const identifier of ['application_id', 'user_version']) {
+    assert.deepEqual(ownershipLeaks(identifier, [...boundary, 'host-ledger-sqlite.ts']), [], `${identifier} escaped storage framing`);
+  }
+});
+
+test('host ledger SQL and derived lookup columns stay private to its storage codec', () => {
+  for (const identifier of ['host_meta', 'host_presence', 'host_evidence', 'row_json', 'presence_revision', 'evidence_revision', 'claim_token_key', 'effective_at']) {
+    assert.deepEqual(ownershipLeaks(identifier, ['host-ledger-sqlite.ts']), [], `${identifier} escaped host ledger storage`);
+  }
+  const transaction = productionSources.get('sqlite-transaction.ts') ?? '';
+  assert.doesNotMatch(transaction, /host-ledger|square-sqlite|host_meta|square_meta/, 'busy retry and transaction lifetime have no schema owner');
 });
 
 test('artifact callbacks are synchronous typed capabilities, not replacement snapshots', () => {
@@ -220,6 +237,7 @@ const integrationEdges = new Map([
   ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHookAsync']],
   ['mcp.ts -> automatic-session.ts', ['operationEnv']],
+  ['cli/ledger-command.ts -> host-ledger-migration.ts', ['verifyHostLedger', 'migrateHostLedger']],
 ]);
 const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
@@ -234,6 +252,7 @@ const pureTypeBindings = new Map([
 ]);
 const integrationTypeBindings = new Map([
   ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],
+  ['cli/ledger-command.ts -> host-ledger-migration.ts', ['HostLedgerReport']],
 ]);
 const presentationHelpers = new Set(['presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
 

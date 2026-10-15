@@ -37,6 +37,7 @@ import {
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
+import { interceptLedgerSql } from './host-ledger-fixtures.js';
 import { withFileLock } from '../dist/file-lock.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
@@ -752,7 +753,7 @@ test('Pi steers pending activity into a running agent and commits only when it l
   }, false);
 });
 
-test('Pi retries a dropped steer after a transient evidence rename refusal and commits once it lands', async (t) => {
+test('Pi retries a dropped steer after a transient evidence write failure and commits once it lands', async (t) => {
   await withPiFixture('pi-dropped-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -760,14 +761,21 @@ test('Pi retries a dropped steer after a transient evidence rename refusal and c
       on(event, handler) { handlers.set(event, handler); },
       sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
-    let refusedRename = false;
-    const rename = fs.promises.rename;
-    t.mock.method(fs.promises, 'rename', async (source, destination) => {
-      if (!refusedRename && sent.length === 1 && path.basename(destination) === 'evidence.ndjsonl') {
-        refusedRename = true;
-        throw Object.assign(new Error('Windows reader temporarily holds the evidence ledger'), { code: 'EPERM' });
+    let pendingEvidenceWrite = false;
+    let refusedCommit = false;
+    interceptLedgerSql(t, item.root, (method, sql) => {
+      const text = sql ?? '';
+      if (method === 'prepare' && /(INTO|UPDATE|DELETE FROM) host_evidence/.test(text)) pendingEvidenceWrite = true;
+      else if (method === 'exec' && /^(COMMIT|ROLLBACK)/.test(text)) {
+        const wroteEvidence = pendingEvidenceWrite;
+        pendingEvidenceWrite = false;
+        // A recognized transient busy: the shared primitive retries this same commit.
+        if (wroteEvidence && !refusedCommit && sent.length === 1) {
+          refusedCommit = true;
+          throw new Error('database is locked');
+        }
       }
-      return rename(source, destination);
+      return undefined;
     });
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
@@ -781,7 +789,7 @@ test('Pi retries a dropped steer after a transient evidence rename refusal and c
       await piTurnStart(handlers);
       await piTurnEnd(handlers);
       await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
-      assert.equal(refusedRename, true, 'the dropped-presentation evidence write must encounter the injected refusal');
+      assert.equal(refusedCommit, true, 'the dropped-presentation evidence commit must encounter the injected busy');
       assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[1].message.content);
       await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');

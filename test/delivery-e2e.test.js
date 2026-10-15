@@ -20,6 +20,7 @@ import { projectWakeEvidence, wakeIsEligible } from '../dist/wake-eligibility.js
 import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { hostLedgerRoot } from '../dist/host-ledger-root.js';
 import { readCursor } from '../dist/runtime.js';
+import { ledgerDatabasePath, readLedgerRecords } from './host-ledger-fixtures.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -249,7 +250,7 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     assert.doesNotMatch(payload, /catch --now/);
     assert.doesNotMatch(payload, new RegExp(`x{${body.length - 5}}`));
     assert.ok(payload.length <= 1200);
-    const rows = fs.readFileSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const rows = readLedgerRecords(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence');
     assert.equal(rows.filter((row) => row.outcome === 'clipped').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
     assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
@@ -378,7 +379,7 @@ test('an accepted native wake does not write presented evidence or suppress the 
       item.env,
     ));
     assert.equal(later, 'presented');
-    assert.equal(fs.existsSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence.ndjsonl')), true);
+    assert.equal(fs.existsSync(ledgerDatabasePath(item.env.SQUARE_HOST_LEDGER_ROOT)), true);
   } finally {
     item.cleanup();
   }
@@ -429,7 +430,8 @@ test('a crash after send records unknown and blocks blind retry', async () => {
     assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome, signature }) => [outcome, signature]), [
       ['unknown', 'worker_interrupted_during_dispatch'],
     ]);
-    assert.equal(fs.existsSync(path.join(item.env.SQUARE_HOST_LEDGER_ROOT, 'wake-claims.ndjsonl')), false);
+    // One attempt owns the whole record: no second claim log exists in storage.
+    assert.deepEqual(readLedgerRecords(item.env.SQUARE_HOST_LEDGER_ROOT, 'evidence').map((row) => row.kind), ['wake']);
     const health = await withRegistry(item.env, () => classifyDeliveryHealth(item.squarePath, {
       graceMs: wakeGraceMs(item.env),
       env: item.env,

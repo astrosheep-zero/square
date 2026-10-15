@@ -87,7 +87,12 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
     summary: 'Convert an existing version 1 square to row storage in place.',
-    details: ['It is the only migration command: there is no --check, --backup or --force.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write.'],
+    details: ['For the selected square artifact only; there is no --check, --backup or --force.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write.'],
+  },
+  {
+    names: ['ledger'], usage: 'ledger <verify|migrate>', usesSquare: false, group: 'maintenance',
+    summary: 'Verify or explicitly convert the machine-local host ledger.',
+    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty.', 'migrate: stop every Square host first, then convert legacy NDJSON without deleting sources or overwriting a destination.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'Migration does not stop or restart hosts. No --force, repair, or automatic conversion.'],
   },
 ];
 
@@ -103,7 +108,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
-    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate', 'ledger'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

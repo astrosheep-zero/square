@@ -1,5 +1,6 @@
 import { buildCommand, doneCommand, expressCommand, holdCommand, ignoreCommand, joinCommand, listenCommand, listeningCommand, resumeCommand } from './square-commands.js';
 import { doctorCommand, migrateCommand } from './maintenance-commands.js';
+import { ledgerCommand } from './ledger-command.js';
 import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
 import { helpCommand, versionCommand } from './meta-commands.js';
@@ -43,6 +44,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['harness'], spec: harnessCommand },
   { names: ['doctor'], spec: doctorCommand },
   { names: ['migrate'], spec: migrateCommand },
+  { names: ['ledger'], spec: ledgerCommand },
   { names: ['history'], spec: historyCommand },
   { names: ['status'], spec: statusCommand },
   { names: ['participants'], spec: participantsCommand },

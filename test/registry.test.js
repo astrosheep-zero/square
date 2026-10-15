@@ -676,14 +676,13 @@ test('presence follows active session lifecycle without delivery routes', async 
   }
 });
 
-test('presence reads ignore stale and malformed ledger rows', async () => {
+test('presence reads ignore stale ledger rows', async () => {
   const cleanup = withRegistry();
   try {
     const squarePath = path.join(os.tmpdir(), 'stale-square.square');
     const now = Date.now();
     const ledger = createHostLedgerPort();
     await ledger.ensurePresence({ location: squarePath, participant: 'Alice', session: 'stale-session', channel: 'unknown', updatedAt: now - 8 * 24 * 60 * 60 * 1000 });
-    fs.appendFileSync(path.join(path.dirname(process.env.SQUARE_REGISTRY), 'presence.ndjsonl'), '{bad json}\n');
     assert.deepEqual(await ledger.listPresence({ session: 'stale-session', now }), []);
   } finally {
     cleanup();

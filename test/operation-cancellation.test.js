@@ -291,55 +291,49 @@ test("conditional claim removal preserves a refreshed row", async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test("presence claim holds the file lock across its read so a concurrent ensure write survives", async () => {
+test("presence claim holds its SQLite write transaction across the snapshot so a concurrent ensure survives", async (t) => {
   const fsp = await import("node:fs/promises");
-  const fsSync = (await import("node:fs")).default;
   const os = await import("node:os");
   const path = await import("node:path");
   const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "square-claim-lost-update-"));
+  const { LEDGER_FILENAME } = await import("../dist/host-ledger-sqlite.js");
+  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "square-claim-lost-update-")));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
   const port = new FileHostLedgerPort({ rootPath: root });
   const location = path.join(root, "SQUARE.square");
+  const ledgerFile = path.join(root, LEDGER_FILENAME);
   const now = Date.now();
-  // The presence file must already exist so the claim reads a real snapshot rather than ENOENT.
-  await port.ensurePresence({ location: path.join(root, "OTHER.square"), participant: "Seed", session: "seed-session", channel: "codex", updatedAt: now });
+  assert.equal((await port.ensurePresence({ location: path.join(root, "OTHER.square"), participant: "Seed", session: "seed-session", channel: "codex", updatedAt: now })).status, "ensured");
 
-  const realReadFile = fsSync.promises.readFile;
-  let pauseResolve;
-  const paused = new Promise((resolve) => { pauseResolve = resolve; });
-  let capturedResolve;
-  const captured = new Promise((resolve) => { capturedResolve = resolve; });
-  let intercepted = false;
-  fsSync.promises.readFile = async (...args) => {
-    const result = await realReadFile(...args);
-    if (!intercepted && path.basename(String(args[0])) === "presence.ndjsonl") {
-      intercepted = true;
-      capturedResolve();
-      await paused;
-    }
-    return result;
-  };
-  try {
-    const claim = port.claimPresence({ location, participant: "Claimant", session: "claim-session", channel: "codex", updatedAt: now });
-    const reachedSnapshot = await Promise.race([
-      captured.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
-    ]);
-    assert.equal(reachedSnapshot, true, "claimPresence must read the presence snapshot");
-    const concurrent = port.ensurePresence({ location, participant: "Concurrent", session: "other-session", channel: "codex", updatedAt: now });
-    const settledWhileClaimReads = await Promise.race([
-      concurrent.then(() => true, () => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), 250)),
-    ]);
-    assert.equal(settledWhileClaimReads, false, "claimPresence must hold the presence file lock across its read");
-    pauseResolve();
-    assert.equal((await claim).status, "acquired");
-    await concurrent;
-  } finally {
-    fsSync.promises.readFile = realReadFile;
-    pauseResolve();
-  }
+  const contender = new DatabaseSync(ledgerFile);
+  t.after(() => contender.close());
+  let concurrent;
+  let captured = false;
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, "prepare", function (sql, ...args) {
+    const statement = prepare.call(this, sql, ...args);
+    if (this.location() !== ledgerFile || captured || !/SELECT seq,row_json FROM host_presence\b/.test(sql)) return statement;
+    const all = statement.all;
+    t.mock.method(statement, "all", function (...params) {
+      const snapshot = all.apply(this, params);
+      captured = true;
+      // SQLite callbacks cannot pause asynchronously. Probe the actual lock with
+      // another connection exactly after the authoritative snapshot was read.
+      try {
+        assert.throws(() => contender.exec("BEGIN IMMEDIATE"), /database is locked|database is busy|SQLITE_BUSY/i);
+      } finally {
+        // Also release an incorrectly acquired lock if the assertion fails.
+        try { contender.exec("ROLLBACK"); } catch { /* no transaction when correctly excluded */ }
+      }
+      concurrent = port.ensurePresence({ location, participant: "Concurrent", session: "other-session", channel: "codex", updatedAt: now });
+      return snapshot;
+    });
+    return statement;
+  });
+  const claimed = await port.claimPresence({ location, participant: "Claimant", session: "claim-session", channel: "codex", updatedAt: now });
+  assert.equal(captured, true, "claimPresence must read the indexed presence snapshot");
+  assert.equal(claimed.status, "acquired", claimed.error?.stack);
+  assert.equal((await concurrent).status, "ensured");
   const rows = await port.listPresence({ location });
   assert.deepEqual(rows.map((row) => row.participant).sort(), ["Claimant", "Concurrent"]);
-  await fsp.rm(root, { recursive: true, force: true });
 });

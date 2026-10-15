@@ -12,6 +12,7 @@ import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { hostLedgerForEnv } from '../dist/registry.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
+import { LEDGER_FILENAME } from '../dist/host-ledger-sqlite.js';
 
 async function waitUntil(predicate, message) {
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -100,26 +101,36 @@ test('a retiring watcher cannot suppress an unsent notification in its replaceme
     runtime: emptyRuntimeState(3),
   });
   await hostLedgerForEnv().ensurePresence({ location: squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
+  const canonicalRoot = fs.realpathSync.native(root);
+  const ledgerFile = path.join(canonicalRoot, LEDGER_FILENAME);
   let enter;
-  let release;
   const entered = new Promise((resolve) => { enter = resolve; });
-  const gate = new Promise((resolve) => { release = resolve; });
-  let presenting = false;
+  let blocker;
   let blocked = false;
+  let presenting = false;
+  const release = () => {
+    if (blocker === undefined) return;
+    const db = blocker;
+    blocker = undefined;
+    try { db.exec('ROLLBACK'); } finally { db.close(); }
+  };
   const exec = DatabaseSync.prototype.exec;
   t.mock.method(DatabaseSync.prototype, 'exec', function (...args) {
-    const result = exec.apply(this, args);
-    if (path.basename(this.location()).startsWith('presentation-boundary-')) presenting = true;
-    return result;
-  });
-  const readFile = fs.promises.readFile.bind(fs.promises);
-  t.mock.method(fs.promises, 'readFile', async (...args) => {
-    if (presenting && !blocked && path.basename(String(args[0])) === 'presence.ndjsonl') {
+    const file = this.location();
+    if (blocker !== undefined && file === ledgerFile && /PRAGMA busy_timeout/.test(args[0])) {
       blocked = true;
       enter();
-      await gate;
     }
-    return readFile(...args);
+    const result = exec.apply(this, args);
+    if (!presenting && typeof file === 'string' && path.basename(file).startsWith('presentation-boundary-')
+      && fs.realpathSync.native(path.dirname(file)) === canonicalRoot && /BEGIN EXCLUSIVE/.test(args[0])) {
+      presenting = true;
+      // Hold the real ledger lock after boundary acquisition, before its fresh
+      // lookup. Unlike an async statement mock, this keeps SQLite callbacks sync.
+      blocker = new DatabaseSync(ledgerFile);
+      blocker.exec('BEGIN EXCLUSIVE');
+    }
+    return result;
   });
   const handlers = new Map();
   const sent = [];
@@ -134,6 +145,7 @@ test('a retiring watcher cannot suppress an unsent notification in its replaceme
   const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId } };
   try {
     await handlers.get('session_start')({}, ctx);
+    await waitUntil(() => blocked, 'old watcher never reached the SQLite lookup under the presentation lock');
     await entered;
     const replacement = handlers.get('session_start')({}, ctx);
     await new Promise((resolve) => setImmediate(resolve));

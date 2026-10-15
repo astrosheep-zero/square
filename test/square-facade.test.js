@@ -11,6 +11,7 @@ import { sweepPending } from '../dist/delivery-operations.js';
 import { wakeGraceMs } from '../dist/notifications.js';
 import { ROUTE_FRESH_MS } from '../dist/routes.js';
 import { upsertWakeRoute } from './wake-routes.js';
+import { readLedgerRecords } from './host-ledger-fixtures.js';
 
 test('fixed facade builds, opens, and exposes participant activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-facade-'));
@@ -124,7 +125,6 @@ test('idle catch wakes for a committed activity and expires while quiet', async 
 test('idle catch with a stable route stays quiet and wakes once for an external activity', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-idle-quiet-'));
   const squarePath = path.join(root, 'SQUARE.square');
-  const presenceFile = path.join(root, 'host-ledger-local', 'presence.ndjsonl');
   const env = {
     ...process.env,
     HOME: root,
@@ -148,13 +148,13 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
 
     const snapshot = () => ({
       artifact: fs.readFileSync(squarePath),
-      presence: fs.existsSync(presenceFile) ? fs.readFileSync(presenceFile) : Buffer.alloc(0),
+      presence: readLedgerRecords(env.SQUARE_HOST_LEDGER_ROOT, 'presence'),
     });
     const waiting = bob.catch({ idle: 900 });
     await new Promise((resolve) => setTimeout(resolve, 120));
     const during = snapshot();
     await new Promise((resolve) => setTimeout(resolve, 350));
-    // Self-side publication must not rewrite the artifact or the presence file while quiet.
+    // Self-side publication must not rewrite the artifact or presence records while quiet.
     assert.deepEqual(snapshot(), during);
 
     const expressed = await alice.express('wake @Bob', { force: true, mentions: ['Bob'] });

@@ -10,6 +10,7 @@ import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { openSquare } from '../dist/open-square.js';
+import { readLedgerRecords, rewriteLedgerRecord, seedLedger } from './host-ledger-fixtures.js';
 
 test('global sweep progresses through suppression and unrelated writes without hydrating bodies or chasing new landings', async (t) => {
   t.mock.method(Date, 'now', () => 1005);
@@ -107,7 +108,7 @@ test('release preserves token authority and rejects late or tokenless terminal e
     assert.deepEqual(released.map(({ outcome, signature, message, diagnostic }) => [outcome, signature, message, diagnostic]), [
       ['released', 'presentation_already_recorded', 'suppressed by existing presentation', { outcome: 'presented' }],
     ]);
-    const rows = fs.readFileSync(path.join(root, 'evidence.ndjsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const rows = readLedgerRecords(root, 'evidence');
     assert.deepEqual(rows.map((row) => [row.outcome, row.claimToken]), [['released', second.claimToken]]);
     const replacement = await ledger.claimEvidence({ ...claim, leaseMs: 10, now: 14 });
     assert.equal(replacement.status, 'acquired');
@@ -133,7 +134,7 @@ test('evidence claims use a fresh lease clock at each acquisition', async () => 
     assert.equal(busy.record.expiresAt, 260);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
-test('accepted wake evidence survives retention only while attention is pending', async () => {
+test('accepted wake evidence stays readable past retention', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-evidence-retention-'));
   const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 10 * 86400000 });
   const attention = { squarePath: path.join(root, 'SQUARE.square'), recipient: 'Bob', actIndex: 1 };
@@ -142,11 +143,9 @@ test('accepted wake evidence survives retention only while attention is pending'
     const claim = await ledger.claimWakeAttempt({ attention, session: 's', routeKind: 'paseo', leaseMs: 10, now: 1 });
     assert.equal(claim.status, 'acquired');
     await ledger.appendEvidence({ ...row, routeKind: 'paseo', attemptN: claim.attemptN, claimToken: claim.claimToken });
+    // A durable wake record is exempt from ordinary seven-day retention.
     assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 1);
-    await ledger.gcEvidence({ before: 2, pendingWakeActivities: ['act/1'] });
-    assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 1);
-    await ledger.gcEvidence({ before: 2, pendingWakeActivities: [] });
-    assert.equal((await ledger.listEvidence({ ...row, now: 10 * 86400000 })).length, 0);
+    assert.equal((await ledger.listWakeAttempts({ attention, now: 10 * 86400000 })).length, 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 test('possibly-sent wake evidence stays readable past retention without native delivery', async () => {
@@ -160,10 +159,8 @@ test('possibly-sent wake evidence stays readable past retention without native d
     assert.equal(claim.status, 'acquired');
     await ledger.appendEvidence({ ...row, routeKind: 'paseo', attemptN: claim.attemptN, claimToken: claim.claimToken });
     assert.deepEqual((await ledger.listWakeAttempts({ attention, now: aged })).map((attempt) => [attempt.outcome, attempt.attemptN]), [['unknown', 1]]);
-    await ledger.gcEvidence({ before: 2, pendingWakeActivities: ['act/1'] });
+    // A possibly-sent wake stays visible past ordinary retention without native delivery.
     assert.equal((await ledger.listWakeAttempts({ attention, now: aged })).length, 1);
-    await ledger.gcEvidence({ before: 2, pendingWakeActivities: [] });
-    assert.equal((await ledger.listWakeAttempts({ attention, now: aged })).length, 0);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 test('wake attempts have exactly one acquisition path', async () => {
@@ -462,10 +459,7 @@ test('expired dispatch is unknown across sessions and its late accepted completi
     assert.equal(recovered.record.outcome, 'unknown');
     assert.equal(recovered.record.unknownSource, 'interrupted');
     // Diagnostics can change without changing the recovered attempt's authority.
-    const evidenceFile = path.join(root, 'evidence.ndjsonl');
-    const stored = fs.readFileSync(evidenceFile, 'utf8').trim().split('\n').map(JSON.parse);
-    stored[0].signature = 'edited_diagnostic';
-    fs.writeFileSync(evidenceFile, stored.map(JSON.stringify).join('\n') + '\n');
+    rewriteLedgerRecord(root, 'evidence', 1, { signature: 'edited_diagnostic' });
     assert.equal(recovered.record.session, 'first');
     assert.equal(recovered.record.claimToken, first.claimToken);
     assert.equal((await ledger.claimWakeAttempt({ ...request, session: 'other', routeKind: 'codex-queue', now: 111 })).status, 'terminal');
@@ -500,13 +494,15 @@ test('transport unknown cannot impersonate recovery; native admission can still 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('legacy recovered unknown still accepts the original sender completion', async () => {
+test('a recovered unknown still accepts the original sender completion', async () => {
   // The ledger compares canonical location keys; a seeded row must already carry one.
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'square-legacy-recovery-')));
   const ledger = new FileHostLedgerPort({ rootPath: root, now: () => 100 });
-  const row = { v: 1, location: path.join(root, 'SQUARE.square'), participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'paseo', attemptN: 1, claimToken: 'original', at: 100, outcome: 'unknown', signature: 'worker_interrupted_during_dispatch' };
+  // Runtime no longer normalizes legacy rows: the importer proves that normalization; a
+  // current-storage row must already carry the interrupted origin it is read with.
+  const row = { v: 1, location: path.join(root, 'SQUARE.square'), participant: 'Bob', activity: 'act/2', session: 's', kind: 'wake', routeKind: 'paseo', attemptN: 1, claimToken: 'original', at: 100, outcome: 'unknown', unknownSource: 'interrupted', signature: 'worker_interrupted_during_dispatch' };
   try {
-    fs.writeFileSync(path.join(root, 'evidence.ndjsonl'), JSON.stringify(row) + '\n');
+    seedLedger(root, { evidence: [row] });
     await ledger.appendEvidence({ ...row, outcome: 'accepted', signature: undefined });
     assert.equal((await ledger.listWakeAttempts())[0].outcome, 'accepted');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

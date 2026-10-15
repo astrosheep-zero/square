@@ -3,7 +3,6 @@ export type {
   ClaimResult,
   EvidenceClaim,
   EvidenceRelease,
-  EvidenceGc,
   EvidenceLookup,
   EvidenceRecord,
   HostLedgerPort,
