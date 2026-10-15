@@ -28,8 +28,8 @@
 //
 // The parent process must expose these runtime entrypoints (v2 candidate). If any is absent the
 // run fails loudly instead of printing empty measurements:
-//   dist/square-file-adapter.js  buildSquare(path, {markdown, hardCap})
-//   dist/square-storage.js       createFileCell(path)
+//   dist/open-square.js         buildSquare(path, {markdown, hardCap})
+//   dist/artifact.js             createArtifactPort(path)
 //   dist/artifact.js             readSquareRevision(path)
 //   dist/inbox.js                observeSessionPending(sessionId, env)
 //   dist/host-ledger-file-adapter.js  createHostLedgerPort({rootPath})
@@ -313,15 +313,14 @@ async function loadRuntime() {
     try { return await import(specifier); }
     catch (error) { throw new Error(`benchmark could not load ${specifier}: ${error.message}`); }
   };
-  const storage = await load('square-storage.js');
   const artifact = await load('artifact.js');
-  const fileAdapter = await load('square-file-adapter.js');
+  const fileAdapter = await load('open-square.js');
   const inbox = await load('inbox.js');
   const ledger = await load('host-ledger-file-adapter.js');
   const facade = await load('index.js');
   const need = (owner, name, value) => { if (typeof value !== 'function') missing.push(`${owner}#${name}`); };
-  need('dist/square-file-adapter.js', 'buildSquare', fileAdapter.buildSquare);
-  need('dist/square-storage.js', 'createFileCell', storage.createFileCell);
+  need('dist/open-square.js', 'buildSquare', fileAdapter.buildSquare);
+  need('dist/artifact.js', 'createArtifactPort', artifact.createArtifactPort);
   need('dist/artifact.js', 'readSquareRevision', artifact.readSquareRevision);
   need('dist/inbox.js', 'observeSessionPending', inbox.observeSessionPending);
   need('dist/host-ledger-file-adapter.js', 'createHostLedgerPort', ledger.createHostLedgerPort);
@@ -331,7 +330,7 @@ async function loadRuntime() {
   }
   return {
     buildSquare: fileAdapter.buildSquare,
-    createFileCell: storage.createFileCell,
+    createArtifactPort: artifact.createArtifactPort,
     readSquareRevision: artifact.readSquareRevision,
     observeSessionPending: inbox.observeSessionPending,
     createHostLedgerPort: ledger.createHostLedgerPort,
@@ -434,7 +433,7 @@ async function runWorker(runtime) {
       });
       process.send({ phase: 'done' });
     } else {
-      const cell = runtime.createFileCell(file);
+      const cell = runtime.createArtifactPort(file);
       const baseline = (await cell.read(() => 0)).version;
       process.send({ ready: true });
       await next(); // go
