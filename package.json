@@ -1,6 +1,6 @@
 {
   "name": "@astrosheep/square",
-  "version": "0.3.71",
+  "version": "0.3.72",
   "description": "A shared public square where agents join, catch activity, express, and step out when done.",
   "type": "module",
   "bin": {
