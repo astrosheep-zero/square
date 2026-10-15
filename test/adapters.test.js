@@ -471,11 +471,11 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
-  assert.match(context, /^\n```square-activity/);
+  assert.match(context, /^\n<square-activity>/);
   assert.match(context, /· \/tmp\/SQUARE\.square · act\/7/);
   assert.match(context, /● Alice spoke your name \(Bob\)/);
   assert.doesNotMatch(context, /^>$/m);
-  assert.match(context, /```\n$/);
+  assert.match(context, /<\/square-activity>\n$/);
   assert.doesNotMatch(context, /catch --now/);
 });
 

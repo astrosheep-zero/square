@@ -41,25 +41,17 @@ export function renderAttentionDescription({ actor, recipient, route }: Pick<Att
 }
 
 export function renderAttentionPreview(attention: AttentionPreview): string {
-  // The fence is what keeps the body from being re-rendered by Markdown. It grows past any
-  // backtick run in the body so a body containing a fence cannot break out of this one.
-  // Everything outside the fence is the system's voice, which participant bodies cannot fake.
-  const fence = '`'.repeat(Math.max(3, longestBacktickRun(attention.body) + 1));
   return [
-    `${fence}square-activity`,
+    '<square-activity>',
     `· ${displayAttentionPath(attention.squarePath)} · ${formatActivityId(attention.actIndex)}`,
     `● ${renderAttentionDescription(attention)}`,
     '',
     previewAttentionBody(attention.body),
-    fence,
+    '</square-activity>',
     // A clipped body ends with the full command to read it all: a labeled caption, then the
     // command bare on its own line so it can be copied and run as it is.
     ...(attentionBodyIsClipped(attention.body)
       ? ['· clipped — read it all:', `${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
       : []),
   ].join('\n');
-}
-
-function longestBacktickRun(value: string): number {
-  return value.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
 }

@@ -160,7 +160,7 @@ test('attention preview distinguishes mention, reply, listening, and everyone’
 test('attention metadata is separate from unindented Markdown body', () => {
   const body = '*thought*\n\n- item\n  - nested\n\n```js\n  run();\n```';
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a"&<b>.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body });
-  assert.equal(rendered, ['````square-activity', '· /tmp/a"&<b>.square · act/12', '● Alice rang the bell · everyone’s attention', '', body, '````'].join('\n'));
+  assert.equal(rendered, ['<square-activity>', '· /tmp/a"&<b>.square · act/12', '● Alice rang the bell · everyone’s attention', '', body, '</square-activity>'].join('\n'));
 });
 
 test('attention body is complete up to the preview boundary', () => {
@@ -170,7 +170,7 @@ test('attention body is complete up to the preview boundary', () => {
 
 test('clipped attention ends with a labeled caption and a bare read-it-all command', () => {
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body: 'x'.repeat(250) });
-  assert.equal(rendered, ['```square-activity', '· /tmp/a.square · act/12', '● Alice rang the bell · everyone’s attention', '', `${'x'.repeat(200)}…`, '```',
+  assert.equal(rendered, ['<square-activity>', '· /tmp/a.square · act/12', '● Alice rang the bell · everyone’s attention', '', `${'x'.repeat(200)}…`, '</square-activity>',
     '· clipped — read it all:', `square --location '${path.resolve('/tmp/a.square')}' --as 'Bob' catch --id act/12`].join('\n'));
 });
 
@@ -179,11 +179,11 @@ test('unclipped attention has no continuation command', () => {
   assert.doesNotMatch(rendered, /catch --id/);
 });
 
-test('a backtick run in the command path stays outside the fence', () => {
+test('a backtick run in the command path stays outside the activity tags', () => {
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a```b.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body: 'x'.repeat(201) });
   const lines = rendered.split('\n');
-  assert.equal(lines[0], '```square-activity');
-  assert.equal(lines[5], '```');
+  assert.equal(lines[0], '<square-activity>');
+  assert.equal(lines[5], '</square-activity>');
   assert.equal(lines[6], '· clipped — read it all:');
   assert.equal(lines[7], `square --location '${path.resolve('/tmp/a```b.square')}' --as 'Bob' catch --id act/12`);
 });
