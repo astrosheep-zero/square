@@ -87,6 +87,28 @@ test('exclusive lock acquisition is cancellable before callback; close drains wo
   await port.close();
 });
 
+test('busy writer acquisition can be cancelled and a later writer still runs exactly once', async t => {
+  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
+  t.after(() => writer.close());
+  await port.revision();
+  writer.exec('BEGIN IMMEDIATE');
+  const abort = new AbortController(), reason = new Error('stop writer acquisition');
+  let calls = 0;
+  const change = w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); };
+  const cancelled = assert.rejects(port.transact(change, abort.signal), e => e === reason);
+  await sleep(40);
+  abort.abort(reason);
+  await cancelled;
+  assert.equal(calls, 0);
+  const next = port.transact(change);
+  await sleep(40);
+  assert.equal(calls, 0);
+  writer.exec('ROLLBACK');
+  assert.equal((await next).value.index, 0);
+  assert.equal(calls, 1);
+  assert.equal(await port.revision(), 1);
+});
+
 test('two processes serialize unseen selection plus sparse receipt insertion without double consumption', async t => {
   const { file, port } = await fixture(t);
   await port.transact(w => {

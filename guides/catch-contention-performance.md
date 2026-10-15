@@ -121,3 +121,37 @@ Every candidate first-catch p95 is below its history's baseline range, but these
 All twelve scenarios discovered 300 participants, consumed one activity each, and consumed none again: 3,600 successful worker results. Each scenario retains 300 hydrated bodies, 600 SQL writes, 300 committed artifact writes and 1,800 committed artifact reads. All stderr files were empty. Tests cover aggregate read-your-writes and rollback, known-but-not-standing peers, missing/done caller quorum, cap precedence, and ordinal numbering across aliases, gaps, rejoins and subsequent writes.
 
 Raw local reports: `/tmp/square-catch-positive-before-{1,2,3}.json` and `/tmp/square-catch-positive-after-{1,2,3}.json`. Earlier reports lack these transaction timing fields and should not be mixed into this comparison.
+
+## Follow-up: spreading writer acquisition retries
+
+Writer acquisition now uses a per-transaction backoff window of 25, 50, then at most 100 ms. Each busy retry independently chooses an integer delay from 1 through that window. Read acquisition and other default retries remain fixed at 25 ms; a busy COMMIT still retries after 1 ms while retaining the writer. The shared helper applies this policy to artifact and host-ledger writes. Cancellation, rollback, synchronous callbacks, receipt selection and storage framing are unchanged.
+
+This changes both retry frequency and synchronization, not jitter alone. At the cap the mean requested delay is 50.5 ms rather than 25 ms. The intent is to reduce contender overhead, not to pretend queue waiting is idle time: serial write hold plus commit already accounts for most of the previous catch duration. Wall-time measurements cannot prove how much of the benefit comes from scheduling or filesystem contention. There is no fairness guarantee; an individual contended retry can sleep longer than before. Uncontended attempts do not sleep.
+
+Baseline `f004621` and the isolated writer-only candidate each ran three times with the same instrumentation and command above. Execution order was baseline 1, three rejected schema-normalization experiments, baselines 2–3, one broader retry pilot, then writer-only candidates 1–3. No build, test suite or second benchmark ran alongside a benchmark. This was not a randomized comparison; prior tables are separate experiments and should not be used as its baseline. The schema-normalization fast path showed no consistent benefit and was removed. The broader pilot is excluded from the results below.
+
+| Metric | Before, 1,800 history | After, 1,800 | Before, 18,000 | After, 18,000 |
+| --- | ---: | ---: | ---: | ---: |
+| First catch API p95 (ms) | 2,942.43 | 2,696.24 | 3,314.33 | 2,703.95 |
+| Empty catch API p95 (ms) | 114.52 | 83.35 | 107.99 | 85.06 |
+| Whole catch phase p95 (ms) | 3,281.04 | 3,089.50 | 3,797.85 | 3,008.00 |
+| Write acquisition p95 (ms) | 2,460.38 | 2,044.42 | 2,441.14 | 2,114.18 |
+| Write hold p95 (ms) | 6.43 | 5.46 | 7.20 | 5.39 |
+| Write commit p95 (ms) | 4.72 | 3.87 | 4.64 | 3.50 |
+| Aggregate phase CPU (ms) | 14,791.25 | 12,797.97 | 16,050.74 | 12,994.48 |
+| Artifact busy observations | 14,311 | 8,943 | 15,203 | 8,966 |
+
+Cells are medians of three run-level measurements. First-catch p95 medians improve 8% and 18%, whole-phase medians 6% and 21%, and CPU 13% and 19%. Empty-catch p95 medians improve 27% and 21%; total busy observations fall 38% and 41%. Median run-level maximum write acquisition falls from 2,835.81 to 2,626.85 ms and from 3,064.84 to 2,656.63 ms; this is not a bounded maximum or a starvation guarantee.
+
+| History | Call | Before p95 runs (ms) | After p95 runs (ms) |
+| --- | --- | --- | --- |
+| 1,800 | First | 3,518.32 / 2,942.43 / 2,797.10 | 2,479.32 / 2,696.24 / 2,829.63 |
+| 18,000 | First | 2,791.81 / 3,314.33 / 3,457.89 | 2,576.67 / 2,759.20 / 2,703.95 |
+| 1,800 | Empty | 114.52 / 114.76 / 100.27 | 83.35 / 84.59 / 82.22 |
+| 18,000 | Empty | 118.99 / 107.99 / 63.28 | 108.44 / 85.06 / 61.79 |
+
+Small-history consuming and whole-phase ranges overlap; large-history consuming ranges do not. Not every tail metric improves: the large-history median of each run's maximum COMMIT duration rises from 506.88 to 920.92 ms, despite the lower COMMIT p95. These local three-run results show lower contention overhead, not a universal latency improvement. Consuming catch still takes seconds near the tail with 300 simultaneous processes.
+
+All twelve scenarios discovered 300 participants, consumed exactly one activity each and consumed none again: 3,600 successful worker results. Each retains 300 hydrated bodies, 600 SQL writes, 300 committed artifact writes and 1,800 committed artifact reads. All stderr files were empty. A new real-lock test checks cancellation before writer acquisition and successful single-callback execution on a subsequent transaction; existing tests retain busy COMMIT cancellation, same-result retries and cross-process receipt exclusion.
+
+Raw local reports: `/tmp/square-lock-before-{1,2,3}.json` and `/tmp/square-lock-writer-{1,2,3}.json`. Discarded experiments are `/tmp/square-lock-schema-{1,2,3}.json` and `/tmp/square-lock-jitter-1.json`.
