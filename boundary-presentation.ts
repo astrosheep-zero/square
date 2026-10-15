@@ -139,7 +139,14 @@ async function presentPendingAtBoundaryUnlocked<T>(
   return result;
 }
 
-/** Serialize a boundary across hook processes so one stale inbox cannot render twice. */
+/**
+ * Serialize a boundary across hook processes so one stale inbox cannot render twice.
+ *
+ * `lookup` returns the session's memberships for this boundary. It may reuse an observation it has
+ * verified against the current presence binding and artifact revision; the boundary still projects
+ * presentation evidence live, and `presentPending` still re-checks the pending head, join, ownership
+ * claim and seen CAS. A source that cannot verify its reuse must read the inbox again.
+ */
 export async function presentPendingAtBoundary<T>(
   sessionId: string,
   present: (context: string) => T | Promise<T>,

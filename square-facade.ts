@@ -1,6 +1,6 @@
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { StoredAct } from './model.js';
-import type { HostLedgerPort, WakeTransportPort, DeliveryResult } from './ports.js';
+import type { HostLedgerPort, WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
 import type { DiagnoseResult } from './artifact.js';
 import type { MigrationOutcome } from './square-migration.js';
 
@@ -58,6 +58,9 @@ export interface SquareApplicationContext extends Readonly<OpenOptions> {
   readonly env: NodeJS.ProcessEnv;
   readonly squarePath?: string;
   readonly participant?: string;
+  /** Borrow the owner's connection for the configured square. The caller owns its lifetime;
+   *  without an owner, each operation opens and closes its own connection. */
+  readonly resources?: SquareResourceOwner;
 }
 /** Data-only callers do not request or pay for presentation work. */
 export interface ApplicationOutcome<Data, Projection, Presentation extends boolean = true> {

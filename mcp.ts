@@ -4,13 +4,14 @@ import { z } from 'zod/v4';
 import { SquareError, isSquareError } from './model.js';
 import { operationEnv } from './automatic-session.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { createSquareApplication } from './square-application.js';
+import { createSquareApplication, createSquareResourceOwner } from './square-application.js';
 import type { ApplicationFailureDetail, ApplicationOutcome, CatchApplicationOptions, ExpressApplicationOptions, HistoryApplicationQuery, OperationControl, SquareApplication, SquareApplicationContext } from './square-facade.js';
 
 type JsonObject = Record<string, unknown>;
 interface ToolDefinition { name: string; description: string; inputSchema: z.ZodObject<z.ZodRawShape, z.core.$strict>; }
 
-export interface SquareMcpOptions extends SquareApplicationContext {}
+/** The server owns its artifact connection lifetime, so callers cannot lend one. */
+export interface SquareMcpOptions extends Omit<SquareApplicationContext, 'resources'> {}
 export type SquareMcpServer = McpServer;
 
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/);
@@ -55,36 +56,61 @@ function operation(app: SquareApplication<false>, name: string, args: JsonObject
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
   const baseEnv = { ...options.env };
+  const resources = createSquareResourceOwner();
+  // One explicit lifetime for this server: every tool call borrows the same connection.
+  const inFlight = new Set<Promise<unknown>>();
   const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
     instructions: 'The catch tool consumes activities. Use history with act/<index> cursors for read-only archive access.',
   });
   for (const tool of TOOL_DEFINITIONS) {
-    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, async (args, extra) => {
-      try {
-        const { as: participant, ...operationArgs } = args as JsonObject;
-        const threadId = extra._meta?.threadId;
-        const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
-        const env = typeof threadId === 'string' && threadId.trim()
-          ? operationEnv('codex', threadId, baseEnv)
-          : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
-            ? operationEnv('opencode', opencodeSessionId, baseEnv)
-            : baseEnv;
-        const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant }, { presentation: false });
-        const outcome = await operation(app, tool.name, operationArgs, { signal: extra.signal });
-        const structuredContent = outcome.data as JsonObject;
-        return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
-      } catch (error) {
-        const normalized = extra.signal.aborted
-          ? { code: 'cancelled', message: 'The MCP request was cancelled' }
-          : isSquareError(error)
-            ? { code: error.code, message: error.message, ...(error.facts === undefined ? {} : { facts: error.facts }) }
-            : { code: 'internal', message: error instanceof Error ? error.message : String(error) };
-        const operation = error instanceof Error ? (error as Error & { operation?: ApplicationFailureDetail }).operation : undefined;
-        const failure = operation === undefined ? normalized : { ...normalized, operation };
-        return { isError: true, content: [{ type: 'text', text: JSON.stringify(failure) }], structuredContent: { error: failure } };
-      }
+    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
+      const call = (async () => {
+        try {
+          const { as: participant, ...operationArgs } = args as JsonObject;
+          const threadId = extra._meta?.threadId;
+          const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
+          const env = typeof threadId === 'string' && threadId.trim()
+            ? operationEnv('codex', threadId, baseEnv)
+            : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
+              ? operationEnv('opencode', opencodeSessionId, baseEnv)
+              : baseEnv;
+          const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant, resources }, { presentation: false });
+          const outcome = await operation(app, tool.name, operationArgs, { signal: extra.signal });
+          const structuredContent = outcome.data as JsonObject;
+          return { content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }], structuredContent };
+        } catch (error) {
+          const normalized = extra.signal.aborted
+            ? { code: 'cancelled', message: 'The MCP request was cancelled' }
+            : isSquareError(error)
+              ? { code: error.code, message: error.message, ...(error.facts === undefined ? {} : { facts: error.facts }) }
+              : { code: 'internal', message: error instanceof Error ? error.message : String(error) };
+          const operation = error instanceof Error ? (error as Error & { operation?: ApplicationFailureDetail }).operation : undefined;
+          const failure = operation === undefined ? normalized : { ...normalized, operation };
+          return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(failure) }], structuredContent: { error: failure } };
+        }
+      })();
+      inFlight.add(call);
+      return call.finally(() => { inFlight.delete(call); });
     });
   }
+  const close = server.close.bind(server);
+  // One idempotent shutdown for both close paths: an explicit server.close() and a
+  // transport-initiated disconnect, where the SDK protocol fires onclose by itself.
+  let draining: Promise<void> | undefined;
+  const drain = (): Promise<void> => draining ??= (async () => {
+    // The SDK aborts in-flight request signals before onclose/close returns; wait for
+    // those handlers to release the shared connection (their cleanup writes included).
+    await Promise.allSettled([...inFlight]);
+    await resources.close();
+  })();
+  server.close = async () => { await close(); await drain(); };
+  const priorOnclose = server.server.onclose;
+  server.server.onclose = () => {
+    // onclose is synchronous, so the disconnect path starts the drain without awaiting it;
+    // the handler's own catch keeps an unexpected close failure from crashing the process.
+    void drain().catch(() => undefined);
+    priorOnclose?.();
+  };
   return server;
 }
 

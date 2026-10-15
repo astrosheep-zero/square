@@ -27,6 +27,7 @@ import { streamSquare } from './stream.js';
 import type { Activity, ApplicationFailureDetail, ApplicationOutcome, CatchApplicationOptions, CatchResult, CatchStopStatus, ExpressApplicationOptions, ExpressApplicationData, ExpressProjection, ExpressOptions, ExpressResult, HistoryQuery, JoinApplicationOptions, JoinApplicationData, ListenerChangeResult, OperationControl, Participant, ParticipantStatus, SquareApplication, SquareApplicationContext, SquareAtInput, SquareBuildInput, SquareContextProjection, SquareSnapshot } from './square-facade.js';
 
 export type * from './square-facade.js';
+export { createSquareResourceOwner } from './open-square.js';
 export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 export { CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT } from './catch-decisions.js';
 export { HELD_WAIT_BUDGET_MS } from './runtime.js';
@@ -373,6 +374,7 @@ export function createSquareApplication(context: SquareApplicationContext, deman
   const hostLedger = context.hostLedger ?? hostLedgerForEnv(env);
   const openOptions = { env, clock, hostLedger, wakeTransport: context.wakeTransport };
   const getTransport = defaultTransport(openOptions);
+  const resources = context.resources;
   function location(): string {
     const selected = context.squarePath ?? env.SQUARE_LOCATION;
     if (selected === undefined || selected.trim() === '') throw new SquareError('invalid_args', 'Square application context needs a square location');
@@ -390,7 +392,9 @@ export function createSquareApplication(context: SquareApplicationContext, deman
   }
   async function scoped<T>(operation: (square: OpenSquare) => Promise<T>, control?: OperationControl): Promise<T> {
     checkControl(control);
-    const square = await openSquare(location(), openOptions, control);
+    const selected = location();
+    const artifact = resources?.artifact(selected);
+    const square = await openSquare(selected, { ...openOptions, artifact }, control);
     try { return await operation(square); }
     finally { await closeOpenSquare(square).catch(() => undefined); }
   }

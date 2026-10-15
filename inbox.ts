@@ -119,6 +119,8 @@ async function capture<T>(observer: VersionObserver<T>, kind: CapturedChange['ki
 }
 
 export interface SessionPendingObserver {
+  /** Read committed revisions before reusing content; filesystem hints are only for waiting. */
+  read(options?: Pick<PendingWaitOptions, 'signal' | 'excludeKeys'>): Promise<InboxMembership[]>;
   wait(timeoutMs: number, options?: PendingWaitOptions): Promise<InboxMembership[]>;
   close(): void;
 }
@@ -133,7 +135,59 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
     inbox: Map<string, { binding: string; version: number; value: InboxMembership | undefined }>;
   }>();
   const lifetime = new AbortController();
+  const bindingsNow = async () => Promise.all((await projectSessionBindings({ hostLedger, sessionId })).map(async (binding) =>
+    ({ ...binding, location: await canonicalPath(binding.location) })));
+  async function membershipAt(binding: SessionBindingProjection, version: number | null | undefined, signal: AbortSignal) {
+    const cache = artifacts.get(binding.location)?.inbox;
+    const name = nameKey(binding.participant);
+    const coordinate = bindingCoordinate(binding);
+    let cached = cache?.get(name);
+    if (cached === undefined || cached.version !== version || cached.binding !== coordinate) {
+      cached = { ...await readInboxMembership(binding, signal), binding: coordinate };
+      cache?.set(name, cached);
+    }
+    const membership = cached.value;
+    if (membership === undefined) return undefined;
+    const { catchLease, ...rest } = membership;
+    const now = Date.now();
+    return catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
+      ? membership : rest;
+  }
+  async function eligibleInbox(inbox: InboxMembership[], excludeKeys?: ReadonlySet<string>) {
+    const eligible = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
+    return excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
+      const notifications = membership.notifications.filter((notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)));
+      return notifications.length === 0 ? [] : [{ ...membership, notifications }];
+    });
+  }
   return {
+    async read(options = {}) {
+      const signal = AbortSignal.any([lifetime.signal, ...(options.signal === undefined ? [] : [options.signal])]);
+      signal.throwIfAborted();
+      const bindings = await bindingsNow();
+      const revisions = new Map<string, number>();
+      const inbox: InboxMembership[] = [];
+      for (const binding of bindings) {
+        signal.throwIfAborted();
+        try {
+          let version = revisions.get(binding.location);
+          if (version === undefined) {
+            const artifact = createArtifactPort(binding.location);
+            try { version = await artifact.revision(signal); }
+            finally { await artifact.close(); }
+            revisions.set(binding.location, version);
+          }
+          const membership = await membershipAt(binding, version, signal);
+          if (membership !== undefined) inbox.push(membership);
+        } catch (error) {
+          if (signal.aborted) throw signal.reason ?? error;
+          // An unreadable current revision must never authorize cached content.
+        }
+      }
+      const pending = await eligibleInbox(inbox, options.excludeKeys);
+      signal.throwIfAborted();
+      return pending;
+    },
     async wait(timeoutMs, options = {}) {
       const deadline = Date.now() + Math.max(0, timeoutMs);
       const expired = new AbortController();
@@ -147,8 +201,7 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
         while (!signal.aborted) {
           // Subscribe/capture the ledger BEFORE discovering bindings; a concurrent join cannot fall in a gap.
           const sources: CapturedChange[] = await Promise.all([capture(ledger.presence, 'presence', signal), capture(ledger.evidence, 'evidence', signal)]);
-          const bindings = await Promise.all((await projectSessionBindings({ hostLedger, sessionId })).map(async (binding) =>
-            ({ ...binding, location: await canonicalPath(binding.location) })));
+          const bindings = await bindingsNow();
           const paths = new Set(bindings.map((binding) => binding.location));
           for (const [file, entry] of artifacts) {
             if (!paths.has(file)) { entry.observer.close(); artifacts.delete(file); }
@@ -170,32 +223,15 @@ export async function observeSessionPending(sessionId: string, suppliedEnv: Node
           const inbox: InboxMembership[] = [];
           for (const binding of bindings) {
             if (signal.aborted) return [];
-            const entry = artifacts.get(binding.location)!;
-            const name = nameKey(binding.participant);
             try {
-              const coordinate = bindingCoordinate(binding);
-              const cached = entry.inbox.get(name);
-              if (cached?.version !== revisions.get(binding.location) || cached?.binding !== coordinate) {
-                const projection = await readInboxMembership(binding, signal);
-                entry.inbox.set(name, { ...projection, binding: coordinate });
-              }
-              const membership = entry.inbox.get(name)?.value;
-              if (membership === undefined) continue;
-              const { catchLease, ...rest } = membership;
-              const now = Date.now();
-              inbox.push(catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
-                ? membership : rest);
+              const membership = await membershipAt(binding, revisions.get(binding.location), signal);
+              if (membership !== undefined) inbox.push(membership);
             } catch (error) {
               if (signal.aborted) throw signal.reason ?? error;
               // Unreadable projections are retried, never cached as current.
             }
           }
-          const eligible = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
-          const excludeKeys = options.excludeKeys;
-          const pending: InboxMembership[] = excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
-            const notifications = membership.notifications.filter((notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)));
-            return notifications.length === 0 ? [] : [{ ...membership, notifications }];
-          });
+          const pending = await eligibleInbox(inbox, options.excludeKeys);
           const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => notificationKey(membership, note.actIndex))).sort());
           if (previousEligible !== undefined && previousEligible !== eligibleKeys) canReturn = true;
           previousEligible = eligibleKeys;

@@ -146,6 +146,17 @@ export interface SquareArtifactPort {
   close(): Promise<void>;
 }
 
+/** Explicit lifetime for an artifact connection reused by a long-lived caller.
+ * Only the connection is shared: every open still derives its own environment,
+ * clock, ledger and transport, and no request signal becomes a connection lifetime.
+ * The owner holds one location and refuses a second rather than sharing the wrong
+ * square; the caller lends the connection and never closes it. */
+export interface SquareResourceOwner {
+  /** The shared connection for a location. Never close it; the owner does. */
+  artifact(location: string): SquareArtifactPort;
+  close(): Promise<void>;
+}
+
 /** Capability-neutral wake transport. Unused by this Contract's activity operations. */
 export interface WakeTransportPort {
   /** Capability check that performs no external wake and writes no evidence. */

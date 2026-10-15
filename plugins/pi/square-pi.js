@@ -254,16 +254,12 @@ export default function squarePiExtension(pi) {
               }
               return landing.promise;
             },
-            async (id, env) => {
-              const inbox = await sessionInbox(id, env ?? sessionEnv(id));
+            async (_id, _env, boundarySignal) => {
+              // Recheck committed revisions and current bindings before reusing observed content.
+              const inbox = await observer.read({ signal: boundarySignal, excludeKeys: handledPending });
               if (signal.aborted || token !== generation) return [];
               for (const key of inboxKeys(inbox)) observedPending.add(key);
-              return inbox.map((membership) => ({
-                ...membership,
-                notifications: membership.notifications.filter((note) => !handledPending.has(
-                  `${membership.squarePath}\u0000${membership.name.toLocaleLowerCase()}\u0000${note.actIndex}`,
-                )),
-              }));
+              return inbox;
             },
             env,
             signal,
