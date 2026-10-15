@@ -59,7 +59,11 @@ export interface SquareApplicationContext extends Readonly<OpenOptions> {
   readonly squarePath?: string;
   readonly participant?: string;
 }
-export interface ApplicationOutcome<Data, Projection> { readonly data: Data; readonly projection: Projection; }
+/** Data-only callers do not request or pay for presentation work. */
+export interface ApplicationOutcome<Data, Projection, Presentation extends boolean = true> {
+  readonly data: Data;
+  readonly projection: Presentation extends true ? Projection : undefined;
+}
 export interface ApplicationFailureDetail {
   readonly operation: 'express' | 'join' | 'catch' | 'history' | 'other';
   readonly subject?: 'caller' | 'filter' | 'recipient';
@@ -243,26 +247,26 @@ export interface StatusProjection extends SquareContextProjection, PresenceClass
 }
 export interface ParticipantsProjection extends SquareContextProjection, PresenceClassification {}
 
-export interface SquareApplication {
+export interface SquareApplication<Presentation extends boolean = true> {
   now(): number;
-  build(input: BuildApplicationInput, control?: OperationControl): Promise<ApplicationOutcome<BuildApplicationData, SquareContextProjection>>;
-  join(options?: JoinApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<JoinApplicationData, EntryProjection>>;
-  express(body: string, options?: ExpressApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<ExpressApplicationData, ExpressProjection>>;
-  catch(options?: CatchApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<CatchApplicationData, CatchProjection>>;
-  history(query?: HistoryApplicationQuery, control?: OperationControl): Promise<ApplicationOutcome<HistoryApplicationData, HistoryProjection>>;
-  listen(target: string, control?: OperationControl): Promise<ApplicationOutcome<ListenerChangeData, ListenerProjection>>;
-  ignore(target: string, control?: OperationControl): Promise<ApplicationOutcome<ListenerChangeData, ListenerProjection>>;
-  listening(control?: OperationControl): Promise<ApplicationOutcome<ListeningData, SquareContextProjection>>;
-  hold(reason?: string, control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection>>;
-  resume(control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection>>;
-  done(body?: string, control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection>>;
-  status(viewer?: string, control?: OperationControl): Promise<ApplicationOutcome<StatusApplicationData, StatusProjection>>;
-  participants(control?: OperationControl): Promise<ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection>>;
-  diagnose(control?: OperationControl): Promise<ApplicationOutcome<DiagnosisApplicationData, Partial<SquareContextProjection>>>;
-  migrate(control?: OperationControl): Promise<ApplicationOutcome<MigrationApplicationData, Partial<SquareContextProjection>>>;
-  discover(options: DiscoveryApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<DiscoveryApplicationData, DiscoveryProjection>>;
-  inbox(sessionId: string, options?: InboxApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<InboxApplicationData, InboxProjection>>;
-  recovery(control?: OperationControl): Promise<ApplicationOutcome<RecoveryApplicationData, RecoveryProjection>>;
+  build(input: BuildApplicationInput, control?: OperationControl): Promise<ApplicationOutcome<BuildApplicationData, SquareContextProjection, Presentation>>;
+  join(options?: JoinApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<JoinApplicationData, EntryProjection, Presentation>>;
+  express(body: string, options?: ExpressApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<ExpressApplicationData, ExpressProjection, Presentation>>;
+  catch(options?: CatchApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<CatchApplicationData, CatchProjection, Presentation>>;
+  history(query?: HistoryApplicationQuery, control?: OperationControl): Promise<ApplicationOutcome<HistoryApplicationData, HistoryProjection, Presentation>>;
+  listen(target: string, control?: OperationControl): Promise<ApplicationOutcome<ListenerChangeData, ListenerProjection, Presentation>>;
+  ignore(target: string, control?: OperationControl): Promise<ApplicationOutcome<ListenerChangeData, ListenerProjection, Presentation>>;
+  listening(control?: OperationControl): Promise<ApplicationOutcome<ListeningData, SquareContextProjection, Presentation>>;
+  hold(reason?: string, control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection, Presentation>>;
+  resume(control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection, Presentation>>;
+  done(body?: string, control?: OperationControl): Promise<ApplicationOutcome<LifecycleData, LifecycleProjection, Presentation>>;
+  status(viewer?: string, control?: OperationControl): Promise<ApplicationOutcome<StatusApplicationData, StatusProjection, Presentation>>;
+  participants(control?: OperationControl): Promise<ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection, Presentation>>;
+  diagnose(control?: OperationControl): Promise<ApplicationOutcome<DiagnosisApplicationData, Partial<SquareContextProjection>, Presentation>>;
+  migrate(control?: OperationControl): Promise<ApplicationOutcome<MigrationApplicationData, Partial<SquareContextProjection>, Presentation>>;
+  discover(options: DiscoveryApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<DiscoveryApplicationData, DiscoveryProjection, Presentation>>;
+  inbox(sessionId: string, options?: InboxApplicationOptions, control?: OperationControl): Promise<ApplicationOutcome<InboxApplicationData, InboxProjection, Presentation>>;
+  recovery(control?: OperationControl): Promise<ApplicationOutcome<RecoveryApplicationData, RecoveryProjection, Presentation>>;
   stream(options: StreamApplicationOptions, control?: OperationControl): AsyncIterable<StreamApplicationRecord>;
 }
 

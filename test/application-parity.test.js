@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square, createSquareApplication } from '../dist/square-application.js';
@@ -138,4 +139,96 @@ test('departed express reenters exactly once and never-joined express is unsent 
   assert.deepEqual(refused.structuredContent.error.operation, { operation: 'express', participant: 'Never', subject: 'caller', expressEffect: 'unsent' });
   assert.deepEqual((await direct.app().history()).data, (await json.app().history()).data);
   assert.equal((await direct.app().participants()).data.participants.some((participant) => participant.name === 'Never'), false);
+});
+
+function measureArtifact(t, squarePath) {
+  const file = fs.realpathSync(squarePath);
+  const exec = DatabaseSync.prototype.exec, prepare = DatabaseSync.prototype.prepare;
+  let reads = 0, hydrated = 0;
+  t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
+    if (this.location() === file && sql.trim().toUpperCase() === 'BEGIN') reads++;
+    return exec.call(this, sql, ...args);
+  });
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    const statement = prepare.call(this, sql, ...args);
+    if (this.location() === file && sql.startsWith('SELECT * FROM activities WHERE act_index IN ')) {
+      const all = statement.all;
+      statement.all = function (...values) {
+        const rows = all.apply(this, values);
+        hydrated += rows.length;
+        return rows;
+      };
+    }
+    return statement;
+  });
+  return async (operation) => {
+    const before = { reads, hydrated };
+    const value = await operation();
+    return { value, reads: reads - before.reads, hydrated: hydrated - before.hydrated };
+  };
+}
+
+test('MCP skips unused presentation reads while CLI-facing outcomes still capture them', async (t) => {
+  const options = await fixture(t, 'presentation-demand');
+  await options.app('Alice').join();
+  await options.app('Bob').join();
+  await options.app('Bob').express('for Alice', { force: true, mentions: ['Alice'] });
+  const call = await mcp(t, options);
+  const measure = measureArtifact(t, options.squarePath);
+
+  const fullJoin = await measure(() => options.app('Alice').join());
+  const dataJoin = await measure(() => call('join', { as: 'Alice' }));
+  assert.deepEqual(dataJoin.value, fullJoin.value.data);
+  assert.equal(dataJoin.hydrated, 0);
+  assert.ok(fullJoin.hydrated > 0, 'join presentation really reads recent activity bodies');
+  assert.equal(fullJoin.reads - dataJoin.reads, 1);
+
+  const dataExpress = await measure(() => call('express', { as: 'Alice', body: 'data', force: true }));
+  const fullExpress = await measure(() => options.app('Alice').express('presented', { force: true }));
+  assert.equal(dataExpress.hydrated, 0);
+  assert.ok(fullExpress.hydrated > 0, 'terminal expression retains its pre-send directed feed');
+  assert.equal(fullExpress.reads - dataExpress.reads, 1);
+  assert.deepEqual(fullExpress.value.projection.pendingPublic.map((act) => act.body), ['for Alice']);
+  assert.equal(dataExpress.value.activity.body, 'data');
+
+  const caught = await measure(() => call('catch', { as: 'Alice' }));
+  assert.deepEqual(caught.value.activities.map((act) => act.body), ['for Alice']);
+  assert.equal(caught.hydrated, 1, 'catch hydrates exactly its selected page');
+  const fullEmpty = await measure(() => options.app('Alice').catch());
+  const dataEmpty = await measure(() => call('catch', { as: 'Alice' }));
+  assert.deepEqual(dataEmpty.value, fullEmpty.value.data);
+  assert.equal(dataEmpty.hydrated, 0);
+  assert.equal(fullEmpty.reads - dataEmpty.reads, 1, 'only presentation requests nearby presence');
+  assert.ok(fullEmpty.value.projection.presence);
+
+  const archive = await measure(() => call('history'));
+  assert.ok(archive.hydrated > 0, 'positive control: data-bearing history still reads bodies');
+  assert.deepEqual(archive.value, (await options.app().history()).data);
+  assert.deepEqual(await call('status'), (await options.app().status()).data);
+  assert.deepEqual(await call('participants'), (await options.app().participants()).data);
+});
+
+test('catch resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {
+  const options = await fixture(t, 'catch-name-demand');
+  for (const name of ['Alice', 'Bob', 'Cara', 'Dan']) await options.app(name).join();
+  await options.app('Dan').done();
+  const app = createSquareApplication({ ...options, participant: 'aLiCe' }, { presentation: false });
+  const measure = measureArtifact(t, options.squarePath);
+  const one = await measure(() => app.catch({ from: ['BOB'] }));
+  const many = await measure(() => app.catch({ from: ['BOB', 'cara', 'Dan', 'BOB'] }));
+  assert.equal(one.reads, many.reads, 'filter count does not add artifact transactions');
+  assert.deepEqual(one.value.data, many.value.data);
+  assert.equal(many.value.projection, undefined);
+  for (const [participant, from, subject, canonical] of [
+    ['Nobody', ['Unknown'], 'caller', 'Nobody'],
+    ['aLiCe', ['Unknown'], 'filter', 'Alice'],
+  ]) {
+    const selected = createSquareApplication({ ...options, participant }, { presentation: false });
+    await assert.rejects(selected.catch({ from }), (error) => {
+      assert.equal(error.code, 'invalid_args');
+      assert.equal(error.facts.reason, 'never_joined');
+      assert.deepEqual(error.operation, { operation: 'catch', subject, participant: canonical });
+      return true;
+    });
+  }
 });

@@ -2,7 +2,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError, isSquareError, nameKey, validateName, type WatchOptions } from './model.js';
-import { validateDoneBody } from './decisions.js';
+import { resolveKnownName, validateDoneBody } from './decisions.js';
 import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
@@ -93,8 +93,8 @@ async function joinOwned(square: OpenSquare, requested: string, options: JoinApp
 async function prepareExpression(square: OpenSquare, requested: string, control?: OperationControl) {
   try {
     checkControl(control);
-    const name = (await resolveParticipant(square, requested, control)).name;
-    return await joinOwned(square, name, {}, control);
+    const result = await join(square, requested, control, { requireKnown: true });
+    return { participant: result.name, activity: result.activity };
   } catch (error) {
     throw failure(error, { operation: 'express', subject: 'caller', participant: requested, expressEffect: 'unsent' });
   }
@@ -151,13 +151,13 @@ async function landExpression(
 
 async function expressOwned(
   square: OpenSquare, requested: string, body: string, options: ExpressApplicationOptions,
-  transport: () => Promise<WakeTransportPort | undefined>, control?: OperationControl,
-): Promise<ApplicationOutcome<ExpressApplicationData, ExpressProjection>> {
+  transport: () => Promise<WakeTransportPort | undefined>, presentation: boolean, control?: OperationControl,
+): Promise<ApplicationOutcome<ExpressApplicationData, ExpressProjection, boolean>> {
   const entry = await prepareExpression(square, requested, control);
   const name = entry.participant;
   let result: (ExpressCommittedResult & { readonly waited: boolean }) | undefined;
   try {
-    const feed = (await square.artifact.read((facts) => {
+    const feed = !presentation ? undefined : (await square.artifact.read((facts) => {
       const pendingPublic = directedSuffix(facts, name);
       return {
         pendingPublic,
@@ -174,7 +174,7 @@ async function expressOwned(
         activity: result.activity, waited: result.waited,
         ...(result.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: result.replyAuthorNotHere }),
       },
-      projection: {
+      projection: feed === undefined ? undefined : {
         ...fresh, ...feed, participant: name,
         location: square.location, now: square.clock(), automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(square.env),
         ...(entry.activity === null ? {} : { reentry: entry.activity }),
@@ -235,9 +235,11 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchA
     }
     if (Object.hasOwn(options, 'replace') && idle === 0) throw new SquareError('invalid_args', 'Catch replacement requires a positive idle duration');
     catchLimit(options.limit);
-    name = (await resolveParticipant(square, requested, control)).name;
-    subject = 'filter';
-    const from = options.from === undefined ? undefined : await Promise.all(options.from.map(async (target) => (await resolveParticipant(square, target, control)).name));
+    const from = (await square.artifact.read((facts) => {
+      name = resolveKnownName(facts, requested);
+      subject = 'filter';
+      return options.from?.map((target) => resolveKnownName(facts, target));
+    }, control?.signal)).value;
     selection = { ...options, ...(from === undefined ? {} : { from }) };
     subject = 'caller';
     if (idle === 0) {
@@ -362,7 +364,10 @@ export class Square {
   retireEndedSessionRoutes(sessionId: string): Promise<void> { return retireEndedSessionRoutes(this.square, sessionId); }
 }
 
-export function createSquareApplication(context: SquareApplicationContext): SquareApplication {
+export function createSquareApplication(context: SquareApplicationContext): SquareApplication;
+export function createSquareApplication(context: SquareApplicationContext, demand: { readonly presentation: false }): SquareApplication<false>;
+export function createSquareApplication(context: SquareApplicationContext, demand = { presentation: true }): SquareApplication<boolean> {
+  const presentation = demand.presentation;
   const env = { ...context.env };
   const clock = clockFor(env, context.clock);
   const hostLedger = context.hostLedger ?? hostLedgerForEnv(env);
@@ -413,7 +418,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const result = await (verb === 'listen' ? listen : ignore)(square, name, target, control);
       return {
         data: result,
-        projection: {
+        projection: !presentation ? undefined : {
           ...await contextProjection(square, name), participant: name,
           requestedTarget: target, target: result.activity?.target ?? target,
         },
@@ -436,6 +441,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       } else {
         result = await resume(square, name, control);
       }
+      if (!presentation) return { data: { activity: result.activity }, projection: undefined };
       const view = await eventPresentation(square, result.activity.id);
       return {
         data: { activity: result.activity },
@@ -455,7 +461,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       }, input.markdown, control?.signal);
       return {
         data: { location: squarePath, ...configuration },
-        projection: { location: squarePath, standingCount: 0, held: false, now,
+        projection: !presentation ? undefined : { location: squarePath, standingCount: 0, held: false, now,
           automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(env) },
       };
     },
@@ -466,6 +472,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
           throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
         }
         const data = await joinOwned(square, name, options, control);
+        if (!presentation) return { data, projection: undefined };
         try {
           const view = await entryPresentation(square, data.participant, last);
           return {
@@ -478,19 +485,19 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       }, control);
     },
     express(body, options = {}, control) {
-      return selected('express', (square, name) => expressOwned(square, name, body, options, getTransport, control), control);
+      return selected('express', (square, name) => expressOwned(square, name, body, options, getTransport, presentation, control), control);
     },
     catch(options, control) {
       return selected('catch', async (square, name) => {
         const result = await catchOwned(square, name, options, control);
-        const presence = await catchPresence(square, control).catch(() => undefined);
+        const presence = !presentation ? undefined : await catchPresence(square, control).catch(() => undefined);
         const view = result.selection;
         const stop = result.stop;
         const status = stop === 'already-active' || stop === 'replaced' || stop === 'capped' || stop === 'quorum'
           ? stop : undefined;
         return {
           data: { ...caughtResult(result), ...(status === undefined ? {} : { status }) },
-          projection: {
+          projection: !presentation ? undefined : {
             ...observedContext(square, view.standingCount, view.held, view.participant, view.now),
             participant: view.participant, sayNumbers: view.sayNumbers,
             ownActivityCount: view.ownActivityCount, hardCap: view.hardCap, stop,
@@ -514,12 +521,14 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         const limit = query.limit ?? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT);
         const kinds = query.at?.length || query.contextBefore !== undefined || query.contextAfter !== undefined || query.since !== undefined ? undefined : NON_READ;
         return (await square.artifact.read((facts) => {
-          const selected = selectHistory(facts, query, limit, kinds);
+          const selected = selectHistory(facts, query, limit, kinds, presentation);
           if (limit === null && selected.totalMatches > HISTORY_MAX_LIMIT) {
             throw failure(new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`), {
               operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: selected.totalMatches },
             });
           }
+          const data = { activities: publicActivities(selected.activities) };
+          if (!presentation) return { data, projection: undefined };
           const indexes = selected.activities.map((activity) => activity.index);
           const presenceAnchors: Record<number, string[]> = {};
           for (const participant of facts.roster()) {
@@ -527,7 +536,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
             if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
           }
           return {
-            data: { activities: publicActivities(selected.activities) },
+            data,
             projection: {
               ...observedContext(square, inSquareCount(facts), facts.hold().active), ...selected,
               sayNumbers: facts.sayOrdinals(indexes), presenceAnchors,
@@ -542,7 +551,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       return selected('other', async (square, requested) => {
         const name = (await resolveParticipant(square, requested, control)).name;
         const targets = await listening(square, name, control);
-        return { data: { listening: targets }, projection: await contextProjection(square, name, control) };
+        return { data: { listening: targets }, projection: !presentation ? undefined : await contextProjection(square, name, control) };
       }, control);
     },
     hold: (reason, control) => lifecycle('hold', reason, control),
@@ -550,15 +559,15 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
     done: (body, control) => lifecycle('done', body, control),
     async status(viewer, control) {
       checkControl(control);
-      const selectedViewer = viewer ?? await actor().catch(() => '');
+      const selectedViewer = !presentation ? '' : viewer ?? await actor().catch(() => '');
       return scoped(async (square) => (await square.artifact.read((facts) => queryStatus(facts, {
         location: square.location, now: square.clock(), automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(square.env),
-      }, selectedViewer), control?.signal)).value, control);
+      }, selectedViewer, presentation), control?.signal)).value, control);
     },
     participants(control) {
       return scoped(async (square) => (await square.artifact.read((facts) => queryParticipants(facts, {
         location: square.location, now: square.clock(), automaticDeliveryAvailable: hasAutomaticDeliveryIdentity(square.env),
-      }), control?.signal)).value, control);
+      }, presentation), control?.signal)).value, control);
     },
     async diagnose(control) {
       checkControl(control);
@@ -566,7 +575,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       const data = await diagnoseSquareFile(squarePath);
       return {
         data,
-        projection: { location: squarePath, now: clock(),
+        projection: !presentation ? undefined : { location: squarePath, now: clock(),
           ...(data.standingCount === undefined ? {} : { standingCount: data.standingCount }) },
       };
     },
@@ -574,14 +583,14 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       checkControl(control);
       const squarePath = location();
       const data = await migrateSquareFile(squarePath, control?.signal);
-      return { data, projection: { location: squarePath, now: clock(), standingCount: data.standing } };
+      return { data, projection: !presentation ? undefined : { location: squarePath, now: clock(), standingCount: data.standing } };
     },
     async discover(options, control) {
       checkControl(control);
       const data = await discoverSquares(context.cwd, options, control, openOptions);
       return {
         data,
-        projection: { cwd: context.cwd, now: clock(),
+        projection: !presentation ? undefined : { cwd: context.cwd, now: clock(),
           depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT },
       };
     },
@@ -611,7 +620,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
         const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
         return compare(a.squarePath, b.squarePath) || compare(nameKey(a.name), nameKey(b.name)) || compare(a.name, b.name);
       });
-      return { data: { rows: rows.slice(0, limit), total: rows.length }, projection: { sessionId, now: clock(), limit } };
+      return { data: { rows: rows.slice(0, limit), total: rows.length }, projection: !presentation ? undefined : { sessionId, now: clock(), limit } };
     },
     async recovery(control) {
       let projection: import('./square-facade.js').RecoveryProjection = { now: clock() };
@@ -634,7 +643,7 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
           }
         }, control);
       } catch { /* unavailable recovery observations never replace the original error */ }
-      return { data: projection, projection };
+      return { data: projection, projection: presentation ? projection : undefined };
     },
     stream(options, control) {
       checkControl(control);

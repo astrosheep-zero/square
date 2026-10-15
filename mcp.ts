@@ -32,7 +32,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: z.object({}).strict() },
 ];
 
-function operation(app: SquareApplication, name: string, args: JsonObject, control: OperationControl): Promise<ApplicationOutcome<object, unknown>> {
+function operation(app: SquareApplication<false>, name: string, args: JsonObject, control: OperationControl): Promise<ApplicationOutcome<object, unknown, false>> {
   switch (name) {
     case 'join': return app.join({ takeover: args.takeover as boolean | undefined }, control);
     case 'express': {
@@ -69,7 +69,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
             ? operationEnv('opencode', opencodeSessionId, baseEnv)
             : baseEnv;
-        const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant });
+        const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant }, { presentation: false });
         const outcome = await operation(app, tool.name, operationArgs, { signal: extra.signal });
         const structuredContent = outcome.data as JsonObject;
         return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };

@@ -37,7 +37,7 @@ export function parseRequiredActivityId(id: ActivityId): number {
 }
 
 /** Compile the public query directly to typed selectors; only search hydrates unselected bodies. */
-export function selectHistory(facts: SquareRead, query: HistoryApplicationQuery, limit: number | null, kinds: ActivityFilter['kinds']) {
+export function selectHistory(facts: SquareRead, query: HistoryApplicationQuery, limit: number | null, kinds: ActivityFilter['kinds'], presentation = true) {
   if (query.before !== undefined && query.after !== undefined) throw new SquareError('invalid_args', 'History cannot combine before and after cursors');
   const afterIndex = query.after === undefined ? undefined : parseRequiredActivityId(query.after);
   const beforeIndex = query.before === undefined ? undefined : parseRequiredActivityId(query.before);
@@ -51,14 +51,16 @@ export function selectHistory(facts: SquareRead, query: HistoryApplicationQuery,
     ...(query.at?.length ? { indexes: facts.contextIndexes(query.at.map(parseRequiredActivityId), query.contextBefore ?? 0, query.contextAfter ?? 0) } : {}),
     kinds: search === undefined ? kinds : ['say', 'done'],
   };
-  let selected: readonly ActivityHead[], totalMatches: number, publicBefore: boolean, publicAfter: boolean;
+  let selected: readonly ActivityHead[], totalMatches: number, publicBefore = false, publicAfter = false;
   if (recipient === undefined && search === undefined && limit !== null && limit <= PAGE_SIZE) {
     selected = facts.activityHeads(filter, { edge: afterIndex === undefined ? 'newest' : 'oldest', limit }).items;
-    const publicHeads = selected.filter((head) => ARCHIVE.has(head.kind));
-    const publicFilter = { ...filter, kinds: [...ARCHIVE] as ActivityFilter['kinds'] };
     totalMatches = facts.activityCount(filter);
-    publicBefore = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, beforeIndex: publicHeads[0].index }) > 0;
-    publicAfter = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, afterIndex: publicHeads.at(-1)!.index }) > 0;
+    if (presentation) {
+      const publicHeads = selected.filter((head) => ARCHIVE.has(head.kind));
+      const publicFilter = { ...filter, kinds: [...ARCHIVE] as ActivityFilter['kinds'] };
+      publicBefore = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, beforeIndex: publicHeads[0].index }) > 0;
+      publicAfter = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, afterIndex: publicHeads.at(-1)!.index }) > 0;
+    }
   } else {
     const page: ActivityHead[] = [];
     totalMatches = 0;
@@ -74,7 +76,7 @@ export function selectHistory(facts: SquareRead, query: HistoryApplicationQuery,
       for (const head of heads) {
         if (matches !== undefined && !matches.has(head.index)) continue;
         totalMatches++;
-        if (ARCHIVE.has(head.kind)) { firstPublic = Math.min(firstPublic, head.index); lastPublic = head.index; }
+        if (presentation && ARCHIVE.has(head.kind)) { firstPublic = Math.min(firstPublic, head.index); lastPublic = head.index; }
         if (limit === null || afterIndex === undefined || page.length < limit) page.push(head);
         if (limit !== null && page.length > limit) page.shift();
       }
@@ -82,13 +84,15 @@ export function selectHistory(facts: SquareRead, query: HistoryApplicationQuery,
       cursor = source.items.at(-1)!.index;
     }
     selected = page;
-    const publicHeads = selected.filter((head) => ARCHIVE.has(head.kind));
-    publicBefore = publicHeads.length > 0 && firstPublic < publicHeads[0].index;
-    publicAfter = publicHeads.length > 0 && lastPublic > publicHeads.at(-1)!.index;
+    if (presentation) {
+      const publicHeads = selected.filter((head) => ARCHIVE.has(head.kind));
+      publicBefore = publicHeads.length > 0 && firstPublic < publicHeads[0].index;
+      publicAfter = publicHeads.length > 0 && lastPublic > publicHeads.at(-1)!.index;
+    }
   }
   const activities = [...facts.activities(selected.map((head) => head.index))];
   if (query.order === 'desc') activities.reverse();
-  const visibleActivities = activities.filter((activity) => ARCHIVE.has(activity.kind));
+  const visibleActivities = presentation ? activities.filter((activity) => ARCHIVE.has(activity.kind)) : [];
   const direction = afterIndex === undefined ? 'before' : 'after';
   const cursor = visibleActivities.length === 0 ? undefined : direction === 'before'
     ? Math.min(...visibleActivities.map((activity) => activity.index)) : Math.max(...visibleActivities.map((activity) => activity.index));
@@ -156,9 +160,11 @@ function classifyPresence(participants: readonly ParticipantSummary[], now: numb
       : participant.state === 'not joined' ? 'not-joined' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
 }
 type ParticipantQueryContext = Pick<SquareContextProjection, 'location' | 'now' | 'automaticDeliveryAvailable'>;
-export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext): ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection> {
+export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext): ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection>;
+export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext, presentation: boolean): ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection, boolean>;
+export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext, presentation = true): ApplicationOutcome<ParticipantsApplicationData, ParticipantsProjection, boolean> {
   const participants = coreParticipants(facts, context.now);
-  return { data: { participants }, projection: { ...context, ...classifyPresence(participants, context.now),
+  return { data: { participants }, projection: !presentation ? undefined : { ...context, ...classifyPresence(participants, context.now),
     standingCount: inSquareCount(facts), held: facts.hold().active } };
 }
 export async function listPresentation(square: OpenSquare, control?: OperationControl): Promise<ListPresentation> {
@@ -170,30 +176,35 @@ export async function listPresentation(square: OpenSquare, control?: OperationCo
     return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
   }, control?.signal)).value;
 }
-export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = ''): ApplicationOutcome<StatusApplicationData, StatusProjection> {
-  const { data: { participants }, projection } = queryParticipants(facts, context);
-  const header = facts.header(), hold = facts.hold();
+export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer?: string): ApplicationOutcome<StatusApplicationData, StatusProjection>;
+export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer: string, presentation: boolean): ApplicationOutcome<StatusApplicationData, StatusProjection, boolean>;
+export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', presentation = true): ApplicationOutcome<StatusApplicationData, StatusProjection, boolean> {
+  const participants = coreParticipants(facts, context.now);
+  const header = facts.header(), hold = facts.hold(), standingCount = inSquareCount(facts);
   const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
   const latestAct = latest === undefined ? undefined : facts.activity(latest.index);
+  const data: StatusApplicationData = {
+    hardCap: header.hardCap,
+    ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
+    activeCount: standingCount, doneCount: participants.filter((p) => p.state === 'done').length,
+    hold: hold.active ? {
+      ...(hold.actor === undefined ? {} : { by: hold.actor }),
+      ...(hold.reason === undefined ? {} : { reason: hold.reason }),
+      ...(hold.at === undefined ? {} : { at: hold.at }),
+    } : null,
+    participants: participants.filter((p) => p.state !== 'not joined'), now: context.now,
+    ...(latestAct === undefined || latestAct.actor === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
+  };
+  if (!presentation) return { data, projection: undefined };
   const afterIndex = latestAct?.index ?? -1;
   const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({ activity,
     rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0 }));
   const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
   return {
-    data: {
-      hardCap: header.hardCap,
-      ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
-      activeCount: projection.standingCount, doneCount: participants.filter((p) => p.state === 'done').length,
-      hold: hold.active ? {
-        ...(hold.actor === undefined ? {} : { by: hold.actor }),
-        ...(hold.reason === undefined ? {} : { reason: hold.reason }),
-        ...(hold.at === undefined ? {} : { at: hold.at }),
-      } : null,
-      participants: participants.filter((p) => p.state !== 'not joined'), now: context.now,
-      ...(latestAct === undefined || latestAct.actor === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
-    },
+    data,
     projection: {
-      ...projection, knownParticipantCount: participants.length, viewer: canonicalViewer,
+      ...context, ...classifyPresence(participants, context.now), standingCount, held: hold.active,
+      knownParticipantCount: participants.length, viewer: canonicalViewer,
       ...(canonicalViewer === '' ? {} : { participant: canonicalViewer }),
       joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }),
       attentionNames: participants.filter((p) => canonicalViewer === '' || nameKey(p.name) === nameKey(canonicalViewer)).map((p) => p.name),

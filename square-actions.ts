@@ -38,14 +38,19 @@ export async function catchUp(square: OperationContext, name: string, options: C
   return selected;
 }
 
-export async function join(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly activity: Activity | null; readonly participantCount: number; readonly reconnected: boolean }> {
+export async function join(square: OperationContext, name: string, control?: OperationControl, admission: { readonly requireKnown?: boolean } = {}): Promise<{ readonly name: string; readonly activity: Activity | null; readonly participantCount: number; readonly reconnected: boolean }> {
   throwIfAborted(control);
   validateName(name);
   const hostLedger = square.hostLedger;
-  const preview = (await square.artifact.read((facts) => ({
-    ...decideJoin(facts, name, square.clock()),
-    participantCount: facts.roster().filter((p) => p.joined || p.done).length,
-  }), control?.signal)).value;
+  const preview = (await square.artifact.read((facts) => {
+    // Express may reenter a known participant, but must never create a new name.
+    const selected = admission.requireKnown ? resolveKnownName(facts, name) : name;
+    return {
+      ...decideJoin(facts, selected, square.clock()),
+      participantCount: facts.roster().filter((p) => p.joined || p.done).length,
+    };
+  }, control?.signal)).value;
+  name = preview.joinedName;
   if (preview.joinAct === undefined) {
     if (hostLedger === undefined) return { name: preview.joinedName, activity: null, participantCount: preview.participantCount, reconnected: false };
     const identity = processIdentity(square.env ?? process.env);
