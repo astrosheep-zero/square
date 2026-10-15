@@ -13,6 +13,42 @@ export interface PiSendTextOptions { readonly delivery?: Delivery; readonly inpu
 export interface PaseoSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export type SendTextOptions = OpenCodeSendTextOptions | ClaudeSendTextOptions | PiSendTextOptions | PaseoSendTextOptions
 
+export interface OpenCodeConnectOptions {
+  readonly harness: 'opencode'
+  readonly sessionId: string
+  readonly endpoint?: { readonly url: string; readonly auth?: { readonly type: 'basic'; readonly username: string; readonly password: string } }
+  readonly registrationFile?: string
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}
+export interface ClaudeConnectOptions {
+  readonly harness: 'claude'
+  readonly sessionId: string
+  readonly endpoint: string
+  readonly token?: string
+  readonly claudeHome?: string
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}
+export interface PiConnectOptions {
+  readonly harness: 'pi'
+  readonly sessionId: string
+  readonly endpoint: string
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}
+export interface PaseoConnectOptions {
+  readonly harness: 'paseo'
+  readonly agentId: string
+  readonly endpoint?: string
+  readonly password?: string
+  readonly authHeader?: string
+  readonly localCredential?: string
+  readonly paseoHome?: string
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}
+
 interface OpenCodeAttempt { readonly harness: 'opencode'; readonly sessionId: string; readonly inputId: string }
 export type OpenCodeDeliveryResult =
   | (OpenCodeAttempt & { readonly state: 'accepted'; readonly inboxId: string; readonly delivery: Delivery })

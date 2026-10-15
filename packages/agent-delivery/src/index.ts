@@ -1,10 +1,7 @@
 import { ConnectionError, DeliveryError, type DeliveryErrorCode } from './errors.js'
 import { isRecord } from './guards.js'
-import type { OpenCodeConnectExistingOptions } from './opencode.js'
-import type { ClaudeConnectExistingOptions } from './claude.js'
-import type { PiConnectExistingOptions } from './pi-client.js'
-import type { PaseoConnectExistingOptions } from './paseo.js'
-import type { OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, OpenCodeSendTextOptions, ClaudeSendTextOptions, PiSendTextOptions, PaseoSendTextOptions } from './types.js'
+import type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions, OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, OpenCodeSendTextOptions, ClaudeSendTextOptions, PiSendTextOptions, PaseoSendTextOptions } from './types.js'
+export type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions } from './types.js'
 
 export interface SendOptions { readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface KeyedSendOptions extends SendOptions { readonly id?: string }
@@ -12,41 +9,6 @@ export interface Receipt { readonly id: string; readonly proof: 'written' | 'adm
 export interface Steerable<O = SendOptions> { steer(text: string, options?: O): Promise<Receipt> }
 export interface Queueable<O = SendOptions> { queue(text: string, options?: O): Promise<Receipt> }
 
-export interface OpenCodeConnectOptions {
-  readonly harness: 'opencode'
-  readonly sessionId: string
-  readonly endpoint?: { readonly url: string; readonly auth?: { readonly type: 'basic'; readonly username: string; readonly password: string } }
-  readonly registrationFile?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
-export interface ClaudeConnectOptions {
-  readonly harness: 'claude'
-  readonly sessionId: string
-  readonly endpoint: string
-  readonly token?: string
-  readonly claudeHome?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
-export interface PiConnectOptions {
-  readonly harness: 'pi'
-  readonly sessionId: string
-  readonly endpoint: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
-export interface PaseoConnectOptions {
-  readonly harness: 'paseo'
-  readonly agentId: string
-  readonly endpoint?: string
-  readonly password?: string
-  readonly authHeader?: string
-  readonly localCredential?: string
-  readonly paseoHome?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
 export type OpenCodeAgent = Steerable<KeyedSendOptions> & Queueable<KeyedSendOptions> & { readonly harness: 'opencode'; readonly sessionId: string }
 export type ClaudeAgent = Steerable & { readonly harness: 'claude'; readonly sessionId: string }
 export type PiAgent = Steerable & Queueable & { readonly harness: 'pi'; readonly sessionId: string }
@@ -113,7 +75,7 @@ const harnesses: Record<string, Harness> = {
     id: (result) => result.inputId!,
     open: async (options) => {
       const { connectExisting, sendText } = await import('./opencode.js')
-      const target = await connectExisting(options as OpenCodeConnectExistingOptions)
+      const target = await connectExisting(options as OpenCodeConnectOptions)
       return { coordinate: target.sessionId, send: (text, value) => sendText(target, text, value as OpenCodeSendTextOptions) }
     },
   },
@@ -122,7 +84,7 @@ const harnesses: Record<string, Harness> = {
     id: (result) => result.messageId!,
     open: async (options) => {
       const { connectExisting, sendText } = await import('./claude.js')
-      const target = await connectExisting(options as ClaudeConnectExistingOptions)
+      const target = await connectExisting(options as ClaudeConnectOptions)
       return { coordinate: target.sessionId, send: (text, value) => sendText(target, text, value as ClaudeSendTextOptions) }
     },
   },
@@ -131,7 +93,7 @@ const harnesses: Record<string, Harness> = {
     id: (result) => result.inputId!,
     open: async (options) => {
       const { connectPi, sendPiText } = await import('./pi-client.js')
-      const target = await connectPi(options as PiConnectExistingOptions)
+      const target = await connectPi(options as PiConnectOptions)
       return { coordinate: target.sessionId, send: (text, value) => sendPiText(target, text, value as PiSendTextOptions) }
     },
   },
@@ -140,7 +102,7 @@ const harnesses: Record<string, Harness> = {
     id: (result) => result.inputId!,
     open: async (options) => {
       const { connectPaseo, sendPaseoText } = await import('./paseo.js')
-      const target = await connectPaseo(options as PaseoConnectExistingOptions)
+      const target = await connectPaseo(options as PaseoConnectOptions)
       return { coordinate: target.agentId, send: (text, value) => sendPaseoText(target, text, value as PaseoSendTextOptions) }
     },
   },

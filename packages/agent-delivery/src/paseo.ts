@@ -10,19 +10,7 @@ import {
   type PaseoCredential,
   type PaseoDaemonTarget,
 } from './paseo-native.js'
-import type { PaseoDeliveryResult, PaseoSendTextOptions, PaseoTarget } from './types.js'
-
-export interface PaseoConnectExistingOptions {
-  readonly harness: 'paseo'
-  readonly agentId: string
-  readonly endpoint?: string
-  readonly password?: string
-  readonly authHeader?: string
-  readonly localCredential?: string
-  readonly paseoHome?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
+import type { PaseoConnectOptions, PaseoDeliveryResult, PaseoSendTextOptions, PaseoTarget } from './types.js'
 
 interface PaseoConnection {
   readonly target: PaseoDaemonTarget
@@ -32,7 +20,7 @@ interface PaseoConnection {
 const connections = new WeakMap<PaseoTarget, PaseoConnection>()
 
 /** Connect to an existing daemon and address one existing agent. Never starts or stops anything. */
-export async function connectPaseo(options: PaseoConnectExistingOptions): Promise<PaseoTarget> {
+export async function connectPaseo(options: PaseoConnectOptions): Promise<PaseoTarget> {
   if (!isRecord(options) || options.harness !== 'paseo' || !isIdentity(options.agentId) ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
     (options.endpoint !== undefined && !isIdentity(options.endpoint)) ||

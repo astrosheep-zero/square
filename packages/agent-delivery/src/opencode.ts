@@ -5,16 +5,7 @@ import { deadline, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError } from './errors.js'
 import { isIdentity, isRecord } from './guards.js'
 import { isNativeSession, sendNativeText } from './opencode-native.js'
-import type { OpenCodeDeliveryResult, OpenCodeTarget, OpenCodeSendTextOptions } from './types.js'
-
-export interface OpenCodeConnectExistingOptions {
-  readonly harness: 'opencode'
-  readonly sessionId: string
-  readonly endpoint?: Endpoint
-  readonly registrationFile?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
+import type { OpenCodeConnectOptions, OpenCodeDeliveryResult, OpenCodeTarget, OpenCodeSendTextOptions } from './types.js'
 
 const endpoints = new WeakMap<OpenCodeTarget, Endpoint>()
 const isV2 = (version: string) => /^2\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)
@@ -57,7 +48,7 @@ function connectionFailure(status: number | undefined, phase: 'health' | 'sessio
 }
 
 /** Resolve an existing service and persisted session. Never starts or stops a service. */
-export async function connectExisting(options: OpenCodeConnectExistingOptions): Promise<OpenCodeTarget> {
+export async function connectExisting(options: OpenCodeConnectOptions): Promise<OpenCodeTarget> {
   if (!isRecord(options) || options.harness !== 'opencode' || !isIdentity(options.sessionId) ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
     (options.endpoint !== undefined && options.registrationFile !== undefined) ||

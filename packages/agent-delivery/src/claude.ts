@@ -5,23 +5,13 @@ import { isIdentity, isRecord } from './guards.js'
 import { parseLocalEndpoint, type LocalEndpoint } from './local-endpoint.js'
 import { writeClaudeNative } from './claude-native.js'
 import { resolveClaudeToken } from './claude-auth.js'
-import type { ClaudeDeliveryResult, ClaudeSendTextOptions, ClaudeTarget } from './types.js'
-
-export interface ClaudeConnectExistingOptions {
-  readonly harness: 'claude'
-  readonly sessionId: string
-  readonly endpoint: string
-  readonly token?: string
-  readonly claudeHome?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
+import type { ClaudeConnectOptions, ClaudeDeliveryResult, ClaudeSendTextOptions, ClaudeTarget } from './types.js'
 
 interface ClaudeCoordinate { readonly endpoint: string; readonly token?: string; readonly claudeHome?: string }
 const coordinates = new WeakMap<ClaudeTarget, ClaudeCoordinate>()
 
 /** Resolve an explicitly identified existing Claude native inbox; never discovers or starts one. */
-export async function connectExisting(options: ClaudeConnectExistingOptions): Promise<ClaudeTarget> {
+export async function connectExisting(options: ClaudeConnectOptions): Promise<ClaudeTarget> {
   if (!isRecord(options) || options.harness !== 'claude' || !isIdentity(options.sessionId) ||
     typeof options.endpoint !== 'string' || options.endpoint.includes('\0') ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal)) throw new ConnectionError('invalid_arguments')

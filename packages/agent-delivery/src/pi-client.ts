@@ -3,15 +3,8 @@ import { deadline, validSignal } from './deadline.js'
 import { ConnectionError } from './errors.js'
 import { connectLocal, LocalEndpointError, parseLocalEndpoint, type LocalEndpoint } from './local-endpoint.js'
 import { MAX_TEXT_BYTES, VERSION, frame, identity, readFrame, record, waitValid } from './pi-protocol.js'
-import type { PiDeliveryResult, PiSendTextOptions, PiTarget } from './types.js'
+import type { PiConnectOptions, PiDeliveryResult, PiSendTextOptions, PiTarget } from './types.js'
 
-export interface PiConnectExistingOptions {
-  readonly harness: 'pi'
-  readonly sessionId: string
-  readonly endpoint: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
 const endpoints = new WeakMap<PiTarget, LocalEndpoint>()
 const timeoutValid = (value: unknown) => value === undefined || waitValid(value)
 
@@ -49,7 +42,7 @@ async function request(endpoint: LocalEndpoint, body: unknown, timeoutMs?: numbe
   }
 }
 
-export async function connectPi(options: PiConnectExistingOptions): Promise<PiTarget> {
+export async function connectPi(options: PiConnectOptions): Promise<PiTarget> {
   if (!record(options) || options.harness !== 'pi' || !identity(options.sessionId) ||
     typeof options.endpoint !== 'string' || !timeoutValid(options.timeoutMs) || !validSignal(options.signal)) {
     throw new ConnectionError('invalid_arguments')
