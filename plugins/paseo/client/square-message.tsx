@@ -1,7 +1,7 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { copyText, Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { squareHeadline, type SquareMessageData } from "../shared/message";
 
 function withOpacity(color: string, opacity: number): string {
@@ -28,7 +28,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     bodyPanel: {
       backgroundColor: theme.colors.surface1,
       borderRadius: 12,
-      marginTop: 7,
+      marginTop: 5,
       marginLeft: 17,
       overflow: "hidden" as const,
     },
@@ -37,20 +37,14 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
       fontSize: 12,
       lineHeight: 21,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-      paddingHorizontal: layout.compact ? 12 : 14,
-      paddingTop: 12,
+      paddingHorizontal: layout.compact ? 10 : 12,
+      paddingTop: 8,
     },
-  }), [expanded, foreground, layout.compact, muted, theme.colors.accent, theme.colors.surface1]);
+  }), [foreground, layout.compact, muted, theme.colors.accent, theme.colors.surface1]);
 
   return (
     <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={latest !== undefined ? squareHeadline(latest) : "Square context"}
-        aria-expanded={expanded}
-        onPress={() => setExpanded(value => !value)}
-        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-      >
+      <View>
         <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 7, paddingVertical: 2 }}>
           <Text style={styles.marker}>■</Text>
           <Text numberOfLines={1} style={styles.headline}>
@@ -58,7 +52,16 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
           </Text>
           {items && items.length > 1 && <Text style={styles.meta}>· {items.length} landed</Text>}
           <View style={{ flex: 1 }} />
-          <View style={{ marginTop: 3 }}><Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={muted} /></View>
+          {!expanded && <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`展开 ${latest !== undefined ? squareHeadline(latest) : "Square context"}`}
+            aria-expanded={false}
+            onPress={() => setExpanded(true)}
+            hitSlop={6}
+            style={({ pressed }) => ({ padding: 5, opacity: pressed ? 0.6 : 1 })}
+          >
+            <Icon name="ChevronDown" size={18} color={muted} />
+          </Pressable>}
         </View>
         {(latest?.actor !== undefined || preview) && <View style={{ marginLeft: 17, marginTop: 2 }}>
           <Text numberOfLines={1} style={styles.preview}>
@@ -67,17 +70,20 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
             {preview}
           </Text>
         </View>}
-      </Pressable>
+      </View>
       {expanded && <View style={styles.bodyPanel}>
-        <Text selectable style={styles.bodyText}>{text}</Text>
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400 }} nestedScrollEnabled>
+          <Text selectable style={styles.bodyText}>{text}</Text>
+        </ScrollView>
         <View style={{
-          marginHorizontal: layout.compact ? 12 : 14,
-          marginTop: 12,
+          marginHorizontal: layout.compact ? 10 : 12,
+          marginTop: 5,
           borderTopWidth: 1,
           borderTopColor: withOpacity(theme.colors.border, 0.55),
-          paddingVertical: 7,
+          paddingVertical: 3,
           flexDirection: "row",
-          justifyContent: "flex-end",
+          alignItems: "center",
+          justifyContent: "space-between",
         }}>
           <Pressable
             accessibilityRole="button"
@@ -93,6 +99,16 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
           >
             <Icon name="Copy" size={12} color={muted} />
             <Text style={{ color: muted, fontSize: 11 }}>Copy content</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="收起 Square context"
+            aria-expanded={true}
+            onPress={() => setExpanded(false)}
+            hitSlop={6}
+            style={({ pressed }) => ({ paddingHorizontal: 5, paddingVertical: 1, opacity: pressed ? 0.6 : 1 })}
+          >
+            <Icon name="ChevronUp" size={18} color={muted} />
           </Pressable>
         </View>
       </View>}
