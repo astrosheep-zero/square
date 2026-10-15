@@ -3,7 +3,7 @@ import path from 'node:path';
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
-import { renderAttentionDescription } from '../../dist/attention-presentation.js';
+import { previewAttentionBody, renderAttentionDescription } from '../../dist/attention-presentation.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
@@ -38,6 +38,7 @@ export function pendingCardDetails(pending) {
     actor: note.actor,
     recipient: membership.name,
     route: note.route,
+    preview: previewAttentionBody(note.body),
     description: renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route }),
   })));
   return items.length === 0 ? undefined : { items };

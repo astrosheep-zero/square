@@ -6,6 +6,7 @@ export const squareCardDetailsSchema = z.object({
     actor: z.string().optional(),
     recipient: z.string().optional(),
     route: z.enum(["mention", "reply", "attention", "bell"]).optional(),
+    preview: z.string().optional(),
     description: z.string(),
   })).min(1),
 });
