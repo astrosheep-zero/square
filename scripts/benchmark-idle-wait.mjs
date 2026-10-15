@@ -69,6 +69,20 @@ const flag = (name) => process.argv.includes(name);
 //   presenceRows counts rows returned by SELECTs touching host_presence (not lock-table SQL);
 //   busy counts thrown busy/locked errors, including prepare and deferred iterator errors;
 //   commitAttempts/commitBusy/commitMs measure explicit COMMIT calls, not inferred retries.
+// `transactions` separates artifact/ledger and explicit read (BEGIN/DEFERRED) versus write
+// (IMMEDIATE/EXCLUSIVE) acquisition modes, not inferred mutation counts. Per connection:
+//   acquireMs = first BEGIN attempt -> successful BEGIN return (including busy retry gaps);
+//   holdMs = successful BEGIN return -> first COMMIT attempt (wall time, not just SQL);
+//   commitMs = first COMMIT attempt -> successful COMMIT return (including retry gaps).
+// Only committed, standalone-control transactions yield timing samples. Rollbacks and non-busy
+// failed BEGINs reset pending state; busy BEGINs retain the first attempt on that connection.
+// Batched control calls (e.g. PRAGMA; BEGIN; CREATE TABLE in lock DBs) cannot expose the inner
+// BEGIN boundary: they are counted separately, never given fabricated exact timings. Untracked
+// COMMIT/ROLLBACK successes are counted too. No transaction is inferred from autocommit SQL.
+// Timing samples grow with completed transactions, never with SQL statements/history rows.
+// Phase timing samples are attributed at successful COMMIT, including any earlier acquisition.
+// Artifact sql.executionMs accumulates execution-call duration per bucket (not prepare time or
+// decoding). Transaction hold includes runtime decoding and event-loop gaps; it is NOT SQL time.
 // Parent totals include setup/controls; worker totals are cumulative; phase totals exclude setup.
 // `ledger` counts instrumented fs.promises calls and readFile/writeFile bytes, NOT SQLite I/O.
 // Its readOps/readBytes prove the file data path. SQLite zero fs bytes is not a performance gain.
@@ -113,7 +127,7 @@ export function isMutatingSql(sql) {
 function emptySqlCounters() {
   const statements = {};
   for (const bucket of SQL_BUCKETS) statements[bucket] = 0;
-  return { prepared: 0, statements, writes: 0, rows: 0, headRows: 0, hydratedRows: 0, hydratedBytes: 0 };
+  return { prepared: 0, statements, executionMs: Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, 0])), writes: 0, rows: 0, headRows: 0, hydratedRows: 0, hydratedBytes: 0 };
 }
 
 function emptyLedgerSqlCounters() {
@@ -126,8 +140,30 @@ function sumLedgerSql(counters) {
   return total;
 }
 
+function emptyTransactionCounts() {
+  return { beginAttempts: 0, beginBusy: 0, beginErrors: 0, begun: 0, committed: 0, rolledBack: 0, samples: [] };
+}
+
+function emptyTransactions() {
+  return Object.fromEntries(['artifact', 'ledger'].map((origin) => [origin, {
+    read: emptyTransactionCounts(), write: emptyTransactionCounts(),
+    batchedControlCalls: 0, untrackedCommits: 0, untrackedRollbacks: 0,
+  }]));
+}
+
+function transactionControl(sql) {
+  const text = String(sql).trim();
+  const begin = /^BEGIN(?:\s+(DEFERRED|IMMEDIATE|EXCLUSIVE))?(?:\s+TRANSACTION)?\s*;?\s*$/i.exec(text);
+  if (begin) return { action: 'begin', mode: /IMMEDIATE|EXCLUSIVE/i.test(begin[1] ?? '') ? 'write' : 'read' };
+  if (/^(?:COMMIT|END)(?:\s+TRANSACTION)?\s*;?\s*$/i.test(text)) return { action: 'commit' };
+  if (/^ROLLBACK(?:\s+TRANSACTION)?\s*;?\s*$/i.test(text)) return { action: 'rollback' };
+  // The benchmark/runtime control batches use plain statements, not triggers or SQL literals.
+  if (/(?:^|;)\s*(?:BEGIN|COMMIT|END|ROLLBACK)\b/i.test(text)) return { action: 'batch' };
+  return undefined;
+}
+
 function emptyCounters() {
-  return { sql: emptySqlCounters(), ledgerSql: emptyLedgerSqlCounters(), busy: 0, commits: { attempts: 0, busy: 0, ms: 0 }, ledger: { ops: 0, bytes: 0, readOps: 0, readBytes: 0 }, watch: 0 };
+  return { sql: emptySqlCounters(), ledgerSql: emptyLedgerSqlCounters(), transactions: emptyTransactions(), busy: 0, commits: { attempts: 0, busy: 0, ms: 0 }, ledger: { ops: 0, bytes: 0, readOps: 0, readBytes: 0 }, watch: 0 };
 }
 
 function isBusyError(error) {
@@ -194,6 +230,7 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
   const bucketOfStatement = new WeakMap();
   const isLedgerPath = ledgerPathMatcher(ledgerRoot);
   const origins = new WeakMap();
+  const transactions = new WeakMap();
   const originOf = (database) => {
     if (!origins.has(database)) origins.set(database, isLedgerPath(database.location()) ? 'ledger' : 'artifact');
     return origins.get(database);
@@ -202,6 +239,7 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
     const origin = originOf(database);
     const text = String(sql).replace(/\s+/g, ' ');
     return {
+      database, control: transactionControl(sql),
       origin, bucket: origin === 'artifact' ? classifySql(sql) : undefined,
       read: /^\s*SELECT\b/i.test(text),
       write: /(?:^|;)\s*(insert|update|delete|replace|create|drop|alter)\b/i.test(text),
@@ -246,6 +284,60 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
     if (meta.origin === 'ledger') counters.ledgerSql.busy++;
     else counters.busy++;
   };
+  const transactionAttempt = (meta, at) => {
+    const control = meta.control;
+    if (control === undefined) return;
+    const database = meta.database, counts = counters.transactions[meta.origin];
+    if (control.action === 'batch') {
+      counts.batchedControlCalls++;
+      transactions.delete(database); // Inner control boundaries are not observable.
+    } else if (control.action === 'begin') {
+      counts[control.mode].beginAttempts++;
+      const current = transactions.get(database);
+      // A failed nested BEGIN must not replace the transaction already holding the connection.
+      if (current?.beganAt === undefined && current?.mode !== control.mode) {
+        transactions.set(database, { mode: control.mode, firstBeginAt: at });
+      }
+    } else if (control.action === 'commit') {
+      const current = transactions.get(database);
+      if (current?.beganAt !== undefined && current.firstCommitAt === undefined) current.firstCommitAt = at;
+    }
+  };
+  const transactionResult = (meta, ended, succeeded, error) => {
+    const control = meta.control;
+    if (control === undefined || control.action === 'batch') return;
+    const database = meta.database, counts = counters.transactions[meta.origin];
+    const current = transactions.get(database);
+    if (control.action === 'begin') {
+      const mode = counts[control.mode];
+      if (!succeeded) {
+        if (isBusyError(error)) mode.beginBusy++;
+        else {
+          mode.beginErrors++;
+          if (current?.beganAt === undefined) transactions.delete(database);
+        }
+      } else {
+        mode.begun++;
+        current.beganAt = ended;
+      }
+    } else if (control.action === 'commit' && succeeded) {
+      if (current?.beganAt !== undefined && current.firstCommitAt !== undefined) {
+        counts[current.mode].committed++;
+        counts[current.mode].samples.push({
+          acquireMs: current.beganAt - current.firstBeginAt,
+          holdMs: current.firstCommitAt - current.beganAt,
+          commitMs: ended - current.firstCommitAt,
+        });
+      } else counts.untrackedCommits++;
+      transactions.delete(database);
+    } else if (control.action === 'rollback') {
+      if (succeeded) {
+        if (current?.beganAt !== undefined) counts[current.mode].rolledBack++;
+        else counts.untrackedRollbacks++;
+      }
+      transactions.delete(database);
+    }
+  };
   const execute = (meta, fn) => {
     const host = meta.origin === 'ledger';
     if (host) {
@@ -253,12 +345,18 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
       if (meta.write) counters.ledgerSql.writeExecutions++;
     }
     const started = performance.now();
+    transactionAttempt(meta, started);
+    let succeeded = false, failure;
     if (meta.commit) {
       if (host) counters.ledgerSql.commitAttempts++;
       else counters.commits.attempts++;
     }
-    try { return fn(); }
-    catch (error) {
+    try {
+      const result = fn();
+      succeeded = true;
+      return result;
+    } catch (error) {
+      failure = error;
       onError(meta, error);
       if (meta.commit && isBusyError(error)) {
         if (host) counters.ledgerSql.commitBusy++;
@@ -266,10 +364,13 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
       }
       throw error;
     } finally {
+      const ended = performance.now(), elapsed = ended - started;
+      if (!host) counters.sql.executionMs[meta.bucket] += elapsed;
       if (meta.commit) {
-        if (host) counters.ledgerSql.commitMs += performance.now() - started;
-        else counters.commits.ms += performance.now() - started;
+        if (host) counters.ledgerSql.commitMs += elapsed;
+        else counters.commits.ms += elapsed;
       }
+      transactionResult(meta, ended, succeeded, failure);
     }
   };
   const metaOf = (statement) => {
@@ -366,7 +467,19 @@ export function installInstrumentation({ ledgerRoot, disableWatch = false } = {}
 function diffCounters(before, after) {
   const out = emptyCounters();
   out.sql.prepared = after.sql.prepared - before.sql.prepared;
-  for (const bucket of SQL_BUCKETS) out.sql.statements[bucket] = after.sql.statements[bucket] - before.sql.statements[bucket];
+  for (const bucket of SQL_BUCKETS) {
+    out.sql.statements[bucket] = after.sql.statements[bucket] - before.sql.statements[bucket];
+    out.sql.executionMs[bucket] = after.sql.executionMs[bucket] - before.sql.executionMs[bucket];
+  }
+  for (const origin of ['artifact', 'ledger']) {
+    for (const mode of ['read', 'write']) {
+      const target = out.transactions[origin][mode], start = before.transactions[origin][mode], end = after.transactions[origin][mode];
+      for (const key of Object.keys(target)) target[key] = key === 'samples' ? end.samples.slice(start.samples.length) : end[key] - start[key];
+    }
+    for (const key of ['batchedControlCalls', 'untrackedCommits', 'untrackedRollbacks']) {
+      out.transactions[origin][key] = after.transactions[origin][key] - before.transactions[origin][key];
+    }
+  }
   out.sql.writes = after.sql.writes - before.sql.writes;
   out.sql.rows = after.sql.rows - before.sql.rows;
   out.sql.headRows = after.sql.headRows - before.sql.headRows;
@@ -378,6 +491,31 @@ function diffCounters(before, after) {
   for (const key of Object.keys(out.ledger)) out.ledger[key] = after.ledger[key] - before.ledger[key];
   out.watch = after.watch - before.watch;
   return out;
+}
+
+function sumSqlExecutionMs(counters) {
+  return Object.fromEntries(SQL_BUCKETS.map((bucket) => [bucket, counters.reduce((total, counter) => total + counter.sql.executionMs[bucket], 0)]));
+}
+
+function transactionSummary(counters) {
+  return Object.fromEntries(['artifact', 'ledger'].map((origin) => {
+    const total = {};
+    for (const mode of ['read', 'write']) {
+      const entries = counters.map((counter) => counter.transactions[origin][mode]);
+      const samples = entries.flatMap((entry) => entry.samples);
+      total[mode] = Object.fromEntries(Object.keys(emptyTransactionCounts()).filter((key) => key !== 'samples')
+        .map((key) => [key, entries.reduce((sum, entry) => sum + entry[key], 0)]));
+      total[mode].timedCommits = samples.length;
+      for (const field of ['acquireMs', 'holdMs', 'commitMs']) {
+        const values = samples.map((sample) => sample[field]);
+        total[mode][field] = values.length === 0 ? null : { total: values.reduce((sum, value) => sum + value, 0), ...latencySummary(values) };
+      }
+    }
+    for (const key of ['batchedControlCalls', 'untrackedCommits', 'untrackedRollbacks']) {
+      total[key] = counters.reduce((sum, counter) => sum + counter.transactions[origin][key], 0);
+    }
+    return [origin, total];
+  }));
 }
 
 function percentile(values, fraction) {
@@ -782,7 +920,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
       idleDelta: idleCounters[index],
       counters: report.counters,
       ...(result.discovered === undefined ? {} : { discovered: result.discovered[index], discoveryDelta: discoveryDelta[index] }),
-      ...(result.catches === undefined ? {} : { catch: result.catches[index], catchDelta: catchDelta[index] }),
+      ...(result.catches === undefined ? {} : { catch: result.catches[index], catchDelta: catchDelta[index], catchTransactions: transactionSummary([catchDelta[index]]) }),
       cpuPercent: report.cpuMs / Math.max(1, report.wallMs) * 100,
     }));
 
@@ -842,6 +980,8 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
           firstCatchMs: latencySummary(result.catches.map((item) => item.firstCatchMs)),
           secondCatchMs: latencySummary(result.catches.map((item) => item.secondCatchMs)),
           closeMs: latencySummary(result.catches.map((item) => item.closeMs)),
+          transactions: transactionSummary(catchDelta),
+          sqlExecutionMs: sumSqlExecutionMs(catchDelta),
           headerStatementsTotal: sum(catchDelta, (c) => c.sql.statements.header),
           ledgerBytesTotal: sum(catchDelta, (c) => c.ledger.bytes),
           commitAttempts: sum(catchDelta, (c) => c.commits.attempts),
@@ -857,6 +997,7 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
         },
       },
       sql: { ...finalCounters.sql, busy: finalCounters.busy, commits: finalCounters.commits },
+      transactions: transactionSummary([finalCounters]),
       ledger: { ...finalCounters.ledger, transport: ledgerTransport, fsBytesComparable: ledgerTransport === 'file' },
       ledgerSql: finalCounters.ledgerSql,
       workerLedgerSql: sumLedgerSql((result.catches ?? result.discovered ?? result.idle).map((item) => item.counters)),
@@ -897,6 +1038,8 @@ async function measureSize({ workerCount, mode, active, noHints, history, bodyBy
         cumulativeBusy: actual.reduce((sum, report) => sum + (report.counters?.busy ?? 0), 0),
         cumulativeLedgerSql: sumLedgerSql(actual.filter((report) => report.counters).map((report) => report.counters)),
         ledgerSql: sumLedgerSql(deltas),
+        transactions: transactionSummary(deltas),
+        sqlExecutionMs: sumSqlExecutionMs(deltas),
         ledgerBytes: deltas.reduce((sum, delta) => sum + delta.ledger.bytes, 0),
         ledgerOps: deltas.reduce((sum, delta) => sum + delta.ledger.ops, 0),
         failures: actual.flatMap((report) => report.failure === undefined ? [] : [report.failure]),
@@ -929,6 +1072,8 @@ function compareRuns(runs) {
     discoveryLatencyP50: runs.map((run) => pick(run, ['phases', 'discovery', 'latencyMs', 'p50'])),
     catchBusy: runs.map((run) => pick(run, ['phases', 'catch', 'busyTotal'])),
     catchLedgerSql: runs.map((run) => pick(run, ['phases', 'catch', 'ledgerSql'])),
+    catchTransactions: runs.map((run) => pick(run, ['phases', 'catch', 'transactions'])),
+    catchSqlExecutionMs: runs.map((run) => pick(run, ['phases', 'catch', 'sqlExecutionMs'])),
     ledgerTransport: runs.map((run) => run.ledger.transport),
     legacyWholeState: runs.map((run) => run.sql.statements.legacyWholeState),
     seedMs: runs.map((run) => run.seed.ms),
@@ -1005,22 +1150,77 @@ async function selfTest() {
     assert.equal(rows.length, 1);
     assert.ok(hydrationDelta.sql.hydratedRows >= 1, 'self-test control: hydrated rows counted');
     assert.ok(hydrationDelta.sql.hydratedBytes > 0, 'self-test control: hydrated bytes counted');
+    assert.ok(hydrationDelta.sql.executionMs.hydrated > 0, 'hydration execution duration counted');
+    assert.ok(instrumentation.counters.sql.executionMs.schema > 0, 'schema execution duration counted');
+    const headsBefore = instrumentation.snapshot();
+    db.prepare('SELECT act_index FROM activities').all();
+    assert.ok(diffCounters(headsBefore, instrumentation.snapshot()).sql.executionMs.heads > 0, 'head execution duration counted');
     db.close();
 
     // Busy positive control: a held write lock must be observed, not silently dropped.
+    const acquisitionBefore = instrumentation.snapshot();
     const holder = new DatabaseSync(dbFile);
     holder.exec('BEGIN IMMEDIATE');
     const contender = new DatabaseSync(dbFile);
     contender.exec('PRAGMA busy_timeout=0');
     const busyBefore = instrumentation.counters.busy;
+    assert.throws(() => contender.exec('BEGIN IMMEDIATE'), isBusyError);
+    const acquisitionGapStart = performance.now();
     let busyThrown = false;
     try { contender.prepare('INSERT INTO activities (act_index, payload_json) VALUES (?, ?)').run(1, '{}'); }
     catch { busyThrown = true; }
     assert.ok(busyThrown, 'self-test control: contended write must throw');
     assert.ok(instrumentation.counters.busy > busyBefore, 'self-test control: busy counter must move');
+    await sleep(5);
     holder.exec('ROLLBACK');
+    const acquisitionGapEnd = performance.now();
+    contender.exec('BEGIN IMMEDIATE');
+    // A non-busy nested BEGIN error cannot replace the write transaction's original boundary.
+    assert.throws(() => contender.exec('BEGIN'), /transaction/i);
+    contender.exec('COMMIT');
+    const acquisition = diffCounters(acquisitionBefore, instrumentation.snapshot());
+    assert.equal(acquisition.transactions.artifact.write.beginAttempts, 3);
+    assert.equal(acquisition.transactions.artifact.write.beginBusy, 1);
+    assert.equal(acquisition.transactions.artifact.write.begun, 2);
+    assert.equal(acquisition.transactions.artifact.write.rolledBack, 1);
+    assert.equal(acquisition.transactions.artifact.write.committed, 1);
+    assert.equal(acquisition.transactions.artifact.read.beginErrors, 1);
+    assert.equal(acquisition.transactions.artifact.write.samples.length, 1);
+    assert.ok(acquisition.transactions.artifact.write.samples[0].acquireMs >= acquisitionGapEnd - acquisitionGapStart, 'acquisition includes busy retry gaps');
+    assert.ok(acquisition.transactions.artifact.write.samples[0].holdMs >= 0);
+
+    // Even a refused ROLLBACK resets a pending, failed BEGIN before a later acquisition.
+    holder.exec('BEGIN IMMEDIATE');
+    assert.throws(() => contender.exec('BEGIN IMMEDIATE'), isBusyError);
+    await sleep(5);
+    assert.throws(() => contender.exec('ROLLBACK'), /transaction/i);
+    holder.exec('ROLLBACK');
+    const resetBefore = instrumentation.snapshot();
+    const freshBeginStart = performance.now();
+    contender.exec('BEGIN IMMEDIATE');
+    const freshBeginEnd = performance.now();
+    contender.exec('COMMIT');
+    const reset = diffCounters(resetBefore, instrumentation.snapshot());
+    assert.equal(reset.transactions.artifact.write.samples.length, 1);
+    assert.ok(reset.transactions.artifact.write.samples[0].acquireMs <= freshBeginEnd - freshBeginStart, 'reset cannot retain an abandoned BEGIN timestamp');
     holder.close();
     contender.close();
+
+    // A failed standalone BEGIN without an active transaction also resets its pending state.
+    const reopened = new DatabaseSync(':memory:');
+    reopened.exec('BEGIN');
+    reopened.exec('ROLLBACK');
+    reopened.close();
+    const failedBefore = instrumentation.snapshot();
+    assert.throws(() => reopened.exec('BEGIN'), /open|closed/i);
+    reopened.open();
+    reopened.exec('BEGIN');
+    reopened.exec('COMMIT');
+    const failedBegin = diffCounters(failedBefore, instrumentation.snapshot());
+    assert.equal(failedBegin.transactions.artifact.read.beginErrors, 1);
+    assert.equal(failedBegin.transactions.artifact.read.committed, 1);
+    assert.equal(failedBegin.transactions.artifact.read.samples.length, 1);
+    reopened.close();
 
     assert.deepEqual(instrumentation.counters.ledgerSql, emptyLedgerSqlCounters(), 'artifact SQL must not enter host counters');
 
@@ -1057,6 +1257,9 @@ async function selfTest() {
     assert.equal(lockDelta.ledgerSql.commitAttempts, 1);
     assert.equal(lockDelta.ledgerSql.presenceRows, 0);
     assert.deepEqual(lockDelta.sql, emptySqlCounters());
+    assert.equal(lockDelta.transactions.ledger.batchedControlCalls, 1);
+    assert.equal(lockDelta.transactions.ledger.untrackedCommits, 1);
+    assert.equal(lockDelta.transactions.ledger.write.samples.length, 0, 'batched BEGIN boundaries must not fabricate precise timing');
     lock.close();
 
     const rival = new DatabaseSync(hostFile);
@@ -1078,13 +1281,17 @@ async function selfTest() {
     cold.close();
 
     // A reader prevents a writer's commit; retry calls are visible, not guessed from busy counts.
+    const transactionBefore = instrumentation.snapshot();
     host.exec('BEGIN');
     host.prepare('SELECT * FROM host_presence').all();
     rival.exec('BEGIN IMMEDIATE');
     insert.run('Reader1', null);
     const commitBefore = instrumentation.snapshot();
     assert.throws(() => rival.exec('COMMIT'), isBusyError);
+    const commitGapStart = performance.now();
+    await sleep(5);
     host.exec('ROLLBACK');
+    const commitGapEnd = performance.now();
     rival.exec('COMMIT');
     const commits = diffCounters(commitBefore, instrumentation.snapshot());
     assert.equal(commits.ledgerSql.commitAttempts, 2);
@@ -1092,6 +1299,17 @@ async function selfTest() {
     assert.equal(commits.ledgerSql.busy, 1);
     assert.equal(commits.busy, 0);
     assert.deepEqual(commits.commits, { attempts: 0, busy: 0, ms: 0 });
+    const transactionDelta = diffCounters(transactionBefore, instrumentation.snapshot());
+    assert.equal(transactionDelta.transactions.ledger.read.rolledBack, 1);
+    assert.equal(transactionDelta.transactions.ledger.read.samples.length, 0);
+    assert.equal(transactionDelta.transactions.ledger.write.committed, 1);
+    assert.equal(transactionDelta.transactions.ledger.write.samples.length, 1);
+    assert.ok(transactionDelta.transactions.ledger.write.samples[0].commitMs >= commitGapEnd - commitGapStart, 'commit timing includes retry gaps');
+    assert.deepEqual(transactionDelta.transactions.artifact, emptyTransactions().artifact, 'origins retain independent transaction boundaries');
+    const timingSummary = transactionSummary([transactionDelta]);
+    assert.equal(timingSummary.ledger.write.timedCommits, 1);
+    assert.equal(timingSummary.ledger.write.commitMs.p95, transactionDelta.transactions.ledger.write.samples[0].commitMs);
+    assert.equal(timingSummary.ledger.read.commitMs, null, 'rolled-back transactions supply no commit sample');
     rival.close();
     host.close();
 

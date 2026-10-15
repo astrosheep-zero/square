@@ -23,14 +23,14 @@ export interface CatchSelection {
 export function observeCatchSelection(facts: SquareRead, participant: string, activities: readonly StoredAct[], filter: DirectedFilter, at: number): CatchSelection {
   if (typeof at !== 'number' || !Number.isFinite(at)) throw new SquareError('invalid_args', 'Catch time must be a finite number.');
   const cursor = readCursor(facts, participant);
-  const roster = facts.roster(), header = facts.header(), current = facts.participant(participant)!;
+  const counts = facts.participantCounts(), header = facts.header(), current = facts.participant(participant)!;
   return {
     participant, activities, consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
     remaining: facts.directedCount(participant, filter),
     sayNumbers: activities.length === 0 ? {} : facts.sayOrdinals(activities.map((item) => item.index)),
-    standingCount: roster.filter((item) => item.joined).length, held: facts.hold().active, now: at,
+    standingCount: counts.joined, held: facts.hold().active, now: at,
     ownActivityCount: current.sayCount, hardCap: header.hardCap,
-    terminalStatus: terminalStatusFor(participant, current.sayCount, header.hardCap, roster),
+    terminalStatus: terminalStatusFor(current, header.hardCap, counts),
   };
 }
 export const CATCH_DEFAULT_LIMIT = 10;

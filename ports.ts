@@ -36,6 +36,11 @@ export interface ParticipantFact {
   readonly lastActiveAt?: number;
   readonly lastJoinIndex?: number;
 }
+export interface ParticipantCounts {
+  readonly known: number;
+  readonly joined: number;
+  readonly done: number;
+}
 export interface AttentionFact {
   readonly listener: string;
   readonly target: string;
@@ -97,6 +102,7 @@ export interface RouteFact {
 export interface SquareRead {
   header(): SquareHeader;
   participant(requestedName: string): ParticipantFact | undefined;
+  participantCounts(): ParticipantCounts;
   roster(): readonly ParticipantFact[];
   attention(listener: string): readonly AttentionFact[];
   incomingAttention(sender: string): readonly AttentionFact[];

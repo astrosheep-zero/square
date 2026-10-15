@@ -1,4 +1,4 @@
-# Catch contention: commit retries and empty reads
+# Catch contention: commit retries, empty reads, and shorter writes
 
 A busy SQLite COMMIT retains the write transaction while waiting for readers to leave. Previously it slept 25 ms between attempts, the same as contenders waiting to acquire a transaction. The retained writer also prevents those contenders from progressing.
 
@@ -79,3 +79,45 @@ All twelve scenarios discovered 300 participants, consumed exactly one activity 
 Focused tests exercise empty snapshot completeness, absence of writer acquisition/body hydration/receipts, a competing consumer between probe and write selection, exact-ID repetition, lease fencing, validation, cancellation, and ownership publication. The existing performance assertion now checks that an empty catch makes no hydration request.
 
 Raw local reports: `/tmp/square-catch-empty-before-{1,2,3}.json` and `/tmp/square-catch-empty-after-{1,2,3}.json`. The final cap-first short circuit in `watchTerminalStatus()` restores its earlier read behavior; it is used by lease pulses and lies outside this benchmark's non-idle path.
+
+## Follow-up: shortening consuming transactions
+
+The next candidate adds transaction-local participant counts instead of decoding the whole roster for catch/terminal summaries. Latest-say ordinals use the existing participant lifetime count when the selected activity is that actor's latest say; older activities retain the indexed prefix count. Artifact acquisition also passes its already-validated header to the transaction callback instead of reading and decoding it again. Schema validation still occurs inside every transaction. There is no persistent schema change or cross-transaction cache.
+
+The benchmark now measures explicit transaction boundaries per connection and separates artifact from host-ledger connections:
+
+- Acquisition: first BEGIN attempt to successful BEGIN return, including retry gaps.
+- Hold: successful BEGIN return to first COMMIT attempt, including validation, decoding and off-CPU wall time.
+- Commit: first COMMIT attempt to successful COMMIT return, including retries.
+
+Only committed transactions contribute timing samples. Rollback resets the sample; unsuccessful read acquisition/validation retries are visible in counts but do not become committed timings. `BEGIN DEFERRED` returning does not imply a read lock has already been acquired. Concurrent read durations cannot be summed into a serial lock-occupancy number. Batched transaction controls without observable inner boundaries are counted separately and excluded from exact timings. Artifact SQL execution durations exclude preparation and JavaScript decoding. Bounded self-tests exercise busy BEGIN, busy COMMIT, rollback/reset and origin separation.
+
+Fresh baseline `13d1a36` and candidate each ran three times with the same new instrumentation and the command above, both histories per run. Baselines ran first; no test suite or second benchmark ran alongside the measurements. These changes were measured together, not as independent experiments.
+
+| Metric | Before, 1,800 history | After, 1,800 | Before, 18,000 | After, 18,000 |
+| --- | ---: | ---: | ---: | ---: |
+| First catch API p95 (ms) | 3,528.76 | 2,678.86 | 3,685.07 | 2,865.71 |
+| Empty catch API p95 (ms) | 68.23 | 89.97 | 58.31 | 91.11 |
+| Whole catch phase p95 (ms) | 3,831.22 | 2,998.22 | 4,165.47 | 3,177.27 |
+| Write acquisition p95 (ms) | 2,739.46 | 1,950.57 | 2,961.04 | 2,257.01 |
+| Write hold p95 (ms) | 8.33 | 5.32 | 10.05 | 5.88 |
+| Write commit p95 (ms) | 4.15 | 3.81 | 4.36 | 4.24 |
+| Aggregate phase CPU (ms) | 16,348.86 | 13,014.67 | 17,732.24 | 13,499.75 |
+| Artifact busy observations | 16,201 | 13,081 | 20,023 | 12,508 |
+
+Cells are medians of three run-level measurements. Each scenario has 300 successful consuming write transactions, so write percentiles span those 300 transactions. First-catch p95 medians fall 24% and 22%; whole-phase medians fall 22% and 24%; CPU falls 20% and 24%. Write acquisition falls 29% and 24%, and hold p95 falls 36% and 42%. Percentiles of these stages must not be added to reconstruct the API percentile.
+
+Empty-catch p95 regresses by 22 ms and 33 ms (32% and 56%) in this contended workload. The faster consuming path does not improve every operation. The current measurements do not isolate the cause of this regression; empty catches still use a read transaction, and the 25 ms acquisition retry interval is unchanged. The consuming-call improvement outweighs it in whole-phase time, but the regression remains part of the result.
+
+| History | Call | Before p95 runs (ms) | After p95 runs (ms) |
+| --- | --- | --- | --- |
+| 1,800 | First | 3,572.79 / 3,123.90 / 3,528.76 | 2,361.69 / 2,732.76 / 2,678.86 |
+| 18,000 | First | 3,577.88 / 3,685.07 / 4,165.72 | 2,865.71 / 2,975.57 / 2,813.31 |
+| 1,800 | Empty | 68.23 / 85.81 / 61.32 | 100.68 / 89.97 / 87.47 |
+| 18,000 | Empty | 57.38 / 59.12 / 58.31 | 108.55 / 83.11 / 91.11 |
+
+Every candidate first-catch p95 is below its history's baseline range, but these sequential local runs are not confidence intervals or a general latency guarantee. Acquisition still takes seconds near the tail under 300 simultaneous processes. Some individual hold/commit samples are much longer than their p95; wall-time instrumentation alone cannot attribute all of that time to SQL or process scheduling.
+
+All twelve scenarios discovered 300 participants, consumed one activity each, and consumed none again: 3,600 successful worker results. Each scenario retains 300 hydrated bodies, 600 SQL writes, 300 committed artifact writes and 1,800 committed artifact reads. All stderr files were empty. Tests cover aggregate read-your-writes and rollback, known-but-not-standing peers, missing/done caller quorum, cap precedence, and ordinal numbering across aliases, gaps, rejoins and subsequent writes.
+
+Raw local reports: `/tmp/square-catch-positive-before-{1,2,3}.json` and `/tmp/square-catch-positive-after-{1,2,3}.json`. Earlier reports lack these transaction timing fields and should not be mixed into this comparison.

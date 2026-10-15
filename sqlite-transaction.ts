@@ -20,17 +20,17 @@ export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSigna
   }
 }
 /** Acquisition may retry; COMMIT retries retain the callback's result and transaction. */
-export async function inSqliteTransaction<T>(db: DatabaseSync, write: boolean, validate: () => void, change: () => T, signal?: AbortSignal): Promise<T> {
+export async function inSqliteTransaction<T, V>(db: DatabaseSync, write: boolean, validate: () => V, change: (validated: V) => T, signal?: AbortSignal): Promise<T> {
   let begun = false;
   try {
-    await retrySqliteBusy(() => {
+    const validated = await retrySqliteBusy(() => {
       db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
       begun = true;
-      try { validate(); }
+      try { return validate(); }
       catch (error) { db.exec('ROLLBACK'); begun = false; throw error; }
     }, signal);
     abort(signal);
-    const result = change();
+    const result = change(validated);
     if (result !== null && (typeof result === 'object' || typeof result === 'function') && typeof (result as { then?: unknown }).then === 'function') {
       void Promise.resolve(result).catch(() => undefined);
       throw new TypeError('SQLite transaction callbacks must be synchronous.');

@@ -111,7 +111,7 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
-    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'routes',
+    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'routes', 'participantCounts',
 ];
 const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'replaceRoutes'];
 /** One connection, ordered operations, guarded synchronous transaction capabilities. */
@@ -166,8 +166,8 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
     }
     async function transaction<R>(callback: (facts: SquareRead | SquareWrite) => R, write: boolean, signal: AbortSignal) {
         const db = await connection(signal);
-        return inSqliteTransaction(db, write, () => validate(db), () => {
-            const driver = createSqliteDriver(db), version = driver.header().revision;
+        return inSqliteTransaction(db, write, () => validate(db), (header) => {
+            const driver = createSqliteDriver(db), version = header.revision;
             let active = true, failed = false, failure: unknown;
             function guard<F extends (...args: never[]) => unknown>(fn: F): F {
                 return ((...args: never[]) => {
@@ -214,7 +214,7 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
     }
     const revision: SquareArtifactPort['revision'] = signal => queue(async (s) => {
         const db = await connection(s);
-        return inSqliteTransaction(db, false, () => validate(db), () => createSqliteDriver(db).header().revision, s);
+        return inSqliteTransaction(db, false, () => validate(db), (header) => header.revision, s);
     }, signal);
     return {
         read: (select, signal) => queue(async (s) => {

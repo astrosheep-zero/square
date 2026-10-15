@@ -1,6 +1,6 @@
 import { formatActivityId, type ActivityId } from './square-core.js';
-import { SquareError, sameName, type StoredAct, type WatchLease } from './model.js';
-import type { ParticipantFact, SquareRead } from './ports.js';
+import { SquareError, type StoredAct, type WatchLease } from './model.js';
+import type { ParticipantCounts, ParticipantFact, SquareRead } from './ports.js';
 
 function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -26,19 +26,19 @@ export function nowMs(): number {
   return value;
 }
 export function rosterNames(facts: SquareRead): string[] { return facts.roster().map((participant) => participant.name); }
-export function inSquareCount(facts: SquareRead): number { return facts.roster().filter((participant) => participant.joined).length; }
+export function inSquareCount(facts: SquareRead): number { return facts.participantCounts().joined; }
 export function actId(actOrIndex: StoredAct | number): ActivityId { return formatActivityId(typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index); }
 
-export function terminalStatusFor(name: string, ownActivityCount: number, hardCap: number | null, roster: readonly ParticipantFact[]): 'capped' | 'quorum' | undefined {
-  if (hardCap !== null && ownActivityCount >= hardCap) return 'capped';
-  const peers = roster.filter((participant) => !sameName(participant.name, name));
-  return peers.length > 0 && peers.every((peer) => peer.done) ? 'quorum' : undefined;
+export function terminalStatusFor(current: ParticipantFact | undefined, hardCap: number | null, counts: ParticipantCounts): 'capped' | 'quorum' | undefined {
+  if (hardCap !== null && (current?.sayCount ?? 0) >= hardCap) return 'capped';
+  const peers = counts.known - Number(current !== undefined);
+  const donePeers = counts.done - Number(current?.done === true);
+  return peers > 0 && donePeers === peers ? 'quorum' : undefined;
 }
 export function watchTerminalStatus(facts: SquareRead, name: string): 'capped' | 'quorum' | undefined {
-  const cap = facts.header().hardCap;
-  const ownActivityCount = cap === null ? 0 : facts.participant(name)?.sayCount ?? 0;
-  if (cap !== null && ownActivityCount >= cap) return 'capped';
-  return terminalStatusFor(name, ownActivityCount, cap, facts.roster());
+  const cap = facts.header().hardCap, current = facts.participant(name);
+  if (cap !== null && (current?.sayCount ?? 0) >= cap) return 'capped';
+  return terminalStatusFor(current, cap, facts.participantCounts());
 }
 
 /** A continuous prefix stops at the first unseen historical audience edge after join. */

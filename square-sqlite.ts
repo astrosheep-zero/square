@@ -1,6 +1,6 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { SquareError, nameKey, isWakeRouteKind, type ActivityObservation, type HardCap, type StoredAct, type WakeRoute, type WatchLease } from './model.js';
-import type { SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, RouteFact } from './ports.js';
+import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, RouteFact } from './ports.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
@@ -341,7 +341,7 @@ function route(row: Row): RouteFact {
     }));
 }
 function normalizedSql(sql: string): string { return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1'); }
-export function validateSqliteHeader(db: DatabaseSync, location = ''): void {
+export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     if (identity.user_version === 1) {
@@ -352,7 +352,7 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): void {
     const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();
     requireFact(actual.length === EXPECTED_SCHEMA_SQL.length && actual.every((sql, i) => sql === EXPECTED_SCHEMA_SQL[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
-    createSqliteDriver(db).header();
+    return createSqliteDriver(db).header();
 }
 interface Selection {
     sql: string;
@@ -443,6 +443,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const r = one('SELECT * FROM participants WHERE name_key_json=?', [key(name)]);
             return r ? participant(r) : undefined;
         },
+        participantCounts() {
+            const r = one('SELECT COUNT(*) AS known, COALESCE(SUM(joined),0) AS joined, COALESCE(SUM(done),0) AS done FROM participants')!;
+            return immutable({ known: integer(r.known), joined: integer(r.joined), done: integer(r.done) });
+        },
         roster: () => immutable(all('SELECT * FROM participants ORDER BY first_index').map(participant)),
         attention: name => immutable(attentionRows('t.listener_key_json=?', [key(name)])),
         incomingAttention: name => immutable(attentionRows('t.target_key_json=?', [key(name)])),
@@ -493,7 +497,14 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         sayOrdinals(indexes) {
             indexes.forEach(v => integer(v));
             const result: Record<number, number> = {};
-            for (const r of all("SELECT a.act_index,(SELECT COUNT(*) FROM activities s WHERE s.kind='say' AND s.actor_key_json=a.actor_key_json AND s.act_index<=a.act_index) AS n FROM activities a WHERE a.kind='say' AND a.act_index IN (SELECT value FROM json_each(?))", [encode(indexes)]))
+            // Only an actor's latest say can use its authoritative lifetime count.
+            for (const r of all(`SELECT a.act_index, CASE
+                WHEN p.say_count IS NOT NULL AND a.act_index=(SELECT MAX(s.act_index) FROM activities s WHERE s.kind='say' AND s.actor_key_json=a.actor_key_json)
+                THEN p.say_count
+                ELSE (SELECT COUNT(*) FROM activities s WHERE s.kind='say' AND s.actor_key_json=a.actor_key_json AND s.act_index<=a.act_index)
+                END AS n
+                FROM activities a LEFT JOIN participants p ON p.name_key_json=a.actor_key_json
+                WHERE a.kind='say' AND a.act_index IN (SELECT value FROM json_each(?))`, [encode(indexes)]))
                 result[integer(r.act_index)] = integer(r.n, 1);
             return immutable(result);
         },
