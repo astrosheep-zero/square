@@ -2,6 +2,8 @@
 
 ## Question and finding
 
+Follow-up: [catch cold-path optimization](catch-cold-path-optimization.md) removes unnecessary name-validation and adapter-loading work without adopting WAL; its separate repeated comparison meets the 50% first-catch p95 target.
+
 Does SQL compilation explain the multi-second queue under 300 processes, or is the critical path mainly lock occupancy?
 
 For the current DELETE-journal implementation, preparation inside committed write transactions accounts for about 6% of their cumulative hold-plus-commit time. About 84% of COMMIT wall time occurs **between** synchronous COMMIT calls following BUSY, not inside SQLite calls. Compilation is not the leading measured direct contributor to writer occupancy.

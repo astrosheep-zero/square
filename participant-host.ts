@@ -21,8 +21,11 @@ export async function identityRouteDraft(context: HostContext, participant: stri
   if (context.location === undefined || context.location === 'memory') return undefined;
   const identity = processIdentity(context.env ?? process.env);
   const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
-  const capabilities = context.hostLedger === undefined ? { canUse: () => false } : await defaultWakeRouteCapabilities(context.hostLedger);
-  return resolvePrimaryWakeRoute({ location: context.location, participant, sessionId: identity.session, provider }, context.env ?? process.env, capabilities);
+  const boundary = { location: context.location, participant, sessionId: identity.session, provider };
+  const env = context.env ?? process.env;
+  // No adapter can add a route when the host has no candidate in the first place.
+  if (context.hostLedger === undefined || resolvePrimaryWakeRoute(boundary, env, { canUse: () => true }) === undefined) return undefined;
+  return resolvePrimaryWakeRoute(boundary, env, await defaultWakeRouteCapabilities(context.hostLedger));
 }
 
 /** One postcommit host observation; presence and route publication fail independently. */

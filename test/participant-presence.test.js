@@ -3,12 +3,42 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 
 import { buildSquare, closeOpenSquare } from '../dist/open-square.js';
 import { FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { catchUp, express, join, takeover } from '../dist/square-actions.js';
 import { identityRouteDraft, publishCommittedIdentity } from '../dist/participant-host.js';
 import { defaultWakeRouteCapabilities, ROUTE_FRESH_MS } from '../dist/routes.js';
+
+test('route drafting loads adapters only when a host-backed candidate exists', () => {
+  // A fresh process makes cold module loading observable; route discovery catches import failures.
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { registerHooks } from 'node:module';
+    const loaded = new Set();
+    registerHooks({ load(url, context, nextLoad) {
+      if (url.endsWith('/codex-queue.js') || url.endsWith('/paseo-delivery.js')) loaded.add(url);
+      return nextLoad(url, context);
+    } });
+    const { identityRouteDraft } = await import(${JSON.stringify(new URL('../dist/participant-host.js', import.meta.url).href)});
+    const base = { location: '/square', hostLedger: {} };
+    assert.equal(await identityRouteDraft({ ...base, env: { PI_SESSION_ID: 'pi-local', PASEO_AGENT_ID: ' ' } }, 'Alice'), undefined);
+    assert.equal(await identityRouteDraft({ ...base, env: { CLAUDE_CODE_SESSION_ID: 'claude-local' } }, 'Alice'), undefined);
+    assert.equal(await identityRouteDraft({ ...base, hostLedger: undefined, env: { CODEX_THREAD_ID: 'thread-local' } }, 'Alice'), undefined);
+    assert.equal(loaded.size, 0, 'no possible route means no optional adapter imports');
+    const native = await identityRouteDraft({ ...base, env: { CODEX_THREAD_ID: 'thread-local' } }, 'Alice');
+    assert.equal(native.kind, 'codex-queue');
+    assert.deepEqual(native.address, { threadId: 'thread-local' });
+    const paseo = await identityRouteDraft({ ...base, env: { PI_SESSION_ID: 'pi-local', PASEO_AGENT_ID: ' agent-local ' } }, 'Alice');
+    assert.equal(paseo.kind, 'paseo');
+    assert.equal(paseo.channel, 'pi');
+    assert.equal(paseo.sessionId, 'pi-local');
+    assert.deepEqual(paseo.address, { agentId: 'agent-local' });
+    assert.equal(loaded.size, 2, 'real candidates still load and check installed adapters');
+  `], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 0, `${child.error ?? ''}${child.stderr}`);
+});
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-publication-'));
