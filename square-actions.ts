@@ -4,7 +4,7 @@ import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
 import type { Activity, CatchOptions, ExpressOptions, ExpressResult, ExpressionObservation, ListenerChangeResult, OperationControl, OwnershipFenceOptions } from './square-facade.js';
-import { decideCatch, type CatchSelection } from './catch-decisions.js';
+import { decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { inSquareCount } from './runtime.js';
 import { claimSessionParticipant, claimSessionTakeover, presenceEpoch, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
 import type { HostLedgerPort } from './host-ledger.js';
@@ -21,7 +21,14 @@ export function catchUp(square: OperationContext, name: string, options: CatchOp
 export async function catchUp(square: OperationContext, name: string, options: CatchOptions = {}, control?: OperationControl, leaseId?: string): Promise<CatchSelection | null> {
   throwIfAborted(control);
   if (!await assertLiveOwner(square, name)) throw new SquareError('already_joined', `${participantIdentity(name)} already stands here — another session holds the name`);
-  const selected = (await square.artifact.transact((facts) => {
+  let selected: CatchSelection | null | undefined;
+  if (leaseId === undefined && options.id === undefined) {
+    selected = (await square.artifact.read((facts) => {
+      const page = selectCatchPage(facts, name, options);
+      return page.indexes.length === 0 ? observeCatchSelection(facts, page.participant, [], page.filter, square.clock()) : undefined;
+    }, control?.signal)).value;
+  }
+  if (selected === undefined) selected = (await square.artifact.transact((facts) => {
     // Replacement and selection share the receipt transaction: an old waiter cannot
     // consume a later activity between its heartbeat and its selection.
     if (leaseId !== undefined && facts.lease(name)?.leaseId !== leaseId) return null;

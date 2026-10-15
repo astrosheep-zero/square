@@ -157,6 +157,7 @@ CREATE TABLE landed_audience (
   UNIQUE (act_index, recipient_order)
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
+const EXPECTED_SCHEMA_SQL = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 // All strings, including identity keys, are JSON encoded before SQLite binding.
 type Row = Record<string, string | number | null>;
 const encode = JSON.stringify;
@@ -348,9 +349,8 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): void {
         throw new SquareError('invalid_args', `Square artifact needs migration.\n${migrationRecoveryCommand(location)}`, { reason: 'migration_required' });
     }
     requireFact(identity.user_version === 2, 'unsupported SQLite format version.');
-    const expected = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
     const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();
-    requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
+    requireFact(actual.length === EXPECTED_SCHEMA_SQL.length && actual.every((sql, i) => sql === EXPECTED_SCHEMA_SQL[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
     createSqliteDriver(db).header();
 }

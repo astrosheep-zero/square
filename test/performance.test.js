@@ -130,11 +130,12 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
 
     // A valid sender filter with no matching pending activity settles empty;
     // unrelated remaining activity cannot force body hydration for that result.
+    const hydrationCount = counters.hydrated.length;
     const settled = await catchUp(square, 'P0', { from: ['P0'] });
     assert.deepEqual(settled.activities, []);
     assert.deepEqual(settled.sayNumbers, {});
     assert.equal(settled.standingCount, 2);
-    assert.deepEqual(counters.hydrated.at(-1), []);
+    assert.equal(counters.hydrated.length, hydrationCount, 'empty catch must not request body hydration');
     const { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, terminalStatus: emptyTerminal, ...emptyObservation } = settled;
     const emptyData = { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, idleExpired: false };
     const emptyOutcome = { data: emptyData, projection: { ...emptyObservation, presence,

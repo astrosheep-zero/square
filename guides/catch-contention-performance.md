@@ -1,4 +1,4 @@
-# Catch contention: retrying a blocked commit promptly
+# Catch contention: commit retries and empty reads
 
 A busy SQLite COMMIT retains the write transaction while waiting for readers to leave. Previously it slept 25 ms between attempts, the same as contenders waiting to acquire a transaction. The retained writer also prevents those contenders from progressing.
 
@@ -42,4 +42,40 @@ Raw local reports: `/tmp/square-catch-baseline-{1,2,3}.json` and `/tmp/square-ca
 
 ## Correctness boundaries
 
-Existing SQLite lifecycle tests exercise real blocked COMMITs, single callback execution, event-loop progress, cancellation rollback and cross-process receipt exclusion. Cancellation tests cover precommit rollback and postcommit success. The empty-catch write transaction remains unchanged: avoiding it would require a separate design and measurement, and is not part of this result.
+Existing SQLite lifecycle tests exercise real blocked COMMITs, single callback execution, event-loop progress, cancellation rollback and cross-process receipt exclusion. Cancellation tests cover precommit rollback and postcommit success. The COMMIT-only measurements above retain the empty-catch write transaction. The subsequent optimization below measures its removal separately.
+
+## Follow-up: empty catches and repeated observation work
+
+Ordinary non-ID, non-leased catches now inspect pending indexes in a read transaction. An empty page returns its complete observation from that snapshot without acquiring the artifact writer or hydrating bodies. A nonempty page is selected again inside the existing receipt transaction; the probe never decides which activities get consumed. Exact-ID and leased catches keep their existing write path. Ownership checks and identity publication remain in place.
+
+Catch observations now reuse one roster and header for standing count and terminal status. Schema validation precomputes only the expected SQL constant; actual schema, identity, version, journal mode, and header checks still run inside each transaction. These three changes were measured together, so the results do not isolate each change's contribution.
+
+The same benchmark command ran three times on baseline `03623cf`, then three times on the candidate, covering both histories each time. These are fresh baselines, separate from the earlier COMMIT experiment. No workload ran alongside the benchmarks. As above, ordering was sequential, not randomized, and results describe this local 300-process workload.
+
+| Metric | Before, 1,800 history | After, 1,800 | Before, 18,000 | After, 18,000 |
+| --- | ---: | ---: | ---: | ---: |
+| First catch API p95 (ms) | 5,681.03 | 3,729.06 | 4,967.29 | 3,654.90 |
+| Second, empty catch API p95 (ms) | 2,868.83 | 79.80 | 2,608.11 | 55.08 |
+| Whole catch phase p95 (ms) | 6,315.96 | 4,111.88 | 5,701.10 | 3,887.74 |
+| Aggregate phase CPU (ms) | 22,441.95 | 17,401.83 | 21,456.88 | 16,184.47 |
+| Artifact busy observations | 34,542 | 18,780 | 32,986 | 18,638 |
+| Artifact COMMIT busy observations | 137 | 323 | 148 | 287 |
+
+Each cell is the median of three run-level measurements. Empty-catch p95 medians fell 97% and 98%; first-catch medians fell 34% and 26%; whole-phase medians fell 35% and 32%; CPU medians fell 22% and 25%. Total busy observations fell, while COMMIT busy observations increased. The extra read probe changes contention; fewer writer acquisitions do not imply every busy counter falls.
+
+Run-level p95s in execution order:
+
+| History | Call | Before (ms) | After (ms) |
+| --- | --- | --- | --- |
+| 1,800 | First | 7,655.42 / 4,857.49 / 5,681.03 | 4,274.17 / 3,729.06 / 3,557.04 |
+| 18,000 | First | 4,967.29 / 5,029.40 / 4,895.89 | 5,005.24 / 3,356.44 / 3,654.90 |
+| 1,800 | Empty | 4,495.46 / 2,348.03 / 2,868.83 | 56.35 / 79.80 / 82.83 |
+| 18,000 | Empty | 3,139.28 / 2,506.64 / 2,608.11 | 53.31 / 55.08 / 56.97 |
+
+The first large-history candidate's consuming catch overlaps the baseline range. Consuming catches still wait seconds under this load; this is not a guarantee of millisecond catch latency generally. The second catch measures an empty result immediately after consumption, not a long-running idle lease.
+
+All twelve scenarios discovered 300 participants, consumed exactly one activity per worker, and consumed none again: 3,600 successful worker results. Each scenario hydrated 300 bodies and issued 600 artifact SQL writes. Empty baseline transactions already wrote no rows; the improvement removes writer acquisition, not receipt writes. Successful artifact transactions per scenario increase from 1,800 to 2,100 because nonempty catches add a read probe. All stderr files were empty.
+
+Focused tests exercise empty snapshot completeness, absence of writer acquisition/body hydration/receipts, a competing consumer between probe and write selection, exact-ID repetition, lease fencing, validation, cancellation, and ownership publication. The existing performance assertion now checks that an empty catch makes no hydration request.
+
+Raw local reports: `/tmp/square-catch-empty-before-{1,2,3}.json` and `/tmp/square-catch-empty-after-{1,2,3}.json`. The final cap-first short circuit in `watchTerminalStatus()` restores its earlier read behavior; it is used by lease pulses and lies outside this benchmark's non-idle path.

@@ -1,8 +1,8 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { inSquareCount, readCursor, watchTerminalStatus } from './runtime.js';
+import { readCursor, terminalStatusFor } from './runtime.js';
 import { SquareError, type StoredAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
-import type { DirectedFilter, SquareRead, SquareWrite } from './ports.js';
+import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
 import type { CatchOptions } from './square-facade.js';
 
 export interface CatchSelection {
@@ -21,14 +21,16 @@ export interface CatchSelection {
 
 /** Capture a selected page (or an empty completion) without opening another resource. */
 export function observeCatchSelection(facts: SquareRead, participant: string, activities: readonly StoredAct[], filter: DirectedFilter, at: number): CatchSelection {
+  if (typeof at !== 'number' || !Number.isFinite(at)) throw new SquareError('invalid_args', 'Catch time must be a finite number.');
   const cursor = readCursor(facts, participant);
+  const roster = facts.roster(), header = facts.header(), current = facts.participant(participant)!;
   return {
     participant, activities, consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
     remaining: facts.directedCount(participant, filter),
     sayNumbers: activities.length === 0 ? {} : facts.sayOrdinals(activities.map((item) => item.index)),
-    standingCount: inSquareCount(facts), held: facts.hold().active, now: at,
-    ownActivityCount: facts.participant(participant)!.sayCount, hardCap: facts.header().hardCap,
-    terminalStatus: watchTerminalStatus(facts, participant),
+    standingCount: roster.filter((item) => item.joined).length, held: facts.hold().active, now: at,
+    ownActivityCount: current.sayCount, hardCap: header.hardCap,
+    terminalStatus: terminalStatusFor(participant, current.sayCount, header.hardCap, roster),
   };
 }
 export const CATCH_DEFAULT_LIMIT = 10;
@@ -41,13 +43,26 @@ export function catchLimit(value: number | undefined): number {
   return limit;
 }
 
+/** Select non-ID catch coordinates without hydrating bodies or recording receipts. */
+export function selectCatchPage(facts: SquareRead, requestedName: string, options: CatchOptions): {
+  readonly participant: string;
+  readonly indexes: readonly ActivityIndex[];
+  readonly filter: DirectedFilter;
+} {
+  const participant = resolveKnownName(facts, requestedName);
+  const limit = catchLimit(options.limit);
+  const filter: DirectedFilter = { unseenOnly: true, ...(options.from === undefined ? {} : { senders: options.from }), ...(options.mention === true ? { attentionOnly: true } : {}) };
+  return { participant, indexes: facts.directed(participant, filter, { edge: 'oldest', limit }).items.map((item) => item.index), filter };
+}
+
 /** Selection, receipts and resulting cursor belong to one artifact write transaction. */
 export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchSelection {
-  const viewer = resolveKnownName(facts, requestedName);
-  const limit = catchLimit(options.limit);
+  let viewer: string;
   let delivered: readonly StoredAct[];
   let filter: DirectedFilter = { unseenOnly: true };
   if (options.id !== undefined) {
+    viewer = resolveKnownName(facts, requestedName);
+    catchLimit(options.limit);
     if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Catch id cannot be combined with idle, from, mention or limit.');
     const index = parseActivityId(options.id);
     if (index === undefined) throw new SquareError('invalid_args', 'Invalid catch id: expected an activity id like act/12.');
@@ -59,8 +74,10 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
     }
     delivered = [activity];
   } else {
-    filter = { unseenOnly: true, ...(options.from === undefined ? {} : { senders: options.from }), ...(options.mention === true ? { attentionOnly: true } : {}) };
-    delivered = facts.activities(facts.directed(viewer, filter, { edge: 'oldest', limit }).items.map((item) => item.index));
+    const page = selectCatchPage(facts, requestedName, options);
+    viewer = page.participant;
+    filter = page.filter;
+    delivered = facts.activities(page.indexes);
   }
   facts.markSeen(viewer, delivered.map((item) => item.index), at);
   return observeCatchSelection(facts, viewer, delivered, filter, at);

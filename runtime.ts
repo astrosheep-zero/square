@@ -1,6 +1,6 @@
 import { formatActivityId, type ActivityId } from './square-core.js';
 import { SquareError, sameName, type StoredAct, type WatchLease } from './model.js';
-import type { SquareRead } from './ports.js';
+import type { ParticipantFact, SquareRead } from './ports.js';
 
 function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -29,11 +29,16 @@ export function rosterNames(facts: SquareRead): string[] { return facts.roster()
 export function inSquareCount(facts: SquareRead): number { return facts.roster().filter((participant) => participant.joined).length; }
 export function actId(actOrIndex: StoredAct | number): ActivityId { return formatActivityId(typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index); }
 
+export function terminalStatusFor(name: string, ownActivityCount: number, hardCap: number | null, roster: readonly ParticipantFact[]): 'capped' | 'quorum' | undefined {
+  if (hardCap !== null && ownActivityCount >= hardCap) return 'capped';
+  const peers = roster.filter((participant) => !sameName(participant.name, name));
+  return peers.length > 0 && peers.every((peer) => peer.done) ? 'quorum' : undefined;
+}
 export function watchTerminalStatus(facts: SquareRead, name: string): 'capped' | 'quorum' | undefined {
   const cap = facts.header().hardCap;
-  if (cap !== null && (facts.participant(name)?.sayCount ?? 0) >= cap) return 'capped';
-  const peers = facts.roster().filter((participant) => !sameName(participant.name, name));
-  return peers.length > 0 && peers.every((peer) => peer.done) ? 'quorum' : undefined;
+  const ownActivityCount = cap === null ? 0 : facts.participant(name)?.sayCount ?? 0;
+  if (cap !== null && ownActivityCount >= cap) return 'capped';
+  return terminalStatusFor(name, ownActivityCount, cap, facts.roster());
 }
 
 /** A continuous prefix stops at the first unseen historical audience edge after join. */
