@@ -43,6 +43,7 @@ function validToken(token: unknown): token is string { return typeof token === '
 function indexSql(name: string, [table, ...fields]: readonly string[]): string {
   return `CREATE INDEX ${name} ON ${table} (${fields.join(',')})`;
 }
+export type HostLedgerFormat = 'current' | 'old-sqlite' | 'unrelated' | 'unsupported';
 function invalid(message: string): Error { return new Error(`Invalid host ledger: ${message}`); }
 function key(value: string): string { return JSON.stringify(value); }
 /** The complete record remains authority; these are only reproducible lookup projections. */
@@ -122,6 +123,18 @@ function verifyLedgerAtVersion(db: DatabaseSync, version: number): ReturnType<ty
   if ((counts.presence && !revision.presence) || (counts.evidence && !revision.evidence)) throw invalid('records without revision');
   return { ...counts, presenceRevision: revision.presence, evidenceRevision: revision.evidence };
 }
+function inspectLegacyRoot(root: string): boolean {
+  return fs.existsSync(path.join(root, 'presence.ndjsonl')) || fs.existsSync(path.join(root, 'evidence.ndjsonl'));
+}
+/** Read the file-type stamp and format version without making the runtime authority. */
+export function inspectLedgerIdentity(db: DatabaseSync): HostLedgerFormat {
+  const application = (db.prepare('PRAGMA application_id').get() as { application_id?: unknown }).application_id;
+  const version = (db.prepare('PRAGMA user_version').get() as { user_version?: unknown }).user_version;
+  if (application !== LEDGER_APPLICATION_ID) return 'unrelated';
+  if (version === LEDGER_VERSION) return 'current';
+  if (version === 1) return 'old-sqlite';
+  return 'unsupported';
+}
 /** Explicit offline migration only; the caller owns the write transaction. Preserve all records and revisions. */
 export function upgradeLedger(db: DatabaseSync): boolean {
   if (db.prepare('PRAGMA user_version').get()?.user_version === LEDGER_VERSION) { verifyLedger(db); return false; }
@@ -133,13 +146,21 @@ export function upgradeLedger(db: DatabaseSync): boolean {
   return true;
 }
 function exists(file: string): boolean { try { fs.statSync(file); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
-export function migrationRequired(): Error {
-  return new Error('Host ledger conversion required. Stop all ledger users before running:\nsquare ledger migrate');
+export function migrationRequired(root: string): Error {
+  return new Error(`Host ledger legacy format needs offline migration at ${root}.\nStop agent sessions and MCP services using Square with this ledger; keep them stopped until migration and verification succeed; then start them with the updated Square version.\nRun square ledger migrate from the same environment, then square ledger verify.`);
 }
 /** Compact runtime framing. Full schema, projections and integrity belong to explicit verify. */
 function validateLedgerHeader(db: DatabaseSync, version = LEDGER_VERSION): void {
-  if (db.prepare('PRAGMA application_id').get()?.application_id !== LEDGER_APPLICATION_ID
-    || db.prepare('PRAGMA user_version').get()?.user_version !== version) throw invalid('unsupported identity or version. Stop all ledger users before running:\nsquare ledger migrate');
+  if (db.prepare('PRAGMA application_id').get()?.application_id !== LEDGER_APPLICATION_ID) throw invalid('unrelated identity.');
+  if (db.prepare('PRAGMA user_version').get()?.user_version !== version) throw invalid('unsupported format version.');
+}
+/** The runtime's only upgrade door: a supported old ledger is pointed at explicit migration. */
+function runtimeLedgerHeader(db: DatabaseSync, root: string): void {
+  try { validateLedgerHeader(db); }
+  catch (error) {
+    if (inspectLedgerIdentity(db) === 'old-sqlite') throw migrationRequired(root);
+    throw error;
+  }
 }
 /** Publish new empty authority only. Never initialize or replace an existing destination. */
 function createEmptyLedger(root: string): void {
@@ -164,7 +185,7 @@ function createEmptyLedger(root: string): void {
 async function openLedger(root: string, write: boolean, signal?: AbortSignal): Promise<DatabaseSync | undefined> {
   const file = path.join(root, LEDGER_FILENAME);
   if (!exists(file)) {
-    if (exists(path.join(root, 'presence.ndjsonl')) || exists(path.join(root, 'evidence.ndjsonl'))) throw migrationRequired();
+    if (inspectLegacyRoot(root)) throw migrationRequired(root);
     if (!write) return undefined;
     if (signal?.aborted) throw signal.reason;
     createEmptyLedger(root);
@@ -254,7 +275,7 @@ export async function withLedger<T>(root: string, write: boolean, select: (rows:
   const db = await openLedger(root, write, signal);
   if (!db) return absent;
   try {
-    return await inSqliteTransaction(db, write, () => validateLedgerHeader(db), () => {
+    return await inSqliteTransaction(db, write, () => runtimeLedgerHeader(db, root), () => {
       const rows = new LedgerTransaction(db), result = select(rows);
       rows.commitRevisions();
       return result;
@@ -264,6 +285,6 @@ export async function withLedger<T>(root: string, write: boolean, select: (rows:
 export async function readLedgerRevisions(root: string, signal?: AbortSignal): Promise<{ presence: number; evidence: number } | undefined> {
   const db = await openLedger(root, false, signal);
   if (!db) return undefined;
-  try { return await inSqliteTransaction(db, false, () => validateLedgerHeader(db), () => ledgerRevisions(db), signal); }
+  try { return await inSqliteTransaction(db, false, () => runtimeLedgerHeader(db, root), () => ledgerRevisions(db), signal); }
   finally { db.close(); }
 }

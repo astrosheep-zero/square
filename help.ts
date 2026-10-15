@@ -87,12 +87,12 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
     summary: 'Convert an existing version 1 square to row storage in place.',
-    details: ['For the selected square artifact only; there is no --check, --backup or --force.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write.'],
+    details: ['For the selected .square artifact only. Global identity and delivery records use square ledger migrate instead.', 'Stop sessions and services using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write. There is no --check, --backup or --force.'],
   },
   {
     names: ['ledger'], usage: 'ledger <verify|migrate|gc>', usesSquare: false, group: 'maintenance',
     summary: 'Verify, convert, or reclaim the machine-local host ledger.',
-    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty. An older or unsupported database is refused with the migrate command and is never upgraded by verify.', 'migrate: stop every Square host first, then convert legacy NDJSON, or upgrade an older SQLite ledger in place. Sources, records, order and observer revisions are preserved; an existing current ledger is an untouched no-op.', 'gc [--dry-run]: reclaim old wake/presentation evidence only where the square artifact proves the recipient is closed — the activity reached them and catch receipted it or they later rejoined. Dispatching, lifecycle and unprovable rows are retained. Deleted rows free reusable pages, not file size (no VACUUM); retired Claude recognition tokens keep growing in total.', 'Run gc with --dry-run first: it reports eligible, retired, cas-miss and unreadable-artifact counts without writing. Eligible rows are candidates only: a changed record or an unusable Claude correlation is retained.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'These commands never stop, restart, install into or schedule hosts; conversion and schema upgrade are never automatic. No --force or repair.'],
+    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty. An older supported SQLite format requires explicit migration. Unsupported versions or invalid databases need diagnosis; migration is not a repair command.', 'migrate: stop agent sessions and MCP services using Square with this ledger first, then convert legacy NDJSON or upgrade supported SQLite version 1 in place. Keep them stopped, run square ledger verify afterward, then start them with the updated Square version. Sources, records, order and observer revisions are preserved; an existing current ledger is an untouched no-op.', 'gc [--dry-run]: reclaim old wake/presentation evidence only where the square artifact proves the recipient is closed — the activity reached them and catch receipted it or they later rejoined. Dispatching, lifecycle and unprovable rows are retained. Deleted rows free reusable pages, not file size (no VACUUM); retired Claude recognition tokens keep growing in total.', 'Run gc with --dry-run first: it reports eligible, retired, cas-miss and unreadable-artifact counts without writing. Eligible rows are candidates only: a changed record or an unusable Claude correlation is retained.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'These commands never stop, restart, install into or schedule hosts; conversion and schema upgrade are never automatic. No --force or repair.'],
   },
 ];
 
@@ -144,7 +144,7 @@ export function renderSubcommandHelp(command: string): string | undefined {
     'Help:',
     '  -h, --help  Show this command help.',
     '',
-    "Run 'square help' to list available commands.",
+    "Run 'square --help' to list available commands.",
     '',
   ].join('\n');
 }
@@ -175,5 +175,5 @@ export function helpRequest(rawArgs: string[]): { command?: string } | undefined
 export function commandUsageHint(command: string | undefined): string {
   return command !== undefined && definitionFor(command) !== undefined
     ? `Run 'square ${command} --help' for usage.\n`
-    : "Run 'square help' to list commands.\n";
+    : "Run 'square --help' to list commands.\n";
 }

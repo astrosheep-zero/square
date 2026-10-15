@@ -246,7 +246,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
   assert.match(alias.stdout, /^Aliases: ls$/m);
   assert.equal(unknown.status, 2);
   assert.match(unknown.stderr, /unknown command: missing-command/);
-  assert.match(unknown.stderr, /square help/);
+  assert.match(unknown.stderr, /square --help/);
   for (const [index, result] of removedResults.entries()) {
     const removed = ['act', 'echo', 'compact'][Math.floor(index / 2)];
     assert.equal(result.status, 2, removed);

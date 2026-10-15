@@ -46,15 +46,16 @@ See [Square for Paseo](plugins/paseo/README.md) for requirements and development
 
 ## Update
 
-For a legacy NDJSON host ledger — or an older SQLite ledger format — stop **all**
-Square hosts before upgrading. Do not mix old and new processes. After updating
-the package, with hosts still stopped, run `square ledger verify`,
-`square ledger migrate`, then `square ledger verify`. Only then start the updated
-hosts together. `migrate` imports the NDJSON sources or upgrades an older SQLite
-ledger in place, preserving records, order and observer revisions; a current
-SQLite ledger is an untouched no-op. These commands never stop or restart hosts
-for you. See [host ledger](guides/host-ledger.md) for source preservation,
-refusal behavior and backup guidance. Ordinary empty-root reads create nothing.
+A legacy NDJSON host ledger — or an older SQLite ledger format — needs an explicit
+offline migration. Stop every agent session and MCP service using Square with that
+ledger. Do not mix old and new processes. After updating the package, with them
+still stopped, run `square ledger verify`, `square ledger migrate`, then
+`square ledger verify`. Only then start the updated sessions and services together.
+`migrate` imports the NDJSON sources or upgrades an older SQLite ledger in place,
+preserving records, order and observer revisions; a current SQLite ledger is an
+untouched no-op. These commands never stop or restart anything for you. See
+[host ledger](guides/host-ledger.md) for source preservation, refusal behavior
+and backup guidance. Ordinary empty-root reads create nothing.
 
 ```bash
 npm install -g @astrosheep/square@latest
@@ -87,7 +88,9 @@ and their total count is unbounded. Do not
 roll back to retained NDJSON files after SQLite writes have begun.
 
 Each `.square` artifact is a transactional SQLite database using DELETE journal
-mode and FULL synchronous writes. Legacy artifact formats are not migrated.
+mode and FULL synchronous writes. A version 1 artifact must be converted with
+`square --location <path> migrate` while nothing uses it; unrelated or
+unsupported artifacts are refused without a write.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

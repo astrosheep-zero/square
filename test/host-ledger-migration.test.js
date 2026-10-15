@@ -172,7 +172,7 @@ test('unsupported destinations and corrupt derived projections are refused witho
   const root = await rootFor(t), file = path.join(root, LEDGER_FILENAME);
   await fs.writeFile(file, 'not a database SECRET');
   for (const operation of [verifyHostLedger, migrateHostLedger]) {
-    await assert.rejects(operation({ rootPath: root }), /database verification failed/);
+    await assert.rejects(operation({ rootPath: root }), /verification failed/);
     assert.equal(await fs.readFile(file, 'utf8'), 'not a database SECRET');
   }
   await fs.unlink(file);
@@ -182,7 +182,7 @@ test('unsupported destinations and corrupt derived projections are refused witho
   try { db.exec("UPDATE host_presence SET session_key='\"wrong\"'"); }
   finally { db.close(); }
   const before = await fs.readFile(file);
-  await assert.rejects(verifyHostLedger({ rootPath: root }), /database verification failed/);
+  await assert.rejects(verifyHostLedger({ rootPath: root }), /verification failed/);
   assert.deepEqual(await fs.readFile(file), before);
   const result = cli(root, ['ledger', 'verify']);
   assert.notEqual(result.status, 0);
@@ -221,7 +221,7 @@ test('a destination appearing at publication is never overwritten, and an invali
     await fs.writeFile(destination, 'foreign authority', { flag: 'wx' });
     return originalLink(source, destination);
   });
-  await assert.rejects(migrateHostLedger({ rootPath: root }), /database verification failed/);
+  await assert.rejects(migrateHostLedger({ rootPath: root }), /verification failed/);
   assert.equal(await fs.readFile(path.join(root, LEDGER_FILENAME), 'utf8'), 'foreign authority');
   assert.equal(await fs.readFile(path.join(root, 'evidence.ndjsonl'), 'utf8'), bytes);
   assert.equal((await fs.readdir(root)).some((name) => name.startsWith('.host-ledger-migrate-')), false);
@@ -266,11 +266,15 @@ test('global CLI verify/migrate require no location or participant and report on
   assert.equal(ready.status, 0, ready.stderr);
   assert.match(ready.stdout, /host ledger: legacy/);
   assert.match(ready.stdout, /sha256 [a-f0-9]{64}/);
-  assert.match(ready.stdout, /Stop all Square hosts before conversion\.\nsquare ledger migrate/);
+  assert.match(ready.stdout, /root: /);
+  assert.match(ready.stdout, /Stop agent sessions and MCP services using Square with this ledger before conversion\./);
+  assert.match(ready.stdout, /Next: migrate, then verify\.\nsquare ledger migrate\nsquare ledger verify/);
   assert.doesNotMatch(ready.stdout + ready.stderr, /PRIVATE-MESSAGE|PRIVATE-ENDPOINT|native-session/);
   const migrated = cli(root, ['ledger', 'migrate']);
   assert.equal(migrated.status, 0, migrated.stderr);
   assert.match(migrated.stdout, /host ledger: migrated/);
+  assert.match(migrated.stdout, /Keep affected sessions and MCP services stopped until verification succeeds\./);
+  assert.match(migrated.stdout, /square ledger verify/);
   assert.equal(cli(root, ['ledger', 'verify']).status, 0);
   assert.equal(cli(root, ['ledger', 'migrate', '--force']).status, 2);
 });

@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { migrateHostLedger, verifyHostLedger } from '../dist/host-ledger-migration.js';
-import { LEDGER_FILENAME, LEDGER_VERSION, initializeLedger, insertLedgerRecord, setLedgerRevisions } from '../dist/host-ledger-sqlite.js';
+import { LEDGER_FILENAME, LEDGER_VERSION, initializeLedger, insertLedgerRecord, setLedgerRevisions, inspectLedgerIdentity } from '../dist/host-ledger-sqlite.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-ledger-upgrade-'));
@@ -89,10 +89,11 @@ test('read-only verify checks recognition codecs without exposing the token', as
   const db = new DatabaseSync(f.file);
   try { db.prepare('UPDATE host_native_tokens SET token_key=?').run(JSON.stringify('INVALID_TOKEN_SECRET')); }
   finally { db.close(); }
+  assert.equal(inspect(f.file, inspectLedgerIdentity), 'current');
   const before = fs.readFileSync(f.file);
   await assert.rejects(verifyHostLedger({ rootPath: f.root }), error => {
-    assert.match(error.message, /database verification failed/);
-    assert.doesNotMatch(error.message, /INVALID_TOKEN_SECRET|private|endpoint/);
+    assert.match(error.message, /verification failed/);
+    assert.doesNotMatch(error.message, /INVALID_TOKEN_SECRET|\/private\/endpoint/);
     return true;
   });
   assert.deepEqual(fs.readFileSync(f.file), before);

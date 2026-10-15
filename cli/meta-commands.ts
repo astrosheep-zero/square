@@ -11,7 +11,7 @@ export const helpCommand: CommandSpec<{ command?: string }, string> = {
   execute(intent) {
     if (intent.command === undefined) return renderGlobalHelp();
     const rendered = renderSubcommandHelp(intent.command);
-    if (rendered === undefined) fail(`unknown command: ${intent.command}\nrun 'square help' to list available commands`);
+    if (rendered === undefined) fail(`unknown command: ${intent.command}\nrun 'square --help' to list available commands`);
     return rendered;
   },
   present: (result) => process.stdout.write(result),

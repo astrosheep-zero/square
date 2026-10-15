@@ -22,7 +22,7 @@ Verification is read-only. It checks SQLite identity, version, schema, integrity
 
 To upgrade an NDJSON ledger:
 
-1. Stop **every** Square host using that ledger, including interactive harnesses and background agents. Do not run old and new hosts together.
+1. Stop **every** agent session and MCP service using Square with this ledger, including interactive harnesses and background agents. Do not run old and new ones together.
 2. Keep a backup of the stopped legacy files.
 3. Run:
 
@@ -36,7 +36,7 @@ To upgrade an NDJSON ledger:
 
 Migration does not stop or restart hosts. Its locks fence compatible writers but do not prove hosts are stopped. It acquires the ownership claim fence, then `presence.ndjsonl.lock`, then `evidence.ndjsonl.lock`.
 
-An older SQLite ledger format is upgraded in place by the same `square ledger migrate` under the same stopped-hosts prerequisite and the same lock order. The upgrade preserves every record, duplicate, original order and both observer revisions. `square ledger verify` stays read-only: it refuses an older or unsupported database with the migrate command and never upgrades silently.
+An older SQLite ledger format is upgraded in place by the same `square ledger migrate` under the same stopped-sessions prerequisite and the same lock order. The upgrade preserves every record, duplicate, original order and both observer revisions. `square ledger verify` stays read-only: it reports a supported old format with the migrate command and never upgrades silently. An unsupported format version or an unrelated database is refused with a diagnosis path instead: migration is not a repair command, and a failed migration is never answered by rerunning it blindly.
 
 The importer preserves all ages, future records, duplicates, original order, native correlation and residual fields. It ignores malformed JSON, wrong versions and records without a numeric timestamp, as the old reader did, and reports those counts. Any valid version-1 record whose indexed fields are unsafe refuses the entire conversion rather than losing evidence. Refusal identifies only source kind, rejected count and first rejected line; no accepted subset is published. Legacy unknown wake sources are normalized once during import.
 

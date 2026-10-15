@@ -7,7 +7,7 @@ import { withFileLock } from './file-lock.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import {
   LEDGER_FILENAME, initializeLedger, insertLedgerRecord, ledgerRecordColumns,
-  setLedgerRevisions, upgradeLedger, validateLedger, verifyLedger,
+  setLedgerRevisions, upgradeLedger, validateLedger, verifyLedger, inspectLedgerIdentity, type HostLedgerFormat,
 } from './host-ledger-sqlite.js';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 
@@ -15,6 +15,7 @@ type Kind = 'presence' | 'evidence';
 export interface LedgerSourceReport { records: number; ignored: number; rejected: number; sha256: string | null }
 export interface HostLedgerReport {
   status: 'empty' | 'legacy' | 'sqlite' | 'migrated' | 'upgraded';
+  rootPath: string;
   presence: number;
   evidence: number;
   presenceRevision?: number;
@@ -37,20 +38,38 @@ async function exists(file: string): Promise<boolean> {
   try { await fs.lstat(file); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
-/** Generic and payload-free: the only supported remedy is offline conversion under stopped hosts. */
-function verificationFailure(): Error {
-  return new Error('Host ledger database verification failed; destination left untouched.\nStop all Square hosts, then run: square ledger migrate');
+function migrationGuidance(root: string, file?: string): string {
+  const name = file ?? path.join(root, LEDGER_FILENAME);
+  return `Host ledger at ${root} has a supported older format (${name}).\nStop agent sessions and MCP services using Square with this ledger; keep them stopped until migration and verification succeed; then start them with the updated Square version.\nsquare ledger migrate\nsquare ledger verify`;
 }
-async function verifyDatabase(file: string, signal?: AbortSignal): Promise<HostLedgerReport> {
+function verificationFailure(root: string, file?: string, format?: HostLedgerFormat): Error {
+  const name = file ?? path.join(root, LEDGER_FILENAME);
+  const detail = format === 'unsupported'
+    ? 'It has an unsupported format version.'
+    : format === 'unrelated'
+      ? 'It is unrelated to a Square host ledger.'
+      : format === undefined
+        ? 'It could not be read.'
+        : 'Its identity is current but its contents failed verification.';
+  return new Error(`Host ledger verification failed at ${name}; ${detail}\nDestination left untouched. Migration is not a repair command. Keep the affected sessions and MCP services stopped, preserve the ledger, and diagnose the underlying file before retrying.`);
+}
+async function verifyDatabase(file: string, root: string, signal?: AbortSignal): Promise<HostLedgerReport> {
   abort(signal);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(file, { readOnly: true });
     const counts = await inSqliteTransaction(db, false, () => validateLedger(db!), () => verifyLedger(db!), signal);
-    return { status: 'sqlite', ...counts };
+    return { status: 'sqlite', rootPath: root, ...counts };
   } catch {
     abort(signal);
-    throw verificationFailure();
+    let format: HostLedgerFormat | undefined;
+    try {
+      db = new DatabaseSync(file, { readOnly: true });
+      format = inspectLedgerIdentity(db);
+      db.close(); db = undefined;
+    } catch { db?.close(); db = undefined; }
+    if (format === 'old-sqlite') throw new Error(migrationGuidance(root, file));
+    throw verificationFailure(root, file, format);
   } finally { db?.close(); }
 }
 interface LegacySource { rows: object[]; report: LedgerSourceReport; firstRejectedLine?: number }
@@ -86,9 +105,10 @@ async function readLegacy(root: string, kind: Kind, signal?: AbortSignal): Promi
 async function readSources(root: string, signal?: AbortSignal): Promise<Record<Kind, LegacySource>> {
   return { presence: await readLegacy(root, 'presence', signal), evidence: await readLegacy(root, 'evidence', signal) };
 }
-function sourceReport(sources: Record<Kind, LegacySource>): HostLedgerReport {
+function sourceReport(root: string, sources: Record<Kind, LegacySource>): HostLedgerReport {
   return {
     status: sources.presence.report.sha256 === null && sources.evidence.report.sha256 === null ? 'empty' : 'legacy',
+    rootPath: root,
     presence: sources.presence.rows.length, evidence: sources.evidence.rows.length,
     sources: { presence: sources.presence.report, evidence: sources.evidence.report },
     ready: sources.presence.report.rejected === 0 && sources.evidence.report.rejected === 0,
@@ -99,8 +119,8 @@ export async function verifyHostLedger(options: HostLedgerMaintenanceOptions = {
   const root = rootFor(options);
   abort(options.signal);
   const destination = path.join(root, LEDGER_FILENAME);
-  if (await exists(destination)) return verifyDatabase(destination, options.signal);
-  return sourceReport(await readSources(root, options.signal));
+  if (await exists(destination)) return verifyDatabase(destination, root, options.signal);
+  return sourceReport(root, await readSources(root, options.signal));
 }
 /** The fixed offline fence: ownership claim, then both legacy source locks, in that order. */
 function withOfflineLocks<T>(root: string, signal: AbortSignal | undefined, body: () => Promise<T>): Promise<T> {
@@ -117,18 +137,18 @@ function withOfflineLocks<T>(root: string, signal: AbortSignal | undefined, body
  */
 async function currentFormat(root: string, signal?: AbortSignal): Promise<HostLedgerReport> {
   const destination = path.join(root, LEDGER_FILENAME);
-  try { return await verifyDatabase(destination, signal); }
+  try { return await verifyDatabase(destination, root, signal); }
   catch { abort(signal); }
-  if (!await exists(destination)) throw verificationFailure();
+  if (!await exists(destination)) throw verificationFailure(root);
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(destination);
     const upgraded = await inSqliteTransaction(db, true, () => {}, () => upgradeLedger(db!), signal);
     db.close(); db = undefined;
-    return { ...await verifyDatabase(destination, signal), status: upgraded ? 'upgraded' : 'sqlite' };
+    return { ...await verifyDatabase(destination, root, signal), status: upgraded ? 'upgraded' : 'sqlite' };
   } catch {
     abort(signal);
-    throw verificationFailure();
+    throw verificationFailure(root, destination);
   } finally { db?.close(); }
 }
 
@@ -138,13 +158,22 @@ export async function migrateHostLedger(options: HostLedgerMaintenanceOptions = 
   abort(signal);
   const destination = path.join(root, LEDGER_FILENAME);
   if (await exists(destination)) {
-    try { return await verifyDatabase(destination, signal); }
+    try { return await verifyDatabase(destination, root, signal); }
     catch { abort(signal); }
-    // An older SQLite format is upgraded offline; a current ledger stays a read-only no-op.
-    return withOfflineLocks(root, signal, () => currentFormat(root, signal));
+    // Inspect only the database identity; record/schema verification remains the migration fence.
+    let format: HostLedgerFormat | undefined;
+    let probe: DatabaseSync | undefined;
+    try { probe = new DatabaseSync(destination, { readOnly: true }); format = inspectLedgerIdentity(probe); }
+    catch { format = undefined; }
+    finally { probe?.close(); }
+    if (format === 'old-sqlite') {
+      // Only the supported prior format enters the existing offline upgrade fence.
+      return withOfflineLocks(root, signal, () => currentFormat(root, signal));
+    }
+    throw verificationFailure(root, destination, format);
   }
   if (!await exists(path.join(root, 'presence.ndjsonl')) && !await exists(path.join(root, 'evidence.ndjsonl'))) {
-    return { status: 'empty', presence: 0, evidence: 0 };
+    return { status: 'empty', rootPath: root, presence: 0, evidence: 0 };
   }
   return withOfflineLocks(root, signal, () => convertLegacy(root, destination, signal));
 }
@@ -153,7 +182,7 @@ export async function migrateHostLedger(options: HostLedgerMaintenanceOptions = 
 async function convertLegacy(root: string, destination: string, signal?: AbortSignal): Promise<HostLedgerReport> {
   if (await exists(destination)) return currentFormat(root, signal);
   const sources = await readSources(root, signal);
-  const report = sourceReport(sources);
+  const report = sourceReport(root, sources);
   if (!report.ready) {
     const rejected = (['presence', 'evidence'] as const).filter((kind) => sources[kind].report.rejected > 0)
       .map((kind) => `${kind}: ${sources[kind].report.rejected} rejected (first line ${sources[kind].firstRejectedLine})`);
@@ -175,14 +204,14 @@ async function convertLegacy(root: string, destination: string, signal?: AbortSi
       setLedgerRevisions(db!, { presence: report.presence ? 1 : 0, evidence: report.evidence ? 1 : 0 });
     }, signal);
     db.close(); db = undefined;
-    const verified = await verifyDatabase(file, signal);
+    const verified = await verifyDatabase(file, root, signal);
     if (verified.presence !== report.presence || verified.evidence !== report.evidence) {
       throw new Error('Host ledger import counts do not match; conversion refused.');
     }
     abort(signal);
     try { await fs.link(file, destination); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return await verifyDatabase(destination, signal);
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return await verifyDatabase(destination, root, signal);
       throw error;
     }
     const directory = await fs.open(root, 'r');

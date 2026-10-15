@@ -8,6 +8,7 @@ type LedgerResult = HostLedgerReport | LedgerMaintenanceReport;
 function renderReport(report: HostLedgerReport): string {
   const lines = [
     `host ledger: ${report.status}`,
+    `root: ${report.rootPath}`,
     `presence: ${report.presence} · evidence: ${report.evidence}`,
   ];
   if (report.presenceRevision !== undefined) {
@@ -22,8 +23,18 @@ function renderReport(report: HostLedgerReport): string {
     }
   }
   if (report.status === 'legacy') {
-    if (report.ready) lines.push('Stop all Square hosts before conversion.', 'square ledger migrate');
-    else lines.push('Unsafe legacy records; conversion refused.');
+    if (report.ready) lines.push(
+      'Stop agent sessions and MCP services using Square with this ledger before conversion.',
+      'Keep them stopped until migration and verification succeed; then start them with the updated Square version.',
+      'Next: migrate, then verify.',
+      'square ledger migrate',
+      'square ledger verify',
+    );
+    else lines.push('Unsafe legacy records; conversion refused. Preserve the sources and resolve the rejected records before retrying verification.');
+  }
+  if (report.status === 'migrated' || report.status === 'upgraded') {
+    lines.push('Keep affected sessions and MCP services stopped until verification succeeds.',
+      'After verification, start them with the updated Square version.', 'square ledger verify');
   }
   return lines.join('\n') + '\n';
 }
