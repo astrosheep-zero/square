@@ -7,12 +7,14 @@ import {
   renderAmbientEvent,
   renderDoctorUnfixable,
   renderExpressNoWait,
+  renderEventCli,
   renderPresenceAnchor,
   renderWatchAlreadyActive,
   renderWatchForceTakeover,
   renderWatchReplaceMissing,
   renderWatchStatus,
 } from '../dist/presentation.js';
+import { toPublicActivity } from '../dist/views.js';
 
 test('unfixable doctor detail is bounded to 160 Unicode code points', () => {
   const detail = '界'.repeat(200);
@@ -35,6 +37,26 @@ test('legacy presence rendering bounds identity lists and names the remainder', 
   const anchor = renderPresenceAnchor(names);
   assert.match(anchor, /@Person0.*@Person9 and 2 more were here/);
   assert.doesNotMatch(anchor, /Person10|Person11/);
+});
+
+test('public activities render directly with the same IDs, replies, bodies and presence as archive records', () => {
+  const records = [
+    { kind: 'say', actor: 'Alice', body: 'first line\nsecond line', mentions: ['Bob'], reply: 3, index: 9, at: 0 },
+    { kind: 'done', actor: 'Alice', body: '', index: 10, at: 0 },
+    { kind: 'listen', actor: 'Alice', target: 'Bob', index: 11, at: 0 },
+  ];
+  const options = { now: 1000, actNumber: 4, mention: 'Bob', perception: 'full' };
+  for (const record of records) {
+    assert.equal(renderAmbientEvent(toPublicActivity(record), 'Bob', options), renderAmbientEvent(record, 'Bob', options));
+  }
+  const rendered = renderAmbientEvent(toPublicActivity(records[0]), 'Bob', options);
+  assert.match(rendered, /#4 · act\/9.*replies to act\/3/);
+  assert.match(rendered, /first line\n  second line/);
+  const presence = { ...options, perception: 'presence' };
+  assert.equal(renderAmbientEvent(toPublicActivity(records[0]), 'Cara', presence), renderAmbientEvent(records[0], 'Cara', presence));
+  assert.doesNotMatch(renderAmbientEvent(toPublicActivity(records[0]), 'Cara', presence), /first line|second line/);
+  assert.equal(renderEventCli({ kind: 'read', actor: 'Bob', through: 9, index: 12, at: 0 }), '');
+  assert.equal(renderEventCli({ kind: 'hold', body: 'pause', index: 13, at: 0 }), '· someone raised a hand — pause');
 });
 
 test('blocked activity output bounds unread participant summaries', () => {

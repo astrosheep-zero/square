@@ -1,17 +1,35 @@
-import { formatActivityId, parseActivityId, type Perception } from './square-core.js';
-import { readCursor } from './runtime.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
+import { inSquareCount, readCursor, watchTerminalStatus } from './runtime.js';
 import { SquareError, type StoredAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
-import type { DirectedFilter, SquareWrite } from './ports.js';
+import type { DirectedFilter, SquareRead, SquareWrite } from './ports.js';
 import type { CatchOptions } from './square-facade.js';
 
-export interface CatchDecision {
-  readonly viewer: string;
-  readonly delivered: readonly StoredAct[];
-  readonly perceptions: ReadonlyMap<number, Perception>;
-  readonly consumedThrough: string | null;
-  readonly changed: boolean;
+export interface CatchSelection {
+  readonly participant: string;
+  readonly activities: readonly StoredAct[];
+  readonly consumedThrough: ActivityId | null;
   readonly remaining: number;
+  readonly sayNumbers: Readonly<Record<number, number>>;
+  readonly standingCount: number;
+  readonly held: boolean;
+  readonly now: number;
+  readonly ownActivityCount: number;
+  readonly hardCap: number | null;
+  readonly terminalStatus: 'capped' | 'quorum' | undefined;
+}
+
+/** Capture a selected page (or an empty completion) without opening another resource. */
+export function observeCatchSelection(facts: SquareRead, participant: string, activities: readonly StoredAct[], filter: DirectedFilter, at: number): CatchSelection {
+  const cursor = readCursor(facts, participant);
+  return {
+    participant, activities, consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
+    remaining: facts.directedCount(participant, filter),
+    sayNumbers: activities.length === 0 ? {} : facts.sayOrdinals(activities.map((item) => item.index)),
+    standingCount: inSquareCount(facts), held: facts.hold().active, now: at,
+    ownActivityCount: facts.participant(participant)!.sayCount, hardCap: facts.header().hardCap,
+    terminalStatus: watchTerminalStatus(facts, participant),
+  };
 }
 export const CATCH_DEFAULT_LIMIT = 10;
 export const CATCH_MAX_LIMIT = 100;
@@ -24,7 +42,7 @@ export function catchLimit(value: number | undefined): number {
 }
 
 /** Selection, receipts and resulting cursor belong to one artifact write transaction. */
-export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchDecision {
+export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchSelection {
   const viewer = resolveKnownName(facts, requestedName);
   const limit = catchLimit(options.limit);
   let delivered: readonly StoredAct[];
@@ -44,11 +62,6 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
     filter = { unseenOnly: true, ...(options.from === undefined ? {} : { senders: options.from }), ...(options.mention === true ? { attentionOnly: true } : {}) };
     delivered = facts.activities(facts.directed(viewer, filter, { edge: 'oldest', limit }).items.map((item) => item.index));
   }
-  const changed = facts.markSeen(viewer, delivered.map((item) => item.index), at) > 0;
-  const cursor = readCursor(facts, viewer);
-  return {
-    viewer, delivered, perceptions: new Map(delivered.map((item) => [item.index, 'full' as const])),
-    consumedThrough: cursor < 0 ? null : formatActivityId(cursor), changed,
-    remaining: facts.directedCount(viewer, filter),
-  };
+  facts.markSeen(viewer, delivered.map((item) => item.index), at);
+  return observeCatchSelection(facts, viewer, delivered, filter, at);
 }

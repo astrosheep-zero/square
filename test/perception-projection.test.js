@@ -55,9 +55,10 @@ test('catch and delivery share one settled audience across case and rejoin bound
     });
 
     const caught = await cell.transact((write) => decideCatch(write, 'BOB', {}, 10));
-    assert.deepEqual(caught.value.delivered.map((activity) => activity.index), [2, 5]);
-    assert.equal(caught.value.perceptions.get(2), 'full');
-    assert.equal(caught.value.perceptions.get(5), 'full');
+    assert.deepEqual(caught.value.activities.map((activity) => activity.index), [2, 5]);
+    for (const activity of caught.value.activities) {
+      assert.equal((await cell.read((facts) => perceiveActivity(facts, activity, 'BOB'))).value, 'full');
+    }
     assert.equal(caught.value.remaining, 0);
   } finally {
     await cell.close();

@@ -3,9 +3,8 @@ import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SquareError, isSquareError, nameKey, validateName, type WatchOptions } from './model.js';
 import { validateDoneBody } from './decisions.js';
-import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, readCursor, watchTerminalStatus } from './runtime.js';
-import { formatActivityId } from './square-core.js';
-import { catchLimit } from './catch-decisions.js';
+import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount } from './runtime.js';
+import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
 import { assertLiveOwner } from './participant-host.js';
 import type { HostLedgerPort, WakeTransportPort } from './ports.js';
@@ -27,7 +26,7 @@ import { diagnoseSquareFile } from './square-storage.js';
 import { migrateSquareFile } from './square-migration.js';
 import { discoverSquares, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT } from './list.js';
 import { streamSquare } from './stream.js';
-import type { Activity, ApplicationFailureDetail, ApplicationOutcome, CatchApplicationData, CatchApplicationOptions, CatchProjection, CatchResult, CatchSelectionObservation, CatchStopStatus, ExpressApplicationOptions, ExpressApplicationData, ExpressProjection, ExpressOptions, ExpressResult, HistoryQuery, JoinApplicationOptions, JoinApplicationData, ListenerChangeResult, OperationControl, Participant, ParticipantStatus, SquareApplication, SquareApplicationContext, SquareAtInput, SquareBuildInput, SquareContextProjection, SquareSnapshot } from './square-facade.js';
+import type { Activity, ApplicationFailureDetail, ApplicationOutcome, CatchApplicationOptions, CatchResult, CatchStopStatus, ExpressApplicationOptions, ExpressApplicationData, ExpressProjection, ExpressOptions, ExpressResult, HistoryQuery, JoinApplicationOptions, JoinApplicationData, ListenerChangeResult, OperationControl, Participant, ParticipantStatus, SquareApplication, SquareApplicationContext, SquareAtInput, SquareBuildInput, SquareContextProjection, SquareSnapshot } from './square-facade.js';
 
 export type * from './square-facade.js';
 export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
@@ -195,12 +194,18 @@ async function expressOwned(
 }
 
 interface CatchCompletion {
-  readonly data: CatchApplicationData;
-  readonly participant: string;
-  readonly stop?: CatchStopStatus;
+  readonly selection: CatchSelection;
+  readonly stop: CatchStopStatus | undefined;
   readonly waitStarted: boolean;
   readonly replaced: boolean;
-  readonly observation: CatchSelectionObservation;
+}
+
+/** Directed selection guarantees full visibility; only the API exits expose activities. */
+function caughtResult({ selection, stop }: CatchCompletion): CatchResult {
+  return {
+    activities: selection.activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' })),
+    consumedThrough: selection.consumedThrough, remaining: selection.remaining, idleExpired: stop === 'stale',
+  };
 }
 
 /** Leases, quiet waiting, selection and sweep form one lifecycle for both APIs. */
@@ -210,32 +215,18 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchA
   let waitStarted = false, replaced = false;
   let selection = options;
   const idle = options.idle ?? 0;
-  async function complete(data: import('./square-actions.js').CatchSelectionResult | undefined, stop?: CatchStopStatus): Promise<CatchCompletion> {
-    const selected = data ?? (await square.artifact.read((facts) => {
-      const cursor = readCursor(facts, name);
-      return {
-        activities: [], consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
-        idleExpired: stop === 'stale',
-        remaining: facts.directedCount(name, {
-          unseenOnly: true, senders: selection.from,
-          ...(selection.mention === true ? { attentionOnly: true } : {}),
-        }),
-        observation: {
-          activities: [], sayNumbers: {}, now: square.clock(),
-          standingCount: inSquareCount(facts), held: facts.hold().active,
-          ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
-          terminalStatus: watchTerminalStatus(facts, name),
-        },
-      };
-    })).value;
-    const { observation, ...caught } = selected;
-    const terminal = stop === 'empty-now' || stop === undefined ? observation.terminalStatus ?? stop : stop;
+  async function complete(caught: CatchSelection | undefined, stop?: CatchStopStatus): Promise<CatchCompletion> {
+    const selected = caught ?? (await square.artifact.read((facts) => observeCatchSelection(facts, name, [], {
+      unseenOnly: true, senders: selection.from,
+      ...(selection.mention === true ? { attentionOnly: true } : {}),
+    }, square.clock()))).value;
+    const terminal = stop === 'empty-now' || stop === undefined ? selected.terminalStatus ?? stop : stop;
     if (leaseId !== undefined) {
       await releaseWatchLease(square, name, leaseId).catch(() => undefined);
       leaseId = undefined;
     }
     if (!control?.signal?.aborted && stop !== 'replaced' && stop !== 'already-active'
-      && (waitStarted || caught.activities.length > 0) && square.location !== 'memory'
+      && (waitStarted || selected.activities.length > 0) && square.location !== 'memory'
       && square.hostLedger !== undefined && square.env?.SQUARE_DISABLE_PASEO_WAKE !== '1') {
       try {
         await sweepPending({
@@ -244,12 +235,7 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchA
         });
       } catch { /* a completed receipt is not conditional on notification enrichment */ }
     }
-    const status = terminal === 'already-active' || terminal === 'replaced' || terminal === 'capped' || terminal === 'quorum'
-      ? terminal : undefined;
-    return {
-      data: { ...caught, ...(status === undefined ? {} : { status }) }, participant: name,
-      ...(terminal === undefined ? {} : { stop: terminal }), waitStarted, replaced, observation,
-    };
+    return { selection: selected, stop: terminal, waitStarted, replaced };
   }
   const empty = (stop: CatchStopStatus) => complete(undefined, stop);
   try {
@@ -334,8 +320,7 @@ class ParticipantHandle implements Participant {
   ignore(target: string, control?: OperationControl): Promise<ListenerChangeResult> { return ignore(this.square, this.name, target, control); }
   listening(control?: OperationControl): Promise<readonly string[]> { return listening(this.square, this.name, control); }
   async catch(options?: CatchApplicationOptions, control?: OperationControl): Promise<CatchResult> {
-    const { data } = await catchOwned(this.square, this.name, options, control);
-    return { activities: data.activities, consumedThrough: data.consumedThrough, idleExpired: data.idleExpired, remaining: data.remaining };
+    return caughtResult(await catchOwned(this.square, this.name, options, control));
   }
   history(query?: HistoryQuery, control?: OperationControl): Promise<Activity[]> { return participantHistory(this.square, this.name, query, control); }
   hold(reason?: string, control?: OperationControl): Promise<ExpressResult> { return hold(this.square, this.name, reason, control); }
@@ -518,12 +503,16 @@ export function createSquareApplication(context: SquareApplicationContext): Squa
       return selected('catch', async (square, name) => {
         const result = await catchOwned(square, name, options, control);
         const presence = await catchPresence(square, control).catch(() => undefined);
-        const view = result.observation;
+        const view = result.selection;
+        const stop = result.stop;
+        const status = stop === 'already-active' || stop === 'replaced' || stop === 'capped' || stop === 'quorum'
+          ? stop : undefined;
         return {
-          data: result.data,
+          data: { ...caughtResult(result), ...(status === undefined ? {} : { status }) },
           projection: {
-            ...observedContext(square, view.standingCount, view.held, result.participant, view.now),
-            ...view, participant: result.participant, stop: result.stop,
+            ...observedContext(square, view.standingCount, view.held, view.participant, view.now),
+            participant: view.participant, sayNumbers: view.sayNumbers,
+            ownActivityCount: view.ownActivityCount, hardCap: view.hardCap, stop,
             ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
             waitStarted: result.waitStarted, replaced: result.replaced,
           },

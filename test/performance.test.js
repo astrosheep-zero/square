@@ -5,7 +5,7 @@ import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
 import { Square } from '../dist/square-application.js';
 import { catchUp } from '../dist/square-actions.js';
 import { createMemoryCell } from '../dist/square-storage.js';
-import { catchPresence } from '../dist/views.js';
+import { catchPresence, toPublicActivity } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
@@ -104,18 +104,18 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
   try {
     const caught = await catchUp(square, 'P0');
     const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
-    assert.deepEqual(caught.activities.map((activity) => activity.id), caughtIds);
+    assert.deepEqual(caught.activities.map((activity) => `act/${activity.index}`), caughtIds);
     assert.equal(caught.remaining, 890);
-    assert.equal(caught.observation.standingCount, 2);
-    assert.deepEqual(caught.observation.activities.map((activity) => activity.index), caughtIds.map((id) => Number(id.slice(4))));
-    assert.deepEqual(caught.observation.sayNumbers, Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [index + 2, index + 1])));
+    assert.equal(caught.standingCount, 2);
+    assert.deepEqual(caught.sayNumbers, Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [index + 2, index + 1])));
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))));
 
     const presence = await catchPresence(square);
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
     // Compose real transaction selection and real optional presence facts using
     // the application outcome shape; no projection stub reads or rebuilds a feed.
-    const { observation, ...data } = caught;
+    const { activities, consumedThrough, remaining, terminalStatus, ...observation } = caught;
+    const data = { activities: activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' })), consumedThrough, remaining, idleExpired: false };
     const outcome = { data, projection: { ...observation, presence,
       location: 'memory', participant: 'P0',
       automaticDeliveryAvailable: false, waitStarted: false, replaced: false,
@@ -132,11 +132,11 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     // unrelated remaining activity cannot force body hydration for that result.
     const settled = await catchUp(square, 'P0', { from: ['P0'] });
     assert.deepEqual(settled.activities, []);
-    assert.deepEqual(settled.observation.activities, []);
-    assert.deepEqual(settled.observation.sayNumbers, {});
-    assert.equal(settled.observation.standingCount, 2);
+    assert.deepEqual(settled.sayNumbers, {});
+    assert.equal(settled.standingCount, 2);
     assert.deepEqual(counters.hydrated.at(-1), []);
-    const { observation: emptyObservation, ...emptyData } = settled;
+    const { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, terminalStatus: emptyTerminal, ...emptyObservation } = settled;
+    const emptyData = { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, idleExpired: false };
     const emptyOutcome = { data: emptyData, projection: { ...emptyObservation, presence,
       location: 'memory', participant: 'P0',
       automaticDeliveryAvailable: false, stop: 'empty-now', waitStarted: false, replaced: false,
@@ -148,6 +148,47 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     assert.deepEqual(measurements(), beforeEmptyRender);
   } finally {
     await cell.close();
+  }
+});
+
+test('catch fences selection and captures the page facts in its receipt transaction', async () => {
+  const resource = Square.inMemory({ markdown: 'test', hardCap: 5, clock: () => 100 });
+  try {
+    const alice = await resource.join('Alice');
+    await resource.join('Bob');
+    await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
+    await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
+    const square = resource.square;
+    const cell = square.artifact;
+    await cell.transact((facts) => facts.putLease('Bob', { leaseId: 'replacement', heartbeatAt: 100, expiresAt: 100_000 }));
+    const revision = await cell.revision();
+    assert.equal(await catchUp(square, 'Bob', {}, undefined, 'old'), null);
+    assert.equal(await cell.revision(), revision, 'a replaced lease cannot insert a receipt');
+    const artifact = {
+      ...cell,
+      read: () => { throw new Error('committed selection must not be looked up again'); },
+      async transact(change, signal) {
+        const result = await cell.transact(change, signal);
+        await cell.transact((facts) => {
+          facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 });
+          facts.land({ kind: 'say', actor: 'Alice', body: 'later for Bob', mentions: ['Bob'], at: 201 });
+          facts.land({ kind: 'hold', actor: 'Alice', body: 'later hold', at: 202 });
+        });
+        return result;
+      },
+    };
+    const caught = await catchUp({ ...square, artifact }, 'Bob', { limit: 1 }, undefined, 'replacement');
+    assert.deepEqual(caught, {
+      participant: 'Bob', activities: [{ kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], index: 2, at: 100 }],
+      consumedThrough: 'act/2', remaining: 1, sayNumbers: { 2: 1 }, standingCount: 2,
+      held: false, now: 100, ownActivityCount: 0, hardCap: 5, terminalStatus: undefined,
+    });
+    assert.deepEqual((await cell.read((facts) => ({
+      receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
+      held: facts.hold().active, ownActivityCount: facts.participant('Bob').sayCount,
+    }))).value, { receipt: { at: 100 }, remaining: 2, held: true, ownActivityCount: 1 });
+  } finally {
+    await resource.close();
   }
 });
 

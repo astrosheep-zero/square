@@ -3,9 +3,9 @@ import { isSquareError, nameKey, SquareError, validateName, type StoredAct } fro
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
-import type { Activity, CatchOptions, CatchResult, CatchSelectionObservation, ExpressOptions, ExpressResult, ExpressionObservation, ListenerChangeResult, OperationControl, OwnershipFenceOptions, PerceivedActivity } from './square-facade.js';
-import { decideCatch } from './catch-decisions.js';
-import { inSquareCount, watchTerminalStatus } from './runtime.js';
+import type { Activity, CatchOptions, ExpressOptions, ExpressResult, ExpressionObservation, ListenerChangeResult, OperationControl, OwnershipFenceOptions } from './square-facade.js';
+import { decideCatch, type CatchSelection } from './catch-decisions.js';
+import { inSquareCount } from './runtime.js';
 import { claimSessionParticipant, claimSessionTakeover, presenceEpoch, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
 import type { HostLedgerPort } from './host-ledger.js';
 import { assertLiveOwner, ensureLocalPresence, identityRouteDraft, processIdentity, publishIdentityRoute, retireIdentityRoute, type HostContext } from './participant-host.js';
@@ -21,43 +21,19 @@ async function publishCommittedPresence(square: OperationContext, name: string, 
   await publishIdentityRoute(square, name, epoch).catch(() => undefined);
 }
 function throwIfAborted(control?: OperationControl): void { if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation aborted'); }
-function exposeCaught(activity: StoredAct, perception: 'full' | 'presence'): PerceivedActivity {
-  const result = toPublicActivity(activity);
-  if (perception === 'full' || !('body' in result)) return { ...result, perception };
-  const { body: _body, ...withoutBody } = result;
-  return { ...withoutBody, perception };
-}
-
-export interface CatchSelectionResult extends CatchResult { readonly observation: CatchSelectionObservation; }
-export function catchUp(square: OperationContext, name: string, options?: CatchOptions, control?: OperationControl): Promise<CatchSelectionResult>;
-export function catchUp(square: OperationContext, name: string, options: CatchOptions, control: OperationControl | undefined, leaseId: string): Promise<CatchSelectionResult | null>;
-export async function catchUp(square: OperationContext, name: string, options: CatchOptions = {}, control?: OperationControl, leaseId?: string): Promise<CatchSelectionResult | null> {
+export function catchUp(square: OperationContext, name: string, options?: CatchOptions, control?: OperationControl): Promise<CatchSelection>;
+export function catchUp(square: OperationContext, name: string, options: CatchOptions, control: OperationControl | undefined, leaseId: string): Promise<CatchSelection | null>;
+export async function catchUp(square: OperationContext, name: string, options: CatchOptions = {}, control?: OperationControl, leaseId?: string): Promise<CatchSelection | null> {
   throwIfAborted(control);
   if (!await assertLiveOwner(square, name)) throw new SquareError('already_joined', `${participantIdentity(name)} already stands here — another session holds the name`);
   const selected = (await square.artifact.transact((facts) => {
     // Replacement and selection share the receipt transaction: an old waiter cannot
     // consume a later activity between its heartbeat and its selection.
     if (leaseId !== undefined && facts.lease(name)?.leaseId !== leaseId) return null;
-    const now = square.clock();
-    const decision = decideCatch(facts, name, options, now);
-    return {
-      decision,
-      observation: {
-        activities: decision.delivered, sayNumbers: facts.sayOrdinals(decision.delivered.map((item) => item.index)),
-        standingCount: inSquareCount(facts), held: facts.hold().active, now,
-        ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
-        terminalStatus: watchTerminalStatus(facts, name),
-      },
-    };
+    return decideCatch(facts, name, options, square.clock());
   }, control?.signal)).value;
-  if (selected === null) return null;
-  const { decision, observation } = selected;
-  await publishCommittedPresence(square, name);
-  return {
-    activities: decision.delivered.map((activity) => exposeCaught(activity, decision.perceptions.get(activity.index) ?? 'full')),
-    consumedThrough: decision.consumedThrough as CatchResult['consumedThrough'], idleExpired: false, remaining: decision.remaining,
-    observation,
-  };
+  if (selected !== null) await publishCommittedPresence(square, selected.participant);
+  return selected;
 }
 
 export async function join(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly activity: Activity | null; readonly participantCount: number; readonly reconnected: boolean }> {

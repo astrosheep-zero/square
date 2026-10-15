@@ -464,12 +464,12 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
   try {
     const page = (cell, options, at) => cell.transact((facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
     const one = await page(first, { limit: 10 }, 100);
-    assert.deepEqual(one.delivered.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 3));
+    assert.deepEqual(one.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 3));
     assert.equal(one.remaining, 15);
     const two = await page(first, { limit: 10 }, 101);
-    assert.deepEqual(two.delivered.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 13));
+    assert.deepEqual(two.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 13));
     const three = await page(first, { limit: 10 }, 102);
-    assert.deepEqual(three.delivered.map((item) => item.index), [23, 24, 25, 26, 27]);
+    assert.deepEqual(three.activities.map((item) => item.index), [23, 24, 25, 26, 27]);
   } finally {
     await first.close();
   }
@@ -485,9 +485,9 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
   }));
   try {
     const bobOnly = (await gap.transact((facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 200))).value;
-    assert.deepEqual(bobOnly.delivered.map((item) => item.index), [4]);
+    assert.deepEqual(bobOnly.activities.map((item) => item.index), [4]);
     const repeat = (await gap.transact((facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 201))).value;
-    assert.deepEqual(repeat.delivered, []);
+    assert.deepEqual(repeat.activities, []);
   } finally {
     await gap.close();
   }

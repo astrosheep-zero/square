@@ -213,18 +213,9 @@ export interface StatusPresentation extends PresenceClassification {
   readonly attentionNames: readonly string[];
   readonly viewer: string;
 }
-export interface CatchSelectionObservation extends ExpressionObservation {
-  readonly activities: readonly ArchiveRecord[];
-  readonly sayNumbers: Readonly<Record<number, number>>;
-  readonly terminalStatus?: 'capped' | 'quorum';
-}
 export interface CatchPresence {
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
-}
-export interface WatchPresentation extends CatchSelectionObservation {
-  /** Nearby participants selected and ordered by the shared presence policy; unavailable on enrichment failure. */
-  readonly presence?: CatchPresence;
 }
 export interface StreamProjection { readonly activities: readonly { readonly activity: ArchiveRecord; readonly route?: string }[]; readonly cursor: number; readonly hasMore: boolean; }
 export interface EntryProjection extends SquareContextProjection, EntryPresentation {}
@@ -240,8 +231,11 @@ export interface ExpressProjection extends SquareContextProjection, ExpressionOb
   readonly reentry?: Activity;
   readonly delivery?: DeliveryResult;
 }
-export interface CatchProjection extends SquareContextProjection, WatchPresentation {
+export interface CatchProjection extends SquareContextProjection, ExpressionObservation {
   readonly participant: string;
+  readonly sayNumbers: Readonly<Record<number, number>>;
+  /** Optional nearby presence is not a commit-time selection fact. */
+  readonly presence?: CatchPresence;
   readonly stop?: CatchStopStatus;
   readonly waitStarted?: boolean;
   readonly replaced?: boolean;

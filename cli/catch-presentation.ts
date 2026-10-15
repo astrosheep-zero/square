@@ -45,14 +45,10 @@ export function renderCatchOutcome(
       exitCode: stop === 'already-active' ? 1 : 0,
     };
   }
-  const rendered = data.activities.map((activity) => {
-    const index = parseActivityId(activity.id);
-    const record = projection.activities.find((item) => item.index === index);
-    return record === undefined ? '' : renderAmbientEvent(record, name, {
-      now: projection.now, actNumber: projection.sayNumbers[record.index],
-      perception: activity.perception, mention: options.mention ? name : undefined,
-    });
-  }).filter(Boolean).join('\n\n');
+  const rendered = data.activities.map((activity) => renderAmbientEvent(activity, name, {
+    now: projection.now, actNumber: projection.sayNumbers[parseActivityId(activity.id)!],
+    perception: activity.perception, mention: options.mention ? name : undefined,
+  })).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
     : `○ ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({

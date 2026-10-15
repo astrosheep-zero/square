@@ -6,7 +6,7 @@ export { participantIdentity } from './participant-identity.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
 import { HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
-import type { UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
+import type { Activity, UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
 import { grepSnippet } from './search.js';
 import { style } from './tty-style.js';
 
@@ -195,7 +195,7 @@ function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: s
 
 const UNREAD_PREVIEW_CHARS = 120;
 
-export function renderRoomChangeText(event: RoomChangeAct): string {
+export function renderRoomChangeText(event: RoomChangeAct | Activity): string {
   const actor = event.actor ?? 'someone';
   const identity = actor === 'someone' ? actor : participantIdentity(actor);
   switch (event.kind) {
@@ -208,9 +208,11 @@ export function renderRoomChangeText(event: RoomChangeAct): string {
     case 'resume':
       return `${identity} lowered the hand`;
     case 'listen':
-      return `${identity} turned an ear toward ${participantIdentity(event.target)}`;
+      return `${identity} turned an ear toward ${participantIdentity(event.target ?? 'someone')}`;
     case 'ignore':
-      return `${identity} turned away from ${participantIdentity(event.target)}`;
+      return `${identity} turned away from ${participantIdentity(event.target ?? 'someone')}`;
+    default:
+      throw new Error('Expected a lifecycle activity');
   }
 }
 
@@ -230,8 +232,15 @@ interface RenderedEvent {
   bodyClipped: boolean;
 }
 
+function eventId(event: StoredAct | Activity): string {
+  return 'index' in event ? formatActivityId(event.index) : event.id;
+}
+function replyId(reply: number | string): string {
+  return typeof reply === 'number' ? formatActivityId(reply) : reply;
+}
+
 function renderEventCliFacts(
-  event: StoredAct,
+  event: StoredAct | Activity,
   opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
 ): RenderedEvent {
   const now = opts.now;
@@ -253,14 +262,14 @@ function renderEventCliFacts(
         mention !== undefined && (event.reach === 'bell' || event.mentions?.some((name) => sameName(name, mention)))
           ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
-      const replySuffix = event.reply === undefined ? '' : ` · replies to ${formatActivityId(event.reply)}`;
-      const meta = ` #${opts.actNumber ?? 1} · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
+      const replySuffix = event.reply === undefined ? '' : ` · replies to ${replyId(event.reply)}`;
+      const meta = ` #${opts.actNumber ?? 1} · ${eventId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
       return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
       return {
-        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
+        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${eventId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
         bodyClipped: body.clipped,
       };
     }
@@ -270,18 +279,18 @@ function renderEventCliFacts(
 }
 
 export function renderEventCli(
-  event: StoredAct,
+  event: StoredAct | Activity,
   opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
 ): string {
   return renderEventCliFacts(event, opts).text;
 }
 
 function renderPresenceOnlySay(
-  event: Extract<StoredAct, { kind: 'say' }>,
+  event: Extract<StoredAct, { kind: 'say' }> | Activity,
   opts: { now?: number; actNumber?: number } = {}
 ): string {
   const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
-  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${formatActivityId(event.index)} · ${formatRelativeTime(event.at, opts.now)}`);
+  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${eventId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
   if (targets.length === 0) {
     return `● ${participantIdentity(event.actor)}${meta}`;
   }
@@ -295,7 +304,7 @@ function renderPresenceOnlySay(
 }
 
 export function renderAmbientEventFacts(
-  event: StoredAct,
+  event: StoredAct | Activity,
   viewer: string,
   opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
 ): RenderedEvent {
@@ -311,7 +320,7 @@ export function renderAmbientEventFacts(
 }
 
 export function renderAmbientEvent(
-  event: StoredAct,
+  event: StoredAct | Activity,
   viewer: string,
   opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
 ): string {

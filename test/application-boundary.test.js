@@ -539,6 +539,47 @@ test('host publication failure cannot erase a committed application express resu
   assert.equal((await app().history()).data.activities.filter((activity) => activity.body === 'runtime uncertain').length, 1);
 });
 
+test('postcommit catch publication and presence failure cannot erase its consumed public page', async (t) => {
+  let committed = false;
+  const clock = () => { if (committed) throw new Error('postcommit clock unavailable'); return 100; };
+  const { cwd, squarePath, env, app } = await fixture(t, { clock });
+  const delegate = hostLedgerForEnv(env);
+  let armed = false;
+  const hostLedger = new Proxy(delegate, { get(target, key) {
+    if (key === 'listPresence') return async (...args) => {
+      const observations = (await readSquareSnapshot(squarePath)).state.runtime.observations;
+      if (armed && observations.Bob?.['act/2']?.state === 'seen') {
+        committed = true;
+        throw new Error('postcommit publication unavailable');
+      }
+      return delegate.listPresence(...args);
+    };
+    const value = Reflect.get(target, key, target);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  await app('Alice').join();
+  const bob = createSquareApplication({ cwd, squarePath, env, participant: 'Bob', hostLedger, clock });
+  await bob.join();
+  const expressed = await app('Alice').express('selected once', { force: true, mentions: ['Bob'] });
+  armed = true;
+  const caught = await bob.catch();
+  assert.equal(committed, true, 'the injected failures begin only after the delivered receipt');
+  assert.deepEqual(caught.data, {
+    activities: [{ ...expressed.data.activity, perception: 'full' }],
+    consumedThrough: 'act/2', remaining: 0, idleExpired: false,
+  });
+  assert.equal(caught.projection.now, 100);
+  assert.equal(caught.projection.standingCount, 2);
+  assert.equal(caught.projection.ownActivityCount, 0);
+  assert.equal(caught.projection.held, false);
+  assert.deepEqual(caught.projection.sayNumbers, { 2: 1 });
+  assert.equal(caught.projection.enrichmentUnavailable, true);
+  assert.equal('activities' in caught.projection, false, 'the public page has no parallel raw projection');
+  committed = false;
+  armed = false;
+  assert.deepEqual((await bob.catch()).data.activities, []);
+});
+
 test('application selected-row corruption reports unknown, not a safely unsent refusal', async (t) => {
   const { app, squarePath } = await fixture(t);
   const alice = app('Alice');
