@@ -163,8 +163,7 @@ export async function executeExpression(application: SquareApplication, squarePa
     const lines = [message, `· draft kept: ${draftPath}`];
     const recipientFailure = detail?.subject === 'recipient';
     const repair = reason === 'bell_mention_conflict' ? { bell: true, fromBody: true }
-      : reason === 'unmatched_mention' ? { bell: false, fromBody: true }
-        : reason === 'not_standing' && recipientFailure ? { bell: false, fromBody: false } : undefined;
+      : reason === 'not_standing' && recipientFailure ? { bell: false, fromBody: false } : undefined;
     if (isSquareError(error)) {
       if ((reason === 'never_joined' && detail?.subject === 'caller') || error.code === 'unknown_participant' || error.code === 'not_joined') {
         lines.push(joinRecoveryCommand(squarePath, name));

@@ -16,7 +16,7 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches body scanning off. An unmatched `@name` is rejected rather than silently landing as a bare say.
+- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches body scanning off. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients.
   A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
   activity is reached like a mentioned participant, combining with the other reach tags and surviving
   `--no-mention`.
@@ -30,7 +30,7 @@ Boundaries should be light and useful:
   when leaving the square. Audience is fixed when each activity lands; later listening changes never
   rewrite history.
   An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The
-  human CLI requires explicit `--no-mention` for that bare reach; the core library never treats an empty
+  human CLI requires explicit `--no-mention` for bare reach unless the body contains unmatched `@name` text; the core library never treats an empty
   audience as invalid. A bell reaches all joined participants (everyone watching
   with `--mention` receives it).
 

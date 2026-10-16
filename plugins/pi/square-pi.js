@@ -1,9 +1,10 @@
 import path from 'node:path';
+import { Text } from '@earendil-works/pi-tui';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { automaticSessionEnd, automaticSessionStart } from '../../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
-import { previewAttentionBody, renderAttentionDescription } from '../../dist/attention-presentation.js';
+import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
@@ -31,7 +32,7 @@ function framePiMessage(content) {
   return `\n${content.replace(/^\n+/, '').replace(/\n+$/, '')}\n`;
 }
 
-/** Renderer-only facts for the collapsed card; Pi never sends `details` to the model. */
+/** Renderer-only summary and full text; Pi never sends `details` to the model. */
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
     square: path.basename(membership.squarePath, '.square'),
@@ -41,7 +42,14 @@ export function pendingCardDetails(pending) {
     preview: previewAttentionBody(note.body),
     description: renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route }),
   })));
-  return items.length === 0 ? undefined : { items };
+  if (items.length === 0) return undefined;
+  const fullText = pending.flatMap((membership) => membership.notifications.map((note) => renderAttentionFull({
+    squarePath: membership.squarePath,
+    actIndex: note.actIndex,
+    recipient: membership.name,
+    ...note,
+  }))).join('\n\n');
+  return { items, fullText };
 }
 
 // Conservative terminal width: anything outside ASCII counts as two columns, so a
@@ -62,12 +70,17 @@ function fitColumns(text, columns) {
 }
 
 /**
- * Collapsed: one line naming who reached you and where. Expanded: Pi's default card,
- * which shows the exact content the model received.
+ * Collapsed: one line naming who reached you and where. Expanded: the complete
+ * notification text from renderer details, wrapped by Pi's terminal component.
  */
 export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
+  if (expanded) {
+    return typeof message.details?.fullText === 'string'
+      ? new Text(message.details.fullText, outputPad, 0)
+      : undefined;
+  }
   const items = message.details?.items;
-  if (expanded || !Array.isArray(items) || items.length === 0) return undefined;
+  if (!Array.isArray(items) || items.length === 0) return undefined;
   const [first] = items;
   const tail = ` · ${first.square}${items.length > 1 ? ` +${items.length - 1}` : ''}`;
   return {
@@ -240,8 +253,8 @@ export default function squarePiExtension(pi) {
             boundSessionId,
             async (content) => {
               if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
-              // One card for the human: collapsed it names who reached you, expanded it
-              // shows the same content the model receives.
+              // One card for the human: a compact heading, expandable to the full body.
+              // Model context stays bounded; renderer-only details carry the complete text.
               const messageContent = framePiMessage(content);
               const landing = waitForLanding(messageContent, signal, 'steer');
               try {
@@ -259,6 +272,7 @@ export default function squarePiExtension(pi) {
               const inbox = await observer.read({ signal: boundarySignal, excludeKeys: handledPending });
               if (signal.aborted || token !== generation) return [];
               for (const key of inboxKeys(inbox)) observedPending.add(key);
+              pending = inbox;
               return inbox;
             },
             env,

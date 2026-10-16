@@ -5,7 +5,7 @@ import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
 import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
-import { scanMentionCandidates, resolveNameAt, type MentionCandidate } from './mention-parse.js';
+import { scanMentionCandidates, resolveNameAt } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
 import type { ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
@@ -111,24 +111,13 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
     if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
     addMention(resolved);
   }
-  if (input.noMention !== true) {
-    const unmatched: MentionCandidate[] = [];
-    for (const candidate of scanMentionCandidates(body)) {
-      const resolved = resolveNameAt(body, candidate, joinedNames);
-      if (resolved === undefined) unmatched.push(candidate); else addMention(resolved);
-    }
-    if (reach !== 'bell' && unmatched.length > 0) {
-      const names = roster.map((participant) => participant.name);
-      const notStanding = unmatched.filter((candidate) => resolveNameAt(body, candidate, names) !== undefined);
-      const unknown = unmatched.filter((candidate) => !notStanding.includes(candidate));
-      const lines: string[] = [];
-      if (unknown.length > 0) lines.push(`${unknown.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${unknown.length === 1 ? 'does' : 'do'} not match anyone in this square`);
-      if (notStanding.length > 0) lines.push(`${notStanding.map((candidate) => participantIdentity(candidate.token)).join(', ')} ${notStanding.length === 1 ? 'is' : 'are'} not standing in this square`);
-      throw activityRefusal('invalid_args', lines.join('\n'), { reason: 'unmatched_mention', targets: unmatched.map((candidate) => candidate.token) });
-    }
+  const bodyMentions = input.noMention === true ? [] : scanMentionCandidates(body);
+  for (const candidate of bodyMentions) {
+    const resolved = resolveNameAt(body, candidate, joinedNames);
+    if (resolved !== undefined) addMention(resolved);
   }
   if (reach === 'bell' && mentionNames.length > 0) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: mentionNames });
-  if (input.requireExplicitReach && reach !== 'bell' && mentionNames.length === 0 && reply === undefined && input.noMention !== true) {
+  if (input.requireExplicitReach && reach !== 'bell' && mentionNames.length === 0 && bodyMentions.length === 0 && reply === undefined && input.noMention !== true) {
     throw activityRefusal('invalid_args', 'Express needs a recipient, reply, bell, or explicit bare reach', { reason: 'explicit_reach_required' });
   }
   const header = facts.header();

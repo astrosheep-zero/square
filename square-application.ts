@@ -143,7 +143,7 @@ async function landExpression(
     }
   } catch (error) {
     const recipient = isSquareError(error)
-      && ['not_standing', 'unmatched_mention', 'bell_mention_conflict'].includes(error.facts?.reason ?? '');
+      && ['not_standing', 'bell_mention_conflict'].includes(error.facts?.reason ?? '');
     throw failure(error, {
       operation: 'express', participant: name, subject: recipient ? 'recipient' : 'caller', expressEffect: effect,
     });

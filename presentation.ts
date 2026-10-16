@@ -99,7 +99,7 @@ export function formatRefusal(
 
 export function refusalText(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  const marked = isSquareError(error) && ['never_joined', 'not_standing', 'unmatched_mention'].includes(error.facts?.reason ?? '');
+  const marked = isSquareError(error) && ['never_joined', 'not_standing'].includes(error.facts?.reason ?? '');
   return marked ? text.split('\n').map((line) => `✕ ${line}`).join('\n') : text;
 }
 

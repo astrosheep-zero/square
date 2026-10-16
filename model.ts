@@ -47,9 +47,8 @@ export type InternalSquareErrorCode = SquareErrorCode
 export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
-  /** Why a name could not be resolved: never in the roster, no longer standing in it, a bell
-   * colliding with a mention, an @name that matches nobody, or an activity catch cannot address. */
-  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'unmatched_mention' | 'not_addressed' | 'migration_required' | 'explicit_reach_required' | 'invalid_reply' | 'invalid_done_body';
+  /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */
+  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'explicit_reach_required' | 'invalid_reply' | 'invalid_done_body';
   /** The activity id a `catch --id` refusal named. */
   activityId?: string;
   /** Requested recipient spellings, without parsing presentation copy. */

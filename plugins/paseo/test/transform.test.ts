@@ -33,6 +33,18 @@ test("Square live and history projection preserve exact content and renderer det
   assert.deepEqual(squareMessageSchema.parse(result!.items[0].data), { text, items });
 });
 
+test("complete renderer text survives live/history projection and schema parsing without changing the model preview", () => {
+  const fullText = `${text}\n${'complete body '.repeat(200)}\nFULL_BODY_TAIL`;
+  const original = row({ metadata: { synthetic: true, customType: "square", details: { items, fullText } } });
+  const before = structuredClone(original);
+  const result = project(original)!;
+  assert.deepEqual(result, project(original, "streaming"));
+  const data = squareMessageSchema.parse(result.items[0].data);
+  assert.equal(data.fullText, fullText);
+  assert.equal(data.text, text);
+  assert.deepEqual(original, before);
+});
+
 test("joining context and malformed details retain content under the generic heading", () => {
   for (const details of [undefined, { items: [] }, { items: [{ description: "missing square" }] }]) {
     const result = project(row({ metadata: { synthetic: true, customType: "square", details } }));
@@ -49,10 +61,10 @@ test("ordinary tools, unrelated custom messages, and unusable content stay untou
 });
 
 test("headline is human-facing when actor and route are present, else falls back", () => {
-  assert.equal(squareHeadline(items[0]), "rei mentioned you");
-  assert.equal(squareHeadline(items[1]), "rei replied to you");
-  assert.equal(squareHeadline({ ...items[0], route: "attention" }), "New from rei");
-  assert.equal(squareHeadline({ ...items[0], route: "bell" }), "rei called everyone");
+  assert.equal(squareHeadline(items[0]), "rei spoke your name");
+  assert.equal(squareHeadline(items[1]), "rei answered you");
+  assert.equal(squareHeadline({ ...items[0], route: "attention" }), "rei spoke · you're listening");
+  assert.equal(squareHeadline({ ...items[0], route: "bell" }), "rei rang the bell");
   // Messages from Square <0.3.71 carry only the agent-voice description.
   assert.equal(squareHeadline({ square: "design", description: "rei spoke your name (aoi)" }), "rei spoke your name (aoi)");
 });

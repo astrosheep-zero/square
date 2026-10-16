@@ -30,6 +30,15 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   const packageRoot = path.join(fixture, 'node_modules', '@astrosheep', 'square');
   fs.mkdirSync(path.dirname(packageRoot), { recursive: true });
   fs.renameSync(path.join(unpack, 'package'), packageRoot);
+  // This fixture unpacks without npm install. Make only the packed manifest's
+  // declared runtime dependencies available, using the checkout's installed copies.
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  assert.ok(manifest.dependencies?.['@earendil-works/pi-tui'], 'Pi renderer must ship its runtime dependency');
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    const target = path.join(fixture, 'node_modules', name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(path.join(root, 'node_modules', name), target, 'dir');
+  }
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type ActivityId, type Participant } from '@astrosheep/square';
@@ -52,7 +61,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const alice = await square.join('Alice');
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
-    // Root packs the same Node-only Pi leaf graph; no unpublished package or OpenCode SDK.
+    // Pi renderer imports must resolve from the declared production dependencies.
     const { default: extension } = await import('./node_modules/@astrosheep/square/plugins/pi/square-pi.js');
     const flags = [], handlers = new Map();
     extension({

@@ -53,28 +53,17 @@ test('a bell+@name conflict refuses with ✕ and a retry that keeps the bell for
   assert.doesNotMatch(output, /keep your intended recipients/);
 });
 
-test('an unmatched @name refuses with ✕ and a retry that lands as printed', shellReplay, async () => {
+test('unmatched body @names land; explicit --mention still offers a runnable repair', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
 
   const result = run(withName(file, 'Alice', ['express', '--no-wait', '-']), { input: 'hello @Nobody\n' });
-  assert.equal(result.status, 2, result.stdout + result.stderr);
-  const output = result.stdout + result.stderr;
-  assert.match(output, /✕ @Nobody does not match anyone in this square/);
-  assert.match(output, /participants/);
-  assert.match(output, /must be removed or wrapped in backticks/);
-  const retries = printedCommands(output);
-  assert.equal(retries.length, 1);
-  assert.match(retries[0], /--no-mention/);
-  assert.doesNotMatch(retries[0], /--mention/);
-  assert.doesNotMatch(output, /keep your intended recipients/);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stderr, /does not match|not standing|draft kept/);
 
-  const replayed = executePrinted(retries[0]);
-  assert.equal(replayed.status, 0, replayed.stdout + replayed.stderr);
-
-  // The same refusal from a --mention flag has no @name in the body to edit.
+  // Explicit routing metadata still requires a standing recipient.
   const flag = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Ghost', 'hello there']));
   assert.equal(flag.status, 2, flag.stdout + flag.stderr);
   const flagOutput = flag.stdout + flag.stderr;

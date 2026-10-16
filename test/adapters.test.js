@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { visibleWidth } from '@earendil-works/pi-tui';
 
 import installedSquarePiExtension, {
   inboxKeys,
@@ -481,7 +482,7 @@ test('Pi inbox helpers expose stable notification identity and commands', () => 
   assert.doesNotMatch(context, /catch --now/);
 });
 
-test('Pi square card collapses to who reached you and where, and expands to the model content', () => {
+test('Pi square card collapses to who reached you and where, and expands to full renderer text', () => {
   const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   const theme = { fg: (_color, text) => `<${text}>` };
@@ -499,9 +500,37 @@ test('Pi square card collapses to who reached you and where, and expands to the 
   const [narrow] = card.render(20);
   assert.match(narrow, /…$/);
   assert.ok(Array.from(narrow.replace(/<■>/, 'x')).reduce((n, c) => n + (c.charCodeAt(0) < 0x80 ? 1 : 2), 0) <= 20);
-  // Expanded, and messages without card details (joining context), fall back to Pi's full card.
-  assert.equal(renderSquareCard(message, { expanded: true, outputPad: 1 }, theme), undefined);
+  const expanded = renderSquareCard(message, { expanded: true, outputPad: 1 }, theme).render(100).join('\n');
+  assert.match(expanded, /Alice rang the bell/);
+  assert.match(expanded, /Cara answered you/);
+  assert.match(expanded, /hello @Bob/);
+  assert.doesNotMatch(expanded, /model text/);
+  // Old messages and joining context retain Pi's default renderer.
+  const legacy = { ...message, details: { items: details.items } };
+  assert.equal(renderSquareCard(legacy, { expanded: true }, theme), undefined);
   assert.equal(renderSquareCard({ ...message, details: undefined }, { expanded: false }, theme), undefined);
+});
+
+test('Pi expansion retains clipped and omitted bodies and wraps wide text without losing the tail', () => {
+  const body = `${'中文🦈 long '.repeat(40)}\nEND_FULL_TEXT`;
+  const inbox = [{
+    name: 'Bob', squarePath: '/tmp/SQUARE.square',
+    notifications: Array.from({ length: 6 }, (_, i) => ({
+      actIndex: i, actor: 'Alice', route: 'mention', body: `${body}\nnotification-${i}`,
+    })),
+  }];
+  const content = renderPiInbox(inbox);
+  assert.match(content, /notifications omitted/);
+  assert.doesNotMatch(content, /END_FULL_TEXT/);
+  const details = pendingCardDetails(inbox);
+  for (const note of inbox[0].notifications) assert.ok(details.fullText.includes(note.body));
+  const card = renderSquareCard({ content, details }, { expanded: true, outputPad: 1 }, {});
+  for (const width of [24, 80]) {
+    const lines = card.render(width);
+    assert.ok(lines.every(line => visibleWidth(line) <= width));
+    assert.equal(lines.filter(line => line.includes('END_FULL_TEXT')).length, 6);
+    assert.match(lines.join('\n'), /notification-5/);
+  }
 });
 
 async function piFixture(sessionId, pending = true) {
@@ -651,7 +680,8 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, true, 'the human sees one collapsible card instead of a separate notify');
-      assert.deepEqual(sent[0].message.details, { items: [{ square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'mention', preview: 'hello @Bob', description: 'Alice spoke your name (Bob)' }] });
+      assert.deepEqual(sent[0].message.details.items, [{ square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'mention', preview: 'hello @Bob', description: 'Alice spoke your name (Bob)' }]);
+      assert.match(sent[0].message.details.fullText, /hello @Bob/);
       assert.deepEqual(notified, [], 'the card replaces the transient notify');
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
@@ -1083,10 +1113,15 @@ test('Pi presents a clipped body without marking it seen after it lands', async 
     squarePiExtension(pi);
     await handlers.get('session_start')({}, context);
     try {
-      const actIndex = await expressToPi(item, `${'x'.repeat(240)} @Bob`);
+      const body = `${'x'.repeat(240)} @Bob\nFULL_BODY_TAIL`;
+      const actIndex = await expressToPi(item, body);
       await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
       assert.match(sent[0].message.content, /x{195}…/);
-      assert.doesNotMatch(sent[0].message.content, /shown in full/);
+      assert.doesNotMatch(sent[0].message.content, /FULL_BODY_TAIL/);
+      assert.ok(sent[0].message.details.fullText.includes(body));
+      const expanded = renderSquareCard(sent[0].message, { expanded: true }, {}).render(40).join('\n');
+      assert.match(expanded, /FULL_BODY_TAIL/);
+      assert.doesNotMatch(expanded, /clipped — read it all/);
       assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
       await piMessageEnd(handlers, sent[0].message.content);

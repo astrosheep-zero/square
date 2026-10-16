@@ -26,13 +26,18 @@ plain-text detail are projected into a card. Real tools, other custom messages,
 and unrecognized rows remain unchanged.
 
 The collapsed heading uses `metadata.details.items`; it never reverse-parses
-the content. Expansion shows `detail.text` verbatim, including fences, clipping
-notices, and catch commands. Copy content copies that exact string. It does not
-fetch extra activity or mark anything seen. Live events and fetched history use
+the content. Expansion shows `metadata.details.fullText` when available: complete
+notification bodies, even when the model preview was clipped or omitted. Older
+messages fall back to `detail.text`, including clipping notices and catch commands.
+Long content scrolls inside a bounded panel. The
+card does not fetch extra activity or mark anything seen. Live events and fetched history use
 the same transformer.
 
-The card uses Paseo theme colors, selectable text, accessible expansion state,
-and compact layout on narrow displays. Removing the plugin restores Paseo's
+The card is visually marked as Square: an accent glyph, a SQUARE badge, and the
+square's name sit above the actor line, on a raised surface distinct from ordinary
+tool output. It uses Paseo theme colors, selectable text, accessible expansion state,
+and compact layout on narrow displays. Expansion starts at the top-right arrow;
+collapse returns from the arrow below the expanded content. Removing the plugin restores Paseo's
 ordinary custom-message row.
 
 ## Develop

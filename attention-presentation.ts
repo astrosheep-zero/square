@@ -40,14 +40,25 @@ export function renderAttentionDescription({ actor, recipient, route }: Pick<Att
   }
 }
 
-export function renderAttentionPreview(attention: AttentionPreview): string {
+/** Full notification text for human-facing expansion, never the bounded model preview. */
+export function renderAttentionFull(attention: AttentionPreview): string {
+  return renderAttentionBlock(attention, attention.body);
+}
+
+function renderAttentionBlock(attention: AttentionPreview, body: string): string {
   return [
     '<square-activity>',
     `· ${displayAttentionPath(attention.squarePath)} · ${formatActivityId(attention.actIndex)}`,
     `● ${renderAttentionDescription(attention)}`,
     '',
-    previewAttentionBody(attention.body),
+    body,
     '</square-activity>',
+  ].join('\n');
+}
+
+export function renderAttentionPreview(attention: AttentionPreview): string {
+  return [
+    renderAttentionBlock(attention, previewAttentionBody(attention.body)),
     // A clipped body ends with the full command to read it all: a labeled caption, then the
     // command bare on its own line so it can be copied and run as it is.
     ...(attentionBodyIsClipped(attention.body)

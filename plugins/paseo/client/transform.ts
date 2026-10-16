@@ -17,7 +17,10 @@ export const transformSquareMessage: PluginTimelineTransformerContribution<"tool
       version: 1,
       data: {
         text: item.detail.text,
-        ...(details.success ? { items: details.data.items } : {}),
+        ...(details.success ? {
+          items: details.data.items,
+          ...(details.data.fullText === undefined ? {} : { fullText: details.data.fullText }),
+        } : {}),
       },
     }],
   };
