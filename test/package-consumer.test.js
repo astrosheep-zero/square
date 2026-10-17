@@ -30,11 +30,14 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   const packageRoot = path.join(fixture, 'node_modules', '@astrosheep', 'square');
   fs.mkdirSync(path.dirname(packageRoot), { recursive: true });
   fs.renameSync(path.join(unpack, 'package'), packageRoot);
-  // This fixture unpacks without npm install. Make only the packed manifest's
-  // declared runtime dependencies available, using the checkout's installed copies.
+  // This fixture unpacks without npm install. Supply declared dependencies and
+  // required peers as the consumer/host would, without private copies in Square.
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-  assert.ok(manifest.dependencies?.['@earendil-works/pi-tui'], 'Pi renderer must ship its runtime dependency');
-  for (const name of Object.keys(manifest.dependencies ?? {})) {
+  assert.equal(manifest.dependencies?.['@earendil-works/pi-tui'], undefined, 'Pi owns the TUI runtime');
+  assert.equal(manifest.peerDependencies?.['@earendil-works/pi-tui'], '*', 'use the host-provided TUI without a version pin');
+  const requiredPeers = Object.keys(manifest.peerDependencies ?? {})
+    .filter((name) => !manifest.peerDependenciesMeta?.[name]?.optional);
+  for (const name of [...Object.keys(manifest.dependencies ?? {}), ...requiredPeers]) {
     const target = path.join(fixture, 'node_modules', name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.join(root, 'node_modules', name), target, 'dir');
@@ -61,7 +64,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const alice = await square.join('Alice');
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
-    // Pi renderer imports must resolve from the declared production dependencies.
+    // Pi renderer imports must resolve from the consumer's supplied TUI peer.
     const { default: extension } = await import('./node_modules/@astrosheep/square/plugins/pi/square-pi.js');
     const flags = [], handlers = new Map();
     extension({
