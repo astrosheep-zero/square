@@ -41,6 +41,7 @@ test('Pi lifecycle awaits watcher retirement after cancellation and replacement'
   });
   const handlers = new Map();
   squarePiExtension({
+    registerTool() {},
     registerFlag() {}, getFlag() {}, sendMessage() {},
     on(event, handler) {
       const prior = handlers.get(event);
@@ -135,6 +136,7 @@ test('a retiring watcher cannot suppress an unsent notification in its replaceme
   const handlers = new Map();
   const sent = [];
   squarePiExtension({
+    registerTool() {},
     registerFlag() {}, getFlag() {},
     on(event, handler) {
       const prior = handlers.get(event);
@@ -197,6 +199,7 @@ test('Pi watcher survives an unreadable bound artifact without changing it', { t
   const handlers = new Map();
   const sent = [];
   const pi = {
+    registerTool() {},
     registerFlag() {},
     getFlag() { return undefined; },
     on(event, handler) {

@@ -1,91 +1,58 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod/v4';
-import { SquareError, isSquareError } from './model.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from './square-tools.js';
 import { operationEnv } from './automatic-session.js';
+import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
 import { createSquareApplication, createSquareResourceOwner } from './square-application.js';
-import type { ApplicationFailureDetail, ApplicationOutcome, CatchApplicationOptions, ExpressApplicationOptions, HistoryApplicationQuery, OperationControl, SquareApplication, SquareApplicationContext } from './square-facade.js';
+import type { SquareApplicationContext } from './square-facade.js';
 
 type JsonObject = Record<string, unknown>;
-interface ToolDefinition { name: string; description: string; inputSchema: z.ZodObject<z.ZodRawShape, z.core.$strict>; }
 
 /** The server owns its artifact connection lifetime, so callers cannot lend one. */
 export interface SquareMcpOptions extends Omit<SquareApplicationContext, 'resources'> {}
 export type SquareMcpServer = McpServer;
 
-const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/);
-const stringArray = z.array(z.string());
-const participantName = z.string().optional().describe("Participant name, same as --as. Defaults to the server's configured participant.");
-
-const TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: 'join', description: 'Join the square as a participant.', inputSchema: z.object({ as: participantName, takeover: z.boolean().optional() }).strict() },
-  { name: 'express', description: 'Express a message or embodied action in the square.', inputSchema: z.object({ as: participantName, body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(), reply: activityId.optional(), force: z.boolean().optional(), noWait: z.boolean().optional() }).strict() },
-  { name: 'catch', description: 'Catch and consume activities perceptible to the participant.', inputSchema: z.object({ as: participantName, id: activityId.optional(), idle: z.number().finite().min(0).optional(), from: stringArray.optional(), mention: z.boolean().optional(), limit: z.number().int().min(1).optional() }).strict() },
-  { name: 'history', description: 'Read the activity stream using stable activity-id cursors.', inputSchema: z.object({ limit: z.number().int().min(1).optional(), order: z.enum(['asc', 'desc']).optional(), before: activityId.optional(), after: activityId.optional(), grep: z.string().optional(), fixed: z.string().optional(), from: stringArray.optional(), mention: z.string().optional() }).strict() },
-  { name: 'listen', description: 'Listen for future activity from a participant.', inputSchema: z.object({ as: participantName, target: z.string() }).strict() },
-  { name: 'ignore', description: 'Stop listening for future activity from a participant.', inputSchema: z.object({ as: participantName, target: z.string() }).strict() },
-  { name: 'listening', description: 'List participants this participant is listening to.', inputSchema: z.object({ as: participantName }).strict() },
-  { name: 'hold', description: 'Raise a hand to hold the square.', inputSchema: z.object({ as: participantName, reason: z.string().optional() }).strict() },
-  { name: 'resume', description: 'Release the current hold.', inputSchema: z.object({ as: participantName }).strict() },
-  { name: 'done', description: 'Leave the square without adding a message.', inputSchema: z.object({ as: participantName }).strict() },
-  { name: 'status', description: 'Read the public status of the square.', inputSchema: z.object({}).strict() },
-  { name: 'participants', description: 'List participants standing in or done with the square.', inputSchema: z.object({}).strict() },
-];
-
-function operation(app: SquareApplication<false>, name: string, args: JsonObject, control: OperationControl): Promise<ApplicationOutcome<object, unknown, false>> {
-  switch (name) {
-    case 'join': return app.join({ takeover: args.takeover as boolean | undefined }, control);
-    case 'express': {
-      const { body, noWait, ...options } = args;
-      return app.express(body as string, { ...options, noWait } as ExpressApplicationOptions, control);
-    }
-    case 'catch': return app.catch(args as CatchApplicationOptions, control);
-    case 'history': return app.history(args as HistoryApplicationQuery, control);
-    case 'listen': return app.listen(args.target as string, control);
-    case 'ignore': return app.ignore(args.target as string, control);
-    case 'listening': return app.listening(control);
-    case 'hold': return app.hold(args.reason as string | undefined, control);
-    case 'resume': return app.resume(control);
-    case 'done': return app.done(undefined, control);
-    case 'status': return app.status(undefined, control);
-    case 'participants': return app.participants(control);
-    default: throw new SquareError('invalid_args', `Unknown tool: ${name}`);
-  }
-}
-
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
   const baseEnv = { ...options.env };
   const resources = createSquareResourceOwner();
-  // One explicit lifetime for this server: every tool call borrows the same connection.
+  // Calls to the configured square borrow one server-owned connection.
   const inFlight = new Set<Promise<unknown>>();
   const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
-    instructions: 'The catch tool consumes activities. Use history with act/<index> cursors for read-only archive access.',
+    instructions: SQUARE_TOOL_INSTRUCTIONS,
   });
-  for (const tool of TOOL_DEFINITIONS) {
+  for (const tool of SQUARE_TOOLS) {
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
       const call = (async () => {
         try {
-          const { as: participant, ...operationArgs } = args as JsonObject;
+          const { as: participant, location } = args as JsonObject;
           const threadId = extra._meta?.threadId;
           const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
-          const env = typeof threadId === 'string' && threadId.trim()
-            ? operationEnv('codex', threadId, baseEnv)
-            : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
-              ? operationEnv('opencode', opencodeSessionId, baseEnv)
-              : baseEnv;
-          const app = createSquareApplication({ ...options, env, participant: (participant as string | undefined) ?? options.participant, resources }, { presentation: false });
-          const outcome = await operation(app, tool.name, operationArgs, { signal: extra.signal });
+          // Claude's plugin endpoint requires the mod's call-local coordinate, never startup identity.
+          const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
+            ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
+            : undefined;
+          const env = claude !== undefined
+            ? { ...operationEnv('claude', claude.sessionId, baseEnv),
+              // Preserve Claude's session + child flag semantics; an agent loop ID is not a session ID.
+              CLAUDE_CODE_CHILD_SESSION: claude.agentId === undefined ? '' : '1' }
+            : typeof threadId === 'string' && threadId.trim()
+              ? operationEnv('codex', threadId, baseEnv)
+              : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
+                ? operationEnv('opencode', opencodeSessionId, baseEnv)
+                : baseEnv;
+          const app = createSquareApplication({
+            ...options, env, cwd: claude?.cwd ?? options.cwd,
+            squarePath: (location as string | undefined) ?? options.squarePath,
+            participant: (participant as string | undefined) ?? options.participant,
+            // The server owner is bound to its configured square; overrides close after each call.
+            resources: location === undefined && claude === undefined ? resources : undefined,
+          }, { presentation: false });
+          const outcome = await tool.run(app, args as JsonObject, { signal: extra.signal });
           const structuredContent = outcome.data as JsonObject;
           return { content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }], structuredContent };
         } catch (error) {
-          const normalized = extra.signal.aborted
-            ? { code: 'cancelled', message: 'The MCP request was cancelled' }
-            : isSquareError(error)
-              ? { code: error.code, message: error.message, ...(error.facts === undefined ? {} : { facts: error.facts }) }
-              : { code: 'internal', message: error instanceof Error ? error.message : String(error) };
-          const operation = error instanceof Error ? (error as Error & { operation?: ApplicationFailureDetail }).operation : undefined;
-          const failure = operation === undefined ? normalized : { ...normalized, operation };
+          const failure = squareToolFailure(error, extra.signal);
           return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(failure) }], structuredContent: { error: failure } };
         }
       })();

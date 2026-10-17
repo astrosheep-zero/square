@@ -69,7 +69,7 @@ test('one MCP server accepts per-call participants without a configured default'
     for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'listening', 'hold', 'resume', 'done']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
-      assert.equal(schema.properties.as.description, "Participant name, same as --as. Defaults to the server's configured participant.");
+      assert.equal(schema.properties.as.description, 'Participant name, same as --as. Defaults to the configured participant or the current session’s unambiguous participant.');
       assert.equal(schema.required?.includes('as') ?? false, false);
       assert.equal('session' in schema.properties, false);
     }
@@ -150,6 +150,26 @@ test('MCP tool schemas reject unknown fields and malformed activity ids', async 
   } finally { await close(); }
 });
 
+test('MCP shares location and noMention parameters with native tools', async (t) => {
+  const { cwd, server } = await fixture('rei');
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const { client, close } = await connectedClient(server);
+  try {
+    await client.callTool({ name: 'join', arguments: {} });
+    await client.callTool({ name: 'join', arguments: { as: 'bob' } });
+    const bare = await client.callTool({ name: 'express', arguments: { body: 'literal @bob', noMention: true, force: true } });
+    assert.deepEqual(bare.structuredContent.activity.mentions, []);
+    const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
+    await other.close();
+    const joined = await client.callTool({ name: 'join', arguments: { location: 'other.square' } });
+    assert.equal(joined.structuredContent.kind, 'joined');
+    const history = await client.callTool({ name: 'history', arguments: { location: 'other.square' } });
+    assert.equal(history.structuredContent.activities.some(a => a.kind === 'say'), false);
+    const original = await client.callTool({ name: 'history', arguments: {} });
+    assert.equal(original.structuredContent.activities.at(-1).body, 'literal @bob');
+  } finally { await close(); }
+});
+
 test('MCP cancellation reaches an in-progress application operation', async () => {
   const { server } = await fixture('aoi');
   const { client, close } = await connectedClient(server);
@@ -216,8 +236,8 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   assert.ok(caught.data.activities.some((activity) => activity.id === expressed.data.activity.id));
 });
 
-test('square mcp-server speaks newline-delimited JSON-RPC on stdio', async () => {
-  const { cwd, squarePath, env } = await fixture('stdio');
+test('square mcp-server starts without a fixed location and speaks newline-delimited JSON-RPC', async () => {
+  const { cwd, env } = await fixture('stdio');
   const input = [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'stdio-test', version: '1' } } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
@@ -226,7 +246,7 @@ test('square mcp-server speaks newline-delimited JSON-RPC on stdio', async () =>
   ].map((message) => JSON.stringify(message)).join('\n') + '\n';
   const child = spawnSync(process.execPath, [path.resolve('dist/square.js'), 'mcp-server'], {
     cwd,
-    env: { ...env, SQUARE_LOCATION: squarePath },
+    env: { ...env, SQUARE_LOCATION: '' },
     input,
     encoding: 'utf8',
     timeout: 5000,

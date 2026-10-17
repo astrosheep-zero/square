@@ -23,7 +23,7 @@ function fixture() {
     } },
   };
   register((name, handler) => handlers.set(name, handler));
-  const invoke = async (name, e, next = async () => ({})) => { const result = await handlers.get(name)($, e, Object.assign(next, { budget: { remainingMs: 150 }, signal: new AbortController().signal })); await new Promise((resolve) => setImmediate(resolve)); return result; };
+  const invoke = async (name, e, next = async () => ({}), signal = new AbortController().signal) => { const result = await handlers.get(name)($, e, Object.assign(next, { budget: { remainingMs: 150 }, signal })); await new Promise((resolve) => setImmediate(resolve)); return result; };
   return { $, handlers, calls, state, invoke, setId: (value) => { id = value; }, setResult: (value) => { result = value; }, reload: () => register((name, handler) => handlers.set(name, handler)) };
 }
 const text = '[square-inbox:opaque-attempt]\npreview\n[/square-inbox:opaque-attempt]';
@@ -119,9 +119,36 @@ test('classic resume uses pinned target while session API still reads the ending
 
 test('failed tool still reconciles committed memberships without body injection', async () => {
   const f = fixture();
-  await assert.rejects(f.invoke('tool.call', {}, async () => { throw new Error('aborted tool'); }), /aborted tool/);
-  assert.equal(f.calls.at(-1).input.operation, 'reconcile');
+  await assert.rejects(f.invoke('tool.call', { tool: 'mcp__square__express' }, async () => { throw new Error('aborted tool'); }), /aborted tool/);
+  assert.deepEqual(f.calls.map(call => call.input.operation), ['reconcile']);
   assert.equal(f.calls.at(-1).input.text, undefined);
+});
+
+test('MCP delegates unchanged and cleans the pinned association even if its call fails after a session change', async () => {
+  const f = fixture();
+  f.setResult({ token: 'call-token' });
+  const event = { tool: 'mcp__plugin_square_square__express', tool_use_id: 'toolu_test', body: 'hello' };
+  await assert.rejects(f.invoke('tool.call', event, async received => {
+    assert.equal(received, event);
+    assert.equal(f.calls[0].input.operation, 'tool-begin');
+    f.setId('replacement');
+    throw new Error('MCP failed');
+  }), /MCP failed/);
+  const cleanup = f.calls[1].input;
+  assert.equal(cleanup.operation, 'tool-end');
+  assert.equal(cleanup.sessionId, 'old-session');
+  assert.equal(cleanup.toolUseId, event.tool_use_id);
+  assert.equal(cleanup.token, 'call-token');
+});
+
+test('failed publication and pre-cancelled MCP calls never proceed to execution', async () => {
+  const f = fixture();
+  const event = { tool: 'mcp__plugin_square_square__join', tool_use_id: 'toolu_test' };
+  f.$.process.run = async () => { throw new Error('bridge unavailable'); };
+  await assert.rejects(f.invoke('tool.call', event, async () => assert.fail('must not run')), /bridge unavailable/);
+  const controller = new AbortController();
+  controller.abort(new Error('cancelled'));
+  await assert.rejects(f.invoke('tool.call', event, async () => assert.fail('must not run'), controller.signal), /cancelled/);
 });
 
 test('explicit abort suppression survives code reload; ordinary completion is not cancellation', async () => {

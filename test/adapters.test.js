@@ -59,6 +59,7 @@ function squarePiExtension(pi) {
   const registrations = new Map();
   return installedSquarePiExtension({
     ...pi,
+    registerTool() {},
     registerFlag() {},
     getFlag() { return undefined; },
     on(event, handler) {

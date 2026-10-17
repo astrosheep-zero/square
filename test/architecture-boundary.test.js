@@ -238,6 +238,7 @@ const integrationEdges = new Map([
   ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHookAsync']],
   ['mcp.ts -> automatic-session.ts', ['operationEnv']],
+  ['mcp.ts -> claude-mcp-context.ts', ['readClaudeMcpCall']],
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['verifyHostLedger', 'migrateHostLedger']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['gcHostLedger']],
 ]);
@@ -291,7 +292,7 @@ function transportLeaks(sources, roots) {
         // reach their execution dependencies or import namespaces from them.
         continue;
       }
-      if (target.startsWith('cli/') || presentationHelpers.has(target) || target === 'mcp.ts') traverse(target, [...trail, target]);
+      if (target.startsWith('cli/') || presentationHelpers.has(target) || ['mcp.ts', 'square-tools.ts'].includes(target)) traverse(target, [...trail, target]);
       else leaks.push(`private execution import: ${[...trail, target].join(' -> ')}`);
     }
   }
@@ -314,13 +315,16 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     ['cli/nested.ts', "import './render.js';"],
     ['cli/render.ts', "export { history } from '../views.js'; export { createArtifactPort } from '../artifact.js';"],
     ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
-    ['mcp.ts', "import { automaticSessionStart } from './automatic-session.js';"],
+    ['mcp.ts', "import { automaticSessionStart } from './automatic-session.js'; import { beginClaudeMcpCall } from './claude-mcp-context.js'; import './square-tools.js';"],
+    ['square-tools.ts', "import { express } from './square-actions.js';"],
   ]);
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
     'integration exception exceeded: mcp.ts -> automatic-session.ts (automaticSessionStart)',
+    'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
     'private binding: presentation.ts -> runtime.ts (nowMs)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',
+    'private execution import: mcp.ts -> square-tools.ts -> square-actions.ts',
   ]);
 });

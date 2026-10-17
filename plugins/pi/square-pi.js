@@ -1,8 +1,12 @@
 import path from 'node:path';
 import { Text } from '@earendil-works/pi-tui';
+import { z } from 'zod/v4';
+
+import { createSquareApplication } from '../../dist/square-application.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
-import { automaticSessionEnd, automaticSessionStart } from '../../dist/automatic-session.js';
+import { automaticSessionEnd, automaticSessionStart, operationEnv } from '../../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
@@ -97,6 +101,33 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
 }
 
 export default function squarePiExtension(pi) {
+  for (const tool of SQUARE_TOOLS) {
+    pi.registerTool({
+      name: `square_${tool.name}`,
+      label: `Square ${tool.name}`,
+      description: tool.description,
+      parameters: z.toJSONSchema(tool.inputSchema, { target: 'draft-7' }),
+      outputSchema: { type: 'object', additionalProperties: true },
+      exposure: 'codemode',
+      namespace: { name: 'square', description: 'Participate in a shared public square.', instructions: SQUARE_TOOL_INSTRUCTIONS },
+      async execute(_id, args, signal, _onUpdate, ctx) {
+        try {
+          const app = createSquareApplication({
+            cwd: ctx.cwd,
+            env: operationEnv('pi', ctx.sessionManager.getSessionId(), process.env),
+            squarePath: args.location,
+            participant: args.as,
+          }, { presentation: false });
+          // Without a resource owner the facade closes each call's connection, including on cancellation.
+          const { data } = await tool.run(app, args, { signal });
+          return { content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+        } catch (error) {
+          const data = { error: squareToolFailure(error, signal) };
+          return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+        }
+      },
+    });
+  }
   pi.registerMessageRenderer?.('square', renderSquareCard);
   pi.registerFlag('agent-delivery-socket', { type: 'string', description: 'Explicit private local delivery socket' });
   createPiReceiver(pi, {

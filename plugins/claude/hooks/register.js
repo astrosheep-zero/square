@@ -55,15 +55,6 @@ async function cancel($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    // Claude refuses plugin tools in sessions started without built-in tools; the inbox must still reconcile.
-    try {
-      await $.tool.register({
-        name: 'square',
-        description: "Run the square CLI. args are exactly the words after `square`; `--help` after an operation shows its usage. Pass a `-` body as stdin.",
-        inputSchema: { type: 'object', properties: { args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } }, required: ['args'] },
-        isDeferred: false,
-      });
-    } catch (error) { await $.ui.log(`Square tool unavailable: ${error?.message ?? error}`); }
     await reconcile($).catch(() => undefined);
     return next(e);
   });
@@ -73,23 +64,18 @@ export function register(on) {
   });
   on('tool.call', async ($, e, next) => {
     try {
-      if (e.tool !== 'mcp__square__square') return await next(e);
-      const sessionId = await $.session.id();
-      const cwd = await $.session.cwd();
-      // process.run has no signal option; it belongs to this cancellable dispatch.
+      if (typeof e.tool !== 'string' || !e.tool.startsWith('mcp__plugin_square_square__')) return await next(e);
       next.signal.throwIfAborted();
-      const result = await $.process.run(['square', ...e.args], {
-        cwd, stdin: e.stdin,
-        env: { CLAUDE_CODE_SESSION_ID: sessionId, CLAUDE_CODE_CHILD_SESSION: e.agentId ? '1' : '' },
-        timeoutMs: 600_000,
-      });
-      let text = result.stdout;
-      if (result.stderr) text += `${text && !text.endsWith('\n') ? '\n' : ''}${result.stderr}`;
-      if (result.exitCode !== 0) {
-        text += `${text && !text.endsWith('\n') ? '\n' : ''}Exit code: ${result.exitCode}`;
-        return { deny: text };
+      const c = await coordinate($);
+      const call = { ...c, toolUseId: e.tool_use_id, agentId: e.agentId };
+      const { token } = await bridge($, { ...call, operation: 'tool-begin' });
+      try {
+        next.signal.throwIfAborted();
+        // MCP receives the original business arguments; identity travels only by tool-use ID.
+        return await next(e);
+      } finally {
+        await bridge($, { ...call, token, operation: 'tool-end' }).catch(() => undefined);
       }
-      return { result: text };
     }
     finally { if (!e.agentId) await reconcile($, undefined, 'reconcile').catch(() => undefined); }
   });

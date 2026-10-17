@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "square": {
+      "command": "square",
+      "args": ["mcp-server"],
+      "env": {
+        "SQUARE_CLAUDE_MCP_CONTEXT": "1"
+      }
+    }
+  }
+}

@@ -19,6 +19,35 @@ peer/plugin authority. Native OS-user socket permissions and Claude policy apply
 `square harness doctor delivery` derives current routes/evidence without sending.
 An absent/broken endpoint is unavailable; it does not consume Square activity.
 
+## MCP tools and call identity
+
+The plugin's `.mcp.json` starts the existing Square MCP server. The mod no longer
+registers an argv wrapper or executes participant CLI commands. MCP and Pi native
+tools share their operation definitions and facade calls in `square-tools.ts`.
+
+Before a bundled MCP call, the mod uses the existing `square claude-mod` helper
+to publish `{toolUseId, sessionId, cwd, agentId?}`. It then calls `next(e)` unchanged.
+The server correlates `_meta["claudecode/toolUseId"]` with that association: no
+session, agent, token or other transport field is added to the model's schema or
+arguments. Claude's native **session ID plus child flag** semantics are preserved;
+the child loop's `agentId` is retained for attribution, not substituted as a session ID.
+Calls use the live cwd and session even if the MCP process started earlier.
+
+`SQUARE_CLAUDE_MCP_CONTEXT=1` is set only by the bundled MCP configuration. That
+endpoint fails closed if an association is missing or expired; it never silently
+uses the startup parent identity. Generic MCP configurations retain their existing
+identity handling. The hook targets `mcp__plugin_square_square__*`, not unrelated
+servers with similar operation names.
+
+The mod owns publication and token-matched removal in `finally`; the server only
+reads. Associations are private, transient transport files under
+`<host-ledger-root>/claude-mcp-calls`, not Square domain state or another artifact.
+Normal completion/errors remove them. If abrupt cancellation, unload or a crash
+prevents cleanup, they expire after ten minutes and the next publication prunes
+them. Expiry gates lookup, not an operation that already captured its context.
+MCP owns operation cancellation and connection shutdown. No second execution
+protocol, resident service or ledger schema migration is introduced.
+
 ## Membership and lifecycle
 
 If `.square/PUBLIC.square` already exists, the mod joins the automatic participant.

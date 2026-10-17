@@ -7,10 +7,14 @@ import { Square } from './square-application.js';
 import { observeClaudeDelivery, type ClaudeBinding } from './claude-delivery.js';
 import { processActNotificationsOnce } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';
+import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 
 export interface ClaudeCoordinate { readonly sessionId: string; readonly cwd: string; readonly version: string; readonly endpoint?: string }
 interface ClaudeBridgeInput extends ClaudeCoordinate {
-  readonly operation: 'start' | 'reconcile' | 'end' | 'cancel' | 'guard' | 'admitted' | 'stored';
+  readonly operation: 'start' | 'reconcile' | 'end' | 'cancel' | 'guard' | 'admitted' | 'stored' | 'tool-begin' | 'tool-end';
+  readonly toolUseId?: string;
+  readonly agentId?: string;
+  readonly token?: string;
   readonly bindings?: readonly ClaudeBinding[];
   readonly resume?: boolean;
   readonly text?: string;
@@ -24,6 +28,13 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   if (inputText.length > 512_000) throw new Error('Claude bridge input exceeds its bound.');
   const input = JSON.parse(inputText) as ClaudeBridgeInput;
   if (!input || typeof input.sessionId !== 'string' || !input.sessionId || typeof input.cwd !== 'string') throw new Error('Claude bridge coordinate missing.');
+  if (input.operation === 'tool-begin') {
+    return `${JSON.stringify(await beginClaudeMcpCall({ toolUseId: input.toolUseId!, sessionId: input.sessionId, cwd: input.cwd, agentId: input.agentId }, env))}\n`;
+  }
+  if (input.operation === 'tool-end') {
+    await endClaudeMcpCall(input.toolUseId!, input.token!, env);
+    return '{}\n';
+  }
   const scoped = operationEnv('claude', input.sessionId, env);
   const ledger = hostLedgerForEnv(env);
   const signal = AbortSignal.timeout(2500);

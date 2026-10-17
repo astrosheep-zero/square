@@ -17,6 +17,7 @@ test('generated release artifacts expose the current identity and supported host
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const claudePlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.claude-plugin', 'plugin.json'), 'utf8'));
   const claudeHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', 'hooks', 'hooks.json'), 'utf8'));
+  const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');
   const claudeSkill = fs.readFileSync(path.join(root, 'plugins', 'claude', 'skills', 'square', 'SKILL.md'), 'utf8');
@@ -47,6 +48,9 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
   assert.deepEqual(claudeHooks, { modules: ['./register.js'] });
+  assert.deepEqual(claudeMcp, { mcpServers: { square: {
+    command: 'square', args: ['mcp-server'], env: { SQUARE_CLAUDE_MCP_CONTEXT: '1' },
+  } } });
   const claudeMod = fs.readFileSync(path.join(root, 'plugins', 'claude', 'hooks', 'register.js'), 'utf8');
   assert.match(claudeMod, /export function register\(on\)/);
   assert.match(claudeMod, /on\('session.receive'/);
@@ -54,7 +58,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.match(claudeMod, /on\('classic.SessionStart'/);
   assert.equal(claudePlugin.types, './types.d.ts');
   assert.equal(fs.existsSync(path.join(root, 'plugins', 'claude', claudePlugin.types)), true);
-  assert.doesNotMatch(claudeMod, /node:|process\.env|PostToolBatch|claude-hook|MESSAGING_TOKEN/);
+  assert.doesNotMatch(claudeMod, /node:|process\.env|PostToolBatch|claude-hook|MESSAGING_TOKEN|tool\.register/);
   assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-hook.js')), false);
   assert.equal(fs.existsSync(path.join(root, 'claude-native.ts')), false);
   assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-native.js')), false);
@@ -107,6 +111,7 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.ok(packed.files.some((entry) => entry.path === leafPath.replace(/\.js$/, '.d.ts')));
   assert.ok(packed.files.some((entry) => entry.path === entryPath));
   for (const file of [
+    'plugins/claude/.mcp.json',
     'plugins/claude/hooks/register.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',

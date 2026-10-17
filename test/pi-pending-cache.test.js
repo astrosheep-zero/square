@@ -57,6 +57,7 @@ test('a Pi batch hydrates the recipient projection once and reuses it at the bou
   const handlers = new Map();
   const sent = [];
   squarePiExtension({
+    registerTool() {},
     registerFlag() {}, getFlag() {},
     on(event, handler) {
       const prior = handlers.get(event);

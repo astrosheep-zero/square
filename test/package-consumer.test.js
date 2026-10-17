@@ -66,14 +66,16 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     await square.close();
     // Pi renderer imports must resolve from the consumer's supplied TUI peer.
     const { default: extension } = await import('./node_modules/@astrosheep/square/plugins/pi/square-pi.js');
-    const flags = [], handlers = new Map();
+    const flags = [], handlers = new Map(), tools = [];
     extension({
       on(event, handler) { handlers.set(event, handler); },
       registerFlag(name) { flags.push(name); },
+      registerTool(tool) { tools.push(tool); },
       getFlag() { return undefined; },
       sendMessage() { throw new Error('factory must not send'); },
     });
     if (flags.join() !== 'agent-delivery-socket') process.exit(3);
+    if (!tools.some(tool => tool.name === 'square_express' && tool.parameters.properties.noMention)) process.exit(6);
     if (!handlers.has('session_start') || !handlers.has('session_shutdown')) process.exit(4);
     // The public OpenCode subpath stays stable after moving the implementation.
     const { default: plugin } = await import('@astrosheep/square/server');
