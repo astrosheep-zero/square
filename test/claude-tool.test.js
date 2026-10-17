@@ -44,7 +44,7 @@ test('square is upfront without native inbox capability and runs direct argv wit
   assert.equal(await f.invoke('session.start', {}, async () => started), started);
   assert.deepEqual(f.registrations, [{
     name: 'square',
-    description: "Run the square CLI. args are exactly the words after `square` in the square skill's commands.",
+    description: "Run the square CLI. args are exactly the words after `square`; `--help` after an operation shows its usage. Pass a `-` body as stdin.",
     inputSchema: { type: 'object', properties: { args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } }, required: ['args'] },
     isDeferred: false,
   }]);
