@@ -168,8 +168,9 @@ test('held or timed-out receive remains unknown; late stored clipped payload clo
   const f = await fixture(t, 'x'.repeat(300));
   await dispatch(f);
   const text = await payload(f);
-  assert.match(text, /clipped — read it all:/);
-  assert.match(text, /catch --id act\/2/);
+  assert.match(text, /· clipped — catch it to read the rest/);
+  assert.match(text, /· Bob · act\/2/);
+  assert.doesNotMatch(text, /square --|catch --|square_catch/);
   assert.equal((await dispatch(f)).attempted, 0, 'ambiguous sends are not replayed');
   // No receive success: this is the held-release/late append boundary.
   await stored(f, text);

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import path from 'node:path';
 import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
@@ -152,15 +151,15 @@ test('attention preview distinguishes mention, reply, listening, and everyone’
       const [{ route, recipient }] = facts.audience(act.index);
       return renderAttentionPreview({ squarePath: '/tmp/listener.square', actIndex: act.index, recipient, actor: act.actor, route, body: act.body }).split('\n')[2];
     });
-    assert.deepEqual(descriptions, ['● Alice spoke · you’re listening to Alice', '● Alice spoke your name (Bob)',
-      '● Alice rang the bell · everyone’s attention', '● Alice answered you (Bob)']);
+    assert.deepEqual(descriptions, ['● Alice spoke · you’re listening', '● Alice spoke your name',
+      '● Alice rang the bell', '● Alice answered you']);
   });
 });
 
 test('attention metadata is separate from unindented Markdown body', () => {
   const body = '*thought*\n\n- item\n  - nested\n\n```js\n  run();\n```';
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a"&<b>.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body });
-  assert.equal(rendered, ['<square-activity>', '· /tmp/a"&<b>.square · act/12', '● Alice rang the bell · everyone’s attention', '', body, '</square-activity>'].join('\n'));
+  assert.equal(rendered, ['<square-activity>', '· /tmp/a"&<b>.square · Bob · act/12', '● Alice rang the bell', '', body, '</square-activity>'].join('\n'));
 });
 
 test('attention body is complete up to the preview boundary', () => {
@@ -168,24 +167,26 @@ test('attention body is complete up to the preview boundary', () => {
   assert.equal(previewAttentionBody('x'.repeat(201)), `${'x'.repeat(200)}…`);
 });
 
-test('clipped attention ends with a labeled caption and a bare read-it-all command', () => {
+test('clipped attention identifies its recipient and describes reading the full activity without invocation syntax', () => {
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body: 'x'.repeat(250) });
-  assert.equal(rendered, ['<square-activity>', '· /tmp/a.square · act/12', '● Alice rang the bell · everyone’s attention', '', `${'x'.repeat(200)}…`, '</square-activity>',
-    '· clipped — read it all:', `square --location '${path.resolve('/tmp/a.square')}' --as 'Bob' catch --id act/12`].join('\n'));
+  assert.equal(rendered, ['<square-activity>', '· /tmp/a.square · Bob · act/12', '● Alice rang the bell', '', `${'x'.repeat(200)}…`, '</square-activity>',
+    '· clipped — catch it to read the rest'].join('\n'));
+  assert.doesNotMatch(rendered, /square --|catch --|square_catch|"id"\s*:/);
 });
 
 test('unclipped attention has no continuation command', () => {
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body: 'short' });
-  assert.doesNotMatch(rendered, /catch --id/);
+  assert.doesNotMatch(rendered, /clipped/);
 });
 
-test('a backtick run in the command path stays outside the activity tags', () => {
+test('a backtick run in the location stays plain metadata rather than becoming a recovery command', () => {
   const rendered = renderAttentionPreview({ squarePath: '/tmp/a```b.square', actIndex: 12, recipient: 'Bob', actor: 'Alice', route: 'bell', body: 'x'.repeat(201) });
   const lines = rendered.split('\n');
   assert.equal(lines[0], '<square-activity>');
+  assert.equal(lines[1], '· /tmp/a```b.square · Bob · act/12');
   assert.equal(lines[5], '</square-activity>');
-  assert.equal(lines[6], '· clipped — read it all:');
-  assert.equal(lines[7], `square --location '${path.resolve('/tmp/a```b.square')}' --as 'Bob' catch --id act/12`);
+  assert.equal(lines[6], '· clipped — catch it to read the rest');
+  assert.equal(lines.length, 7);
 });
 
 test('a later listen does not retroactively receive an earlier bare say', async () => {

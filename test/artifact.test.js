@@ -104,7 +104,13 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
   db.close();
   const before = fs.readFileSync(file), port = createArtifactPort(file);
   t.after(() => port.close());
-  await assert.rejects(port.read(r => r.header()), e => e.code === 'invalid_args' && e.facts?.reason === 'migration_required' && /migrate/.test(e.message));
+  await assert.rejects(port.read(r => r.header()), e => {
+    assert.equal(e.code, 'invalid_args');
+    assert.equal(e.facts?.reason, 'migration_required');
+    assert.match(e.message, /Stop sessions.*back it up.*migrate and verify/);
+    assert.doesNotMatch(e.message, /square --|--location/);
+    return true;
+  });
   await assert.rejects(writeSquareFile(file, empty()), /migration/);
   const diagnosis = await diagnoseSquareFile(file);
   assert.match(diagnosis.migrationRequired, /migrate/);

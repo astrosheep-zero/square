@@ -75,7 +75,9 @@ old ends cannot retire that replacement. Unchanged reload preserves epochs.
 ## Body, admission, and presentation
 
 The coordinator uses Square's canonical audience projection and bounded body
-preview. A clipped preview ends with the full `catch --id act/<index>` command.
+preview. Each notification identifies the square, receiving participant and
+activity before its event and body. A clipped preview describes catching that
+activity to read it in full; it never embeds shell commands or tool-call syntax.
 Opaque text correlation resolves through bound memberships and the existing
 attempt ledger, never a path or asserted source from incoming text.
 

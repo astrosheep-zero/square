@@ -62,6 +62,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const blocks: string[] = [];
   const complete: CompleteBoundaryMembership[] = [];
   let omitted = 0;
+  const omission = (count: number) => `… ${count} more — catch up to read them`;
 
   for (const [index, entry] of queued.entries()) {
     const { membership, notification } = entry;
@@ -76,7 +77,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       }),
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;
-    const prospective = frameBoundary([...blocks, block, ...(omittedAfter > 0 ? [`… ${omittedAfter} ${omittedAfter === 1 ? 'notification' : 'notifications'} omitted.`] : [])]);
+    const prospective = frameBoundary([...blocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
     if (prospective.length > CONTEXT_MAX) {
       omitted += 1;
       continue;
@@ -90,7 +91,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   }
 
   return {
-    context: frameBoundary([...blocks, ...(omitted > 0 ? [`… ${omitted} ${omitted === 1 ? 'notification' : 'notifications'} omitted.`] : [])]),
+    context: frameBoundary([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])]),
     complete,
   };
 }

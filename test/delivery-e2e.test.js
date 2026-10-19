@@ -254,7 +254,9 @@ test('a native boundary presents bounded awareness and suppresses wake after a c
     assert.equal(rows.filter((row) => row.outcome === 'clipped').length, 1);
     assert.ok(rows.filter((row) => row.kind === 'presentation').every((row) => row.session === 'bob-native'));
     assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(act.index)], undefined);
-    assert.ok(payload.includes(`catch --id ${formatActivityId(act.index)}`));
+    assert.ok(payload.includes(`· Bob · ${formatActivityId(act.index)}`));
+    assert.match(payload, /· clipped — catch it to read the rest/);
+    assert.doesNotMatch(payload, /square --|catch --|square_catch/);
 
     const evidence = await withRegistry(item.env, () => wakeEvidence(item.squarePath, 'Bob', act.index, Date.now(), item.env));
     assert.equal(evidence.presented, true);

@@ -51,6 +51,8 @@ export interface SquareErrorFacts {
   reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'explicit_reach_required' | 'invalid_reply' | 'invalid_done_body';
   /** The activity id a `catch --id` refusal named. */
   activityId?: string;
+  /** The host ledger requiring offline migration, rather than the selected artifact. */
+  ledgerRoot?: string;
   /** Requested recipient spellings, without parsing presentation copy. */
   targets?: readonly string[];
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */

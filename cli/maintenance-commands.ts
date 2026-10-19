@@ -1,5 +1,5 @@
 import { createSquareApplication } from '../square-application.js';
-import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
+import { commandPrefix, renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 
 import { requireSquarePath, type CommandSpec, usage } from './context.js';
 
@@ -42,7 +42,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     const squarePath = requireSquarePath(context);
     const { data: diagnosis, projection } = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath }).diagnose();
     if (diagnosis.migrationRequired !== undefined) {
-      return { output: withPathOutput(squarePath, `${diagnosis.migrationRequired}\n`), exitCode: 2 };
+      return { output: withPathOutput(squarePath, `${diagnosis.migrationRequired}\n${commandPrefix(squarePath)} migrate\n`), exitCode: 2 };
     }
     if (diagnosis.unfixable !== undefined || diagnosis.standingCount === undefined) {
       return {

@@ -2,7 +2,6 @@ import { homedir } from 'node:os';
 
 import type { DirectedNotificationRoute } from './model.js';
 import { formatActivityId } from './square-core.js';
-import { participantCommandPrefix } from './presentation.js';
 
 export const ATTENTION_BODY_MAX = 200;
 
@@ -31,12 +30,12 @@ export function displayAttentionPath(squarePath: string): string {
     : squarePath;
 }
 
-export function renderAttentionDescription({ actor, recipient, route }: Pick<AttentionPreview, 'actor' | 'recipient' | 'route'>): string {
+export function renderAttentionDescription({ actor, route }: Pick<AttentionPreview, 'actor' | 'route'>): string {
   switch (route) {
-    case 'mention': return `${actor} spoke your name (${recipient})`;
-    case 'reply': return `${actor} answered you (${recipient})`;
-    case 'attention': return `${actor} spoke · you’re listening to ${actor}`;
-    case 'bell': return `${actor} rang the bell · everyone’s attention`;
+    case 'mention': return `${actor} spoke your name`;
+    case 'reply': return `${actor} answered you`;
+    case 'attention': return `${actor} spoke · you’re listening`;
+    case 'bell': return `${actor} rang the bell`;
   }
 }
 
@@ -48,7 +47,7 @@ export function renderAttentionFull(attention: AttentionPreview): string {
 function renderAttentionBlock(attention: AttentionPreview, body: string): string {
   return [
     '<square-activity>',
-    `· ${displayAttentionPath(attention.squarePath)} · ${formatActivityId(attention.actIndex)}`,
+    `· ${displayAttentionPath(attention.squarePath)} · ${attention.recipient} · ${formatActivityId(attention.actIndex)}`,
     `● ${renderAttentionDescription(attention)}`,
     '',
     body,
@@ -59,10 +58,8 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
 export function renderAttentionPreview(attention: AttentionPreview): string {
   return [
     renderAttentionBlock(attention, previewAttentionBody(attention.body)),
-    // A clipped body ends with the full command to read it all: a labeled caption, then the
-    // command bare on its own line so it can be copied and run as it is.
     ...(attentionBodyIsClipped(attention.body)
-      ? ['· clipped — read it all:', `${participantCommandPrefix(attention.squarePath, attention.recipient)} catch --id ${formatActivityId(attention.actIndex)}`]
+      ? ['· clipped — catch it to read the rest']
       : []),
   ].join('\n');
 }

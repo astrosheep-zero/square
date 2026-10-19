@@ -36,18 +36,10 @@ export interface LegacyFraming {
     readonly journalMode: string;
 }
 /**
- * The one recovery command for an owned legacy artifact, with a shell-quoted
- * path. Kept beside framing recognition so the refusal and migration
- * instruction cannot drift apart. This codec stays free of the renderer.
- */
-export function migrationRecoveryCommand(location: string): string {
-    return `square --location '${location.replace(/'/g, `'\\''`)}' migrate`;
-}
-/**
  * Read-only legacy framing: application id, format version, journal mode and the
  * exact owned snapshot schema. It decodes no snapshot payload, writes no pragma
- * and runs no DDL, so ordinary open can establish ownership before offering
- * the migration command. Anything else is unrelated or unsupported, not repaired.
+ * and runs no DDL, so ordinary open can establish ownership before requiring
+ * migration. Anything else is unrelated or unsupported, not repaired.
  */
 export function validateLegacyFraming(database: DatabaseSync, applicationId: number, location = ''): LegacyFraming {
     const identity = database.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as { application_id?: unknown; user_version?: unknown };
@@ -346,7 +338,7 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     if (identity.user_version === 1) {
         validateLegacyFraming(db, APPLICATION_ID, location);
-        throw new SquareError('invalid_args', `Square artifact needs migration.\n${migrationRecoveryCommand(location)}`, { reason: 'migration_required' });
+        throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
     requireFact(identity.user_version === 2, 'unsupported SQLite format version.');
     const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();

@@ -762,7 +762,7 @@ test('build --force does not bypass the v1 refusal', { skip: gate(V2, GATE) }, (
 
   const result = run(['--location', squarePath, 'build', '-f'], { input: 'replacement' });
   assert.notEqual(result.status, 0, result.stdout);
-  assert.match(result.stderr, /Square artifact needs migration/);
+  assert.match(result.stderr, /Square artifact at .* needs migration/);
   assert.equal(v1Framing(squarePath).userVersion, 1);
   assert.equal(digest(squarePath), before);
 });

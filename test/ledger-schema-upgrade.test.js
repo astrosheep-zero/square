@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
+import { run } from './square-cli-helpers.js';
 import { migrateHostLedger, verifyHostLedger } from '../dist/host-ledger-migration.js';
 import { LEDGER_FILENAME, LEDGER_VERSION, initializeLedger, insertLedgerRecord, setLedgerRevisions, inspectLedgerIdentity } from '../dist/host-ledger-sqlite.js';
 
@@ -41,8 +42,18 @@ test('explicit offline migrate upgrades prior SQLite while preserving every reco
   const f = fixture(t);
   const before = fs.readFileSync(f.file);
   const ledger = createHostLedgerPort({ rootPath: f.root });
-  await assert.rejects(ledger.listEvidence(), /square ledger migrate/);
-  await assert.rejects(verifyHostLedger({ rootPath: f.root }), /square ledger migrate/);
+  for (const operation of [() => ledger.listEvidence(), () => verifyHostLedger({ rootPath: f.root })]) {
+    await assert.rejects(operation(), error => {
+      assert.equal(error.facts?.reason, 'migration_required');
+      assert.equal(error.facts.ledgerRoot, fs.realpathSync(f.root));
+      assert.match(error.message, /Stop sessions and MCP services.*back it up.*migrate and verify/);
+      assert.doesNotMatch(error.message, /square ledger|square --/);
+      return true;
+    });
+  }
+  const cli = run(['ledger', 'verify'], { env: { SQUARE_HOST_LEDGER_ROOT: f.root } });
+  assert.equal(cli.status, 2, cli.stderr);
+  assert.match(cli.stderr, /square ledger migrate\nsquare ledger verify/);
   assert.deepEqual(fs.readFileSync(f.file), before, 'runtime and verify must not silently upgrade');
   const report = await migrateHostLedger({ rootPath: f.root });
   assert.equal(report.status, 'upgraded');

@@ -13,6 +13,7 @@ import { Square } from '../dist/square-application.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { createSquareApplication } from '../dist/square-application.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
+import { legacyFixtureState, writeV1Artifact } from './fixtures/v1-artifact.js';
 
 const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -57,6 +58,35 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
   } finally { await close(); }
 });
 
+test('MCP migration refusals describe the required action without CLI syntax', async (t) => {
+  for (const source of ['artifact', 'ledger']) await t.test(source, async (t) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-migration-'));
+    t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+    const squarePath = path.join(cwd, 'legacy.square');
+    const ledgerRoot = path.join(cwd, 'ledger');
+    if (source === 'artifact') writeV1Artifact(squarePath, legacyFixtureState(), 7);
+    else {
+      const square = await Square.build({ path: squarePath, markdown: 'Migration refusal' });
+      await square.close();
+      fs.mkdirSync(ledgerRoot);
+      fs.writeFileSync(path.join(ledgerRoot, 'presence.ndjsonl'), '');
+    }
+    const before = fs.readFileSync(squarePath);
+    const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: ledgerRoot, CODEX_THREAD_ID: 'migration-refusal' };
+    const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, squarePath, participant: 'rei' }));
+    try {
+      const result = await client.callTool({ name: source === 'artifact' ? 'status' : 'join', arguments: {} });
+      assert.equal(result.isError, true);
+      const failure = result.structuredContent.error;
+      assert.equal(failure.facts.reason, 'migration_required');
+      assert.match(failure.message, /Stop .*migrate and verify/);
+      assert.ok(failure.message.includes(source === 'artifact' ? squarePath : ledgerRoot));
+      assert.doesNotMatch(failure.message, /square --|square ledger|--location/);
+      assert.deepEqual(fs.readFileSync(squarePath), before);
+    } finally { await close(); }
+  });
+});
+
 test('one MCP server accepts per-call participants without a configured default', async () => {
   const { cwd, squarePath, env } = await fixture();
   const baseEnv = { ...env };
@@ -69,7 +99,7 @@ test('one MCP server accepts per-call participants without a configured default'
     for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'listening', 'hold', 'resume', 'done']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
-      assert.equal(schema.properties.as.description, 'Participant name, same as --as. Defaults to the configured participant or the current session’s unambiguous participant.');
+      assert.equal(schema.properties.as.description, 'Participant name. Defaults to the configured participant or the current session’s unambiguous participant.');
       assert.equal(schema.required?.includes('as') ?? false, false);
       assert.equal('session' in schema.properties, false);
     }

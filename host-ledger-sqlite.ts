@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { nameKey } from './model.js';
+import { SquareError, nameKey } from './model.js';
 import { inSqliteTransaction, retrySqliteBusy } from './sqlite-transaction.js';
 import type { PresenceRecord, PresenceLookup, EvidenceRecord, EvidenceLookup, NativeTokenLookup, NativeTokenResult } from './host-ledger.js';
 
@@ -147,7 +147,7 @@ export function upgradeLedger(db: DatabaseSync): boolean {
 }
 function exists(file: string): boolean { try { fs.statSync(file); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
 export function migrationRequired(root: string): Error {
-  return new Error(`Host ledger legacy format needs offline migration at ${root}.\nStop agent sessions and MCP services using Square with this ledger; keep them stopped until migration and verification succeed; then start them with the updated Square version.\nRun square ledger migrate from the same environment, then square ledger verify.`);
+  return new SquareError('invalid_args', `Host ledger at ${root} needs offline migration.\nStop sessions and MCP services using it, back it up, then migrate and verify from the same environment before restarting.`, { reason: 'migration_required', ledgerRoot: root });
 }
 /** Compact runtime framing. Full schema, projections and integrity belong to explicit verify. */
 function validateLedgerHeader(db: DatabaseSync, version = LEDGER_VERSION): void {

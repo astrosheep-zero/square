@@ -470,44 +470,47 @@ test('Codex installation preserves the prior bundle when the host rejects it', a
   }
 });
 
-test('Pi inbox helpers expose stable notification identity and commands', () => {
+test('Pi inbox helpers expose stable notification identity without invocation hints', () => {
   const inbox = sampleInbox();
   const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(context, /^\n<square-activity>/);
-  assert.match(context, /· \/tmp\/SQUARE\.square · act\/7/);
-  assert.match(context, /● Alice spoke your name \(Bob\)/);
+  assert.match(context, /· \/tmp\/SQUARE\.square · Bob · act\/7/);
+  assert.match(context, /● Alice spoke your name\n/);
   assert.doesNotMatch(context, /^>$/m);
   assert.match(context, /<\/square-activity>\n$/);
   assert.doesNotMatch(context, /catch --now/);
 });
 
-test('Pi square card collapses to who reached you and where, and expands to full renderer text', () => {
+test('Pi square card collapses to who reached you, where, and their opening line, and expands to Markdown bodies', () => {
   const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   const theme = { fg: (_color, text) => `<${text}>` };
-  const details = pendingCardDetails([membership([note({ route: 'bell' }), note({ actor: 'Cara', route: 'reply' })])]);
+  const details = pendingCardDetails([membership([note({ route: 'bell', body: '\nhello **@Bob**\nsecond' }), note({ actor: 'Cara', route: 'reply', actIndex: 8 })])]);
   assert.deepEqual(details.items, [
-    { square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'bell', preview: 'hello @Bob', description: 'Alice rang the bell · everyone’s attention' },
-    { square: 'SQUARE', actor: 'Cara', recipient: 'Bob', route: 'reply', preview: 'hello @Bob', description: 'Cara answered you (Bob)' },
+    { square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'bell', act: 'act/7', preview: '\nhello **@Bob**\nsecond', description: 'Alice rang the bell', body: '\nhello **@Bob**\nsecond' },
+    { square: 'SQUARE', actor: 'Cara', recipient: 'Bob', route: 'reply', act: 'act/8', preview: 'hello @Bob', description: 'Cara answered you', body: 'hello @Bob' },
   ]);
   assert.equal(pendingCardDetails([membership([])]), undefined);
 
   const message = { customType: 'square', content: 'model text', details };
   const card = renderSquareCard(message, { expanded: false, outputPad: 1 }, theme);
-  assert.deepEqual(card.render(80), [' <■> Alice rang the bell · everyone’s attention< · SQUARE +1>']);
+  assert.deepEqual(card.render(80), [' <■> Alice rang the bell< · SQUARE · Bob +1>', '   <hello @Bob>']);
   // Narrow terminals truncate instead of overflowing the viewport.
-  const [narrow] = card.render(20);
-  assert.match(narrow, /…$/);
-  assert.ok(Array.from(narrow.replace(/<■>/, 'x')).reduce((n, c) => n + (c.charCodeAt(0) < 0x80 ? 1 : 2), 0) <= 20);
+  const narrow = card.render(14);
+  assert.match(narrow[0], /…$/);
+  for (const line of narrow) {
+    // The fake theme wraps styled spans in <…>; only the text counts toward width.
+    assert.ok(Array.from(line.replace(/<■>/, 'x').replace(/[<>]/g, '')).reduce((n, c) => n + (c.charCodeAt(0) < 0x80 ? 1 : 2), 0) <= 14);
+  }
   const expanded = renderSquareCard(message, { expanded: true, outputPad: 1 }, theme).render(100).join('\n');
-  assert.match(expanded, /Alice rang the bell/);
-  assert.match(expanded, /Cara answered you/);
+  assert.match(expanded, /<●> Alice rang the bell<  SQUARE · Bob · act\/7>/);
+  assert.match(expanded, /Cara answered you<  SQUARE · Bob · act\/8>/);
   assert.match(expanded, /hello @Bob/);
-  assert.doesNotMatch(expanded, /model text/);
+  assert.doesNotMatch(expanded, /model text|square-activity|\*\*/);
   // Old messages and joining context retain Pi's default renderer.
-  const legacy = { ...message, details: { items: details.items } };
+  const legacy = { ...message, details: { items: [{ square: 'SQUARE', description: 'old' }], fullText: 'old' } };
   assert.equal(renderSquareCard(legacy, { expanded: true }, theme), undefined);
   assert.equal(renderSquareCard({ ...message, details: undefined }, { expanded: false }, theme), undefined);
 });
@@ -521,10 +524,12 @@ test('Pi expansion retains clipped and omitted bodies and wraps wide text withou
     })),
   }];
   const content = renderPiInbox(inbox);
-  assert.match(content, /notifications omitted/);
-  assert.doesNotMatch(content, /END_FULL_TEXT/);
+  assert.match(content, /… \d+ more — catch up to read them/);
+  assert.ok(content.length <= 1200);
+  assert.doesNotMatch(content, /END_FULL_TEXT|square --|catch --/);
   const details = pendingCardDetails(inbox);
   for (const note of inbox[0].notifications) assert.ok(details.fullText.includes(note.body));
+  assert.deepEqual(details.items.map(item => item.body), inbox[0].notifications.map(note => note.body));
   const card = renderSquareCard({ content, details }, { expanded: true, outputPad: 1 }, {});
   for (const width of [24, 80]) {
     const lines = card.render(width);
@@ -681,8 +686,7 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       await waitUntil(() => sent.length === 1, 'Pi did not deliver after the contended boundary lock released');
       assert.match(sent[0].message.content, /hello @Bob/);
       assert.equal(sent[0].message.display, true, 'the human sees one collapsible card instead of a separate notify');
-      assert.deepEqual(sent[0].message.details.items, [{ square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'mention', preview: 'hello @Bob', description: 'Alice spoke your name (Bob)' }]);
-      assert.match(sent[0].message.details.fullText, /hello @Bob/);
+      assert.deepEqual(sent[0].message.details.items, [{ square: 'SQUARE', actor: 'Alice', recipient: 'Bob', route: 'mention', act: 'act/2', preview: 'hello @Bob', description: 'Alice spoke your name', body: 'hello @Bob' }]);
       assert.deepEqual(notified, [], 'the card replaces the transient notify');
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
@@ -1119,10 +1123,10 @@ test('Pi presents a clipped body without marking it seen after it lands', async 
       await waitUntil(() => sent.length === 1, 'Pi did not present clipped activity');
       assert.match(sent[0].message.content, /x{195}…/);
       assert.doesNotMatch(sent[0].message.content, /FULL_BODY_TAIL/);
-      assert.ok(sent[0].message.details.fullText.includes(body));
+      assert.equal(sent[0].message.details.items[0].body, body);
       const expanded = renderSquareCard(sent[0].message, { expanded: true }, {}).render(40).join('\n');
       assert.match(expanded, /FULL_BODY_TAIL/);
-      assert.doesNotMatch(expanded, /clipped — read it all/);
+      assert.doesNotMatch(expanded, /clipped/);
       assert.equal(await hasPresentedForOwner('pi-preview-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
       await piMessageEnd(handlers, sent[0].message.content);

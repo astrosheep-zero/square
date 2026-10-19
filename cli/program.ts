@@ -12,11 +12,14 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   if (!isSquareError(error)) throw error;
   const detail = (error as ApplicationError).operation;
   const squarePath = context?.squarePath;
-  const recovery = context === undefined || squarePath === undefined ? undefined
+  const recovery = error.facts?.reason === 'migration_required' || context === undefined || squarePath === undefined ? undefined
     : await applicationFor({ ...context, name: detail?.participant ?? context.name }).recovery().catch(() => undefined);
   const name = detail?.participant ?? recovery?.data.participant ?? context?.name;
   const existing = [refusalText(error)];
-  if (squarePath !== undefined && name !== undefined && error.code === 'already_joined') {
+  if (error.facts?.reason === 'migration_required') {
+    if (error.facts.ledgerRoot !== undefined) existing.push('square ledger migrate', 'square ledger verify');
+    else if (squarePath !== undefined) existing.push(`${commandPrefix(squarePath)} migrate`);
+  } else if (squarePath !== undefined && name !== undefined && error.code === 'already_joined') {
     existing.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);
     existing.push(...takeoverRecoveryLines(squarePath, name));

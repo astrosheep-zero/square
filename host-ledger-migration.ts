@@ -7,7 +7,7 @@ import { withFileLock } from './file-lock.js';
 import { hostLedgerRoot } from './host-ledger-root.js';
 import {
   LEDGER_FILENAME, initializeLedger, insertLedgerRecord, ledgerRecordColumns,
-  setLedgerRevisions, upgradeLedger, validateLedger, verifyLedger, inspectLedgerIdentity, type HostLedgerFormat,
+  setLedgerRevisions, upgradeLedger, validateLedger, verifyLedger, inspectLedgerIdentity, migrationRequired, type HostLedgerFormat,
 } from './host-ledger-sqlite.js';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 
@@ -38,10 +38,6 @@ async function exists(file: string): Promise<boolean> {
   try { await fs.lstat(file); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
-function migrationGuidance(root: string, file?: string): string {
-  const name = file ?? path.join(root, LEDGER_FILENAME);
-  return `Host ledger at ${root} has a supported older format (${name}).\nStop agent sessions and MCP services using Square with this ledger; keep them stopped until migration and verification succeed; then start them with the updated Square version.\nsquare ledger migrate\nsquare ledger verify`;
-}
 function verificationFailure(root: string, file?: string, format?: HostLedgerFormat): Error {
   const name = file ?? path.join(root, LEDGER_FILENAME);
   const detail = format === 'unsupported'
@@ -68,7 +64,7 @@ async function verifyDatabase(file: string, root: string, signal?: AbortSignal):
       format = inspectLedgerIdentity(db);
       db.close(); db = undefined;
     } catch { db?.close(); db = undefined; }
-    if (format === 'old-sqlite') throw new Error(migrationGuidance(root, file));
+    if (format === 'old-sqlite') throw migrationRequired(root);
     throw verificationFailure(root, file, format);
   } finally { db?.close(); }
 }

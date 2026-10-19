@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { Text } from '@earendil-works/pi-tui';
+import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
 import { createSquareApplication } from '../../dist/square-application.js';
@@ -9,6 +9,7 @@ import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/bo
 import { automaticSessionEnd, automaticSessionStart, operationEnv } from '../../dist/automatic-session.js';
 import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
+import { formatActivityId } from '../../dist/square-core.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
@@ -36,15 +37,17 @@ function framePiMessage(content) {
   return `\n${content.replace(/^\n+/, '').replace(/\n+$/, '')}\n`;
 }
 
-/** Renderer-only summary and full text; Pi never sends `details` to the model. */
+/** Renderer-only card facts for Pi and Paseo; Pi never sends `details` to the model. */
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
     square: path.basename(membership.squarePath, '.square'),
     actor: note.actor,
     recipient: membership.name,
     route: note.route,
+    act: formatActivityId(note.actIndex),
     preview: previewAttentionBody(note.body),
-    description: renderAttentionDescription({ actor: note.actor, recipient: membership.name, route: note.route }),
+    description: renderAttentionDescription({ actor: note.actor, route: note.route }),
+    body: note.body,
   })));
   if (items.length === 0) return undefined;
   const fullText = pending.flatMap((membership) => membership.notifications.map((note) => renderAttentionFull({
@@ -73,31 +76,67 @@ function fitColumns(text, columns) {
   return `${out}…`;
 }
 
+const fg = (theme, color, text) => theme.fg?.(color, text) ?? text;
+const style = (theme, name) => (text) => theme[name]?.(text) ?? text;
+
+function markdownTheme(theme) {
+  const color = (name) => (text) => fg(theme, name, text);
+  return {
+    heading: color('mdHeading'), link: color('mdLink'), linkUrl: color('mdLinkUrl'), code: color('mdCode'),
+    codeBlock: color('mdCodeBlock'), codeBlockBorder: color('mdCodeBlockBorder'), quote: color('mdQuote'),
+    quoteBorder: color('mdQuoteBorder'), hr: color('mdHr'), listBullet: color('mdListBullet'),
+    bold: style(theme, 'bold'), italic: style(theme, 'italic'), underline: style(theme, 'underline'),
+    strikethrough: style(theme, 'strikethrough'),
+  };
+}
+
+/** One styled line that never exceeds the width; truncated lines stay unstyled so escapes are never cut. */
+function fitLine(parts, width) {
+  const plain = parts.map(([text]) => text).join('');
+  return widthOf(plain) <= width ? parts.map(([text, paint]) => paint(text)).join('') : fitColumns(plain, width);
+}
+
 /**
- * Collapsed: one line naming who reached you and where. Expanded: the complete
- * notification text from renderer details, wrapped by Pi's terminal component.
+ * Collapsed: who reached you and where, then the first line of what they said.
+ * Expanded: each activity as a heading line and its Markdown body; the model's
+ * framing and continuation hints are not for human eyes.
  */
 export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
-  if (expanded) {
-    return typeof message.details?.fullText === 'string'
-      ? new Text(message.details.fullText, outputPad, 0)
-      : undefined;
-  }
   const items = message.details?.items;
-  if (!Array.isArray(items) || items.length === 0) return undefined;
-  const [first] = items;
-  const tail = ` · ${first.square}${items.length > 1 ? ` +${items.length - 1}` : ''}`;
-  return {
-    invalidate() {},
-    render(width) {
-      const room = Math.max(1, width - outputPad * 2 - 2);
-      // Style only an untruncated line, so escape codes never count toward or get cut by the width.
-      const line = widthOf(first.description + tail) <= room
-        ? `${first.description}${theme.fg('dim', tail)}`
-        : fitColumns(first.description + tail, room);
-      return [`${' '.repeat(outputPad)}${theme.fg('customMessageLabel', '■')} ${line}`];
-    },
-  };
+  if (!Array.isArray(items) || items.length === 0 || items.some((item) => typeof item.body !== 'string')) return undefined;
+  const pad = ' '.repeat(outputPad);
+  const dim = (text) => fg(theme, 'dim', text);
+  if (!expanded) {
+    const [first] = items;
+    const more = items.length > 1 ? ` +${items.length - 1}` : '';
+    // A glance, not a render: drop the commonest inline markers so the line reads as speech.
+    const opening = (first.body.split('\n').find((line) => line.trim() !== '') ?? '')
+      .trim().replace(/^(#{1,6}|>|[-*+])\s+/, '').replace(/\*\*|__|`/g, '');
+    return {
+      invalidate() {},
+      render(width) {
+        const room = Math.max(1, width - outputPad * 2 - 2);
+        return [
+          `${pad}${fg(theme, 'customMessageLabel', '■')} ${fitLine([[first.description, (t) => t], [` · ${first.square} · ${first.recipient}${more}`, dim]], room)}`,
+          ...(opening ? [`${pad}  ${fitLine([[opening, dim]], room)}`] : []),
+        ];
+      },
+    };
+  }
+  const card = new Container();
+  for (const [index, item] of items.entries()) {
+    if (index > 0) card.addChild(new Spacer(1));
+    card.addChild({
+      invalidate() {},
+      render(width) {
+        const room = Math.max(1, width - outputPad * 2 - 2);
+        return [`${pad}${fg(theme, 'customMessageLabel', '●')} ${fitLine([[item.description, (t) => t], [`  ${item.square} · ${item.recipient} · ${item.act}`, dim]], room)}`];
+      },
+    });
+    card.addChild(new Spacer(1));
+    card.addChild(new Markdown(item.body, outputPad + 2, 0, markdownTheme(theme)));
+  }
+  return card;
 }
 
 export default function squarePiExtension(pi) {

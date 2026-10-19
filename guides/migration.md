@@ -6,7 +6,8 @@ sparse receipts, catch leases, ordered routes and the small configuration
 facts — in one in-place database.
 
 Existing artifacts are **not** converted automatically. A normal read of a
-version 1 artifact refuses with the exact command to run:
+version 1 artifact refuses with a descriptive offline-migration requirement.
+The CLI adds the concrete recovery command; native tools retain the description:
 
 ```sh
 square --location /path/to/SQUARE.square migrate
