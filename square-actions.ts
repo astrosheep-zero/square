@@ -1,9 +1,9 @@
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, expressionReach, resolveKnownName, validateDoneBody } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
 import { deliverPending } from './delivery-operations.js';
-import type { Activity, CatchOptions, ExpressOptions, ExpressResult, ExpressionObservation, ListenerChangeResult, OperationControl, OwnershipFenceOptions } from './square-facade.js';
+import type { Activity, ActivityResult, CatchOptions, ExpressOptions, ExpressResult, ExpressionObservation, OperationControl, OwnershipFenceOptions, SquareObservation } from './square-facade.js';
 import { decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { inSquareCount } from './runtime.js';
 import { claimSessionParticipant, claimSessionTakeover, presenceEpoch, releaseSessionParticipantClaim, readParticipantOwner } from './registry.js';
@@ -38,26 +38,30 @@ export async function catchUp(square: OperationContext, name: string, options: C
   return selected;
 }
 
-export async function join(square: OperationContext, name: string, control?: OperationControl, admission: { readonly requireKnown?: boolean } = {}): Promise<{ readonly name: string; readonly activity: Activity | null; readonly participantCount: number; readonly reconnected: boolean }> {
+type LandingContext = Pick<SquareObservation, 'standingCount' | 'held' | 'now'>;
+
+export async function join(square: OperationContext, name: string, control?: OperationControl, admission: { readonly requireKnown?: boolean } = {}): Promise<{ readonly name: string; readonly activity: Activity | null; readonly participantCount: number; readonly reconnected: boolean; readonly observation: LandingContext }> {
   throwIfAborted(control);
   validateName(name);
   const hostLedger = square.hostLedger;
   const preview = (await square.artifact.read((facts) => {
     // Express may reenter a known participant, but must never create a new name.
     const selected = admission.requireKnown ? resolveKnownName(facts, name) : name;
+    const now = square.clock();
     return {
-      ...decideJoin(facts, selected, square.clock()),
+      ...decideJoin(facts, selected, now),
       participantCount: facts.roster().filter((p) => p.joined || p.done).length,
+      observation: { standingCount: inSquareCount(facts), held: facts.hold().active, now },
     };
   }, control?.signal)).value;
   name = preview.joinedName;
   if (preview.joinAct === undefined) {
-    if (hostLedger === undefined) return { name: preview.joinedName, activity: null, participantCount: preview.participantCount, reconnected: false };
+    if (hostLedger === undefined) return { name: preview.joinedName, activity: null, participantCount: preview.participantCount, reconnected: false, observation: preview.observation };
     const identity = processIdentity(square.env ?? process.env);
     const owner = await readParticipantOwner(square.location!, preview.joinedName, hostLedger);
     if (owner?.session === identity.session) return {
       name: preview.joinedName, activity: null, participantCount: preview.participantCount,
-      reconnected: identity.channel !== 'unknown',
+      reconnected: identity.channel !== 'unknown', observation: preview.observation,
     };
     // Missing or foreign owner must pass CAS, not become a silent reconnect.
   }
@@ -67,7 +71,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
     ownershipClaim = await claimSessionParticipant(square.location!, name, hostLedger, square.env ?? process.env, control?.signal);
     epoch = ownershipClaim?.epoch;
   }
-  let committed: { name: string; stored: StoredAct | null; participantCount: number };
+  let committed: { name: string; stored: StoredAct | null; participantCount: number; observation: LandingContext };
   try {
     const now = square.clock(), route = await identityRouteDraft(square, name);
     throwIfAborted(control);
@@ -81,6 +85,7 @@ export async function join(square: OperationContext, name: string, control?: Ope
       return {
         name: decision.joinedName, stored,
         participantCount: facts.roster().filter((p) => p.joined || p.done).length,
+        observation: { standingCount: inSquareCount(facts), held: facts.hold().active, now },
       };
     }, control?.signal)).value;
   } catch (error) {
@@ -90,12 +95,12 @@ export async function join(square: OperationContext, name: string, control?: Ope
   await publishCommittedIdentity(square, committed.name, epoch);
   return {
     name: committed.name, activity: committed.stored === null ? null : toPublicActivity(committed.stored),
-    participantCount: committed.participantCount, reconnected: false,
+    participantCount: committed.participantCount, reconnected: false, observation: committed.observation,
   };
 }
 
 /** Takeover holds the host CAS fence across the single done+join artifact transaction. */
-export async function takeover(square: OperationContext, name: string, _oldSessionIds: readonly string[] = [], control?: OperationControl): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly participantCount: number; readonly epoch?: number }> {
+export async function takeover(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly activities: readonly Activity[]; readonly participantCount: number; readonly epoch?: number; readonly observation: LandingContext }> {
   throwIfAborted(control);
   validateName(name);
   const hostLedger = square.hostLedger;
@@ -112,6 +117,7 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
       return {
         name: joinedName, stored: [storedDone, storedJoin],
         participantCount: facts.roster().filter((p) => p.joined || p.done).length,
+        observation: { standingCount: inSquareCount(facts), held: facts.hold().active, now },
       };
     }, control?.signal)).value;
   };
@@ -129,11 +135,11 @@ export async function takeover(square: OperationContext, name: string, _oldSessi
       return committed;
     }, control?.signal);
     if (outcome.status === 'busy') throw new SquareError('already_joined', `${participantIdentity(name)} already stands here — another session holds the name`);
-    return { name: outcome.result.name, activities: outcome.result.stored.map(toPublicActivity), participantCount: outcome.result.participantCount, epoch: outcome.epoch };
+    return { name: outcome.result.name, activities: outcome.result.stored.map(toPublicActivity), participantCount: outcome.result.participantCount, epoch: outcome.epoch, observation: outcome.result.observation };
   }
   const committed = await commitLifecycle();
   await publishCommittedIdentity(square, committed.name);
-  return { name: committed.name, activities: committed.stored.map(toPublicActivity), participantCount: committed.participantCount };
+  return { name: committed.name, activities: committed.stored.map(toPublicActivity), participantCount: committed.participantCount, observation: committed.observation };
 }
 
 export async function implicitJoin(square: OperationContext, name: string, control?: OperationControl): Promise<{ readonly name: string; readonly state: 'joined' | 'active' | 'done'; readonly activity: Activity | null }> {
@@ -160,7 +166,7 @@ function rejectUnsentActivity<T>(operation: () => T): T {
   try { return operation(); }
   catch (error) { if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true }; throw error; }
 }
-export interface ExpressCommittedResult extends ExpressResult { readonly observation: ExpressionObservation; }
+export interface ExpressCommittedResult extends Omit<ExpressResult, 'waited' | 'observation'> { readonly observation: ExpressionObservation; }
 export async function express(square: OperationContext, name: string, body: string, options: ExpressOptions = {}, control?: OperationControl): Promise<ExpressCommittedResult> {
   throwIfAborted(control);
   if (!await assertLiveOwner(square, name)) throw new SquareError('already_joined', `${participantIdentity(name)} already stands here — another session holds the name`, { activityUnsent: true });
@@ -169,7 +175,10 @@ export async function express(square: OperationContext, name: string, body: stri
   const reply = rejectUnsentActivity(() => {
     try { return options.reply === undefined ? undefined : parseRequiredActivityId(options.reply); }
     catch (error) {
-      if (isSquareError(error)) error.facts = { ...error.facts, reason: 'invalid_reply', activityId: options.reply };
+      if (isSquareError(error)) error.facts = {
+        ...error.facts, reason: 'invalid_reply', activityId: options.reply,
+        hasReachWithoutReply: expressionReach({ ...options, body }).hasReachWithoutReply,
+      };
       throw error;
     }
   });
@@ -196,6 +205,7 @@ export async function express(square: OperationContext, name: string, body: stri
         standingCount: inSquareCount(facts), held: facts.hold().active, now,
         ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
       },
+      ...(decision.unmatchedMentions === undefined ? {} : { unmatchedMentions: decision.unmatchedMentions }),
       ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }),
     };
   }, control?.signal)).value;
@@ -204,30 +214,36 @@ export async function express(square: OperationContext, name: string, body: stri
     ? await deliverPending({ artifact: square.artifact, hostLedger: square.hostLedger, transport: square.wakeTransport, location: square.location, activity: committed.stored.index, now })
       .catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }))
     : { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
-  return {
-    activity: toPublicActivity(committed.stored), delivery, observation: committed.observation,
-    ...(committed.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: committed.replyAuthorNotHere }),
-  };
+  const { stored, observation, ...metadata } = committed;
+  return { activity: toPublicActivity(stored), delivery, observation, ...metadata };
 }
 
-async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore', actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> {
+export interface ListenerCommittedResult {
+  readonly activity: Activity | null;
+  readonly observation: LandingContext;
+}
+async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore', actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> {
   throwIfAborted(control);
   const now = square.clock();
-  const stored = (await square.artifact.transact((facts) => {
+  const committed = (await square.artifact.transact((facts) => {
     const act = verb === 'listen' ? coreListen(facts, actor, target, now) : coreIgnore(facts, actor, target, now);
-    return act === undefined ? null : facts.land(act);
+    const stored = act === undefined ? null : facts.land(act);
+    return { stored, observation: { standingCount: inSquareCount(facts), held: facts.hold().active, now } };
   }, control?.signal)).value;
-  return { activity: stored === null ? null : toPublicActivity(stored) };
+  return { activity: committed.stored === null ? null : toPublicActivity(committed.stored), observation: committed.observation };
 }
-export function listen(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> { return landListenerChange(square, 'listen', actor, target, control); }
-export function ignore(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerChangeResult> { return landListenerChange(square, 'ignore', actor, target, control); }
+export function listen(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> { return landListenerChange(square, 'listen', actor, target, control); }
+export function ignore(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> { return landListenerChange(square, 'ignore', actor, target, control); }
 export async function listening(square: OperationContext, actor: string, control?: OperationControl): Promise<readonly string[]> { return (await square.artifact.read((facts) => coreListening(facts, actor), control?.signal)).value; }
 
-async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> {
+export interface LifecycleCommittedResult extends ActivityResult {
+  readonly observation: LandingContext & { readonly activity: StoredAct };
+}
+async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resume', actor: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<LifecycleCommittedResult> {
   if (verb === 'done') validateDoneBody(body);
   const hostLedger = verb === 'done' ? square.hostLedger : undefined;
   const session = hostLedger === undefined ? undefined : processIdentity(square.env ?? process.env).session;
-  const commitAndCleanup = async (): Promise<StoredAct> => {
+  const commitAndCleanup = async (): Promise<LifecycleCommittedResult> => {
     // Owner admission, commit and route/presence cleanup share the host claim critical section.
     if (verb === 'done' && !await assertLiveOwner(square, actor, fence.expectedEpoch)) throw new SquareError('already_done', `${participantIdentity(actor)} already stands here — another session holds the name`);
     const owners = hostLedger === undefined ? [] : (await hostLedger.listPresence({ location: square.location!, participant: actor })).filter((row) => row.session === session);
@@ -235,17 +251,18 @@ async function landCore(square: OperationContext, verb: 'done' | 'hold' | 'resum
     const stored = (await square.artifact.transact((facts) => {
       const result = facts.land(verb === 'done' ? coreDone(facts, actor, body, now) : verb === 'hold' ? coreHold(facts, actor, body, now) : coreResume(facts, actor, now));
       if (session !== undefined) dropEndedSessionWakeRoutes(facts, square.location!, session, { expectedEpoch: fence.expectedEpoch, force: true, participant: actor });
-      return result;
+      return { activity: toPublicActivity(result), observation: {
+        activity: result, standingCount: inSquareCount(facts), held: facts.hold().active, now,
+      } };
     }, control?.signal)).value;
     for (const row of owners) await hostLedger!.removePresenceIfUnchanged(row).catch((error) => {
       process.stderr.write(`! host presence cleanup degraded: ${error instanceof Error ? error.message : String(error)}\n`);
     });
     return stored;
   };
-  const stored = hostLedger === undefined ? await commitAndCleanup() : await hostLedger.withClaimLock(commitAndCleanup, control?.signal);
-  return { activity: toPublicActivity(stored) };
+  return hostLedger === undefined ? commitAndCleanup() : hostLedger.withClaimLock(commitAndCleanup, control?.signal);
 }
-export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'done', name, body, fence, control); }
+export function done(square: OperationContext, name: string, body = '', fence: OwnershipFenceOptions = {}, control?: OperationControl): Promise<LifecycleCommittedResult> { return landCore(square, 'done', name, body, fence, control); }
 
 function liveClaimedParticipants(rows: readonly import('./host-ledger.js').PresenceRecord[], sessionId: string): ReadonlySet<string> {
   const claimed = new Set<string>(), foreign = new Set<string>();
@@ -257,7 +274,7 @@ async function readLiveClaimedParticipants(hostLedger: HostLedgerPort, location:
   try { return liveClaimedParticipants(await hostLedger.listPresence({ location, now }), sessionId); } catch { return undefined; }
 }
 
-export async function endOwnedSession(square: OperationContext, name: string, sessionId: string, expectedEpoch?: number): Promise<ExpressResult | null> {
+export async function endOwnedSession(square: OperationContext, name: string, sessionId: string, expectedEpoch?: number): Promise<ActivityResult | null> {
   const { location, hostLedger } = square;
   const run = async () => {
     const now = square.clock();
@@ -302,5 +319,5 @@ export async function retireEndedSessionRoutes(square: OperationContext, session
     await square.artifact.transact((facts) => { dropEndedSessionWakeRoutes(facts, location, sessionId, { liveParticipants, force: false }); });
   });
 }
-export function hold(square: OperationContext, name: string, reason = '', control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'hold', name, reason, {}, control); }
-export function resume(square: OperationContext, name: string, control?: OperationControl): Promise<ExpressResult> { return landCore(square, 'resume', name, '', {}, control); }
+export function hold(square: OperationContext, name: string, reason = '', control?: OperationControl): Promise<LifecycleCommittedResult> { return landCore(square, 'hold', name, reason, {}, control); }
+export function resume(square: OperationContext, name: string, control?: OperationControl): Promise<LifecycleCommittedResult> { return landCore(square, 'resume', name, '', {}, control); }

@@ -14,12 +14,14 @@ import { observeClaudeDelivery } from '../dist/claude-delivery.js';
 import { writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { claimSessionTakeover } from '../dist/registry.js';
 import { processActNotificationsOnce } from '../dist/notifications.js';
 import { closeOpenSquare, openSquare } from '../dist/open-square.js';
+import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { sessionInbox } from '../dist/inbox.js';
 
 const supported = { skip: process.platform !== 'darwin' };
 async function fixture(t, body = 'hello @Bob') {
@@ -151,6 +153,8 @@ test('manual membership without PUBLIC receives bounded body, admission is not p
   assert.equal((await dispatch(f)).unknown, 1);
   const text = await payload(f);
   assert.match(text, /hello @Bob/);
+  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''),
+    renderPendingAtBoundary(await sessionInbox('claude-test', f.env)));
   assert.doesNotMatch(text, /not for Bob/);
   assert.equal(await seen(f), undefined);
   assert.equal((await evidence(f)).find((row) => row.kind === 'wake').outcome, 'unknown');
@@ -168,8 +172,10 @@ test('held or timed-out receive remains unknown; late stored clipped payload clo
   const f = await fixture(t, 'x'.repeat(300));
   await dispatch(f);
   const text = await payload(f);
-  assert.match(text, /· clipped — catch it to read the rest/);
-  assert.match(text, /· Bob · act\/2/);
+  assert.match(text, /truncated="100 more chars">\nAlice spoke your name\./);
+  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''),
+    renderPendingAtBoundary(await sessionInbox('claude-test', f.env)));
+  assert.match(text, /as="Bob" id="act\/2"/);
   assert.doesNotMatch(text, /square --|catch --|square_catch/);
   assert.equal((await dispatch(f)).attempted, 0, 'ambiguous sends are not replayed');
   // No receive success: this is the held-release/late append boundary.

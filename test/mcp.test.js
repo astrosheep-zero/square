@@ -9,9 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
-import { createSquareApplication } from '../dist/square-application.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 import { legacyFixtureState, writeV1Artifact } from './fixtures/v1-artifact.js';
 
@@ -23,7 +22,7 @@ async function fixture(participant = 'rei') {
   const square = await Square.build({ path: squarePath, markdown: 'MCP scene' });
   await square.close();
   const env = { ...process.env, SQUARE_REGISTRY: path.join(cwd, 'registry.ndjsonl'), SQUARE_PARTICIPANT_NAME: participant, CODEX_THREAD_ID: `mcp-${participant}` };
-  return { cwd, squarePath, env, server: createSquareMcpServer({ cwd, env, squarePath, participant }) };
+  return { cwd, squarePath, env, server: createSquareMcpServer({ cwd, env, path: squarePath, participant }) };
 }
 
 async function connectedClient(server) {
@@ -73,7 +72,7 @@ test('MCP migration refusals describe the required action without CLI syntax', a
     }
     const before = fs.readFileSync(squarePath);
     const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: ledgerRoot, CODEX_THREAD_ID: 'migration-refusal' };
-    const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, squarePath, participant: 'rei' }));
+    const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, participant: 'rei' }));
     try {
       const result = await client.callTool({ name: source === 'artifact' ? 'status' : 'join', arguments: {} });
       assert.equal(result.isError, true);
@@ -93,7 +92,7 @@ test('one MCP server accepts per-call participants without a configured default'
   delete baseEnv.SQUARE_PARTICIPANT_NAME;
   const beforeProcessEnv = { ...process.env };
   const beforeBaseEnv = { ...baseEnv };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, squarePath, env: baseEnv }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv }));
   try {
     const tools = (await client.listTools()).tools;
     for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'listening', 'hold', 'resume', 'done']) {
@@ -195,8 +194,15 @@ test('MCP shares location and noMention parameters with native tools', async (t)
     assert.equal(joined.structuredContent.kind, 'joined');
     const history = await client.callTool({ name: 'history', arguments: { location: 'other.square' } });
     assert.equal(history.structuredContent.activities.some(a => a.kind === 'say'), false);
+    const directed = await client.callTool({ name: 'express', arguments: { body: '@Eve', noMention: true, mentions: ['bob'], reply: bare.structuredContent.activity.id, force: true } });
+    assert.deepEqual(directed.structuredContent.activity.mentions, ['bob']);
+    assert.equal(directed.structuredContent.activity.reply, bare.structuredContent.activity.id);
+    assert.equal(directed.structuredContent.unmatchedMentions, undefined);
+    const bell = await client.callTool({ name: 'express', arguments: { body: '@bob @Eve', reach: 'bell', force: true } });
+    assert.deepEqual(bell.structuredContent.activity.mentions, []);
+    assert.equal(bell.structuredContent.unmatchedMentions, undefined);
     const original = await client.callTool({ name: 'history', arguments: {} });
-    assert.equal(original.structuredContent.activities.at(-1).body, 'literal @bob');
+    assert.equal(original.structuredContent.activities.at(-1).body, '@bob @Eve');
   } finally { await close(); }
 });
 
@@ -218,7 +224,8 @@ test('MCP cancellation reaches an in-progress application operation', async () =
 
 test('stdio disconnect aborts held express and idle catch without later mutation or consumption', async (t) => {
   const { cwd, squarePath, env } = await fixture('disconnected');
-  const app = createSquareApplication({ cwd, squarePath, env, participant: 'disconnected' });
+  const app = await Square.at({ cwd, path: squarePath, env, participant: 'disconnected' });
+  t.after(() => app.close());
   const child = spawn(process.execPath, [path.resolve('dist/square.js'), 'mcp-server'], {
     cwd, env: { ...env, SQUARE_LOCATION: squarePath }, stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -257,13 +264,14 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   const disconnected = once(child, 'exit', { signal: AbortSignal.timeout(3000) });
   child.stdin.end();
   assert.deepEqual(await disconnected, [0, null], stderr);
-  await app.resume();
-  assert.equal((await app.history()).data.activities.some((activity) => activity.body === 'orphan expression'), false);
-  const writer = createSquareApplication({ cwd, squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' }, participant: 'writer' });
-  await writer.join();
-  const expressed = await writer.express('after disconnect', { force: true, mentions: ['disconnected'] });
-  const caught = await app.catch();
-  assert.ok(caught.data.activities.some((activity) => activity.id === expressed.data.activity.id));
+  await (await app.participant()).resume();
+  assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
+  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' } });
+  t.after(() => writer.close());
+  const { participant } = await writer.join('writer');
+  const expressed = await participant.express('after disconnect', { force: true, mentions: ['disconnected'] });
+  const caught = await (await app.participant()).catch();
+  assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
 });
 
 test('square mcp-server starts without a fixed location and speaks newline-delimited JSON-RPC', async () => {

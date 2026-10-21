@@ -1,20 +1,20 @@
 import { helpRequest } from '../help.js';
 import { isSquareError } from '../model.js';
-import type { ApplicationError } from '../square-facade.js';
+import type { OperationError } from '../square-facade.js';
 import {
   commandPrefix, formatRefusal, refusalText, joinRecoveryCommand, participantIdentity,
   participantsRecoveryCommand, takeoverRecoveryLines,
 } from '../presentation.js';
-import { type CommandContext, applicationFor, defaultContext, parseGlobalArgs } from './context.js';
+import { type CommandContext, withSquare, defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
 async function handleSquareError(error: unknown, context?: CommandContext): Promise<never> {
   if (!isSquareError(error)) throw error;
-  const detail = (error as ApplicationError).operation;
+  const detail = (error as OperationError).operation;
   const squarePath = context?.squarePath;
   const recovery = error.facts?.reason === 'migration_required' || context === undefined || squarePath === undefined ? undefined
-    : await applicationFor({ ...context, name: detail?.participant ?? context.name }).recovery().catch(() => undefined);
-  const name = detail?.participant ?? recovery?.data.participant ?? context?.name;
+    : await withSquare({ ...context, name: detail?.participant ?? context.name }, (square) => square.recovery(detail?.participant ?? context.name)).catch(() => undefined);
+  const name = detail?.participant ?? recovery?.participant ?? context?.name;
   const existing = [refusalText(error)];
   if (error.facts?.reason === 'migration_required') {
     if (error.facts.ledgerRoot !== undefined) existing.push('square ledger migrate', 'square ledger verify');
@@ -36,12 +36,12 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   if (error.facts?.reason === 'invalid_done_body') existing.push('square done --help');
   if (squarePath === undefined) process.stderr.write(`${existing.join('\n')}\n`);
   else process.stderr.write(formatRefusal(squarePath, existing, {
-    participantCount: recovery?.data.standingCount, held: recovery?.data.held,
+    participantCount: recovery?.standingCount, held: recovery?.held,
   }));
   process.exit(error.code === 'not_found' ? 1 : 2);
 }
 
-/** Parse global flags, select an executable adapter, and leave operations to the application. */
+/** Parse global flags, select an adapter, and execute through Square/Participant. */
 export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
   let context: CommandContext | undefined;
   try {

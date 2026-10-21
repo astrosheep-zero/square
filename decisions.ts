@@ -5,10 +5,10 @@ import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
 import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
-import { scanMentionCandidates, resolveNameAt } from './mention-parse.js';
+import { scanMentionCandidates, resolveMention } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
-import type { ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
+import type { ExpressOptions, ExpressResult, ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
 export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
@@ -56,7 +56,7 @@ function requireStanding(current: ParticipantFact): void {
   if (!current.joined) throw new SquareError('not_joined', `${participantIdentity(current.name)} has not joined this square`);
 }
 export type ActDecision =
-  | { type: 'sent'; act: TimedAct; replyAuthorNotHere?: string }
+  | ({ type: 'sent'; act: TimedAct } & Pick<ExpressResult, 'replyAuthorNotHere' | 'unmatchedMentions'>)
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped'; count: number; hardCap: number }
   | { type: 'throttled'; delayMs: number }
@@ -92,6 +92,12 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
+export function expressionReach(input: { body: string } & Pick<ExpressOptions, 'reach' | 'mentions' | 'noMention'>) {
+  const bodyMentions = input.reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(input.body);
+  const hasReachWithoutReply = input.reach === 'bell' || (input.mentions?.length ?? 0) > 0 || input.noMention === true || bodyMentions.length > 0;
+  return { bodyMentions, hasReachWithoutReply };
+}
+
 export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean; requireExplicitReach?: boolean }): ActDecision {
   const { now, force, body, reach, reply } = input;
   const current = resolveStanding(facts, input.name, true);
@@ -99,6 +105,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
   if (body.trim() === '') throw activityRefusal('invalid_args', 'express body cannot be empty');
   const roster = facts.roster();
   const joinedNames = roster.filter((participant) => participant.joined).map((participant) => participant.name);
+  if (reach === 'bell' && input.mentions?.length) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: [...input.mentions] });
   const mentionNames: string[] = [];
   const addMention = (resolved: string) => {
     if (mentionNames.some((existing) => sameName(existing, resolved))) return;
@@ -111,19 +118,20 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
     if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
     addMention(resolved);
   }
-  const bodyMentions = input.noMention === true ? [] : scanMentionCandidates(body);
-  for (const candidate of bodyMentions) {
-    const resolved = resolveNameAt(body, candidate, joinedNames);
+  const { bodyMentions, hasReachWithoutReply } = expressionReach(input);
+  const unmatchedMentions: string[] = [];
+  for (const token of bodyMentions) {
+    const resolved = resolveMention(token, joinedNames);
     if (resolved !== undefined) addMention(resolved);
+    else unmatchedMentions.push(token);
   }
-  if (reach === 'bell' && mentionNames.length > 0) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: mentionNames });
-  if (input.requireExplicitReach && reach !== 'bell' && mentionNames.length === 0 && bodyMentions.length === 0 && reply === undefined && input.noMention !== true) {
+  if (input.requireExplicitReach && !hasReachWithoutReply && reply === undefined) {
     throw activityRefusal('invalid_args', 'Express needs a recipient, reply, bell, or explicit bare reach', { reason: 'explicit_reach_required' });
   }
   const header = facts.header();
   if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
     const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
-    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`, { reason: 'invalid_reply', activityId: label, activityExists: false });
+    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`, { reason: 'invalid_reply', activityId: label, activityExists: false, hasReachWithoutReply });
   }
   const replyAuthor = reply === undefined ? undefined : facts.activity(reply)?.actor;
   const replyAuthorNotHere = replyAuthor === undefined || sameName(replyAuthor, name) || facts.participant(replyAuthor)?.joined ? undefined : replyAuthor;
@@ -147,6 +155,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
   }
   return { type: 'sent', act: { kind: 'say', actor: name, at: now, body, mentions: mentionNames,
     ...(reach === undefined ? {} : { reach }), ...(reply === undefined ? {} : { reply }) },
+    ...(unmatchedMentions.length === 0 ? {} : { unmatchedMentions }),
     ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }) };
 }
 

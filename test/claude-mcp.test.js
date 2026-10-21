@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { readClaudeMcpCall } from '../dist/claude-mcp-context.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';

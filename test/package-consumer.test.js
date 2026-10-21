@@ -44,12 +44,14 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   }
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
-    import { Square, SquareError, type ActivityId, type Participant } from '@astrosheep/square';
+    import { Square, SquareError, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
     const square = Square.inMemory({ markdown: 'context' });
-    const participant: Promise<Participant> = square.join('Alice');
+    const joined: Promise<JoinResult> = square.join('Alice');
+    const participant: Promise<Participant> = joined.then(result => result.participant);
+    const history: Promise<HistoryResult> = square.history({ limit: null });
     const id: ActivityId = 'act/1';
     const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'held', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
-    void participant; void id; void codes;
+    void participant; void history; void id; void codes;
   `);
   const typecheck = run(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
     '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
@@ -61,7 +63,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { Square } from '@astrosheep/square';
     const square = Square.inMemory({ markdown: 'context' });
-    const alice = await square.join('Alice');
+    const { participant: alice } = await square.join('Alice');
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
     // Pi renderer imports must resolve from the consumer's supplied TUI peer.

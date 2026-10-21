@@ -2,7 +2,8 @@ import os from 'node:os';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
-import { createSquareApplication } from '../square-application.js';
+import { Square, squareClock } from '../square-api.js';
+import type { OperationControl } from '../square-facade.js';
 
 export interface CommandContext {
   cwd: string;
@@ -160,9 +161,18 @@ export function defaultContext(command: string, squarePath?: string, name?: stri
   return { command, cwd: process.cwd(), env: { ...process.env }, squarePath, name, homeDir: os.homedir() };
 }
 
-export function applicationFor(context: CommandContext) {
-  return createSquareApplication({ cwd: context.cwd, env: context.env, squarePath: context.squarePath, participant: context.name });
+export function squareInput(context: CommandContext) {
+  return { cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name };
 }
+
+/** Adapter lifetime only; each callback uses the actual public resource API. */
+export async function withSquare<T>(context: CommandContext, run: (square: Square) => Promise<T>, control?: OperationControl): Promise<T> {
+  const square = await Square.at(squareInput(context), control);
+  try { return await run(square); }
+  finally { await square.close(); }
+}
+
+export function now(context: CommandContext): number { return squareClock(context.env)(); }
 
 export function requireSquarePath(context: CommandContext): string {
   if (context.squarePath === undefined) fail(`✕ ${context.command} needs a square location\nsquare ls`);

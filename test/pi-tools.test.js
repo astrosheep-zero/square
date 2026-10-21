@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { SQUARE_TOOLS } from '../dist/square-tools.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 
@@ -80,6 +80,12 @@ test('Pi calls use live context, preserve environment, and return structured dat
   assert.deepEqual(directed.structuredContent.activity.mentions, ['bob']);
   const history = await call('history');
   assert.deepEqual(history.structuredContent.activities.filter(a => a.kind === 'say').map(a => a.body), ['literal @bob', 'hello']);
+  const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', force: true });
+  assert.deepEqual(unmatched.structuredContent.activity.mentions, ['bob']);
+  assert.deepEqual(unmatched.structuredContent.unmatchedMentions, ['Eve']);
+  const conflict = await call('express', { as: 'rei', body: '@bob', reach: 'bell', mentions: ['bob'], force: true });
+  assert.equal(conflict.isError, true);
+  assert.equal(conflict.structuredContent.error.facts.reason, 'bell_mention_conflict');
   assert.deepEqual({ ...process.env }, before);
 });
 

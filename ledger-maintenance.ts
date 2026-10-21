@@ -91,7 +91,7 @@ async function provenClosable(location: string, group: readonly Candidate[]): Pr
   }
 }
 
-/** Command/application entry: root selection uses the caller's captured environment. */
+/** Maintenance entry: root selection uses the caller's captured environment. */
 export function gcHostLedger(options: LedgerMaintenanceOptions & { readonly env?: NodeJS.ProcessEnv } = {}): Promise<LedgerMaintenanceReport> {
   return maintainHostLedger(hostLedgerForEnv(options.env ?? process.env), options);
 }

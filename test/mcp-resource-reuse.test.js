@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square, createSquareApplication } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { createSquareResourceOwner, openSquare, closeOpenSquare } from '../dist/open-square.js';
 
@@ -59,7 +59,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   const { cwd, squarePath, env } = await fixture('mcp');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = createSquareMcpServer({ cwd, env, squarePath });
+  const server = createSquareMcpServer({ cwd, env, path: squarePath });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
@@ -76,8 +76,9 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   // Closing the server closes the connection: a later open starts from scratch.
   await server.close();
   assert.equal(opened(), 1);
-  const fresh = createSquareApplication({ cwd, env: { ...env, SQUARE_PARTICIPANT_NAME: 'other' }, squarePath, participant: 'other' });
+  const fresh = await Square.at({ cwd, env: { ...env, SQUARE_PARTICIPANT_NAME: 'other' }, path: squarePath });
   await fresh.join();
+  await fresh.close();
   assert.equal(opened(), 2);
 });
 
@@ -85,7 +86,7 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   const { cwd, squarePath, env } = await fixture('concurrent');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = createSquareMcpServer({ cwd, env, squarePath });
+  const server = createSquareMcpServer({ cwd, env, path: squarePath });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
@@ -105,7 +106,7 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
 test('MCP shutdown waits for an idle catch before releasing the connection', async (t) => {
   const { cwd, squarePath, env } = await fixture('shutdown');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const server = createSquareMcpServer({ cwd, env, squarePath });
+  const server = createSquareMcpServer({ cwd, env, path: squarePath });
   const client = await connect(server);
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   await call('join');
@@ -119,16 +120,18 @@ test('MCP shutdown waits for an idle catch before releasing the connection', asy
   await client.close().catch(() => undefined);
 });
 
-test('a shared resource owner saves one connection open per application call', async (t) => {
+test('a shared resource owner saves one connection open per request Square', async (t) => {
   const { cwd, squarePath, env } = await fixture('measure', 'rei');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const rounds = 8;
-  const context = { cwd, squarePath, env };
+  const context = { cwd, path: squarePath, env };
   const opened = countConnections(t, squarePath);
 
   const baselineStart = Date.now();
   for (let index = 0; index < rounds; index += 1) {
-    await createSquareApplication({ ...context, participant: 'rei' }).status();
+    const square = await Square.at(context);
+    try { await square.status(); }
+    finally { await square.close(); }
   }
   const baselineMs = Date.now() - baselineStart;
   assert.equal(opened(), rounds, 'without an owner every call opens its own connection');
@@ -136,7 +139,9 @@ test('a shared resource owner saves one connection open per application call', a
   const resources = createSquareResourceOwner();
   const sharedStart = Date.now();
   for (let index = 0; index < rounds; index += 1) {
-    await createSquareApplication({ ...context, participant: 'rei', resources }).status();
+    const square = await Square.at({ ...context, resources });
+    try { await square.status(); }
+    finally { await square.close(); }
   }
   const sharedMs = Date.now() - sharedStart;
   t.after(() => resources.close());
@@ -167,7 +172,7 @@ test('a transport disconnect releases the connection even without server.close()
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
   const closed = countCloses(t, squarePath);
-  const server = createSquareMcpServer({ cwd, env, squarePath });
+  const server = createSquareMcpServer({ cwd, env, path: squarePath });
   const client = await connect(server);
   t.after(async () => { await server.close().catch(() => undefined); });
 
@@ -183,7 +188,7 @@ test('reused connections keep per-call participants and harness sessions separat
   const { cwd, squarePath, env } = await fixture('sessions');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = createSquareMcpServer({ cwd, env, squarePath });
+  const server = createSquareMcpServer({ cwd, env, path: squarePath });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args, meta) => client.callTool({ name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });

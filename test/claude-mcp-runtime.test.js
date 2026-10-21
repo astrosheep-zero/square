@@ -20,7 +20,7 @@ test('shipped Claude MCP correlates main/child calls and removes call maps', {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-mcp-runtime-')));
   console.log(`Claude MCP runtime evidence: ${root}`);
   // Preserve scratch evidence on success and failure; never touch user configuration.
-  const { Square } = await import('../dist/square-application.js');
+  const { Square } = await import('../dist/square-api.js');
   fs.mkdirSync(path.join(root, 'work'));
   const location = path.join(root, 'work/test.square');
   const square = await Square.build({ path: location, markdown: 'Local Claude MCP ownership fixture' });

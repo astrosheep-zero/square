@@ -582,6 +582,7 @@ test('producer commits artifact before a repository presence permission failure'
   await writeSquareFile(location, state);
   let committedBeforeEnsure = false;
   const ledger = {
+    claimPresence: async (record) => ({ status: 'acquired', record }),
     listPresence: async () => [],
     ensurePresence: async () => {
       const snapshot = (await readSquareSnapshot(location)).state;
@@ -591,7 +592,7 @@ test('producer commits artifact before a repository presence permission failure'
   };
   const square = await openSquare(location, { hostLedger: ledger });
   try {
-    const result = await join({ artifact: square.artifact, clock: () => 1, location, hostLedger: ledger }, 'Alice');
+    const result = await join({ artifact: square.artifact, clock: () => 1, location, hostLedger: ledger, env: { PI_SESSION_ID: 'producer-session' } }, 'Alice');
     assert.equal(result.activity?.kind, 'join');
     assert.equal(committedBeforeEnsure, true);
     assert.equal((await readSquareSnapshot(location)).state.acts.length, 1);

@@ -21,7 +21,7 @@ import { canonicalPath } from '../dist/canonical-path.js';
 import { sessionIdsFromEnvironment } from '../dist/participant-identity.js';
 import { createArtifactPort, prepareSquareBuild, writeSquareFile } from '../dist/artifact.js';
 import { done, join, takeover } from '../dist/square-actions.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { closeOpenSquare, openSquare } from '../dist/open-square.js';
 import { streamProjection, streamTailProjection } from '../dist/views.js';
 
@@ -531,39 +531,21 @@ test('invalid takeover name performs no ownership mutation', async () => {
   }
 });
 
-test('takeover of a never-joined participant refuses before any ownership claim', async () => {
+test('join takeover option admits a fresh name through the ordinary ownership claim', async () => {
   const cleanup = withRegistry();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-unknown-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-kick-fresh-'));
   try {
     const squarePath = path.join(root, 'SQUARE.square');
-    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'unknown'));
-    const base = {
-      SQUARE_REGISTRY: process.env.SQUARE_REGISTRY,
-      CLAUDE_CODE_SESSION_ID: '',
-      CODEX_THREAD_ID: '',
-      OPENCODE_SESSION_ID: '',
-      PI_SESSION_ID: '',
-      PASEO_AGENT_ID: '',
-    };
-    const kicker = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'kicker-x' } });
+    await writeSquareFile(squarePath, await prepareSquareBuild({ force: true, hardCap: null }, 'fresh'));
+    const env = { SQUARE_REGISTRY: process.env.SQUARE_REGISTRY, CODEX_THREAD_ID: 'kicker-x' };
+    const square = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env });
     try {
-      await assert.rejects(() => kicker.takeover('Alice'), (error) => error?.code === 'invalid_args');
-    } finally {
-      await kicker.close();
-    }
-    assert.deepEqual((await loadSquare(squarePath)).acts, []);
-    assert.deepEqual(await createHostLedgerPort().listPresence({ location: squarePath, participant: 'Alice' }), []);
-    assert.deepEqual(await createHostLedgerPort().listPresence({ session: 'kicker-x' }), []);
-
-    // The refused takeover must leave the name claimable by a later explicit join.
-    const owner = await Square.at({ path: squarePath, hostLedger: createHostLedgerPort(), env: { ...base, CODEX_THREAD_ID: 'owner-y' } });
-    try {
-      await owner.join('Alice');
-    } finally {
-      await owner.close();
-    }
+      const result = await square.join('Alice', { takeover: true });
+      assert.equal(result.kind, 'joined');
+      assert.equal(result.participant.name, 'Alice');
+    } finally { await square.close(); }
     assert.deepEqual((await loadSquare(squarePath)).acts.map((act) => act.kind), ['join']);
-    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'owner-y');
+    assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.session, 'kicker-x');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     cleanup();

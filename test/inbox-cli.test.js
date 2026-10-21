@@ -11,7 +11,7 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
   const longName = `BRAVO${'z'.repeat(180)}`;
   const secretBody = 'notification body that stays inside delivery';
   const source = await persistSquare(async ({ square }) => {
-    const sender = await square.join('Sender');
+    const sender = (await square.join('Sender')).participant;
     await square.join('Alpha');
     await square.join(longName);
     await sender.express(secretBody, { force: true, mentions: ['Alpha', longName] });

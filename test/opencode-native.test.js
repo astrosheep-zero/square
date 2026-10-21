@@ -6,10 +6,12 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
 import plugin from '../dist/plugins/opencode/index.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { readSquareSnapshot } from '../dist/artifact.js';
 import { claimSessionTakeover, hostLedgerForEnv } from '../dist/registry.js';
 import { interceptLedgerSql, ledgerDatabasePath } from './host-ledger-fixtures.js';
+import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { sessionInbox } from '../dist/inbox.js';
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 4000;
@@ -28,7 +30,7 @@ async function fixture(t, beforeSetup) {
   const square = await Square.build({ path: squarePath, env, markdown: 'fixture', hardCap: null });
   await square.join('Bob');
   const aliceSquare = await Square.at({ path: squarePath, env: { ...env, OPENCODE_SESSION_ID: '' } });
-  const alice = await aliceSquare.join('Alice');
+  const alice = (await aliceSquare.join('Alice')).participant;
   const ledger = hostLedgerForEnv(env);
   const hooks = new Map();
   const events = new EventEmitter();
@@ -104,6 +106,7 @@ test('v2 native body admission is not presentation; exact prepared primary conte
   assert.equal(f.sent[0].delivery, 'steer');
   assert.equal(f.sent[0].resume, true);
   assert.match(f.sent[0].text, /BODY for Bob/);
+  assert.equal(f.sent[0].text, renderPendingAtBoundary(await sessionInbox('opencode-fixture', f.env)));
   await waitFor(async () => (await f.evidence()).some((row) => row.activity === `act/${index}` && row.outcome === 'accepted'));
   assert.equal(await f.seen(index), undefined);
   await f.context(f.sent[0], { id: 'msg_wrong' });
@@ -116,6 +119,7 @@ test('v2 native body admission is not presentation; exact prepared primary conte
   assert.equal((await f.evidence()).filter((row) => row.activity === `act/${index}` && row.kind === 'presentation').length, 1);
   const clipped = await f.express('x'.repeat(300));
   await waitFor(() => f.sent.length === 2);
+  assert.equal(f.sent[1].text, renderPendingAtBoundary(await sessionInbox('opencode-fixture', f.env)));
   await f.context(f.sent[1]);
   assert.equal(await f.seen(clipped), undefined);
   assert.equal((await f.evidence()).filter((row) => row.activity === `act/${clipped}` && row.outcome === 'clipped').length, 1);

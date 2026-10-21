@@ -7,7 +7,7 @@ import { canonicalPath } from './canonical-path.js';
 import { projectBoundaryEligibility, projectSessionBindings } from './square-projections.js';
 import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
 import { pendingHead, pendingNotifications, leaseOwnsNotification } from './delivery.js';
-import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
+import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;
@@ -60,8 +60,8 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
   if (!head || (lease !== undefined && leaseOwnsNotification(lease, head))) return undefined;
   const item = facts.activity(input.actIndex);
   if (item?.kind !== 'say') return undefined;
-  return { payload: renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body }), clipped: attentionBodyIsClipped(item.body) };
+  return { payload: renderSquareReminder([renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
+    actor: item.actor, route: head.route, body: item.body })]), clipped: attentionBodyIsClipped(item.body) };
 }
 
 async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal) {

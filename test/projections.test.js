@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSquareFile, createArtifactPort } from '../dist/artifact.js';
-import { createSquareApplication } from '../dist/square-application.js';
-import { catchPresence, entryPresentation, history, selectHistory, NON_READ, queryParticipants, recoveryObservation, resolveParticipant, snapshot, queryStatus, streamProjection } from '../dist/views.js';
+import { Square } from '../dist/square-api.js';
+import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, resolveParticipant, snapshot, queryStatus, streamProjection } from '../dist/views.js';
 
 const queryContext = { location: 'memory', now: 100_000, automaticDeliveryAvailable: false };
 
@@ -13,13 +13,15 @@ function fixture(acts, observations = {}) {
   return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
     runtime: { nextActIndex: (acts.at(-1)?.index ?? -1) + 1, observations, leases: {} } };
 }
-async function archiveApplication(t, state) {
+async function archiveSquare(t, state) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-history-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const squarePath = path.join(root, 'archive.square');
   await createSquareFile(squarePath, state);
-  return createSquareApplication({ cwd: root, squarePath, clock: () => 100_000,
+  const square = await Square.at({ cwd: root, path: squarePath, clock: () => 100_000,
     env: { ...process.env, SQUARE_REGISTRY: path.join(root, 'registry') } });
+  t.after(() => square.close());
+  return square;
 }
 function measuredSquare(state) {
   const cell = createArtifactPort(':memory:', state);
@@ -55,7 +57,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     assert.deepEqual(await resolveParticipant(square, 'BOB'), { name: 'Bob' });
     const recovered = await recoveryObservation(square, 'BOB');
     assert.deepEqual(recovered, {
-      name: 'Bob', roster: ['Alice', 'Bob'], participantCount: 2,
+      participant: 'Bob', roster: ['Alice', 'Bob'], standingCount: 2,
       held: true, holdReason: 'pause', ownActivityCount: 1, hardCap: 5,
       activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_990,
         previews: [8, 9, 10].map((index) => ({ number: index - 2, act: acts[index], perception: 'full' })),
@@ -99,16 +101,16 @@ test('history keeps traversing audience pages through empty intersections and li
     assert.equal(selected.totalMatches, 2);
     assert.deepEqual(selected.visibleActivities.map((activity) => activity.index), [209]);
     assert.deepEqual(selected.continuation, { direction: 'before', cursor: 'act/209', limit: 1 });
-    const app = await archiveApplication(t, fixture(acts));
-    const outcome = await app.history(query);
-    assert.equal(outcome.projection.sayNumbers[209], 2);
-    assert.deepEqual(outcome.projection.continuation, selected.continuation);
-    assert.deepEqual(outcome.data.activities.map((activity) => activity.id), ['act/209']);
+    const app = await archiveSquare(t, fixture(acts));
+    const outcome = await app.history({ ...query, observe: true });
+    assert.equal(outcome.observation.sayNumbers[209], 2);
+    assert.deepEqual(outcome.observation.continuation, selected.continuation);
+    assert.deepEqual(outcome.activities.map((activity) => activity.id), ['act/209']);
     assert.equal(reads.directed, 3);
     assert.deepEqual(reads.batches.filter((ids) => ids.length > 0), [[208, 209], [209]]);
-    const byId = await history(square, { mention: 'Bob', grep: '^act/208$', limit: 1 });
+    const byId = (await app.history({ mention: 'Bob', grep: '^act/208$', limit: 1 })).activities;
     assert.deepEqual(byId.map((a) => a.id), ['act/208']);
-    const first = await history(square, { after: 'act/207', mention: 'Bob', limit: 1, order: 'desc' });
+    const first = (await app.history({ after: 'act/207', mention: 'Bob', limit: 1, order: 'desc' })).activities;
     assert.deepEqual(first.map((a) => a.id), ['act/208']);
   } finally { await cell.close(); }
 });
@@ -123,17 +125,17 @@ test('context uses existing activity positions while facade omits read and CLI r
   ];
   const { square, cell } = measuredSquare(fixture(acts));
   try {
-    const app = await archiveApplication(t, fixture(acts));
-    const application = await app.history({ at: ['act/50'], contextBefore: 1, contextAfter: 1 });
-    assert.deepEqual(application.projection.visibleActivities.map((a) => a.index), [7, 80]);
-    assert.deepEqual(application.projection.activities.map((activity) => activity.index), [7, 50, 80]);
-    assert.deepEqual(application.data.activities.map((activity) => activity.id), ['act/7']);
-    assert.equal(application.projection.continuation, undefined);
-    const ordinary = await app.history({ limit: 3 });
-    assert.deepEqual(ordinary.projection.activities.map((a) => a.index), [7, 80, 101]);
-    const facade = await history(square, { before: 'act/80', limit: 3 });
+    const app = await archiveSquare(t, fixture(acts));
+    const application = await app.history({ observe: true, at: ['act/50'], contextBefore: 1, contextAfter: 1 });
+    assert.deepEqual(application.observation.visibleActivities.map((a) => a.index), [7, 80]);
+    assert.deepEqual(application.observation.activities.map((activity) => activity.index), [7, 50, 80]);
+    assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7']);
+    assert.equal(application.observation.continuation, undefined);
+    const ordinary = await app.history({ observe: true, limit: 3 });
+    assert.deepEqual(ordinary.observation.activities.map((a) => a.index), [7, 80, 101]);
+    const facade = (await app.history({ before: 'act/80', limit: 3 })).activities;
     assert.deepEqual(facade.map((a) => a.id), ['act/0', 'act/7']);
-    const after = await history(square, { after: 'act/0', before: undefined, limit: 1, order: 'desc' });
+    const after = (await app.history({ after: 'act/0', before: undefined, limit: 1, order: 'desc' })).activities;
     assert.deepEqual(after.map((a) => a.id), ['act/7']);
   } finally { await cell.close(); }
 });
@@ -148,43 +150,40 @@ test('hidden listener events occupy history positions without becoming terminal 
     { kind: 'read', actor: 'Bob', at: 5, index: 100, through: 7 },
     { kind: 'say', actor: 'Alice', at: 6, index: 101, body: 'latest', mentions: ['Bob'] },
   ]);
-  const app = await archiveApplication(t, state);
-  const recent = await app.history({ limit: 3, order: 'desc' });
-  assert.deepEqual(recent.projection.activities.map((activity) => activity.index), [101, 80, 50]);
-  assert.deepEqual(recent.data.activities.map((activity) => activity.id), ['act/101', 'act/80', 'act/50']);
-  assert.deepEqual(recent.projection.visibleActivities.map((activity) => activity.index), [101]);
-  assert.deepEqual(recent.projection.continuation, { direction: 'before', cursor: 'act/101', limit: 3 });
-  assert.deepEqual(recent.projection.sayNumbers, { 101: 2 });
-  assert.deepEqual(recent.projection.presenceAnchors, { 101: ['Alice'] });
-  assert.equal(recent.projection.standingCount, 2);
-  const forward = await app.history({ after: 'act/0', limit: 3, order: 'desc' });
-  assert.deepEqual(forward.projection.activities.map((activity) => activity.index), [50, 7, 2]);
-  assert.deepEqual(forward.projection.continuation, { direction: 'after', cursor: 'act/7', limit: 3 });
-  const hidden = await app.history({ before: 'act/101', limit: 2 });
-  assert.deepEqual(hidden.data.activities.map((activity) => activity.kind), ['listen', 'ignore']);
-  assert.deepEqual(hidden.projection.visibleActivities, []);
-  assert.equal(hidden.projection.continuation, undefined);
+  const app = await archiveSquare(t, state);
+  const recent = await app.history({ observe: true, limit: 3, order: 'desc' });
+  assert.deepEqual(recent.observation.activities.map((activity) => activity.index), [101, 80, 50]);
+  assert.deepEqual(recent.activities.map((activity) => activity.id), ['act/101', 'act/80', 'act/50']);
+  assert.deepEqual(recent.observation.visibleActivities.map((activity) => activity.index), [101]);
+  assert.deepEqual(recent.observation.continuation, { direction: 'before', cursor: 'act/101', limit: 3 });
+  assert.deepEqual(recent.observation.sayNumbers, { 101: 2 });
+  assert.deepEqual(recent.observation.presenceAnchors, { 101: ['Alice'] });
+  assert.equal(recent.observation.standingCount, 2);
+  const forward = await app.history({ observe: true, after: 'act/0', limit: 3, order: 'desc' });
+  assert.deepEqual(forward.observation.activities.map((activity) => activity.index), [50, 7, 2]);
+  assert.deepEqual(forward.observation.continuation, { direction: 'after', cursor: 'act/7', limit: 3 });
+  const hidden = await app.history({ observe: true, before: 'act/101', limit: 2 });
+  assert.deepEqual(hidden.activities.map((activity) => activity.kind), ['listen', 'ignore']);
+  assert.deepEqual(hidden.observation.visibleActivities, []);
+  assert.equal(hidden.observation.continuation, undefined);
 });
 
-test('application history bounds context and validates query without tightening SDK search', async (t) => {
+test('history bounds contextual windows and uses the same validation for SDK and adapters', async (t) => {
   const state = fixture([{ kind: 'join', actor: 'Alice', at: 0, index: 0 },
     ...Array.from({ length: 101 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index + 1, index: index + 1, body: `message ${index}` })),
   ]);
-  const app = await archiveApplication(t, state);
-  await assert.rejects(app.history({ at: ['act/50'], contextBefore: 100, contextAfter: 100 }), (error) => {
+  const app = await archiveSquare(t, state);
+  await assert.rejects(app.history({ observe: true, at: ['act/50'], contextBefore: 100, contextAfter: 100 }), (error) => {
     assert.equal(error.code, 'invalid_args');
     assert.deepEqual(error.operation, { operation: 'history', historyBounds: { maxLimit: 100, totalMatches: 102 } });
     return true;
   });
-  assert.equal((await app.history({ at: ['act/50'], contextBefore: 100, contextAfter: 100, limit: 100 })).data.activities.length, 100);
+  assert.equal((await app.history({ observe: true, at: ['act/50'], contextBefore: 100, contextAfter: 100, limit: 100 })).activities.length, 100);
   for (const query of [{ limit: 101 }, { grep: 'message', fixed: 'other' }, { fixed: '' }, { since: Infinity }, { contextBefore: -1 }, { before: 'act/5', after: 'act/2' }, { at: ['bad'] }]) {
     await assert.rejects(app.history(query), (error) => error.code === 'invalid_args');
   }
-  const { square, cell } = measuredSquare(state);
-  try {
-    assert.equal((await history(square, { grep: 'message', fixed: 'other' })).length, 101);
-    assert.equal((await history(square, { fixed: '' })).length, 102);
-  } finally { await cell.close(); }
+  assert.equal((await app.history({ limit: null, grep: 'message' })).activities.length, 101);
+  assert.equal((await app.history({ limit: null })).activities.length, 102);
 });
 
 test('status settles viewer perception and retains exact-spelling rejoin annotations', async () => {
@@ -200,14 +199,14 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
   ];
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const { projection } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, ''))).value;
+    const { observation: projection } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, '', true))).value;
     assert.equal(projection.latestPerception, 'presence');
     assert.equal(projection.latestActNumber, 1);
     assert.equal(projection.joinCount, 4);
     assert.deepEqual(projection.joins.map(({ activity, rejoined }) => [activity.index, rejoined]), [[5, false], [6, true], [7, false]]);
     assert.deepEqual(reads.batches, [[5, 6, 7]]);
     assert.deepEqual(reads.singles, [3]);
-    const { projection: own } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'ALICE'))).value;
+    const { observation: own } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'ALICE', true))).value;
     assert.equal(own.latestPerception, 'full');
     assert.equal(own.viewer, 'Alice');
     assert.deepEqual(own.attentionNames, ['Alice']);
@@ -229,7 +228,7 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
   const { square, cell } = measuredSquare(state);
   try {
     const before = (await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value;
-    const { data, projection } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice'))).value;
+    const { observation: projection, ...data } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice', true))).value;
     assert.deepEqual(data, {
       hardCap: 7, throttlePerMinute: 3, activeCount: 1, doneCount: 1,
       hold: { reason: 'historical pause', at: 5 }, now: 100_000,
@@ -245,9 +244,9 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
     assert.equal(Object.hasOwn(projection, 'latestAct'), false);
     assert.equal(Object.hasOwn(projection, 'status'), false);
     assert.equal(Object.hasOwn(projection, 'participants'), false);
-    const roster = (await square.artifact.read((facts) => queryParticipants(facts, queryContext))).value;
-    assert.deepEqual(roster.data.participants.map((p) => p.name), ['Alice', 'Gone', 'Reserved']);
-    assert.equal(Object.hasOwn(roster.projection, 'participants'), false);
+    const roster = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
+    assert.deepEqual(roster.participants.map((p) => p.name), ['Alice', 'Gone', 'Reserved']);
+    assert.equal(Object.hasOwn(roster.observation, 'participants'), false);
     assert.deepEqual((await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value, before);
   } finally { await cell.close(); }
 });
@@ -305,8 +304,8 @@ test('presence classifications and nearby watch participants are settled by proj
   const { square, reads, cell } = measuredSquare(state);
   try {
     const before = (await cell.read((facts) => ({ receipts: facts.receiptAssignments(), lease: facts.lease('Watcher'), header: facts.header() }))).value;
-    const { projection: participants } = (await square.artifact.read((facts) => queryParticipants(facts, queryContext))).value;
-    const { projection: status } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'Recent'))).value;
+    const { observation: participants } = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
+    const { observation: status } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'Recent', true))).value;
     assert.deepEqual(participants.classificationByName, { Old: 'lingering', Watcher: 'here', Lingering: 'lingering', Recent: 'here', Done: 'done' });
     assert.deepEqual(participants.orderedHereNames, ['Watcher', 'Recent']);
     assert.equal(participants.lingeringCount, 2);

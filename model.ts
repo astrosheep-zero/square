@@ -57,6 +57,8 @@ export interface SquareErrorFacts {
   targets?: readonly string[];
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
   activityExists?: boolean;
+  /** Express has a recipient, bell, body candidate, or explicit bare reach without its reply. */
+  hasReachWithoutReply?: boolean;
   pending?: number;
   holder?: string;
   holdReason?: string;
@@ -64,7 +66,7 @@ export interface SquareErrorFacts {
 }
 
 class SquareErrorBase<Code extends string> extends Error {
-  operation?: import('./square-facade.js').ApplicationFailureDetail;
+  operation?: import('./square-facade.js').OperationFailureDetail;
   constructor(
     public code: Code,
     message: string,

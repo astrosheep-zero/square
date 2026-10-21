@@ -108,7 +108,7 @@ test('catch limit is bounded and mention is boolean', () => {
 
 test('listener commands do not rejoin a participant who already left', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.done();
   });
   const before = run(withPath(file, ['history', '--no-truncate']));
@@ -375,7 +375,7 @@ test('join and catch only show fallback catch hints without automatic session de
   assert.doesNotMatch(takeover.stdout, /catch --/);
 
   const historySquare = await Square.at({ path: file });
-  const lifecycle = (await historySquare.history({ limit: 100 })).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
+  const lifecycle = ((await historySquare.history({ limit: 100 })).activities).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
   await historySquare.close();
   assert.deepEqual(lifecycle, ['join', 'done', 'join']);
   const ledger = hostLedgerForEnv({ SQUARE_REGISTRY: registry });
@@ -432,7 +432,7 @@ test('join --kick reclaims a name when a secondary inherited session matches the
   assert.equal(selfKick.status, 0, selfKick.stderr);
   const square = await Square.at({ path: file });
   try {
-    const lifecycle = (await square.history({ limit: 100 }))
+    const lifecycle = ((await square.history({ limit: 100 })).activities)
       .filter((activity) => activity.kind === 'join' || activity.kind === 'done')
       .map((activity) => activity.kind);
     assert.deepEqual(lifecycle, ['join', 'done', 'join', 'done', 'join']);
@@ -473,7 +473,7 @@ test('an unknown recipient errors with the roster command instead of a join', as
 
 test('status offers the full history read only when the latest body is clipped', async () => {
   const short = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('short words', { force: true });
   }, { hardCap: 10 });
   const unclipped = run(withName(short, 'Alice', ['status']));
@@ -483,7 +483,7 @@ test('status offers the full history read only when the latest body is clipped',
 
   // A short body that merely says "more chars" must not look clipped.
   const literal = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('the phrase more chars fits without clipping', { force: true });
   }, { hardCap: 10 });
   const literalStatus = run(withName(literal, 'Alice', ['status']));
@@ -492,7 +492,7 @@ test('status offers the full history read only when the latest body is clipped',
   assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
 
   const clipped = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('x'.repeat(260), { force: true });
   }, { hardCap: 10 });
   const clippedStatus = run(withName(clipped, 'Alice', ['status']));
@@ -546,7 +546,7 @@ test('catch conflicts and removed modes are refused while bare catch is the defa
 test('bare catch takes pending activity now and consumes it', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('hello Alice', { mentions: ['Alice'] });
   });
   const caught = run(withName(file, 'Alice', ['catch']));
@@ -619,7 +619,7 @@ test('join rejects removed exhaustive history and bounds --last', async () => {
 
 test('CLI activity selectors accept only canonical textual ids', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('anchor', { force: true, reach: 'bell' });
   });
 

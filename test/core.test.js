@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { catchPresence, history, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
+import { catchPresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -21,6 +21,10 @@ function makeState(overrides = {}) {
     acts,
     runtime: overrides.runtime ?? { ...emptyRuntimeState(acts.length), nextActIndex: acts.length },
   };
+}
+
+async function selectedHistory(square, query) {
+  return (await square.artifact.read((facts) => publicActivities(selectHistory(facts, query, query.limit ?? null, NON_READ, false).activities))).value;
 }
 
 function memorySquare(overrides = {}, clock = () => 0) {
@@ -47,8 +51,8 @@ test('participant lists share actual action and receipt times, including a fresh
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
     const projections = [
-      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.data.participants,
-      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.data.participants,
+      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
+      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
       (await catchPresence(square)).participants,
     ];
     for (const participants of projections) {
@@ -102,7 +106,7 @@ test('unknown participant errors identify only the requested name', async () => 
   const { cell, square } = memorySquare({ acts: [{ kind: 'join', actor: 'Alice', at: 1 }] });
   const unknown = 'Eve';
   const cases = [
-    () => history(square, { from: [unknown] }),
+    () => selectedHistory(square, { from: [unknown] }),
     () => cell.transact((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
     () => cell.transact((facts) => decideCatch(facts, unknown, {}, 2)),
   ];
@@ -135,8 +139,8 @@ test('mention history selects historical direct attention for the addressed part
     ],
   });
   try {
-    assert.deepEqual((await history(square, { mention: 'Bob' })).map((item) => item.id), ['act/3']);
-    assert.deepEqual((await history(square, { mention: 'Cara' })).map((item) => item.id), ['act/5']);
+    assert.deepEqual((await selectedHistory(square, { mention: 'Bob' })).map((item) => item.id), ['act/3']);
+    assert.deepEqual((await selectedHistory(square, { mention: 'Cara' })).map((item) => item.id), ['act/5']);
   } finally {
     await cell.close();
   }
@@ -445,9 +449,9 @@ test('activity history grep searches ids, participant names, and bodies', async 
     ],
   });
   try {
-    assert.deepEqual((await history(square, { grep: '^act/2$' })).map((item) => item.body), ['first inventory @Bob']);
-    assert.deepEqual((await history(square, { grep: '^Bob$' })).map((item) => item.body), ['facts only @Alice']);
-    assert.deepEqual((await history(square, { grep: 'act/2|facts only' })).map((item) => item.id), ['act/2', 'act/3']);
+    assert.deepEqual((await selectedHistory(square, { grep: '^act/2$' })).map((item) => item.body), ['first inventory @Bob']);
+    assert.deepEqual((await selectedHistory(square, { grep: '^Bob$' })).map((item) => item.body), ['facts only @Alice']);
+    assert.deepEqual((await selectedHistory(square, { grep: 'act/2|facts only' })).map((item) => item.id), ['act/2', 'act/3']);
   } finally {
     await cell.close();
   }

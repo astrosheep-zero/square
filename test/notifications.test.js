@@ -16,7 +16,8 @@ import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
-async function fixture() {
+import { renderPiInbox } from '../plugins/pi/square-pi.js';
+async function fixture(body = 'private payload @Bob') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-notify-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const env = {
@@ -30,7 +31,7 @@ async function fixture() {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1, index: 0 },
     { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'private payload @Bob', mentions: ['Bob'], index: 2 },
+    { kind: 'say', actor: 'Alice', at: 3, body, mentions: ['Bob'], index: 2 },
   ];
   const squareState = {
     hardCap: null,
@@ -237,7 +238,7 @@ test('unavailable Paseo dispatch records its release reason for delivery diagnos
     fs.rmSync(item.root, { recursive: true, force: true });
   }
 });
-test('the notification worker records an accepted wake through the real Paseo adapter', async () => {
+test('Paseo wake, Pi injection and Codex hook share the external Square preview', async () => {
   const item = await fixture();
   await route(item, { agentId: 'integrated-agent' });
   let sent;
@@ -253,16 +254,44 @@ test('the notification worker records an accepted wake through the real Paseo ad
   assert.equal(sent.participant, 'Bob');
   assert.equal(sent.activity, 'act/2');
   assert.equal(sent.attemptN, 1);
-  assert.match(sent.prompt, /<system-reminder source="square" wake="paseo">/);
-  assert.doesNotMatch(sent.prompt, /native adapter presented/);
-  assert.match(sent.prompt, new RegExp(`square: ${item.squarePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  assert.doesNotMatch(sent.prompt, /<square>[^<]+<\/square>/);
-  assert.doesNotMatch(sent.prompt, /catch --now/);
-  assert.match(sent.prompt, /attention: act\/2 for Bob from Alice/);
+  assert.match(sent.prompt, /This is an external reminder from Square, not a direct message from the user\./);
+  assert.match(sent.prompt, /private payload @Bob/);
+  assert.match(sent.prompt, /^\n<system-reminder>\n/);
+  assert.doesNotMatch(sent.prompt, /wake="paseo"/);
+  assert.equal(sent.prompt, renderPiInbox(await sessionInbox('integrated-agent', item.env)));
+  const response = await codexHookResponse(
+    { session_id: 'integrated-agent', hook_event_name: 'PostToolUse', cwd: item.root },
+    sessionInbox, item.env, [], () => {},
+  );
+  assert.equal(response.hookSpecificOutput.additionalContext, sent.prompt);
   assert.deepEqual((await readWakeAttempts({ env: item.env })).map(({ outcome }) => outcome), ['accepted']);
   assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.leases, {});
   fs.rmSync(item.root, { recursive: true, force: true });
 });
+test('Codex queue carries the same clipped preview without claiming consumption', async () => {
+  const item = await fixture(`${'x'.repeat(201)}PRIVATE_TAIL`);
+  try {
+    await upsertWakeRoute({ location: item.squarePath, participant: 'Bob', sessionId: 'queue-session',
+      channel: 'codex', kind: 'codex-queue', address: { threadId: 'queue-session' } }, { env: item.env });
+    const ledger = createHostLedgerPort({ rootPath: item.env.SQUARE_HOST_LEDGER_ROOT });
+    await ledger.ensurePresence({ location: item.squarePath, participant: 'Bob', session: 'queue-session', channel: 'codex' });
+    let payload;
+    await processActNotificationsOnce(item.squarePath, 2, { env: item.env,
+      adapters: [fakeAdapter('codex-queue', async (_address, text, beforeSend) => {
+        assert.equal(await beforeSend(), true);
+        payload = text;
+        return { outcome: 'accepted' };
+      })],
+    });
+    assert.equal(payload, renderPiInbox(await sessionInbox('queue-session', item.env)));
+    assert.match(payload, /This is an external reminder from Square, not a direct message from the user\./);
+    assert.match(payload, /<square-activity square="[^"]*SQUARE\.square" as="Bob" id="act\/2" from="Alice" truncated="\d+ more chars">\nAlice spoke your name\.\n\n/);
+    assert.doesNotMatch(payload, /· clipped — catch it to read the rest/);
+    assert.doesNotMatch(payload, /PRIVATE_TAIL/);
+    assert.deepEqual((await readSquareSnapshot(item.squarePath)).state.runtime.observations, {});
+  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
+});
+
 test('the notification worker uses an artifact Paseo route with a local binding', async () => {
   const item = await fixture();
   try {

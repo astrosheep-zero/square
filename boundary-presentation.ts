@@ -11,7 +11,7 @@ import { hostLedgerForEnv } from './registry.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
 import type { OpenSquare } from './open-square.js';
-import { attentionBodyIsClipped, renderAttentionPreview } from './attention-presentation.js';
+import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 import { projectBoundaryEligibility } from './square-projections.js';
 export { pendingAtBoundary } from './square-projections.js';
 
@@ -51,10 +51,6 @@ interface BoundaryRender {
   complete: CompleteBoundaryMembership[];
 }
 
-function frameBoundary(lines: readonly string[]): string {
-  return `\n${lines.join('\n')}\n`;
-}
-
 function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
@@ -62,7 +58,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   const blocks: string[] = [];
   const complete: CompleteBoundaryMembership[] = [];
   let omitted = 0;
-  const omission = (count: number) => `… ${count} more — catch up to read them`;
+  const omission = (count: number) => `${count} more ${count === 1 ? 'activity' : 'activities'} not shown.`;
 
   for (const [index, entry] of queued.entries()) {
     const { membership, notification } = entry;
@@ -77,7 +73,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
       }),
     ].join('\n');
     const omittedAfter = omitted + queued.length - index - 1;
-    const prospective = frameBoundary([...blocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
+    const prospective = renderSquareReminder([...blocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
     if (prospective.length > CONTEXT_MAX) {
       omitted += 1;
       continue;
@@ -91,7 +87,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
   }
 
   return {
-    context: frameBoundary([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])]),
+    context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])]),
     complete,
   };
 }

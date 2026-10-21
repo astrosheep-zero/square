@@ -14,4 +14,6 @@ The single-root HostLedgerPort passes `(input, signal)` for cancellable claims; 
 
 Ownership and delivery have the same limitation: cancellation can stop work that has not entered the boundary, but it cannot withdraw an ownership effect or a transport send that already happened. The returned committed result and existing degradation classification remain authoritative.
 
+The same `Square`/`Participant` methods serve SDK and adapters; see [resource API](square-api.md). Join, listener and lifecycle essential observations use commit-time facts. Join's optional entry enrichment may be unavailable without rejecting its successful receipt. CLI express passes its abort signal through the initial `Square.at`; raw draft saving precedes a separate uncancelled recovery reopen.
+
 Pi notification cancellation is separate and unchanged.

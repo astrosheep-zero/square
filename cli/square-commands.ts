@@ -8,11 +8,11 @@ import {
   renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
-import { formatActivityId } from '../square-application.js';
+import { Square, formatActivityId } from '../square-api.js';
 import { style } from '../tty-style.js';
 import { executeExpression } from './express-presentation.js';
 import {
-  type CommandContext, type CommandSpec, applicationFor, fail, parseBoundedLimit,
+  type CommandContext, type CommandSpec, squareInput, withSquare, fail, parseBoundedLimit,
   parseHardCap, parsePositiveInteger, readStdin, requireSquarePath, requireValue,
   resolveBody, usage,
 } from './context.js';
@@ -77,11 +77,14 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
   async execute(intent, context) {
     const markdown = await readStdin();
     if (markdown.trim() === '') fail('Missing Markdown body snippet on stdin.');
-    const { data, projection } = await applicationFor(context).build({ ...intent.options, markdown });
+    const square = await Square.build({ ...squareInput(context), ...intent.options, markdown });
+    let data;
+    try { data = await square.status(); }
+    finally { await square.close(); }
     const cap = data.hardCap === null ? 'unlimited' : formatHardCap(data.hardCap);
     const throttle = data.throttlePerMinute === undefined ? [] : [`  · throttle ${data.throttlePerMinute}/min`];
-    return withPathOutput(data.location, ['· the square stands ready', `  · cap ${cap}`, ...throttle].join('\n'), {
-      participantCount: projection.standingCount, held: projection.held,
+    return withPathOutput(square.location, ['· the square stands ready', `  · cap ${cap}`, ...throttle].join('\n'), {
+      participantCount: 0, held: false,
     });
   },
   present: (result) => process.stdout.write(result),
@@ -102,12 +105,14 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     return { lastN, kick };
   },
   async execute(intent, context) {
-    const { data, projection: after } = await applicationFor(context).join({ takeover: intent.kick, last: intent.lastN });
-    const name = data.participant;
-    const activities = after.recentActivities.map((event) => renderAmbientEvent(event, name, {
+    const data = await withSquare(context, (square) => square.join(context.name, { takeover: intent.kick, last: intent.lastN, observe: true }));
+    const after = data.observation!;
+    const entry = after.entry;
+    const name = data.participant.name;
+    const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
       now: after.now, preview: 200,
-      actNumber: event.kind === 'say' ? after.sayNumbers[event.index] : undefined,
-      perception: after.perceptions[event.index],
+      actNumber: event.kind === 'say' ? entry!.sayNumbers[event.index] : undefined,
+      perception: entry!.perceptions[event.index],
     })).filter(Boolean).join('\n\n');
     const fallback = after.automaticDeliveryAvailable ? [] : [
       '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
@@ -117,13 +122,14 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
       : data.kind === 'reconnected' ? '● you are already in the square'
         : `✓ you banished the original ${participantIdentity(name)} — the name is yours`;
     const isRejoin = data.kind !== 'joined';
-    const entryScene = isRejoin ? '' : after.joinedBefore
-      ? '*the flagstones are where you left them. so is your shadow.*' : after.scene;
+    const entryScene = isRejoin || entry === undefined ? '' : entry.joinedBefore
+      ? '*the flagstones are where you left them. so is your shadow.*' : entry.scene;
     return withPathOutput(after.location, [
       entryLine, '',
       "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
       ...(entryScene === '' ? [] : ['', entryScene]),
-      ...(isRejoin || after.joinContext === '' ? [] : ['', style('dim', 'context'), after.joinContext]),
+      ...(isRejoin || !entry?.joinContext ? [] : ['', style('dim', 'context'), entry.joinContext]),
+      ...(after.enrichmentUnavailable ? ['  · joined; recent activity and context are unavailable right now'] : []),
       ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
       ...fallback,
     ].join('\n'), { participantCount: after.standingCount, held: after.held });
@@ -156,8 +162,6 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     else bodyArgs.push(argument);
   }
   const reach = bell ? 'bell' : undefined;
-  if (bell && (noMention || mentions.length > 0)) fail('✕ --bell cannot be combined with --mention or --no-mention\nsquare express --help');
-  if (noMention && mentions.length > 0) fail('✕ --no-mention cannot be combined with --mention\nsquare express --help');
   if (bodyArgs.length !== 1) {
     if (bodyArgs.length === 0 && !process.stdin.isTTY) bodyArgs.push('-');
     else fail("express requires a body argument (a quoted string or '-' with piped stdin)");
@@ -169,7 +173,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
     const rawInput = await resolveBody(intent.activity);
-    await executeExpression(applicationFor(context), requireSquarePath(context), context.name, rawInput, {
+    await executeExpression((control) => Square.at(squareInput(context), control), requireSquarePath(context), context.name, rawInput, {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
       mentions: intent.mentions, reach: intent.reach, reply: intent.reply,
     });
@@ -186,7 +190,8 @@ function listenerCommand(verb: 'listen' | 'ignore'): CommandSpec<ListenerIntent,
   return {
     parse(argv, context) { return parseListener(argv, context, true); },
     async execute(intent, context) {
-      const { data, projection } = await applicationFor(context)[verb](intent.target!);
+      const data = await withSquare(context, async (square) => (await square.participant(context.name))[verb](intent.target!, { observe: true }));
+      const projection = data.observation!;
       const actor = participantIdentity(projection.participant);
       const target = participantIdentity(projection.target);
       const action = data.activity !== null
@@ -204,7 +209,8 @@ export const ignoreCommand = listenerCommand('ignore');
 export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(_intent, context) {
-    const { data, projection } = await applicationFor(context).listening();
+    const data = await withSquare(context, async (square) => (await square.participant(context.name)).listening({ observe: true }));
+    const projection = data.observation!;
     const body = data.listening.length === 0
       ? `○ ${participantIdentity(projection.participant!)} is not turned toward anyone`
       : ['listening', ...data.listening.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
@@ -221,7 +227,8 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   async execute(intent, context) {
     const body = intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY)
       ? await readStdin() : intent.body;
-    const { data, projection } = await applicationFor(context).done(body);
+    const data = await withSquare(context, async (square) => (await square.participant(context.name)).done(body, { observe: true }));
+    const projection = data.observation!;
     return withPathOutput(projection.location, `○ you stepped out — your footsteps fade · ${data.activity.id}`, {
       participantCount: projection.standingCount, held: projection.held,
     });
@@ -235,7 +242,9 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
     return { body: argv[0] };
   },
   async execute(intent, context) {
-    const { projection } = await applicationFor(context).hold((await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim());
+    const body = (await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim();
+    const result = await withSquare(context, async (square) => (await square.participant(context.name)).hold(body, { observe: true }));
+    const projection = result.observation!;
     return withPathOutput(projection.location,
       `· ${renderRoomChangeText(projection.activity as RoomChangeAct)} · ${formatActivityId(projection.activity.index)} · just now`,
       { participantCount: projection.standingCount, held: projection.held });
@@ -249,7 +258,8 @@ export const resumeCommand: CommandSpec<Record<string, never>, string> = {
     return {};
   },
   async execute(_intent, context) {
-    const { projection } = await applicationFor(context).resume();
+    const result = await withSquare(context, async (square) => (await square.participant(context.name)).resume({ observe: true }));
+    const projection = result.observation!;
     return withPathOutput(projection.location,
       `✓ ${renderRoomChangeText(projection.activity as RoomChangeAct)} · ${formatActivityId(projection.activity.index)} · just now`,
       { participantCount: projection.standingCount, held: projection.held });

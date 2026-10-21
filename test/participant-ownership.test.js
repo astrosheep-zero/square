@@ -7,7 +7,7 @@ import test from 'node:test';
 import { prepareSquareBuild, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 
 /**
  * The injected in-memory host ledger: presence rows in a list, with one in-process
@@ -84,7 +84,7 @@ test('an injected in-memory ledger owns the claim, not the environment ledger', 
       assert.deepEqual((await f.ledger.listPresence({ location: f.location, participant: 'Alice' })).map((row) => [row.session, row.epoch]), [['session-a', 1]]);
       assert.deepEqual(await hostLedgerForEnv(f.env).listPresence({ location: f.location, participant: 'Alice' }), []);
       // The claim critical section runs on the injected ledger too.
-      await square.takeover('Alice');
+      await square.join('Alice', { takeover: true });
       assert.deepEqual((await f.ledger.listPresence({ location: f.location, participant: 'Alice' })).map((row) => [row.session, row.epoch]), [['session-a', 2]]);
       assert.deepEqual(await hostLedgerForEnv(f.env).listPresence({ location: f.location, participant: 'Alice' }), []);
     } finally { await square.close(); }
@@ -116,7 +116,7 @@ test('a file square opened without a ledger binds the env ledger for join and do
     const square = await Square.at({ path: f.location, env: { ...f.env, CODEX_THREAD_ID: 'env-session' } });
     try {
       const envLedger = hostLedgerForEnv(f.env);
-      const participant = await square.join('Alice');
+      const participant = (await square.join('Alice')).participant;
       const owner = await readParticipantOwner(f.location, 'Alice', envLedger);
       assert.equal(owner?.session, 'env-session');
       assert.equal(owner?.epoch, 1);

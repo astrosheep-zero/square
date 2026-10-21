@@ -4,17 +4,17 @@ import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from './squ
 import { operationEnv } from './automatic-session.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { createSquareApplication, createSquareResourceOwner } from './square-application.js';
-import type { SquareApplicationContext } from './square-facade.js';
+import { Square, createSquareResourceOwner } from './square-api.js';
+import type { SquareAtInput } from './square-facade.js';
 
 type JsonObject = Record<string, unknown>;
 
 /** The server owns its artifact connection lifetime, so callers cannot lend one. */
-export interface SquareMcpOptions extends Omit<SquareApplicationContext, 'resources'> {}
+export interface SquareMcpOptions extends Omit<SquareAtInput, 'resources'> {}
 export type SquareMcpServer = McpServer;
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
-  const baseEnv = { ...options.env };
+  const baseEnv = { ...(options.env ?? process.env) };
   const resources = createSquareResourceOwner();
   // Calls to the configured square borrow one server-owned connection.
   const inFlight = new Set<Promise<unknown>>();
@@ -41,15 +41,16 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
               : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
                 ? operationEnv('opencode', opencodeSessionId, baseEnv)
                 : baseEnv;
-          const app = createSquareApplication({
+          const square = await Square.at({
             ...options, env, cwd: claude?.cwd ?? options.cwd,
-            squarePath: (location as string | undefined) ?? options.squarePath,
+            path: (location as string | undefined) ?? options.path,
             participant: (participant as string | undefined) ?? options.participant,
             // The server owner is bound to its configured square; overrides close after each call.
             resources: location === undefined && claude === undefined ? resources : undefined,
-          }, { presentation: false });
-          const outcome = await tool.run(app, args as JsonObject, { signal: extra.signal });
-          const structuredContent = outcome.data as JsonObject;
+          }, { signal: extra.signal });
+          let structuredContent: JsonObject;
+          try { structuredContent = await tool.run(square, args as JsonObject, { signal: extra.signal }) as JsonObject; }
+          finally { await square.close(); }
           return { content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }], structuredContent };
         } catch (error) {
           const failure = squareToolFailure(error, extra.signal);

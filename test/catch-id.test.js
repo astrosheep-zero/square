@@ -9,8 +9,8 @@ import { run, tempSquare, withName } from './square-cli-helpers.js';
 async function setup(t, file) {
   const square = file ? await Square.build({ path: file, markdown: 'test' }) : Square.inMemory({ markdown: 'test' });
   t.after(() => square.close());
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   const first = await alice.express('first', { force: true, mentions: ['Bob'] });
   const body = 'complete-body-'.repeat(500) + 'END-OF-BODY';
   const second = await alice.express(body, { force: true, mentions: ['Bob'] });

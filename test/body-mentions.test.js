@@ -57,9 +57,10 @@ test('scanMentionCandidates honors boundaries, code spans, and the name grammar'
     ['@aku/riko-2 hi', ['aku/riko-2']],
     ['@🦆 hi', ['🦆']],
     ['@Rei and @rei', ['Rei']],
+    ['🦆@rei', ['rei']],
   ];
   for (const [body, expected] of cases) {
-    assert.deepEqual(scanMentionCandidates(body).map((candidate) => candidate.token), expected, JSON.stringify(body));
+    assert.deepEqual(scanMentionCandidates(body), expected, JSON.stringify(body));
   }
 });
 
@@ -113,27 +114,35 @@ test('unknown and departed body @names stay literal while standing matches still
   assert.equal(decision.type, 'sent');
   assert.equal(decision.act.body, body);
   assert.deepEqual(decision.act.mentions, ['Cara']);
+  assert.deepEqual(decision.unmatchedMentions, ['Bob', 'Eve']);
   const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', force: true, now: 11, requireExplicitReach: true });
   assert.equal(literal.type, 'sent');
   assert.equal(literal.act.body, '@Bob @Eve');
   assert.deepEqual(literal.act.mentions, []);
 });
 
-test('explicit noMention switches body scanning off entirely', async () => {
-  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @Bob', force: true, now: 10, noMention: true });
+test('noMention disables only body scanning, not explicit mentions or reply', async () => {
+  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @Bob @Eve', force: true, now: 10, noMention: true, mentions: ['cara'], reply: 1 });
   assert.equal(decision.type, 'sent');
-  assert.deepEqual(decision.act.mentions, []);
+  assert.deepEqual(decision.act.mentions, ['Cara']);
+  assert.equal(decision.act.reply, 1);
+  assert.equal(decision.unmatchedMentions, undefined);
 });
 
-test('a bell rejects a body @name but tolerates unmatched at-sign text', async () => {
+test('a bell ignores all body candidates but rejects explicit mentions in core', async () => {
   await assert.rejects(
-    () => decide(standingState(), { name: 'Alice', body: 'look @Bob', force: true, now: 10, reach: 'bell' }),
-    (error) => /bell cannot be combined with a mention/.test(error.message),
+    () => decide(standingState(), { name: 'Alice', body: 'look @Bob', force: true, now: 10, reach: 'bell', mentions: ['Bob'] }),
+    (error) => error.facts?.reason === 'bell_mention_conflict',
   );
-  const decision = await decide(standingState(), { name: 'Alice', body: 'look @decorator fans', force: true, now: 10, reach: 'bell' });
+  const decision = await decide(standingState(), { name: 'Alice', body: 'look @Bob @decorator', force: true, now: 10, reach: 'bell', noMention: true, reply: 1 });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, []);
   assert.equal(decision.act.reach, 'bell');
+  assert.equal(decision.act.reply, 1);
+  assert.equal(decision.unmatchedMentions, undefined);
+  const scannedOff = await decide(standingState(), { name: 'Alice', body: '@Bob @Eve', force: true, now: 10, reach: 'bell' });
+  assert.deepEqual(scannedOff.act.mentions, []);
+  assert.equal(scannedOff.unmatchedMentions, undefined);
 });
 
 test('body @names share the mention limit with --mention', async () => {
@@ -154,10 +163,13 @@ test('body @names share the mention limit with --mention', async () => {
 test('express through the library stores derived mention metadata', async () => {
   const square = Square.inMemory({ markdown: 'context' });
   try {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     const directed = await alice.express('hey @Bob and @Unknown', { force: true });
     assert.deepEqual(directed.activity.mentions, ['Bob']);
+    assert.deepEqual(directed.unmatchedMentions, ['Unknown']);
+    assert.equal(directed.activity.unmatchedMentions, undefined);
+    assert.equal(((await alice.history({ limit: null })).activities).at(-1).unmatchedMentions, undefined);
     assert.equal(directed.activity.body, 'hey @Bob and @Unknown');
     const literal = await alice.express('hey @Unknown', { force: true });
     assert.deepEqual(literal.activity.mentions, []);
@@ -172,6 +184,8 @@ test('express through the library stores derived mention metadata', async () => 
 
 test('activityRetryCommand preserves the caller reach instead of forcing --no-mention', () => {
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { noMention: true }), / --no-mention /);
+  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Cara'], noMention: true }), / --mention 'Cara' --no-mention /);
+  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { reach: 'bell', noMention: true }), / --bell --no-mention /);
   const derived = activityRetryCommand('/tmp/x.square', 'Alice', {});
   assert.doesNotMatch(derived, /--no-mention|--mention|--bell/);
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Bob'] }), / --mention 'Bob'/);
@@ -197,12 +211,15 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
 
   const unknown = run(withName(file, 'Alice', ['express', 'hey @Eve']));
   assert.equal(unknown.status, 0, unknown.stderr);
+  assert.match(unknown.stdout, /@Eve isn't standing here — activity landed bare/);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hey @Eve');
   assert.deepEqual(acts.at(-1).mentions, []);
 
   const mixed = run(withName(file, 'Alice', ['express', '-']), { input: 'hello @Eve and @Bob' });
   assert.equal(mixed.status, 0, mixed.stderr);
+  assert.match(mixed.stdout, /@Eve isn't standing here — left as literal text/);
+  assert.doesNotMatch(mixed.stdout, /landed bare/);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hello @Eve and @Bob');
   assert.deepEqual(acts.at(-1).mentions, ['Bob']);
@@ -216,6 +233,16 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
   const piped = run(withName(file, 'Alice', ['express', '-']), { input: 'piped @Bob' });
   assert.equal(piped.status, 0, piped.stderr);
   assert.match(piped.stdout, /● you walk over to @Bob — act\/\d+/);
+
+  const replyUnknown = run(withName(file, 'Alice', ['express', '--reply', 'act/1', '@Eve']));
+  assert.equal(replyUnknown.status, 0, replyUnknown.stderr);
+  assert.match(replyUnknown.stdout, /@Eve isn't standing here — left as literal text/);
+  assert.doesNotMatch(replyUnknown.stdout, /landed bare/);
+
+  const explicit = run(withName(file, 'Alice', ['express', '--no-mention', '--mention', 'Bob', '@Eve']));
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.match(explicit.stdout, /you walk over to @Bob/);
+  assert.doesNotMatch(explicit.stdout, /isn't standing/);
 
   const pipedBare = run(withName(file, 'Alice', ['express', '-']), { input: 'no audience here' });
   assert.equal(pipedBare.status, 2);

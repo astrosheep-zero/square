@@ -14,6 +14,8 @@ Treat `AGENTS.md` as project authority. Read it before changing behavior, then i
 - Put behavior in the module that owns the underlying fact. Do not let presentation labels drive behavior.
 - Persist only authoritative, monotonic evidence. Derive temporary conditions and diagnostic classifications at query time.
 - Do not add compatibility reads, duplicate ledgers, speculative fields, daemons, or configuration unless a current invariant requires them.
+- SDK and adapters use the real `Square`/`Participant` resource API (`guides/square-api.md`). Do not add a parallel dispatcher or generic outcome envelope; optional observation facts belong to the same concrete operation result.
+- Keep committed success facts in the mutation transaction. Best-effort enrichment and cancellation after commit must not erase a receipt or suggest a duplicate retry.
 - When replacing a model, remove the old code, vocabulary, and tests in the same change.
 
 ## Preserve Delivery Boundaries

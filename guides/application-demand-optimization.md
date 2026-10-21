@@ -1,5 +1,10 @@
 # Application presentation demand
 
+> **Historical evidence, superseded API.** The factory/outcome shapes and split SDK defaults
+> below describe the earlier implementation, not current instructions. Use the real
+> [Square/Participant API](square-api.md); the independent factory and its design guide are deleted.
+
+
 ## Design
 
 `createSquareApplication(context)` retains complete terminal-facing outcomes. MCP uses `createSquareApplication(context, { presentation: false })`; its outcome has the same `data` contract and `projection: undefined`.

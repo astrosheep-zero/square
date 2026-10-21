@@ -1,6 +1,11 @@
 # Shared application boundary: delivery evidence
 
-Deliverer evidence, **not independent review or acceptance**. Design and the complete caller/deletion map are in [application-facade-design](application-facade-design.md).
+> **Historical evidence, superseded API.** The factory/outcome shapes and split SDK defaults
+> below describe the earlier implementation, not current instructions. Use the real
+> [Square/Participant API](square-api.md); the independent factory and its design guide are deleted.
+
+
+Deliverer evidence, **not independent review or acceptance**. The historical caller/deletion map is recorded below; current ownership is described in [Square/Participant API](square-api.md).
 
 ## Candidate coordinates
 

@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { runClaudeMod } from '../claude-mod.js';
 import { runCodexHookAsync } from '../codex-hook.js';
 import { isSquareError, sameName } from '../model.js';
-import type { ActivityId, ApplicationError, ArchiveRecord, CatchApplicationOptions, DiscoveryApplicationData, DiscoveryApplicationOptions, DiscoveryProjection, HistoryApplicationQuery, HistoryProjection, StreamStart } from '../square-facade.js';
+import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, HistoryObservation, StreamStart } from '../square-facade.js';
 import {
   commandPrefix,
   participantIdentity,
@@ -17,13 +17,13 @@ import {
 } from '../presentation.js';
 import { style } from '../tty-style.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
-import { formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-application.js';
+import { discover, inbox, formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
 import { renderCatchOutcome, renderCatchProgress } from './catch-presentation.js';
 
 import {
   type CommandContext,
   type CommandSpec,
-  applicationFor as application,
+  withSquare, squareInput, now,
   fail,
   parseBoundedLimit,
   parseDurationMs,
@@ -47,14 +47,14 @@ function inboxDisplay(value: string): string {
 }
 
 interface HistoryCommandOptions {
-  query: HistoryApplicationQuery;
+  query: HistoryQuery;
   noTruncate: boolean;
   format?: string[];
   json: boolean;
   continuationArgs: string[];
 }
 
-function renderSquareList(data: DiscoveryApplicationData, projection: DiscoveryProjection): string {
+function renderSquareList(data: DiscoveryResult, projection: { now: number; depth: number; limit: number }): string {
   const { items, stopped, remaining, next } = data;
   if (data.total === 0) {
     return ['(no squares found)', ...(stopped ? [style('dim', '○ the walk stopped early — deeper squares may still be hiding')] : [])].join('\n') + '\n';
@@ -83,7 +83,7 @@ function renderSquareList(data: DiscoveryApplicationData, projection: DiscoveryP
   return lines.join('\n') + '\n';
 }
 
-export const listCommand: CommandSpec<DiscoveryApplicationOptions, string> = {
+export const listCommand: CommandSpec<DiscoveryOptions, string> = {
   parse(argv, context) {
     let depth = DEFAULT_LIST_DEPTH;
     let limit = DEFAULT_LIST_LIMIT;
@@ -105,8 +105,8 @@ export const listCommand: CommandSpec<DiscoveryApplicationOptions, string> = {
     return { depth, limit, after };
   },
   async execute(intent, context) {
-    const outcome = await application(context).discover(intent);
-    return renderSquareList(outcome.data, outcome.projection);
+    const result = await discover(squareInput(context), intent);
+    return renderSquareList(result, { now: now(context), depth: intent.depth ?? DEFAULT_LIST_DEPTH, limit: intent.limit ?? DEFAULT_LIST_LIMIT });
   },
   present: (result) => process.stdout.write(result),
 };
@@ -151,9 +151,11 @@ export const streamCommand: CommandSpec<StreamIntent> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      for await (const record of application(context).stream({ recipient: intent.forName, start: intent.start }, { signal: controller.signal })) {
-        if (!process.stdout.write(`${JSON.stringify(record)}\n`)) await once(process.stdout, 'drain', { signal: controller.signal });
-      }
+      await withSquare(context, async (square) => {
+        for await (const record of square.stream({ recipient: intent.forName, start: intent.start }, { signal: controller.signal })) {
+          if (!process.stdout.write(`${JSON.stringify(record)}\n`)) await once(process.stdout, 'drain', { signal: controller.signal });
+        }
+      }, { signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) process.exitCode = 130;
       else if (isSquareError(error) && error.code === 'unavailable') {
@@ -165,7 +167,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
   present: () => {},
 };
 
-export const catchCommand: CommandSpec<CatchApplicationOptions> = {
+export const catchCommand: CommandSpec<CatchOptions> = {
   parse(argv, context) {
     let idle: number | undefined;
     let mention: boolean | undefined;
@@ -218,13 +220,13 @@ export const catchCommand: CommandSpec<CatchApplicationOptions> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      const outcome = await application(context).catch(intent, {
+      const outcome = await withSquare(context, async (square) => (await square.participant(context.name)).catch({ ...intent, observe: true }, {
         signal: controller.signal,
         onProgress(progress) {
           const line = renderCatchProgress(squarePath, progress);
           if (line !== undefined) process.stderr.write(line);
         },
-      });
+      }), { signal: controller.signal });
       const rendered = renderCatchOutcome(squarePath, outcome, intent);
       process.stdout.write(rendered.stdout);
       process.exitCode = rendered.exitCode;
@@ -294,7 +296,7 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
       participants.push(...parseNameList(requireValue(argv, index, flag), flag));
       index += 1;
     } else if (flag === '--since') {
-      since = parseTimestamp(requireValue(argv, index, flag), flag, application(context).now());
+      since = parseTimestamp(requireValue(argv, index, flag), flag, now(context));
       index += 1;
     } else if (flag === '--after') {
       after = formatActivityId(parseActRef(requireValue(argv, index, flag), flag));
@@ -391,8 +393,8 @@ function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRec
 }
 
 function renderHistoryProjection(
-  projection: HistoryProjection,
-  visible: HistoryProjection['visibleActivities'],
+  projection: HistoryObservation,
+  visible: HistoryObservation['visibleActivities'],
   noTruncate: boolean,
   squarePath: string,
 ): string {
@@ -425,13 +427,13 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
   async execute(options, context) {
     const squarePath = requireSquarePath(context);
     let outcome;
-    try { outcome = await application(context).history(options.query); }
+    try { outcome = await withSquare(context, (square) => square.history({ ...options.query, observe: true })); }
     catch (error) {
-      const bounds = (error as ApplicationError | null)?.operation?.historyBounds;
+      const bounds = (error as OperationError | null)?.operation?.historyBounds;
       if (bounds !== undefined) fail(`✕ history is capped at ${bounds.maxLimit} activities\n${historyContinuationCommand(options, squarePath, ['--limit', String(bounds.maxLimit)])}`);
       throw error;
     }
-    const projection = outcome.projection;
+    const projection = outcome.observation!;
     const events = projection.activities;
     if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item)).join('\n') + (events.length > 0 ? '\n' : '');
     if (options.format !== undefined && options.format.length > 0) {
@@ -473,7 +475,8 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
   parse(argv, context) { return parseParticipants(argv, context); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const { data, projection } = await application(context).participants();
+    const data = await withSquare(context, (square) => square.participants({ observe: true }));
+    const projection = data.observation!;
     const now = projection.now;
     const participants = data.participants;
     const lines = participants.slice(0, intent.limit).map((participant) => {
@@ -501,7 +504,8 @@ export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const { data: result, projection: presentation } = await application(context).status(context.name);
+    const result = await withSquare(context, (square) => square.status({ viewer: context.name, observe: true }));
+    const presentation = result.observation!;
     const participantsByName = new Map(result.participants.map((participant) => [participant.name, participant]));
     const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
     const lingering = presentation.lingeringCount;
@@ -611,7 +615,7 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
     return { sessionId, json, limit };
   },
   async execute(intent, context) {
-    const { data } = await application(context).inbox(intent.sessionId, { limit: intent.limit });
+    const data = await inbox(squareInput(context), intent.sessionId, { limit: intent.limit });
     const rows = data.rows.map((membership) => ({
       namePreview: inboxDisplay(membership.name),
       squarePathPreview: inboxDisplay(membership.squarePath),

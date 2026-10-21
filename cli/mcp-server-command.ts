@@ -7,7 +7,7 @@ export const mcpServerCommand: CommandSpec<undefined, void> = {
   },
   async execute(_intent, context: CommandContext) {
     const { runSquareMcpStdio } = await import('../mcp.js');
-    await runSquareMcpStdio({ cwd: context.cwd, env: context.env, squarePath: context.squarePath, participant: context.name });
+    await runSquareMcpStdio({ cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name });
   },
   present() {},
 };

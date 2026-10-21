@@ -6,7 +6,7 @@ import {
   type WakeAdapter,
 } from './delivery.js';
 import { SquareError } from './model.js';
-import { displayAttentionPath } from './attention-presentation.js';
+import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import type { OpenSquare } from './open-square.js';
@@ -119,13 +119,23 @@ export function createWakeTransport(
       const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
-        const kind = request.route.kind;
-        const payload = [
-          `<system-reminder source="square" wake="${kind === 'paseo' ? 'paseo' : kind.startsWith('codex') ? 'codex-queue' : kind}">`,
-          `square: ${displayAttentionPath(request.location)}`,
-          `attention: ${request.activity} for ${request.participant} from ${request.actor}`,
-          '</system-reminder>',
-        ].join('\n');
+        const location = await canonicalPath(request.location);
+        const square = await openSquare(location, { hostLedger }).catch(() => undefined);
+        if (square === undefined) return { outcome: 'not-capable', diagnostic: `Square is unavailable at ${location}` };
+        let payload: string | undefined;
+        try {
+          const index = parseActivityId(request.activity);
+          payload = (await square.artifact.read((facts) => {
+            const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
+            const item = index === undefined ? undefined : facts.activity(index);
+            if (!head || item?.kind !== 'say') return undefined;
+            return renderSquareReminder([renderAttentionPreview({
+              squarePath: location, recipient: request.participant, actIndex: item.index,
+              actor: item.actor, route: head.route, body: item.body,
+            })]);
+          })).value;
+        } finally { await closeOpenSquare(square); }
+        if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
         const result = await adapter.dispatch(request.route.address, payload, finalGate, timeoutMs, request);
         if (result.outcome !== 'gate-rejected') return result;
         if (revalidation !== undefined && !revalidation.current) {

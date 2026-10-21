@@ -1,7 +1,7 @@
-import { createSquareApplication } from '../square-application.js';
+import { diagnoseSquare, migrateSquare } from '../square-api.js';
 import { commandPrefix, renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 
-import { requireSquarePath, type CommandSpec, usage } from './context.js';
+import { requireSquarePath, squareInput, type CommandSpec, usage } from './context.js';
 
 interface DoctorResult {
   output: string;
@@ -19,14 +19,14 @@ export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
   },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const { data: outcome, projection } = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath }).migrate();
+    const outcome = await migrateSquare(squareInput(context));
     const body = outcome.status === 'migrated' && outcome.counts !== undefined
       ? [
         '✓ migrated to row storage',
         `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
       ].join('\n')
       : '· already format 2 — nothing changed';
-    return { output: withPathOutput(squarePath, body, { participantCount: projection.standingCount }) };
+    return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };
   },
   present(result) {
     process.stdout.write(result.output);
@@ -40,7 +40,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const { data: diagnosis, projection } = await createSquareApplication({ cwd: context.cwd, env: context.env, squarePath }).diagnose();
+    const diagnosis = await diagnoseSquare(squareInput(context));
     if (diagnosis.migrationRequired !== undefined) {
       return { output: withPathOutput(squarePath, `${diagnosis.migrationRequired}\n${commandPrefix(squarePath)} migrate\n`), exitCode: 2 };
     }
@@ -55,7 +55,7 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
     }
     return {
       output: withPathOutput(squarePath, renderDoctorClean(), {
-        participantCount: projection.standingCount,
+        participantCount: diagnosis.standingCount,
       }),
     };
   },

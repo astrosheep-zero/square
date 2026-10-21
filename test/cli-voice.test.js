@@ -23,7 +23,7 @@ function printedCommands(output) {
 test('a held refusal without a reason names the holder and never prints an empty sensory line', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold();
   });
 
@@ -34,23 +34,16 @@ test('a held refusal without a reason names the holder and never prints an empty
   assert.doesNotMatch(held.stdout, /holds its breath/);
 });
 
-test('a bell+@name conflict refuses with ✕ and a retry that keeps the bell for the speaker to edit', async () => {
+test('a bell ignores body @names, including unmatched names, with redundant no-mention allowed', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
 
-  const result = run(withName(file, 'Alice', ['express', '--no-wait', '--bell', '-']), { input: 'ringing for @Bob\n' });
-  assert.equal(result.status, 2, result.stdout + result.stderr);
-  const output = result.stdout + result.stderr;
-  assert.match(output, /✕ a bell cannot be combined with a mention/);
-  assert.match(output, /participants/);
-  assert.match(output, /must be removed or wrapped in backticks/);
-  const retries = printedCommands(output);
-  assert.equal(retries.length, 1);
-  assert.match(retries[0], /--bell/);
-  assert.doesNotMatch(retries[0], /--mention/);
-  assert.doesNotMatch(output, /keep your intended recipients/);
+  const result = run(withName(file, 'Alice', ['express', '--no-wait', '--bell', '--no-mention', '-']), { input: 'ringing for @Bob @Eve\n' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /● you ring the bell/);
+  assert.doesNotMatch(result.stdout + result.stderr, /isn't standing|conflict|draft kept/);
 });
 
 test('unmatched body @names land; explicit --mention still offers a runnable repair', shellReplay, async () => {
@@ -78,7 +71,7 @@ test('unmatched body @names land; explicit --mention still offers a runnable rep
 
 test('catch --id refuses an activity that is not addressed to the caller with ✕ and a runnable read', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await alice.express('for nobody in particular', { force: true, noMention: true });
   });
@@ -127,7 +120,7 @@ test('express receipts name the act: words, gesture, walk-over, and the bell', a
 test('a reply to an author who stepped out says the reply did not reach them', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('question', { force: true, noMention: true });
     await bob.done();
   });
@@ -141,7 +134,7 @@ test('a reply to an author who stepped out says the reply did not reach them', a
 test('unread activity appended to a receipt is led by the ▲ line', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('question for you @Alice', { force: true, mentions: ['Alice'] });
   });
 
@@ -157,7 +150,7 @@ test('unread activity appended to a receipt is led by the ▲ line', async () =>
 
 test('the throttle refusal names the lull and keeps a retry that runs later', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('first', { force: true });
   }, { throttlePerMinute: 1 });
 
@@ -172,7 +165,7 @@ test('the throttle refusal names the lull and keeps a retry that runs later', as
 
 test('a capped express counts what was spoken and keeps the draft and the done command', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('the one activity', { force: true });
   }, { hardCap: 1 });
 
@@ -218,7 +211,7 @@ test('build stands ready, and the long scene belongs to a first join only', asyn
 
 test('history closes the page with one presence anchor line', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });

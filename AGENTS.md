@@ -16,7 +16,7 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches body scanning off. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients.
+- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches only body scanning off; explicit mentions and replies still apply. Bell also leaves body `@name` text literal and cannot combine with explicit mentions. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients, and the sender receives a notice for unmatched names.
   A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
   activity is reached like a mentioned participant, combining with the other reach tags and surviving
   `--no-mention`.
@@ -58,6 +58,9 @@ CLI voice:
 - Express hints (the 3-line pool) surface on a participant's first activity and every fifth after; they encourage embodied expression and meaningful conversation, not CLI mechanics.
 
 Implementation taste:
+- SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
+- Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts, held state and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
+- Cross-square discovery/inbox and path-based diagnose/migrate remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
 - The authoritative artifact is one versioned SQLite `.square` database containing the square's state; there is no independent runtime sidecar. SQLite-owned recovery journals are allowed.

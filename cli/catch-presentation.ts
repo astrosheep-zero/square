@@ -1,7 +1,5 @@
-import { parseActivityId } from '../square-application.js';
-import type {
-  ApplicationOutcome, CatchApplicationData, CatchApplicationOptions, CatchProjection, OperationProgress,
-} from '../square-facade.js';
+import { parseActivityId } from '../square-api.js';
+import type { CatchResult, CatchOptions, OperationProgress } from '../square-facade.js';
 import {
   participantCommandPrefix, renderAmbientEvent, renderWatchAlreadyActive, renderWatchForceTakeover,
   renderWatchReplaceMissing, renderWatchReplaced, renderWatchStatus, withPathOutput,
@@ -14,7 +12,7 @@ export function renderCatchProgress(squarePath: string, progress: OperationProgr
     ? renderWatchForceTakeover(options) : renderWatchReplaceMissing(options)) + '\n';
 }
 
-function continuationCommand(squarePath: string, name: string, options: CatchApplicationOptions): string {
+function continuationCommand(squarePath: string, name: string, options: CatchOptions): string {
   const args = ['--now'];
   if (options.from?.length) args.push('--from', options.from.join(','));
   if (options.mention) args.push('--mention');
@@ -25,10 +23,10 @@ function continuationCommand(squarePath: string, name: string, options: CatchApp
 /** Render settled catch facts; no selection, terminal decisions, receipts or wait machinery. */
 export function renderCatchOutcome(
   squarePath: string,
-  outcome: ApplicationOutcome<CatchApplicationData, CatchProjection>,
-  options: CatchApplicationOptions = {},
+  data: CatchResult,
+  options: CatchOptions = {},
 ): { stdout: string; exitCode: number } {
-  const { data, projection } = outcome;
+  const projection = data.observation!;
   const location = projection.location ?? squarePath;
   const name = projection.participant;
   const stop = projection.stop ?? data.status;

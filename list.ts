@@ -5,7 +5,7 @@ import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { listPresentation } from './views.js';
 import { SquareError } from './model.js';
-import type { DiscoveryApplicationData, DiscoveryApplicationOptions, OpenOptions, OperationControl, SquareListItem } from './square-facade.js';
+import type { DiscoveryResult, DiscoveryOptions, OpenOptions, OperationControl, SquareListItem } from './square-facade.js';
 
 export const DEFAULT_LIST_DEPTH = 4;
 export const MAX_LIST_DEPTH = 16;
@@ -35,8 +35,8 @@ async function readSquareListItem(filePath: string, root: string, options: OpenO
   }
 }
 
-/** Bounded deterministic discovery. Only the application calls this private operation. */
-export async function discoverSquares(root: string, options: DiscoveryApplicationOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): Promise<DiscoveryApplicationData> {
+/** Bounded deterministic discovery for the public resource API. */
+export async function discoverSquares(root: string, options: DiscoveryOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): Promise<DiscoveryResult> {
   const depth = options.depth ?? DEFAULT_LIST_DEPTH;
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   if (!Number.isSafeInteger(depth) || depth < 0 || depth > MAX_LIST_DEPTH

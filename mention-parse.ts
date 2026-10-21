@@ -11,8 +11,8 @@ import { NAME_GRAPHEME_SOURCE, sameName } from './model.js';
  *   (`user@host`), URLs (`x.com/@user`), and `snake_@case` stay literal. Only ASCII
  *   word characters, `_`, `-`, `/`, and `@` block a boundary: CJK adjacency like
  *   `告诉@rei` stays mentionable because CJK text has no spaces to lean on.
- * - The token must be a complete name (slash-separated segments allowed); resolution
- *   never backs off to a shorter prefix, so `@rei2` does not mention `rei`.
+ * - Slash-separated names are allowed. Resolution may stop at a CJK suffix, but never
+ *   at an ASCII handle continuation: `@rei这个` can reach `rei`; `@rei2` cannot.
  */
 
 const MENTION_TOKEN = new RegExp(`@((?:${NAME_GRAPHEME_SOURCE})+(?:/(?:${NAME_GRAPHEME_SOURCE})+)*)`, 'vg');
@@ -47,44 +47,34 @@ function codeSpanRanges(body: string): Array<readonly [number, number]> {
   return ranges;
 }
 
-export interface MentionCandidate {
-  /** The maximal name-grammar token after `@` (roster-free; resolution may shorten it). */
-  readonly token: string;
-  /** UTF-16 index of the `@` in the body. */
-  readonly index: number;
-}
-
-export function scanMentionCandidates(body: string): MentionCandidate[] {
+export function scanMentionCandidates(body: string): string[] {
   const spans = codeSpanRanges(body);
-  const found: MentionCandidate[] = [];
+  const found: string[] = [];
   const seen = new Set<string>();
   for (const match of body.matchAll(MENTION_TOKEN)) {
     const start = match.index;
     if (spans.some(([from, to]) => start >= from && start < to)) continue;
-    const unit = start <= 0 ? undefined : body.charCodeAt(start - 1);
-    const previous = unit === undefined ? undefined
-      : unit >= 0xdc00 && unit <= 0xdfff && start >= 2 ? String.fromCodePoint(body.codePointAt(start - 2)!) : String.fromCodePoint(unit);
+    const previous = body[start - 1];
     if (previous !== undefined && BOUNDARY_BLOCKER.test(previous)) continue;
     const token = match[1];
     const key = token.toLocaleLowerCase();
     if (!seen.has(key)) {
       seen.add(key);
-      found.push({ token, index: start });
+      found.push(token);
     }
   }
   return found;
 }
 
 /**
- * Resolve the longest standing name starting at one candidate's position. A partial
+ * Resolve the longest standing name at the start of a candidate token. A partial
  * match is only accepted when the character right after it is not handle-continuation
  * (ASCII word char, `_`, `-`, `/`): `@rei2` never degrades into mentioning `rei`, while
  * CJK-fluent text like `告诉@rei这个` still mentions `rei`.
  */
 const TRAILING_BLOCKER = /[A-Za-z0-9_\-/]/;
 
-export function resolveNameAt(body: string, candidate: MentionCandidate, names: readonly string[]): string | undefined {
-  const text = body.slice(candidate.index + 1, candidate.index + 1 + candidate.token.length);
+export function resolveMention(text: string, names: readonly string[]): string | undefined {
   let best: string | undefined;
   for (const name of names) {
     if (name.length > text.length) continue;

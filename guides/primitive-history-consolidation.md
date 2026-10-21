@@ -1,5 +1,10 @@
 # History query consolidation — delivery evidence
 
+> **Historical evidence, superseded API.** The factory/outcome shapes and split SDK defaults
+> below describe the earlier implementation, not current instructions. Use the real
+> [Square/Participant API](square-api.md); the independent factory and its design guide are deleted.
+
+
 Deliverer evidence, not an independent review or acceptance.
 
 ## Coordinates and lane-local reduction

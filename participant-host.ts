@@ -20,6 +20,7 @@ export function processIdentity(env: NodeJS.ProcessEnv): { session: string; chan
 export async function identityRouteDraft(context: HostContext, participant: string): Promise<Omit<WakeRoute, 'updatedAt'> | undefined> {
   if (context.location === undefined || context.location === 'memory') return undefined;
   const identity = processIdentity(context.env ?? process.env);
+  if (identity.channel === 'unknown') return undefined;
   const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;
   const boundary = { location: context.location, participant, sessionId: identity.session, provider };
   const env = context.env ?? process.env;
@@ -61,6 +62,8 @@ export async function assertLiveOwner(context: HostContext, participant: string,
 export async function ensureLocalPresence(context: HostContext, participant: string, epoch?: number): Promise<{ readonly epoch?: number } | undefined> {
   if (context.hostLedger === undefined || context.location === undefined || context.location === 'memory') return;
   const identity = processIdentity(context.env ?? process.env);
+  // Sessionless library operations do not establish host presence or ownership.
+  if (identity.channel === 'unknown') return;
   const now = Date.now();
   let existing: readonly PresenceRecord[];
   try {

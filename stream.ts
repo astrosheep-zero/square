@@ -3,10 +3,10 @@ import { SquareError } from './model.js';
 import { observeSquareRevision } from './artifact.js';
 import { openSquare, closeOpenSquare } from './open-square.js';
 import { streamProjection, streamTailProjection } from './views.js';
-import type { OpenOptions, OperationControl, StreamApplicationOptions, StreamApplicationRecord } from './square-facade.js';
+import type { OpenOptions, OperationControl, StreamOptions, StreamRecord } from './square-facade.js';
 
 /** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
-export function streamSquare(squarePath: string, options: StreamApplicationOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): AsyncIterable<StreamApplicationRecord> {
+export function streamSquare(squarePath: string, options: StreamOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): AsyncIterable<StreamRecord> {
   return {
     [Symbol.asyncIterator]() {
       const disposal = new AbortController();
@@ -21,7 +21,7 @@ export function streamSquare(squarePath: string, options: StreamApplicationOptio
         },
       };
 
-      async function* observe(): AsyncGenerator<StreamApplicationRecord, void, unknown> {
+      async function* observe(): AsyncGenerator<StreamRecord, void, unknown> {
         try {
           signal.throwIfAborted();
           try { await fs.stat(squarePath); }

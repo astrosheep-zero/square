@@ -9,7 +9,7 @@ const HELD_BUDGET_ENV = { SQUARE_HELD_WAIT_BUDGET_MS: '300' };
 test('a held express announces the holder, waits within a budget, then keeps a draft', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold('pause for thought');
   });
 
@@ -33,7 +33,7 @@ test('a held express announces the holder, waits within a budget, then keeps a d
 test('a held express lands as soon as the hand lowers mid-wait', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold();
   });
 
@@ -51,7 +51,7 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
 test('express after done announces the return; a standing participant sees none', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.done();
   });
 
@@ -68,7 +68,7 @@ test('express after done announces the return; a standing participant sees none'
 test('history pairs holds with lowerings and departures with returns', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold('pause');
     await bob.resume();
     await bob.done();

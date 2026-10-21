@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
@@ -34,7 +35,7 @@ function executeRecovery(command, env = {}) {
 
 async function says(file) {
   const square = await Square.at({ path: file });
-  try { return (await square.history({ limit: 100 })).filter((activity) => activity.kind === 'say'); }
+  try { return ((await square.history({ limit: 100 })).activities).filter((activity) => activity.kind === 'say'); }
   finally { await square.close(); }
 }
 
@@ -70,12 +71,12 @@ test('missing and malformed replies are dropped from runnable recovery while rec
   for (const reply of ['act/999', 'not-an-id']) {
     const body = `reply body \r\nwith 'quotes'\r\n`;
     const before = (await says(file)).length;
-    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
+    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--no-mention', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
     assert.equal(result.status, 2, result.stderr);
     const saved = recovery(result, body);
     assert.equal(saved.commands.length, 1);
     assert.match(saved.commands[0], /express --no-wait/);
-    assert.ok(saved.commands[0].includes("--mention 'Bob'"));
+    assert.ok(saved.commands[0].includes("--mention 'Bob' --no-mention"));
     assert.doesNotMatch(saved.commands[0], /--reply|--force/);
     assert.match(saved.output, /history --limit 10/);
     assert.match(saved.output, /choose a valid --reply from history, or send without a reply/);
@@ -96,9 +97,50 @@ test('missing and malformed replies are dropped from runnable recovery while rec
   }
 });
 
+test('invalid reply recovery retains body candidates and adds bare reach only without candidates', shellReplay, async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+  }, { hardCap: null });
+  const cases = [
+    ['act/999', '@Bob\n', false],
+    ['not-an-id', '@Bob\n', false],
+    ['act/999', '@Eve\n', false],
+    ['act/999', 'reply only\n', true],
+    ['not-an-id', '`@Bob` user@Bob.com https://example.com/@Bob\n', true],
+  ];
+  for (const [reply, body, needsBareReach] of cases) {
+    const saved = recovery(run(withName(file, 'Alice', ['express', '--reply', reply, '-']), { input: body }), body);
+    assert.equal(saved.commands.length, 1);
+    assert.doesNotMatch(saved.commands[0], /--reply/);
+    if (needsBareReach) assert.match(saved.commands[0], /--no-mention/);
+    else assert.doesNotMatch(saved.commands[0], /--no-mention/);
+    const retry = executeRecovery(saved.commands[0]);
+    assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+    assert.deepEqual((await says(file)).at(-1).mentions, body === '@Bob\n' ? ['Bob'] : []);
+  }
+});
+
+test('explicit bell conflict repairs flags without asking for body edits', shellReplay, async () => {
+  const file = await persistSquare(async ({ square }) => {
+    await square.join('Alice');
+    await square.join('Bob');
+  });
+  const body = '@Bob @Eve\n';
+  const saved = recovery(run(withName(file, 'Alice', ['express', '--bell', '--no-mention', '--mention', 'Bob', '--reply', 'act/1', '-']), { input: body }), body);
+  assert.match(saved.output, /a bell cannot be combined with a mention/);
+  assert.doesNotMatch(saved.output, /edit the draft|removed or wrapped/);
+  assert.match(saved.commands[0], /--bell --no-mention --reply act\/1/);
+  assert.doesNotMatch(saved.commands[0], /--mention /);
+  const retry = executeRecovery(saved.commands[0]);
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+  assert.doesNotMatch(retry.stdout, /isn't standing/);
+  assert.equal((await says(file)).at(-1).reach, 'bell');
+});
+
 test('bell quota preserves a retryable draft, bell reach, reply and no-wait', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await alice.express('first bell', { reach: 'bell' });
   });
@@ -121,7 +163,7 @@ test('held recovery preserves the original force choice and no-wait without wide
   for (const force of [false, true]) {
     const file = await persistSquare(async ({ square }) => {
       await square.join('Alice');
-      const bob = await square.join('Bob');
+      const bob = (await square.join('Bob')).participant;
       await bob.hold('pause');
     });
     const body = `held ${force}\n`;
@@ -145,7 +187,7 @@ test('held recovery preserves the original force choice and no-wait without wide
 
 test('throttle recovery remains no-wait and does not add force', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('first');
   }, { throttlePerMinute: 1 });
   const body = 'waiting for a lull\n';
@@ -162,7 +204,7 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
 test('behind recovery offers catch then an ordinary retry and labels force as optional', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('question', { mentions: ['Alice'] });
   });
   const body = 'answer\n';
@@ -209,7 +251,7 @@ test('only admission rejection proves a failed express unsent; post-commit failu
   await square.artifact.close();
 });
 
-test('a failed application clock cannot prevent raw draft saving or landed reconciliation', async (t) => {
+test('a failed observation clock cannot prevent raw draft saving or landed reconciliation', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-draft-clock-'));
   const file = path.join(root, 'SQUARE.square');
   const raw = "  exact raw body\r\nwith 'quotes'\r\n";
@@ -217,23 +259,21 @@ test('a failed application clock cannot prevent raw draft saving or landed recon
   const error = Object.assign(new Error(clockFailure.message), {
     operation: { operation: 'express', participant: 'Alice', expressEffect: 'landed', landedId: 'act/2' },
   });
-  const now = t.mock.fn(() => { throw clockFailure; });
   let output = '';
   const stderr = t.mock.method(process.stderr, 'write', (text) => { output += text; return true; });
   const previousExit = process.exitCode;
   let draftAtRecovery;
   try {
-    await executeExpression({
-      now,
-      async express() { throw error; },
+    await executeExpression(async () => ({
+      async participant() { return { name: 'Alice', async express() { throw error; } }; },
+      async close() {},
       async recovery() {
         const drafts = fs.readdirSync(path.join(root, 'drafts'));
         draftAtRecovery = fs.readFileSync(path.join(root, 'drafts', drafts[0]), 'utf8');
         throw clockFailure;
       },
-    }, file, 'Alice', raw, { noMention: true });
+    }), file, 'Alice', raw, { noMention: true });
     assert.equal(process.exitCode, 1);
-    assert.equal(now.mock.callCount(), 0);
     assert.equal(draftAtRecovery, raw);
     assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);
     assert.match(output, /act\/2/);
@@ -246,9 +286,47 @@ test('a failed application clock cannot prevent raw draft saving or landed recon
   }
 });
 
+test('Ctrl-C cancels the initial express open while SQLite is locked and keeps the raw draft', shellReplay, async () => {
+  const file = await persistSquare(async ({ square }) => { await square.join('Alice'); });
+  const database = new DatabaseSync(file);
+  database.exec('BEGIN EXCLUSIVE');
+  const body = 'raw locked body\r\n';
+  const child = spawn(process.execPath, [CLI, ...withName(file, 'Alice', ['express', '--no-mention', '-'])], {
+    cwd: ROOT, env: testEnv(), stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const exited = once(child, 'exit');
+  child.stdin.end(body);
+  // Let module loading complete and the open reach its cancellable SQLite retry.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  child.kill('SIGINT');
+  // Recovery is deliberately uncancelled: it may reopen only after the lock releases.
+  const draftDirectory = path.join(path.dirname(file), 'drafts');
+  const deadline = Date.now() + 1500;
+  while (!fs.existsSync(draftDirectory) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  const savedWhileLocked = fs.existsSync(draftDirectory);
+  database.exec('ROLLBACK');
+  database.close();
+  let timeout;
+  try {
+    const [code] = await Promise.race([exited, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('express open ignored Ctrl-C')), 3000);
+    })]);
+    assert.equal(savedWhileLocked, true, 'cancelling the initial open must save the draft before recovery can acquire the lock');
+    assert.equal(code, 130, stdout + stderr);
+    assert.equal(fs.readFileSync(draftPathFrom(stdout + stderr), 'utf8'), body);
+    assert.equal((await says(file)).length, 0);
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+});
+
 test('selected artifact corruption never advertises a safely unsent activity', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const writer = await square.join('Writer');
+    const writer = (await square.join('Writer')).participant;
     await writer.express('original', { force: true });
   });
   const database = new DatabaseSync(file);
@@ -257,7 +335,7 @@ test('selected artifact corruption never advertises a safely unsent activity', a
   database.close();
   const square = await Square.at({ path: file });
   try {
-    const writer = await square.join('Writer');
+    const writer = (await square.join('Writer')).participant;
     await assert.rejects(writer.express('reply', { force: true, reply: 'act/1' }),
       (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
   } finally { await square.close(); }

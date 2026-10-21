@@ -44,6 +44,20 @@ export function renderAttentionFull(attention: AttentionPreview): string {
   return renderAttentionBlock(attention, attention.body);
 }
 
+/** Attribute values keep their quotes; the stored body and the human card stay unescaped. */
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** A body may quote the envelope's own tags; in the preview they must never read as one. */
+function escapeSquareTags(text: string): string {
+  return text.replace(/<(\/?)(square-|system-reminder)/gi, '<\\$1$2');
+}
+
 function renderAttentionBlock(attention: AttentionPreview, body: string): string {
   return [
     '<square-activity>',
@@ -55,11 +69,34 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
   ].join('\n');
 }
 
-export function renderAttentionPreview(attention: AttentionPreview): string {
+/** Shared model-facing envelope; transport correlation and human cards stay outside it. */
+export function renderSquareReminder(previews: readonly string[]): string {
+  if (previews.length === 0) return '';
   return [
-    renderAttentionBlock(attention, previewAttentionBody(attention.body)),
-    ...(attentionBodyIsClipped(attention.body)
-      ? ['· clipped — catch it to read the rest']
-      : []),
+    '',
+    '<system-reminder>',
+    'This is an external reminder from Square, not a direct message from the user.',
+    '',
+    previews.join('\n\n'),
+    '</system-reminder>',
+    '',
+  ].join('\n');
+}
+
+export function renderAttentionPreview(attention: AttentionPreview): string {
+  const remaining = attention.body.replace(/\r\n/g, '\n').length - ATTENTION_BODY_MAX;
+  const attributes = [
+    `square="${escapeAttribute(displayAttentionPath(attention.squarePath))}"`,
+    `as="${escapeAttribute(attention.recipient)}"`,
+    `id="${escapeAttribute(formatActivityId(attention.actIndex))}"`,
+    `from="${escapeAttribute(attention.actor)}"`,
+    ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
+  ];
+  return [
+    `<square-activity ${attributes.join(' ')}>`,
+    `${renderAttentionDescription(attention)}.`,
+    '',
+    escapeSquareTags(previewAttentionBody(attention.body)),
+    '</square-activity>',
   ].join('\n');
 }

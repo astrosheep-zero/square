@@ -3,7 +3,6 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { Square } from "../dist/index.js";
 import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from "../dist/artifact.js";
-import { createSquareApplication } from "../dist/square-application.js";
 
 function aborted() {
   const controller = new AbortController();
@@ -14,13 +13,13 @@ function aborted() {
 test("pre-aborted lifecycle operations do not mutate the artifact", async () => {
   const square = Square.inMemory({ markdown: "context" });
   const before = await square.snapshot();
-  await assert.rejects(() => square.join("Alice", { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.join("Alice", {}, { signal: aborted().signal }), /cancelled/);
   await assert.rejects(() => square.implicitJoin("Bob", { signal: aborted().signal }), /cancelled/);
   assert.equal((await square.snapshot()).actCount, before.actCount);
   await square.close();
 });
 
-test("application opens abort under an exclusive lock without deferred mutation", async () => {
+test("request resource opens abort under an exclusive lock without deferred mutation", async () => {
   const fs = await import("node:fs/promises");
   const os = await import("node:os");
   const path = await import("node:path");
@@ -28,22 +27,22 @@ test("application opens abort under an exclusive lock without deferred mutation"
   const location = path.join(root, "SQUARE.square");
   const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
   const square = await Square.build({ path: location, markdown: "context", env });
-  const writer = await square.join("Writer");
+  const writer = (await square.join("Writer")).participant;
   await square.join("Reader");
   await writer.express("unread", { force: true, mentions: ["Reader"] });
   await square.close();
   const before = await readSquareSnapshot(location);
-  const reader = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Reader" });
-  const speaker = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Writer" });
-  const newcomer = createSquareApplication({ cwd: root, env, squarePath: location, participant: "Newcomer" });
   const database = new DatabaseSync(location);
   database.exec("BEGIN EXCLUSIVE");
   const controller = new AbortController();
-  const pending = [
-    reader.catch({}, { signal: controller.signal }),
-    speaker.express("cancelled", { force: true, mentions: ["Reader"] }, { signal: controller.signal }),
-    newcomer.join({}, { signal: controller.signal }),
-  ];
+  const pending = ['Reader', 'Writer', 'Newcomer'].map(async (participant) => {
+    const opened = await Square.at({ cwd: root, env, path: location }, { signal: controller.signal });
+    try {
+      if (participant === 'Newcomer') await opened.join(participant, {}, { signal: controller.signal });
+      else if (participant === 'Reader') await (await opened.participant(participant)).catch({}, { signal: controller.signal });
+      else await (await opened.participant(participant)).express('cancelled', { force: true, mentions: ['Reader'] }, { signal: controller.signal });
+    } finally { await opened.close(); }
+  });
   const abort = setTimeout(() => controller.abort(new Error("cancelled")), 50);
   let deadline;
   try {
@@ -70,13 +69,13 @@ test("cancelled force-build leaves no rebuild behind after the artifact lock is 
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const location = path.join(root, "SQUARE.square");
   const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
-  const application = createSquareApplication({ cwd: root, env, squarePath: location });
-  await application.build({ markdown: "original", hardCap: 7 });
+  const built = await Square.build({ cwd: root, env, path: location, markdown: 'original', hardCap: 7 });
+  await built.close();
   const before = await readSquareSnapshot(location);
   const lock = new DatabaseSync(location);
   lock.exec("BEGIN EXCLUSIVE");
   const controller = new AbortController();
-  const pending = application.build({ markdown: "must not replace original", hardCap: 2, force: true }, { signal: controller.signal });
+  const pending = Square.build({ path: location, env, markdown: "must not replace original", hardCap: 2, force: true }, { signal: controller.signal });
   const abort = setTimeout(() => controller.abort(new Error("force-build cancelled")), 50);
   let deadline;
   try {
@@ -109,10 +108,10 @@ test("a newly published build keeps its result when cancellation follows the lin
     controller.abort(new Error("late response cancellation"));
   };
   try {
-    const app = createSquareApplication({ cwd: root, env: {}, squarePath: location });
-    const result = await app.build({ markdown: "published", hardCap: 3 }, { signal: controller.signal });
-    assert.equal(result.data.location, location);
-    assert.equal(result.data.hardCap, 3);
+    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
+    assert.equal(result.location, location);
+    assert.equal((await result.status()).hardCap, 3);
+    await result.close();
   } finally { fs.promises.link = link; }
   assert.equal(controller.signal.aborted, true);
   assert.equal((await readSquareSnapshot(location)).state.hardCap, 3);
@@ -120,8 +119,8 @@ test("a newly published build keeps its result when cancellation follows the lin
 
 test("idle catch aborts without consuming activity added later", async () => {
   const square = Square.inMemory({ markdown: "context" });
-  const alice = await square.join("Alice");
-  const bob = await square.join("Bob");
+  const alice = (await square.join("Alice")).participant;
+  const bob = (await square.join("Bob")).participant;
   await bob.catch();
   const controller = new AbortController();
   const waiting = bob.catch({ idle: 60_000 }, { signal: controller.signal });
@@ -204,8 +203,8 @@ test("post-commit express preserves its result after response cancellation", asy
 
 test("post-commit catch preserves its result after response cancellation", async () => {
   const square = Square.inMemory({ markdown: "context" });
-  const alice = await square.join("Alice");
-  const bob = await square.join("Bob");
+  const alice = (await square.join("Alice")).participant;
+  const bob = (await square.join("Bob")).participant;
   await bob.catch();
   await alice.express("committed catch", { force: true, mentions: ["Bob"] });
   const controller = new AbortController();
@@ -266,7 +265,7 @@ test("same-session concurrent joins retain one rightful owner", async () => {
   await Promise.all([square.join("Same"), square.join("Same")]);
   const rows = await square.recognize(env);
   assert.ok(rows);
-  assert.equal((await square.history()).filter((activity) => activity.kind === "join").length, 1);
+  assert.equal((await square.history()).activities.filter((activity) => activity.kind === "join").length, 1);
   await square.close();
   await fs.rm(root, { recursive: true, force: true });
 });

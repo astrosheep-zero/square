@@ -302,7 +302,7 @@ test('package facade participant verbs persist through shared actions', async ()
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
     const square = await Square.at({ path: squarePath });
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
@@ -475,11 +475,10 @@ test('Pi inbox helpers expose stable notification identity without invocation hi
   const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
-  assert.match(context, /^\n<square-activity>/);
-  assert.match(context, /· \/tmp\/SQUARE\.square · Bob · act\/7/);
-  assert.match(context, /● Alice spoke your name\n/);
+  assert.match(context, /^\n<system-reminder>\nThis is an external reminder from Square, not a direct message from the user\.\n\n<square-activity square="\/tmp\/SQUARE\.square" as="Bob" id="act\/7" from="Alice">/);
+  assert.match(context, /^Alice spoke your name\.$/m);
   assert.doesNotMatch(context, /^>$/m);
-  assert.match(context, /<\/square-activity>\n$/);
+  assert.match(context, /<\/square-activity>\n<\/system-reminder>\n$/);
   assert.doesNotMatch(context, /catch --now/);
 });
 
@@ -524,8 +523,10 @@ test('Pi expansion retains clipped and omitted bodies and wraps wide text withou
     })),
   }];
   const content = renderPiInbox(inbox);
-  assert.match(content, /… \d+ more — catch up to read them/);
+  assert.match(content, /\d+ more activities? not shown\./);
   assert.ok(content.length <= 1200);
+  assert.equal(content.split('This is an external reminder from Square,').length - 1, 1);
+  assert.equal(renderPiInbox([]), '');
   assert.doesNotMatch(content, /END_FULL_TEXT|square --|catch --/);
   const details = pendingCardDetails(inbox);
   for (const note of inbox[0].notifications) assert.ok(details.fullText.includes(note.body));
@@ -537,6 +538,20 @@ test('Pi expansion retains clipped and omitted bodies and wraps wide text withou
     assert.equal(lines.filter(line => line.includes('END_FULL_TEXT')).length, 6);
     assert.match(lines.join('\n'), /notification-5/);
   }
+});
+
+test('the omission line names what the budget dropped and closes the reminder', () => {
+  const longPath = `/tmp/${'d'.repeat(90)}.square`;
+  const pending = (count) => [{ name: 'Bob', squarePath: longPath, notifications: Array.from({ length: count }, (_, i) => ({
+    actIndex: 10 + i, actor: 'Alice', route: 'mention', body: 'y'.repeat(600),
+  })) }];
+  const one = renderPiInbox(pending(3));
+  assert.equal(one.split('<square-activity').length - 1, 2);
+  assert.match(one, /\n\n1 more activity not shown\.\n<\/system-reminder>\n$/);
+  assert.ok(one.length <= 1200);
+  const two = renderPiInbox(pending(4));
+  assert.match(two, /\n\n2 more activities not shown\.\n<\/system-reminder>\n$/);
+  assert.ok(two.length <= 1200);
 });
 
 async function piFixture(sessionId, pending = true) {
@@ -577,7 +592,7 @@ async function withPiFixture(sessionId, fn, pending = true) {
 async function expressToPi(item, body) {
   const square = await Square.at({ path: item.squarePath });
   try {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     const result = await alice.express(body, { mentions: ['Bob'] });
     return Number(result.activity.id.slice('act/'.length));
   } finally {
@@ -1085,7 +1100,7 @@ test('Pi defers a rejected native injection until the next Square change', async
 
       const square = await Square.at({ path: item.squarePath });
       try {
-        const alice = await square.join('Alice');
+        const alice = (await square.join('Alice')).participant;
         await alice.listen('Bob');
       } finally {
         await square.close();

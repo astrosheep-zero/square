@@ -54,7 +54,7 @@ function resolvedTarget(file, module) {
 function storageLeaks(sources) {
   const artifactBindings = new Map([
     ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
-    ['square-application.ts', ['createSquare', 'diagnoseSquareFile']],
+    ['square-api.ts', ['createSquare', 'diagnoseSquareFile']],
     ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
     ['ledger-maintenance.ts', ['createArtifactPort']],
     ['stream.ts', ['observeSquareRevision']],
@@ -196,8 +196,8 @@ test('decisions and perception use domain facts, outside host and storage operat
 test('product adapters stay behind the facade and close boundary', () => {
   const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'ledger-maintenance.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
-  // The application owner is the only entry into participant execution.
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-application.ts']);
+  // The real Square resource is the only entry into participant execution.
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-api.ts']);
   assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, []);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);
@@ -273,7 +273,7 @@ function transportLeaks(sources, roots) {
         continue;
       }
       const target = resolvedTarget(file, edge.module);
-      if (target === 'square-application.ts') continue;
+      if (target === 'square-api.ts') continue;
       if (target === 'square-facade.ts') {
         if (edge.names.length > 0) leaks.push(`DTO runtime import: ${[...trail, target].join(' -> ')}`);
         continue;
@@ -300,7 +300,7 @@ function transportLeaks(sources, roots) {
   return leaks.sort();
 }
 
-test('CLI/MCP and every reachable presentation helper use the application owner, not private execution', () => {
+test('CLI/MCP and every reachable presentation helper use Square/Participant, not private execution', () => {
   const roots = productionFiles.filter((file) => file.startsWith('cli/')).concat(['mcp.ts', 'presentation.ts']);
   const leaks = transportLeaks(productionSources, roots);
   assert.deepEqual(leaks, [], `transport boundary escaped transitively:\n${leaks.join('\n')}`);

@@ -21,15 +21,15 @@ test('fixed facade builds, opens, and exposes participant activity', async () =>
     markdown: '# context',
     clock: () => 10,
   });
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   const expressed = await alice.express('hello @Bob', { force: true, mentions: ['Bob'] });
   assert.equal(expressed.activity.id, 'act/2');
-  assert.equal((await bob.history()).at(-1).body, 'hello @Bob');
+  assert.equal(((await bob.history({ limit: null })).activities).at(-1).body, 'hello @Bob');
   await square.close();
 
   const reopened = await Square.at({ path: squarePath });
-  assert.deepEqual((await reopened.history()).map((activity) => activity.id), ['act/0', 'act/1', 'act/2']);
+  assert.deepEqual(((await reopened.history({ limit: null })).activities).map((activity) => activity.id), ['act/0', 'act/1', 'act/2']);
   await reopened.close();
 });
 
@@ -45,8 +45,8 @@ test('opening a file square validates and projects unchanged persisted state', a
     const snapshot = await square.snapshot();
     assert.match(snapshot.context, /^# context(?:\n|$)/);
     assert.equal(snapshot.actCount, 0);
-    assert.deepEqual(await square.history(), []);
-    assert.deepEqual(await square.participants(), []);
+    assert.deepEqual((await square.history({ limit: null })).activities, []);
+    assert.deepEqual((await square.participants()).participants, []);
     await square.close();
     assert.deepEqual((await readSquareSnapshot(squarePath)).state, persisted);
   } finally {
@@ -57,29 +57,29 @@ test('opening a file square validates and projects unchanged persisted state', a
 test('participant history defaults to the recent ten activities in ascending order', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   for (let index = 0; index < 12; index += 1) {
     await alice.express(`message ${index} @Bob`, { force: true, mentions: ['Bob'] });
   }
-  const recent = await bob.history();
+  const recent = (await bob.history()).activities;
   assert.equal(recent.length, 10);
   assert.deepEqual(recent.map((activity) => activity.id), Array.from({ length: 10 }, (_, index) => `act/${index + 4}`));
-  assert.deepEqual((await bob.history({ limit: 3, order: 'desc' })).map((activity) => activity.id), ['act/13', 'act/12', 'act/11']);
-  assert.equal((await bob.history({ limit: 14 })).length, 14);
+  assert.deepEqual(((await bob.history({ limit: 3, order: 'desc' })).activities).map((activity) => activity.id), ['act/13', 'act/12', 'act/11']);
+  assert.equal(((await bob.history({ limit: 14 })).activities).length, 14);
   await square.close();
 });
 
 test('participant history reads the full archive', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   await alice.express('before listening', { force: true });
   await bob.listen('Alice');
   await alice.express('after listening', { force: true });
 
-  const history = await bob.history({ limit: 20 });
+  const history = (await bob.history({ limit: 20 })).activities;
   const before = history.find((activity) => activity.body === 'before listening');
   const after = history.find((activity) => activity.body === 'after listening');
   assert.equal(before?.body, 'before listening');
@@ -90,12 +90,12 @@ test('participant history reads the full archive', async () => {
 test('participant history pages around stable activity ids without overlap', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
-  const alice = await square.join('Alice');
+  const alice = (await square.join('Alice')).participant;
   for (let index = 0; index < 6; index += 1) await alice.express(`message ${index}`, { force: true });
-  assert.deepEqual((await alice.history({ limit: 3 })).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
-  assert.deepEqual((await alice.history({ before: 'act/4', limit: 3 })).map((activity) => activity.id), ['act/1', 'act/2', 'act/3']);
-  assert.deepEqual((await alice.history({ before: 'act/4', limit: 3, order: 'desc' })).map((activity) => activity.id), ['act/3', 'act/2', 'act/1']);
-  assert.deepEqual((await alice.history({ after: 'act/3', limit: 3 })).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
+  assert.deepEqual(((await alice.history({ limit: 3 })).activities).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
+  assert.deepEqual(((await alice.history({ before: 'act/4', limit: 3 })).activities).map((activity) => activity.id), ['act/1', 'act/2', 'act/3']);
+  assert.deepEqual(((await alice.history({ before: 'act/4', limit: 3, order: 'desc' })).activities).map((activity) => activity.id), ['act/3', 'act/2', 'act/1']);
+  assert.deepEqual(((await alice.history({ after: 'act/3', limit: 3 })).activities).map((activity) => activity.id), ['act/4', 'act/5', 'act/6']);
   await assert.rejects(() => alice.history({ before: 'act/4', after: 'act/3', limit: 3 }), /cannot combine before and after cursors/);
   await square.close();
 });
@@ -103,8 +103,8 @@ test('participant history pages around stable activity ids without overlap', asy
 test('idle catch wakes for a committed activity and expires while quiet', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   await bob.catch();
 
   const waiting = bob.catch({ idle: 500, mention: true });
@@ -140,8 +140,8 @@ test('idle catch with a stable route stays quiet and wakes once for an external 
   };
   const square = await Square.build({ path: squarePath, markdown: 'context', env });
   try {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await bob.catch();
     const routeBefore = (await readSquareSnapshot(squarePath)).state.routes.find((route) => route.participant === 'Bob');
     assert.ok(routeBefore);
@@ -259,7 +259,7 @@ test('concurrent facade joins for one participant keep a single live owner', asy
 test('listener facade commits only edge changes and exposes canonical listener state', async () => {
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
-  const alice = await square.join('Alice');
+  const alice = (await square.join('Alice')).participant;
   const emojiAkuId = 'aku/🕷️/1234abcd';
   await square.join('Bob');
   await square.join(emojiAkuId);
@@ -267,16 +267,16 @@ test('listener facade commits only edge changes and exposes canonical listener s
   const first = await alice.listen('bob');
   assert.deepEqual(first.activity && { kind: first.activity.kind, actor: first.activity.actor, target: first.activity.target }, { kind: 'listen', actor: 'Alice', target: 'bob' });
   assert.equal((await alice.listen('BOB')).activity, null);
-  assert.deepEqual(await alice.listening(), ['bob']);
+  assert.deepEqual((await alice.listening()).listening, ['bob']);
   assert.deepEqual((await square.snapshot()).participants.find((participant) => participant.name === 'Alice')?.listening, ['bob']);
   assert.equal((await alice.ignore('Bob')).activity?.kind, 'ignore');
   assert.equal((await alice.ignore('Bob')).activity, null);
-  assert.deepEqual(await alice.listening(), []);
+  assert.deepEqual((await alice.listening()).listening, []);
 
   assert.equal((await alice.listen(emojiAkuId)).activity?.kind, 'listen');
-  assert.deepEqual(await alice.listening(), [emojiAkuId]);
+  assert.deepEqual((await alice.listening()).listening, [emojiAkuId]);
   assert.equal((await alice.ignore(emojiAkuId)).activity?.kind, 'ignore');
-  assert.deepEqual(await alice.listening(), []);
+  assert.deepEqual((await alice.listening()).listening, []);
   await square.close();
 });
 
@@ -284,8 +284,8 @@ test('SDK express reenters a departed handle once and SDK catch avoids applicati
   let at = 0;
   const square = Square.inMemory({ markdown: 'context', clock: () => ++at });
   t.after(() => square.close());
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   await alice.done();
   // Instrument only read capabilities on this test-owned resource. Mutation
   // hydration belongs in the transaction; SDK calls must not hydrate another
@@ -312,7 +312,7 @@ test('SDK express reenters a departed handle once and SDK catch avoids applicati
   assert.deepEqual(stale, { activities: [], consumedThrough: expressed.activity.id, idleExpired: true, remaining: 0 });
   assert.deepEqual(projectionReads, []);
   t.mock.restoreAll();
-  assert.deepEqual((await square.history()).map((activity) => activity.kind), ['join', 'join', 'done', 'join', 'say']);
+  assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => activity.kind), ['join', 'join', 'done', 'join', 'say']);
   assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), true);
 });
 
@@ -329,7 +329,7 @@ test('path-backed SDK uses default wake delivery unless an injected port overrid
     await square.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const alice = await square.join('Alice');
+  const alice = (await square.join('Alice')).participant;
   await square.join('Bob');
   // An absent Stop boundary prevents external sending while still proving that
   // the default transport, rather than an undefined port, ran its real adapter.
@@ -343,7 +343,7 @@ test('path-backed SDK uses default wake delivery unless an injected port overrid
       return { outcome: 'accepted' };
     },
   } });
-  const second = await (await overridden.join('Alice')).express('injected adapter', { force: true, mentions: ['Bob'] });
+  const second = await ((await overridden.join('Alice')).participant).express('injected adapter', { force: true, mentions: ['Bob'] });
   assert.deepEqual(second.delivery, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
   assert.deepEqual(requests.map((request) => [request.participant, request.activity]), [['Bob', second.activity.id]]);
 });
@@ -356,7 +356,7 @@ test('recognize returns only the current locally bound participant without chang
   process.env.SQUARE_REGISTRY = registryPath;
   try {
     const square = await Square.build({ path: squarePath, markdown: 'context' });
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     const before = (await square.snapshot()).actCount;
     await createHostLedgerPort().ensurePresence({ location: squarePath, participant: alice.name, session: 'alice-session', channel: 'codex' });
     assert.equal((await square.recognize({ CODEX_THREAD_ID: 'alice-session' }))?.name, 'Alice');
@@ -390,7 +390,7 @@ test('a completed catch reads no sweep evidence and leaves unrelated eligible wo
   };
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const built = await Square.build({ path: squarePath, markdown: 'context', env });
-  const alice = await built.join('Alice');
+  const alice = (await built.join('Alice')).participant;
   await built.join('Bob');
   await built.join('Carol');
   const forBob = await alice.express('for Bob @Bob', { force: true, mentions: ['Bob'] });
@@ -421,7 +421,7 @@ test('a completed catch reads no sweep evidence and leaves unrelated eligible wo
   });
   const square = await Square.at({ path: squarePath, hostLedger: observed, env });
   t.after(() => square.close());
-  const carol = await square.join('Carol');
+  const carol = (await square.join('Carol')).participant;
   evidenceReads.length = 0;
   const caught = await carol.catch();
   assert.deepEqual(caught.activities.map((activity) => activity.id), [forCarol.activity.id]);

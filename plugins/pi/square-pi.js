@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
-import { createSquareApplication } from '../../dist/square-application.js';
+import { Square } from '../../dist/square-api.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
@@ -151,14 +151,15 @@ export default function squarePiExtension(pi) {
       namespace: { name: 'square', description: 'Participate in a shared public square.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
         try {
-          const app = createSquareApplication({
+          const square = await Square.at({
             cwd: ctx.cwd,
             env: operationEnv('pi', ctx.sessionManager.getSessionId(), process.env),
-            squarePath: args.location,
+            path: args.location,
             participant: args.as,
-          }, { presentation: false });
-          // Without a resource owner the facade closes each call's connection, including on cancellation.
-          const { data } = await tool.run(app, args, { signal });
+          }, { signal });
+          let data;
+          try { data = await tool.run(square, args, { signal }); }
+          finally { await square.close(); }
           return { content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
         } catch (error) {
           const data = { error: squareToolFailure(error, signal) };

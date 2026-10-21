@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
-import { Square } from '../dist/square-application.js';
+import { Square } from '../dist/square-api.js';
 import { catchUp } from '../dist/square-actions.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence, toPublicActivity } from '../dist/views.js';
@@ -112,11 +112,10 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
 
     const presence = await catchPresence(square);
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
-    // Compose real transaction selection and real optional presence facts using
-    // the application outcome shape; no projection stub reads or rebuilds a feed.
+    // Compose transaction selection and optional presence in the concrete catch result.
     const { activities, consumedThrough, remaining, terminalStatus, ...observation } = caught;
     const data = { activities: activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' })), consumedThrough, remaining, idleExpired: false };
-    const outcome = { data, projection: { ...observation, presence,
+    const outcome = { ...data, observation: { ...observation, presence,
       location: 'memory', participant: 'P0',
       automaticDeliveryAvailable: false, waitStarted: false, replaced: false,
     } };
@@ -138,7 +137,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     assert.equal(counters.hydrated.length, hydrationCount, 'empty catch must not request body hydration');
     const { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, terminalStatus: emptyTerminal, ...emptyObservation } = settled;
     const emptyData = { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, idleExpired: false };
-    const emptyOutcome = { data: emptyData, projection: { ...emptyObservation, presence,
+    const emptyOutcome = { ...emptyData, observation: { ...emptyObservation, presence,
       location: 'memory', participant: 'P0',
       automaticDeliveryAvailable: false, stop: 'empty-now', waitStarted: false, replaced: false,
     } };
@@ -155,7 +154,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
 test('catch fences selection and captures the page facts in its receipt transaction', async () => {
   const resource = Square.inMemory({ markdown: 'test', hardCap: 5, clock: () => 100 });
   try {
-    const alice = await resource.join('Alice');
+    const alice = (await resource.join('Alice')).participant;
     await resource.join('Bob');
     await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
     await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
@@ -197,14 +196,14 @@ test('a capped idle catch through the shared SDK owner hydrates no bodies and wr
   const resource = Square.inMemory({ markdown: 'test', hardCap: 1, clock: () => 100 });
   try {
     await resource.join('Alice');
-    const participant = await resource.join('P0');
+    const participant = (await resource.join('P0')).participant;
     await participant.express('only say', { force: true });
     const cell = resource.square.artifact;
     const before = (await cell.read((facts) => facts.receiptAssignments())).value;
     const { counters, artifact } = instrumentCell(cell);
     resource.square.artifact = artifact;
     const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-    assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0 });
+    assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0, status: 'capped' });
     assert.equal(counters.hydrated.flat().length, 0);
     assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
   } finally {

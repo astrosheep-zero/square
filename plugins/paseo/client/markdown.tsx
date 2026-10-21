@@ -84,20 +84,30 @@ function parseBlocks(markdown: string): Block[] {
 
 interface SquareBlock { meta?: string; actor?: string; body: string }
 
+function parseAttributes(source: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  for (const match of source.matchAll(/([a-z]+)="([^"]*)"/g)) {
+    attributes[match[1]!] = match[2]!.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
+  return attributes;
+}
+
 // A square notification is one or more <square-activity> blocks. Split them out so the
-// envelope lines become styled chrome and only the body goes through markdown.
+// envelope becomes styled chrome and only the body goes through markdown: where and which
+// activity come from tag attributes, and the first inner line is the route sentence.
 function parseSquareBlocks(text: string): SquareBlock[] {
   const blocks: SquareBlock[] = [];
-  const re = /<square-activity>\n([\s\S]*?)\n<\/square-activity>/g;
+  const re = /<square-activity([^>]*)>\n([\s\S]*?)\n<\/square-activity>/g;
   let last = 0;
   for (const match of text.matchAll(re)) {
     const index = match.index ?? 0;
     const before = text.slice(last, index).trim();
     if (before !== "") blocks.push({ body: before });
-    const inner = match[1]!;
-    const innerLines = inner.split("\n");
-    const meta = innerLines[0]?.startsWith("· ") ? innerLines.shift() : undefined;
-    const actor = innerLines[0]?.startsWith("● ") ? innerLines.shift() : undefined;
+    const attributes = parseAttributes(match[1]!);
+    const innerLines = match[2]!.split("\n");
+    const described = [attributes.square, attributes.as, attributes.id].filter((value) => value !== undefined);
+    const meta = described.length > 0 ? `· ${described.join(" · ")}` : undefined;
+    const actor = innerLines.shift();
     blocks.push({ meta, actor, body: innerLines.join("\n").trim() });
     last = index + match[0].length;
   }

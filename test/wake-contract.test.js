@@ -1,19 +1,40 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { after, before, test } from 'node:test';
 
+import { writeSquareFile } from '../dist/artifact.js';
 import { createWakeTransport } from '../dist/notifications.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 
 const clock = () => 1_700_000_000_000;
 const hostLedger = { listPresence: async () => [] };
 
+// Every wake route previews the stored activity, so the transport needs a real square.
+let root;
+let squarePath;
+before(async () => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-contract-'));
+  squarePath = path.join(root, 'square.square');
+  const acts = [
+    { kind: 'join', actor: 'Bev', at: 1, index: 0 },
+    { kind: 'join', actor: 'Faye', at: 2, index: 1 },
+    { kind: 'say', actor: 'Bev', at: 3, body: 'answer me @Faye', mentions: ['Faye'], index: 2 },
+  ];
+  await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts,
+    runtime: { ...emptyRuntimeState(acts.length), nextActIndex: acts.length } });
+});
+after(() => { if (root !== undefined) fs.rmSync(root, { recursive: true, force: true }); });
+
 function request(kind) {
   return {
-    location: '/nonexistent/square.square',
+    location: squarePath,
     participant: 'Faye',
-    activity: 'act/1',
+    activity: 'act/2',
     actor: 'Bev',
     route: {
-      location: '/nonexistent/square.square',
+      location: squarePath,
       participant: 'Faye',
       sessionId: `${kind}-session`,
       channel: kind,
@@ -52,7 +73,7 @@ test('supplied final gate alone owns transport revalidation without another arti
   const gated = adapter('paseo', {
     async dispatch(_address, payload, finalGate) {
       assert.equal(finalGate, gate);
-      assert.match(payload, /attention: act\/1 for Faye from Bev/);
+      assert.match(payload, /<square-activity square="[^"]*square\.square" as="Faye" id="act\/2" from="Bev">\nBev spoke your name\./);
       assert.equal(await finalGate(), true);
       return { outcome: 'accepted' };
     },

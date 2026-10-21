@@ -9,7 +9,7 @@ import test from 'node:test';
 import { formatActivityId } from '../../dist/square-core.js';
 import { readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
 import { Square } from '../../dist/index.js';
-import { createSquareApplication } from '../../dist/square-application.js';
+import { discover } from '../../dist/square-api.js';
 import { listCommand } from '../../dist/cli/observation-commands.js';
 import {
   ROOT,
@@ -25,7 +25,7 @@ import {
 
 test('status renders hold duration from the real actor', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const host = await square.join('Host');
+    const host = (await square.join('Host')).participant;
     await host.hold('pause');
   });
   const held = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '62000' } });
@@ -36,8 +36,8 @@ test('status renders hold duration from the real actor', async () => {
 
 test('status stays compact and focuses on the current square', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     for (let index = 0; index < 12; index += 1) {
       await alice.express(`activity ${index} @Bob`, { force: true, mentions: ['Bob'] });
     }
@@ -59,7 +59,7 @@ test('status previews ten active participants and links to the complete roster',
   const file = await persistSquare(async ({ square }) => {
     await square.join('Viewer');
     for (const name of peers) {
-      const participant = await square.join(name);
+      const participant = (await square.join(name)).participant;
       await participant.express(`recent activity from ${name}`, { force: true });
     }
   }, { hardCap: 100 });
@@ -104,7 +104,7 @@ test('status separates here from lingering and keeps the roster honest', async (
 
 test('status shows who stepped in after the latest public act', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.done();
     await square.join('Alice');
     await square.join('Bob');
@@ -119,7 +119,7 @@ test('status shows who stepped in after the latest public act', async () => {
 
 test('participants stops crediting long-quiet speakers as active', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('old words', { force: true });
   }, { hardCap: 100 });
 
@@ -174,7 +174,7 @@ test('participants do not offer a rejected complete-roster limit', async () => {
 
 test('history refuses an unbounded merged context and offers a bounded executable command', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     for (let index = 1; index <= 101; index += 1) {
       await alice.express(`activity ${index}`, { force: true });
     }
@@ -204,8 +204,8 @@ test('status has no participant preview affordance at ten active participants', 
 test('express does not surface delivery-health diagnostics during normal use', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
-    await (await square.join('Alice')).express('hey @Bob', { force: true, mentions: ['Bob'] });
+    const bob = (await square.join('Bob')).participant;
+    await ((await square.join('Alice')).participant).express('hey @Bob', { force: true, mentions: ['Bob'] });
     await bob.express('still working @Bob', { force: true, mentions: ['Bob'] });
   });
 
@@ -224,8 +224,8 @@ test('express does not surface delivery-health diagnostics during normal use', a
 
 test('catch --mention renders matching says and suppresses room changes', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await square.join('Cara');
     void alice;
@@ -241,9 +241,9 @@ test('catch --mention renders matching says and suppresses room changes', async 
 
 test('catch continuation preserves filters and page size', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
-    const cara = await square.join('Cara');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
+    const cara = (await square.join('Cara')).participant;
     for (let index = 0; index < 3; index += 1) await bob.express(`message ${index} @Alice`, { force: true, mentions: ['Alice'] });
     for (let index = 0; index < 3; index += 1) await cara.express(`reply ${index} @Alice`, { force: true, mentions: ['Alice'] });
     void alice;
@@ -260,8 +260,8 @@ test('catch continuation preserves filters and page size', async () => {
 test('catch --from renders named peers and rejects the removed --by flag', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
-    const cara = await square.join('Cara');
+    const bob = (await square.join('Bob')).participant;
+    const cara = (await square.join('Cara')).participant;
     await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
     await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
     await bob.done();
@@ -301,7 +301,7 @@ test('catch --now around the square excludes the current actor', async () => {
 test('history with an explicit page and no truncation renders the archive', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await bob.done();
   });
@@ -316,7 +316,7 @@ test('history with an explicit page and no truncation renders the archive', asyn
 
 test('history accepts --as without claiming identity or changing archive semantics', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('archived body', { force: true });
   });
   const before = fs.readFileSync(file);
@@ -351,7 +351,7 @@ test('unknown participant errors stay bounded and point to the roster', async ()
 
 test('history pages with stable activity-id cursors and prints the next page', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     for (let index = 0; index < 12; index += 1) await alice.express(`message ${index}`, { force: true });
   }, { hardCap: 20 });
   const latest = run(withPath(file, ['history', '--limit', '3']));
@@ -370,7 +370,7 @@ test('history pages with stable activity-id cursors and prints the next page', a
 test('history --since excludes older public activity', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await bob.done();
   });
@@ -393,7 +393,7 @@ test('history --since excludes older public activity', async () => {
 
 test('history hides read bookkeeping acts except in time and context windows', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('first public activity', { force: true });
     await alice.express('second public activity', { force: true });
   }, { hardCap: 100 });
@@ -428,7 +428,7 @@ test('history hides read bookkeeping acts except in time and context windows', a
 
 test('ambient catch and history render full body to a mention target and presence to others', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await square.join('Cara');
     await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
@@ -474,7 +474,7 @@ test('ambient catch and history render full body to a mention target and presenc
 
 test('history anchors footprints at the last evidence of presence', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await square.join('Cara');
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
@@ -492,8 +492,8 @@ test('history anchors footprints at the last evidence of presence', async () => 
 
 test('presence rendering omits a body when a bare say has no visible mention target', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await square.join('Cara');
     await bob.listen('Alice');
     await alice.express('listener-only answer', { force: true });
@@ -509,7 +509,7 @@ test('presence rendering omits a body when a bare say has no visible mention tar
 
 test('history expands the newest ten activities in chronological order', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     for (let index = 1; index <= 11; index += 1) {
       const body = `history body ${index} ${'x'.repeat(index === 11 ? 230 : 4)} @Alice`;
       await alice.express(body, { force: true, mentions: ['Alice'] });
@@ -529,7 +529,7 @@ test('history expands one result, previews multiple results, and --no-truncate e
   const firstTail = 'FIRST-TAIL';
   const secondTail = 'SECOND-TAIL';
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express(`${'a'.repeat(220)}${firstTail}`, { force: true });
     await alice.express(`${'b'.repeat(220)}${secondTail}`, { force: true });
   });
@@ -552,7 +552,7 @@ test('history expands one result, previews multiple results, and --no-truncate e
 
 test('bell quota refusal prints the next timestamp and express help keeps --bell', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await square.join('Cara');
     await alice.express('bell one', { force: true, reach: 'bell' });
@@ -579,8 +579,8 @@ test('bell quota refusal prints the next timestamp and express help keeps --bell
 
 test('express --reply renders the causal activity reference', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
     await bob.express('answer @Alice', { force: true, mentions: ['Alice'], reply: 'act/2' });
   });
@@ -596,8 +596,8 @@ test('express --reply renders the causal activity reference', async () => {
 
 test('history --at accepts multiple coordinates and unions their context windows', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await alice.express('first @Bob', { force: true, mentions: ['Bob'] });
     await bob.express('second @Alice', { force: true, mentions: ['Alice'] });
   });
@@ -613,7 +613,7 @@ test('history --at accepts multiple coordinates and unions their context windows
 
 test('inbox stays read-only while codex admits pending attention once at a boundary', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await alice.express('hey @Bob', { force: true, mentions: ['Bob'] });
   });
@@ -685,8 +685,8 @@ test('inbox stays read-only while codex admits pending attention once at a bound
 
 test('history power filters and jsonl stay read-only', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
-    const bob = await square.join('Bob');
+    const alice = (await square.join('Alice')).participant;
+    const bob = (await square.join('Bob')).participant;
     await bob.express('deploy failed on schema v3 @Alice', { force: true, mentions: ['Alice'] });
     await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
   });
@@ -701,7 +701,7 @@ test('history power filters and jsonl stay read-only', async () => {
 
 test('history grep defaults to a compact character-bounded search view', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express(`needle ${'🙂'.repeat(250)}TAIL @Alice`, { force: true, mentions: ['Alice'] });
   });
 
@@ -724,7 +724,7 @@ test('history grep defaults to a compact character-bounded search view', async (
 
 test('history grep centers snippets on late, multiline, and fixed matches', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express(`START-${'x'.repeat(260)}-schema\nv3-${'y'.repeat(260)}-END @Alice`, { force: true, mentions: ['Alice'] });
     await alice.express('literal [ bracket @Alice', { force: true, mentions: ['Alice'] });
   });
@@ -747,7 +747,7 @@ test('history grep centers snippets on late, multiline, and fixed matches', asyn
 
 test('history search reports shown and total matches consistently', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     for (let index = 0; index < 12; index += 1) {
       await alice.express(`needle ${index} @Alice`, { force: true, mentions: ['Alice'] });
     }
@@ -798,7 +798,7 @@ test('history grep describes an empty result precisely', async () => {
 
 test('status shows attention state and stable activity ids', async () => {
   const file = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
     await alice.express('please check @Bob', { force: true, mentions: ['Bob'] });
   });
@@ -824,7 +824,7 @@ test('status shows attention state and stable activity ids', async () => {
 test('status header counts only participants still in the square', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.done();
   });
   const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
@@ -835,7 +835,7 @@ test('status header counts only participants still in the square', async () => {
 test('historical body-bearing done events remain readable without becoming catch messages', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold('pause');
     await bob.resume();
   });
@@ -862,7 +862,7 @@ test('historical body-bearing done events remain readable without becoming catch
 test('status attention and express blocker agree on unread square changes', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.hold('pause');
   });
   const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
@@ -894,13 +894,13 @@ test('an unread join alone does not block express', async () => {
 test('held, throttled, blocked, and capped activities preserve executable drafts', async () => {
   const heldFile = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const host = await square.join('Host');
+    const host = (await square.join('Host')).participant;
     await host.hold('pause');
   }, { hardCap: 10 });
   assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', "express --no-wait --mention 'Host' -");
 
   const throttleFile = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('first @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10, throttlePerMinute: 1 });
   const throttled = run(withName(throttleFile, 'Alice', ['express', '--no-wait', '--mention', 'Alice', '-']), {
@@ -912,7 +912,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
   assert.doesNotMatch(throttled.stdout, /\d{4,}ms/);
 
   const capFile = await persistSquare(async ({ square }) => {
-    const alice = await square.join('Alice');
+    const alice = (await square.join('Alice')).participant;
     await alice.express('first @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 1 });
   const capped = run(withName(capFile, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'final body @Alice\n' });
@@ -925,7 +925,7 @@ test('held, throttled, blocked, and capped activities preserve executable drafts
 
   const blockedFile = await persistSquare(async ({ square }) => {
     await square.join('Alice');
-    const bob = await square.join('Bob');
+    const bob = (await square.join('Bob')).participant;
     await bob.express('peer @Alice', { force: true, mentions: ['Alice'] });
   }, { hardCap: 10 });
   const blocked = run(withName(blockedFile, 'Alice', ['express', '--mention', 'Bob', '-']), { input: 'blocked body @Bob\n' });
@@ -1045,7 +1045,7 @@ test('list previews bounded context and the three most recently active participa
   await square.join('bob');
   await square.join('carol');
   await square.join('dave');
-  await (await square.join('alice')).express('@bob latest', { force: true, mentions: ['bob'] });
+  await ((await square.join('alice')).participant).express('@bob latest', { force: true, mentions: ['bob'] });
   await square.close();
 
   const listed = run(['list'], { cwd });
@@ -1066,9 +1066,9 @@ test('list clips displayed path, context, and names without truncating its proje
   await square.join(longName);
   await square.close();
 
-  const discovered = await createSquareApplication({ cwd, env: testEnv() }).discover({});
-  const item = discovered.data.items.find((candidate) => candidate.path === longPath);
-  assert.ok(item, 'application discovery retains the complete relative path');
+  const discovered = await discover({ cwd, env: testEnv() });
+  const item = discovered.items.find((candidate) => candidate.path === longPath);
+  assert.ok(item, 'discovery retains the complete relative path');
   assert.ok(item.context.includes(longContext));
   assert.ok(item.participants.includes(longName));
 
@@ -1090,8 +1090,8 @@ test('list, participants, and clipped status use current state and executable hi
     hardCap: 10,
     throttlePerMinute: 2,
   });
-  const alice = await square.join('Alice');
-  const bob = await square.join('Bob');
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   await bob.done();
   await alice.express(`${'x'.repeat(260)} @Alice`, { force: true, mentions: ['Alice'] });
   await square.close();

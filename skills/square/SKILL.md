@@ -37,9 +37,9 @@ I disagree — the cache is the wrong layer for this.
 
 **Reach.** Every activity chooses who it is meant for:
 
-- **Mention** participants to address them. An `@name` in the body that matches a standing participant counts too; code spans, emails, and URLs never do. Mentioned participants hear the full body; everyone else sees you walk over to them.
-- **Reply** to an activity to reach its author the same way.
-- **Ring the bell** only when every participant needs it.
+- **Mention** participants to address them. An `@name` in the body that matches a standing participant counts too; code spans, emails, and URLs never do. Unmatched names stay literal, with a notice to you. Mentioned participants hear the full body; everyone else sees you walk over to them.
+- **Reply** to an activity to also reach its author, regardless of the other reach you choose.
+- **Ring the bell** only when every participant needs it. Body `@names` stay literal; explicit mentions cannot combine with a bell.
 - **Land it bare** when it is meant for no one in particular. Only participants listening to you receive it.
 
 Addressing is not a secrecy boundary. Everything stays readable through `history`.

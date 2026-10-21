@@ -2,11 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSquareError } from '../model.js';
-import { formatActivityId, parseActivityId } from '../square-application.js';
-import type {
-  ActivityId, ApplicationError, ApplicationOutcome, ExpressApplicationData,
-  ExpressApplicationOptions, ExpressProjection, SquareApplication,
-} from '../square-facade.js';
+import { type Square, formatActivityId, parseActivityId } from '../square-api.js';
+import type { ActivityId, OperationError, OperationControl, ExpressResult, ExpressOptions } from '../square-facade.js';
 import {
   expressHintLine, formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
   renderActivityUncertain, renderExpressNoWait, renderExpressWaiting, renderPendingFeed,
@@ -16,7 +13,7 @@ import {
 import { formatDuration } from '../time.js';
 import { style } from '../tty-style.js';
 
-export interface ActivityOptions extends Omit<ExpressApplicationOptions, 'reply'> { readonly reply?: string; }
+export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> { readonly reply?: string; }
 
 export function saveActivityDraft(squarePath: string, name: string, body: string, now = Date.now()): string {
   const draftDir = path.join(path.dirname(squarePath), 'drafts');
@@ -40,22 +37,18 @@ function replyArgument(reply: string | undefined): string {
 
 /** Retry choices are transport syntax, never a second admission decision. */
 export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions, force = opts.force ?? false): string {
-  const reach = opts.reach === 'bell' ? ' --bell'
-    : opts.mentions?.length ? opts.mentions.map((target) => ` --mention ${quoteShell(target)}`).join('')
-      : opts.noMention === true ? ' --no-mention' : '';
+  const reach = (opts.reach === 'bell' ? ' --bell' : '')
+    + (opts.mentions ?? []).map((target) => ` --mention ${quoteShell(target)}`).join('')
+    + (opts.noMention === true ? ' --no-mention' : '');
   return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${replyArgument(opts.reply)} -`;
-}
-
-function mentionRepairCommand(squarePath: string, name: string, opts: ActivityOptions, bell: boolean): string {
-  return `${participantCommandPrefix(squarePath, name)} express${opts.force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${bell ? ' --bell' : ' --no-mention'}${replyArgument(opts.reply)} -`;
 }
 
 function isGestureOnly(body: string): boolean {
   return /\*[^*]*\*/.test(body) && body.replace(/\*[^*]*\*/g, '').trim() === '';
 }
 
-export function renderExpression(squarePath: string, outcome: ApplicationOutcome<ExpressApplicationData, ExpressProjection>): string {
-  const { data, projection } = outcome;
+export function renderExpression(squarePath: string, data: ExpressResult): string {
+  const projection = data.observation!;
   const name = projection.participant;
   const pendingSpeaker = projection.pendingPublic[0]?.actor;
   const pendingLead = pendingSpeaker === undefined ? ''
@@ -73,14 +66,18 @@ export function renderExpression(squarePath: string, outcome: ApplicationOutcome
   const hint = expressHintLine(ownCount);
   const replyNotice = data.replyAuthorNotHere === undefined ? ''
     : `\n○ ${participantIdentity(data.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
+  const unmatchedNotice = data.unmatchedMentions?.length
+    ? `\n  · ${data.unmatchedMentions.map((token) => `@${token} isn't standing here`).join('; ')} — ${activity.mentions.length === 0 && activity.reply === undefined ? 'activity landed bare' : 'left as literal text'}` : '';
   return withPathOutput(projection.location ?? squarePath,
     (projection.reentry === undefined ? '' : '● you stepped back into the square\n')
-      + confirmation + (hint ? `\n${style('dim', hint)}` : '') + replyNotice + pending,
+      + confirmation + (hint ? `\n${style('dim', hint)}` : '') + replyNotice + unmatchedNotice + pending,
     { participantCount: projection.standingCount, held: projection.held });
 }
 
-/** Body adaptation, terminal IO and drafts only; the application owns every attempt and wait. */
-export async function executeExpression(application: SquareApplication, squarePath: string, requestedName: string | undefined, rawInput: string, opts: ActivityOptions): Promise<void> {
+/** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string, opts: ActivityOptions): Promise<void> {
+  let square: Square | undefined;
+  let attempted = false;
   let announcedWait: 'held' | 'throttled' | undefined;
   let landedId: ActivityId | undefined;
   let name = requestedName;
@@ -88,8 +85,12 @@ export async function executeExpression(application: SquareApplication, squarePa
   const interrupt = () => controller.abort();
   process.once('SIGINT', interrupt);
   try {
-    const outcome = await application.express(rawInput.replace(/\r\n/g, '\n').trim(), {
-      ...opts, reply: opts.reply as ActivityId | undefined, requireExplicitReach: true,
+    square = await open({ signal: controller.signal });
+    const participant = await square.participant(requestedName);
+    name = participant.name;
+    attempted = true;
+    const outcome = await participant.express(rawInput.replace(/\r\n/g, '\n').trim(), {
+      ...opts, reply: opts.reply as ActivityId | undefined, requireExplicitReach: true, observe: true,
     }, {
       signal: controller.signal,
       onProgress(progress) {
@@ -98,21 +99,21 @@ export async function executeExpression(application: SquareApplication, squarePa
         announcedWait = progress.reason;
       },
     });
-    landedId = outcome.data.activity.id;
-    name = outcome.projection.participant;
+    landedId = outcome.activity.id;
+    name = outcome.observation!.participant;
     process.stdout.write(renderExpression(squarePath, outcome));
   } catch (error) {
-    const detail = (error as ApplicationError | undefined)?.operation;
+    const detail = (error as OperationError | undefined)?.operation;
     name = detail?.participant ?? name ?? 'participant';
     // This MUST precede recovery: even an unreadable artifact cannot eat the raw body.
     const draftPath = saveActivityDraft(squarePath, name, rawInput);
-    const recovered = await application.recovery().catch(() => undefined);
-    const fresh = recovered?.data;
+    if (square === undefined) square = await open().catch(() => undefined);
+    const fresh = await square?.recovery(name).catch(() => undefined);
     name = fresh?.participant ?? name;
     const output = { squarePath, name, draftPath, participantCount: fresh?.standingCount, held: fresh?.held };
     const confirmedUnsent = landedId === undefined && detail?.landedId === undefined
       && detail?.expressEffect !== 'landed' && detail?.expressEffect !== 'unknown'
-      && (detail?.expressEffect === 'unsent' || (isSquareError(error) && error.facts?.activityUnsent === true));
+      && (!attempted || detail?.expressEffect === 'unsent' || (isSquareError(error) && error.facts?.activityUnsent === true));
     const retryCommand = activityRetryCommand(squarePath, name, opts);
     const exitCode = (code: number) => { process.exitCode = controller.signal.aborted ? 130 : code; };
     if (!confirmedUnsent) {
@@ -161,19 +162,17 @@ export async function executeExpression(application: SquareApplication, squarePa
             : 'Invalid --reply: expected an activity id like act/12'
           : refusalText(error);
     const lines = [message, `· draft kept: ${draftPath}`];
-    const recipientFailure = detail?.subject === 'recipient';
-    const repair = reason === 'bell_mention_conflict' ? { bell: true, fromBody: true }
-      : reason === 'not_standing' && recipientFailure ? { bell: false, fromBody: false } : undefined;
+    const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
     if (isSquareError(error)) {
       if ((reason === 'never_joined' && detail?.subject === 'caller') || error.code === 'unknown_participant' || error.code === 'not_joined') {
         lines.push(joinRecoveryCommand(squarePath, name));
       }
       if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name));
-      if (repair !== undefined) {
-        lines.push(participantsRecoveryCommand(squarePath), repair.fromBody
-          ? "  · edit the draft first — the body's @name must be removed or wrapped in backticks:"
+      if (repair) {
+        lines.push(participantsRecoveryCommand(squarePath), reason === 'bell_mention_conflict'
+          ? '  · ring the bell without explicit mentions:'
           : '  · pick someone standing here, or land it bare:',
-        `${mentionRepairCommand(squarePath, name, opts, repair.bell)} < ${quoteShell(draftPath)}`);
+        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [], noMention: opts.reach === 'bell' ? opts.noMention : true })} < ${quoteShell(draftPath)}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
         if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
@@ -185,15 +184,15 @@ export async function executeExpression(application: SquareApplication, squarePa
         `${activityRetryCommand(squarePath, name, { ...opts, noMention: true })} < ${quoteShell(draftPath)}`,
       );
     } else if (reason === 'invalid_reply') {
-      const hasFlagReach = opts.reach !== undefined || (opts.mentions?.length ?? 0) > 0 || opts.noMention === true;
-      const withoutReply = { ...opts, reply: undefined, ...(hasFlagReach ? {} : { noMention: true }) };
+      const needsBareReach = facts?.hasReachWithoutReply === false;
+      const withoutReply = { ...opts, reply: undefined, ...(needsBareReach ? { noMention: true } : {}) };
       lines.push(
         `${commandPrefix(squarePath)} history --limit 10`,
         '  · choose a valid --reply from history, or send without a reply using this repair:',
-        ...(hasFlagReach ? [] : ['  · this repair is bare; replace --no-mention with --mention <name> to address someone']),
+        ...(needsBareReach ? ['  · this repair is bare; replace --no-mention with --mention <name> to address someone'] : []),
         `${activityRetryCommand(squarePath, name, withoutReply)} < ${quoteShell(draftPath)}`,
       );
-    } else if (repair === undefined) {
+    } else if (!repair) {
       lines.push(
         '  · correct the problem above before retrying; keep your intended recipients and reply:',
         `${retryCommand} < ${quoteShell(draftPath)}`,
@@ -201,5 +200,5 @@ export async function executeExpression(application: SquareApplication, squarePa
     }
     process.stderr.write(formatRefusal(squarePath, lines, output));
     exitCode(2);
-  } finally { process.off('SIGINT', interrupt); }
+  } finally { process.off('SIGINT', interrupt); await square?.close(); }
 }
