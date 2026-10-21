@@ -54,17 +54,14 @@ test('participants renders roster names without mention syntax', () => {
   assert.doesNotMatch(roster.stdout, /@Alice/);
 });
 
-test('listen and ignore commands control future bare delivery without gating express', async () => {
+test('bare activities land without an audience and listeners receive later bare activity', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   });
-  const missingReach = run(withName(file, 'Alice', ['express', 'bare thought']));
-  assert.equal(missingReach.status, 2);
-  assert.match(missingReach.stderr, /express needs --mention <name>, --no-mention, --bell, or an @name in the body/);
-
-  const bareWithoutListener = run(withName(file, 'Alice', ['express', '--no-mention', 'bare thought']));
+  const bareWithoutListener = run(withName(file, 'Alice', ['express', 'bare thought']));
   assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);
+  assert.match(bareWithoutListener.stdout, /your words land/);
 
   const ignoredBeforeListening = run(withName(file, 'Bob', ['ignore', 'Alice']));
   assert.equal(ignoredBeforeListening.status, 0, ignoredBeforeListening.stderr);
@@ -76,8 +73,13 @@ test('listen and ignore commands control future bare delivery without gating exp
   const repeated = run(withName(file, 'Bob', ['listen', 'Alice']));
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.match(repeated.stdout, /already turns an ear toward @Alice/);
-  assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['express', '--no-mention', 'bare thought'])).status, 0);
+  const heard = run(withName(file, 'Alice', ['express', 'listener thought']));
+  assert.equal(heard.status, 0, heard.stderr);
+  const caught = run(withName(file, 'Bob', ['catch', '--now']));
+  assert.equal(caught.status, 0, caught.stderr);
+  assert.match(caught.stdout, /listener thought/);
+  assert.doesNotMatch(caught.stdout, /bare thought/);
+
   const listening = run(withName(file, 'Bob', ['listening']));
   assert.equal(listening.status, 0, listening.stderr);
   assert.match(listening.stdout, /@Alice/);

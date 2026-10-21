@@ -84,6 +84,43 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   }
 });
 
+test('SDK, CLI and MCP bare expressions land without an audience and reach listeners', async (t) => {
+  const direct = await fixture(t, 'bare-sdk'), terminal = await fixture(t, 'bare-cli'), json = await fixture(t, 'bare-mcp');
+  const call = await mcp(t, json);
+  for (const name of ['Alice', 'Bob']) {
+    await direct.square.join(name);
+    cli(terminal, name, ['join']);
+    await call('join', { as: name });
+  }
+
+  await (await direct.square.participant('Alice')).express('sdk bare without listener', { force: true });
+  cli(terminal, 'Alice', ['express', '--force', 'cli bare without listener']);
+  await call('express', { as: 'Alice', body: 'mcp bare without listener', force: true });
+
+  await (await direct.square.participant('Bob')).listen('Alice');
+  cli(terminal, 'Bob', ['listen', 'Alice']);
+  await call('listen', { as: 'Bob', target: 'Alice' });
+
+  await (await direct.square.participant('Alice')).express('sdk bare for listener', { force: true });
+  cli(terminal, 'Alice', ['express', '--force', 'cli bare for listener']);
+  await call('express', { as: 'Alice', body: 'mcp bare for listener', force: true });
+
+  const sdkCaught = await (await direct.square.participant('Bob')).catch();
+  assert.deepEqual(sdkCaught.activities.map((activity) => activity.body), ['sdk bare for listener']);
+  const cliCaught = cli(terminal, 'Bob', ['catch', '--now']);
+  assert.match(cliCaught, /cli bare for listener/);
+  assert.doesNotMatch(cliCaught, /cli bare without listener/);
+  const mcpCaught = await call('catch', { as: 'Bob' });
+  assert.deepEqual(mcpCaught.activities.map((activity) => activity.body), ['mcp bare for listener']);
+
+  for (const options of [direct, terminal, json]) {
+    const bodies = (await options.square.history({ limit: 100 })).activities
+      .filter((activity) => activity.kind === 'say').map((activity) => activity.body);
+    assert.equal(bodies.some((body) => body?.includes('without listener')), true);
+    assert.equal(bodies.some((body) => body?.includes('for listener')), true);
+  }
+});
+
 test('all history callers default to ten; only explicit null reads the full archive, without receipts', async (t) => {
   const options = await fixture(t, 'archive'), { square } = options;
   const { participant } = await square.join('Alice');

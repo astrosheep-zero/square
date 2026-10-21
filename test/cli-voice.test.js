@@ -61,11 +61,11 @@ test('unmatched body @names land; explicit --mention still offers a runnable rep
   assert.equal(flag.status, 2, flag.stdout + flag.stderr);
   const flagOutput = flag.stdout + flag.stderr;
   assert.match(flagOutput, /✕ @Ghost is not standing in this square/);
-  assert.match(flagOutput, /pick someone standing here, or land it bare/);
+  assert.match(flagOutput, /retry without explicit recipients/);
   assert.doesNotMatch(flagOutput, /must be removed or wrapped in backticks/);
   const flagRetries = printedCommands(flagOutput);
   assert.equal(flagRetries.length, 1);
-  assert.match(flagRetries[0], /--no-mention/);
+  assert.doesNotMatch(flagRetries[0], /--no-mention/);
   assert.equal(executePrinted(flagRetries[0]).status, 0);
 });
 

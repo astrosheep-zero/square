@@ -30,7 +30,6 @@ export interface ExpressOptions extends ObservationOptions {
   readonly reply?: ActivityId;
   readonly noMention?: boolean;
   readonly noWait?: boolean;
-  readonly requireExplicitReach?: boolean;
 }
 export interface ActivityResult {
   readonly activity: Activity;

@@ -8,7 +8,7 @@ import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './squa
 import { scanMentionCandidates, resolveMention } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
-import type { ExpressOptions, ExpressResult, ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
+import type { ExpressResult, ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
 export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
@@ -92,13 +92,7 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
-export function expressionReach(input: { body: string } & Pick<ExpressOptions, 'reach' | 'mentions' | 'noMention'>) {
-  const bodyMentions = input.reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(input.body);
-  const hasReachWithoutReply = input.reach === 'bell' || (input.mentions?.length ?? 0) > 0 || input.noMention === true || bodyMentions.length > 0;
-  return { bodyMentions, hasReachWithoutReply };
-}
-
-export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean; requireExplicitReach?: boolean }): ActDecision {
+export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {
   const { now, force, body, reach, reply } = input;
   const current = resolveStanding(facts, input.name, true);
   const name = current.name;
@@ -118,20 +112,17 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
     if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
     addMention(resolved);
   }
-  const { bodyMentions, hasReachWithoutReply } = expressionReach(input);
+  const bodyMentions = reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(body);
   const unmatchedMentions: string[] = [];
   for (const token of bodyMentions) {
     const resolved = resolveMention(token, joinedNames);
     if (resolved !== undefined) addMention(resolved);
     else unmatchedMentions.push(token);
   }
-  if (input.requireExplicitReach && !hasReachWithoutReply && reply === undefined) {
-    throw activityRefusal('invalid_args', 'Express needs a recipient, reply, bell, or explicit bare reach', { reason: 'explicit_reach_required' });
-  }
   const header = facts.header();
   if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
     const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
-    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`, { reason: 'invalid_reply', activityId: label, activityExists: false, hasReachWithoutReply });
+    throw activityRefusal('invalid_args', `Unknown reply activity: ${label}`, { reason: 'invalid_reply', activityId: label, activityExists: false });
   }
   const replyAuthor = reply === undefined ? undefined : facts.activity(reply)?.actor;
   const replyAuthorNotHere = replyAuthor === undefined || sameName(replyAuthor, name) || facts.participant(replyAuthor)?.joined ? undefined : replyAuthor;

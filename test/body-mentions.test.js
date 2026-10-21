@@ -110,15 +110,22 @@ test('unknown and departed body @names stay literal while standing matches still
     ],
   });
   const body = '@Bob @Eve @Cara listen up';
-  const decision = await decide(state, { name: 'Alice', body, force: true, now: 10, requireExplicitReach: true });
+  const decision = await decide(state, { name: 'Alice', body, force: true, now: 10 });
   assert.equal(decision.type, 'sent');
   assert.equal(decision.act.body, body);
   assert.deepEqual(decision.act.mentions, ['Cara']);
   assert.deepEqual(decision.unmatchedMentions, ['Bob', 'Eve']);
-  const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', force: true, now: 11, requireExplicitReach: true });
+  const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', force: true, now: 11 });
   assert.equal(literal.type, 'sent');
   assert.equal(literal.act.body, '@Bob @Eve');
   assert.deepEqual(literal.act.mentions, []);
+});
+
+test('bare activity is valid without a recipient and remains available to listeners', async () => {
+  const state = standingState();
+  const decision = await decide(state, { name: 'Alice', body: 'ordinary thought', force: true, now: 10 });
+  assert.equal(decision.type, 'sent');
+  assert.deepEqual(decision.act.mentions, []);
 });
 
 test('noMention disables only body scanning, not explicit mentions or reply', async () => {
@@ -245,6 +252,6 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
   assert.doesNotMatch(explicit.stdout, /isn't standing/);
 
   const pipedBare = run(withName(file, 'Alice', ['express', '-']), { input: 'no audience here' });
-  assert.equal(pipedBare.status, 2);
-  assert.match(pipedBare.stderr, /express needs --mention <name>, --no-mention, --bell, or an @name in the body/);
+  assert.equal(pipedBare.status, 0, pipedBare.stderr);
+  assert.match(pipedBare.stdout, /your words land/);
 });

@@ -48,7 +48,7 @@ export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
   /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */
-  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'explicit_reach_required' | 'invalid_reply' | 'invalid_done_body';
+  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'invalid_reply' | 'invalid_done_body';
   /** The activity id a `catch --id` refusal named. */
   activityId?: string;
   /** The host ledger requiring offline migration, rather than the selected artifact. */
@@ -57,8 +57,6 @@ export interface SquareErrorFacts {
   targets?: readonly string[];
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
   activityExists?: boolean;
-  /** Express has a recipient, bell, body candidate, or explicit bare reach without its reply. */
-  hasReachWithoutReply?: boolean;
   pending?: number;
   holder?: string;
   holdReason?: string;

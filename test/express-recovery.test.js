@@ -51,12 +51,12 @@ test('a refused recipient is dropped from the printed retry instead of being sug
     assert.equal(result.status, 2, result.stderr);
     const saved = recovery(result, body);
     assert.equal(saved.commands.length, 1);
-    assert.match(saved.commands[0], /express --no-wait --no-mention --reply act\/0 - </);
+    assert.doesNotMatch(saved.commands[0], /--no-mention/);
     assert.doesNotMatch(saved.commands[0], /--mention/);
     assert.doesNotMatch(saved.commands[0], /--force/);
     assert.match(saved.output, /participants/);
     // The refused name came from a flag, so the body carries no @name to edit.
-    assert.match(saved.output, /pick someone standing here, or land it bare/);
+    assert.match(saved.output, /retry without explicit recipients/);
     assert.doesNotMatch(saved.output, /must be removed or wrapped in backticks/);
     assert.doesNotMatch(saved.output, /keep your intended recipients/);
     assert.equal((await says(file)).length, 0);
@@ -97,24 +97,23 @@ test('missing and malformed replies are dropped from runnable recovery while rec
   }
 });
 
-test('invalid reply recovery retains body candidates and adds bare reach only without candidates', shellReplay, async () => {
+test('invalid reply recovery retains body candidates without forcing a bare selector', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     await square.join('Bob');
   }, { hardCap: null });
   const cases = [
-    ['act/999', '@Bob\n', false],
-    ['not-an-id', '@Bob\n', false],
-    ['act/999', '@Eve\n', false],
-    ['act/999', 'reply only\n', true],
-    ['not-an-id', '`@Bob` user@Bob.com https://example.com/@Bob\n', true],
+    ['act/999', '@Bob\n'],
+    ['not-an-id', '@Bob\n'],
+    ['act/999', '@Eve\n'],
+    ['act/999', 'reply only\n'],
+    ['not-an-id', '`@Bob` user@Bob.com https://example.com/@Bob\n'],
   ];
-  for (const [reply, body, needsBareReach] of cases) {
+  for (const [reply, body] of cases) {
     const saved = recovery(run(withName(file, 'Alice', ['express', '--reply', reply, '-']), { input: body }), body);
     assert.equal(saved.commands.length, 1);
     assert.doesNotMatch(saved.commands[0], /--reply/);
-    if (needsBareReach) assert.match(saved.commands[0], /--no-mention/);
-    else assert.doesNotMatch(saved.commands[0], /--no-mention/);
+    assert.doesNotMatch(saved.commands[0], /--no-mention/);
     const retry = executeRecovery(saved.commands[0]);
     assert.equal(retry.status, 0, retry.stdout + retry.stderr);
     assert.deepEqual((await says(file)).at(-1).mentions, body === '@Bob\n' ? ['Bob'] : []);

@@ -29,9 +29,7 @@ Boundaries should be light and useful:
   directed attention. A listener turns away explicitly or loses every outgoing listening relation
   when leaving the square. Audience is fixed when each activity lands; later listening changes never
   rewrite history.
-  An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The
-  human CLI requires explicit `--no-mention` for bare reach unless the body contains unmatched `@name` text; the core library never treats an empty
-  audience as invalid. A bell reaches all joined participants (everyone watching
+  An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The core library and CLI never treat an empty audience as invalid. A bell reaches all joined participants (everyone watching
   with `--mention` receives it).
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through

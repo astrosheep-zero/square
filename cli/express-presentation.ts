@@ -90,7 +90,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     name = participant.name;
     attempted = true;
     const outcome = await participant.express(rawInput.replace(/\r\n/g, '\n').trim(), {
-      ...opts, reply: opts.reply as ActivityId | undefined, requireExplicitReach: true, observe: true,
+      ...opts, reply: opts.reply as ActivityId | undefined, observe: true,
     }, {
       signal: controller.signal,
       onProgress(progress) {
@@ -152,15 +152,13 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     }
     const facts = isSquareError(error) ? error.facts : undefined;
     const reason = facts?.reason;
-    const message = reason === 'explicit_reach_required'
-      ? '✕ express needs --mention <name>, --no-mention, --bell, or an @name in the body\n  · --reply <activity-id> also reaches the author it answers'
-      : reason === 'bell_mention_conflict'
-        ? '✕ a bell cannot be combined with a mention'
-        : reason === 'invalid_reply'
-          ? facts?.activityExists === false
-            ? `Invalid --reply: ${facts.activityId ?? opts.reply ?? 'that activity'} is not in this square's history`
-            : 'Invalid --reply: expected an activity id like act/12'
-          : refusalText(error);
+    const message = reason === 'bell_mention_conflict'
+      ? '✕ a bell cannot be combined with a mention'
+      : reason === 'invalid_reply'
+        ? facts?.activityExists === false
+          ? `Invalid --reply: ${facts.activityId ?? opts.reply ?? 'that activity'} is not in this square's history`
+          : 'Invalid --reply: expected an activity id like act/12'
+        : refusalText(error);
     const lines = [message, `· draft kept: ${draftPath}`];
     const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
     if (isSquareError(error)) {
@@ -171,25 +169,18 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       if (repair) {
         lines.push(participantsRecoveryCommand(squarePath), reason === 'bell_mention_conflict'
           ? '  · ring the bell without explicit mentions:'
-          : '  · pick someone standing here, or land it bare:',
-        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [], noMention: opts.reach === 'bell' ? opts.noMention : true })} < ${quoteShell(draftPath)}`);
+          : '  · retry without explicit recipients:',
+        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })} < ${quoteShell(draftPath)}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
         if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
       }
     }
-    if (reason === 'explicit_reach_required') {
-      lines.push(
-        '  · choose someone with --mention <name>, or send without addressing anyone:',
-        `${activityRetryCommand(squarePath, name, { ...opts, noMention: true })} < ${quoteShell(draftPath)}`,
-      );
-    } else if (reason === 'invalid_reply') {
-      const needsBareReach = facts?.hasReachWithoutReply === false;
-      const withoutReply = { ...opts, reply: undefined, ...(needsBareReach ? { noMention: true } : {}) };
+    if (reason === 'invalid_reply') {
+      const withoutReply = { ...opts, reply: undefined };
       lines.push(
         `${commandPrefix(squarePath)} history --limit 10`,
         '  · choose a valid --reply from history, or send without a reply using this repair:',
-        ...(needsBareReach ? ['  · this repair is bare; replace --no-mention with --mention <name> to address someone'] : []),
         `${activityRetryCommand(squarePath, name, withoutReply)} < ${quoteShell(draftPath)}`,
       );
     } else if (!repair) {

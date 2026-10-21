@@ -1,4 +1,4 @@
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, expressionReach, resolveKnownName, validateDoneBody } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
@@ -177,7 +177,6 @@ export async function express(square: OperationContext, name: string, body: stri
     catch (error) {
       if (isSquareError(error)) error.facts = {
         ...error.facts, reason: 'invalid_reply', activityId: options.reply,
-        hasReachWithoutReply: expressionReach({ ...options, body }).hasReachWithoutReply,
       };
       throw error;
     }
@@ -185,7 +184,7 @@ export async function express(square: OperationContext, name: string, body: stri
   const committed = (await square.artifact.transact((facts) => {
     // Selected-row decoding is storage work, not evidence that admission safely refused.
     const proposed = decideAct(facts, { name, body, force: options.force ?? false, now, mentions: options.mentions,
-      ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...('requireExplicitReach' in options ? { requireExplicitReach: options.requireExplicitReach === true } : {}), ...(reply === undefined ? {} : { reply }) });
+      ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
     const holder = proposed.type === 'held' ? facts.hold().actor : undefined;
     const decision = rejectUnsentActivity(() => {
       const decision = proposed;
