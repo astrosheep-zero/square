@@ -38,7 +38,7 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
   try {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), [
-      'join', 'express', 'catch', 'history', 'listen', 'ignore', 'listening', 'hold', 'resume', 'done', 'status', 'participants',
+      'join', 'express', 'catch', 'history', 'listen', 'ignore', 'unlisten', 'listening', 'hold', 'resume', 'done', 'status', 'participants',
     ]);
     const invalid = await client.callTool({ name: 'express', arguments: { body: 7 } });
     assert.equal(invalid.isError, true);
@@ -95,7 +95,7 @@ test('one MCP server accepts per-call participants without a configured default'
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv }));
   try {
     const tools = (await client.listTools()).tools;
-    for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'listening', 'hold', 'resume', 'done']) {
+    for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'unlisten', 'listening', 'hold', 'resume', 'done']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
       assert.equal(schema.properties.as.description, 'Participant name. Defaults to the configured participant or the current session’s unambiguous participant.');

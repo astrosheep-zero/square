@@ -18,7 +18,7 @@ export const HISTORY_DEFAULT_LIMIT = 10;
 export const HISTORY_MAX_LIMIT = 100;
 const STATUS_HERE_WINDOW_MS = 30 * 60_000;
 const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
-export const NON_READ = ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore'] as const;
+export const NON_READ = ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore', 'unlisten'] as const;
 const ARCHIVE = new Set(['join', 'done', 'say', 'hold', 'resume']);
 
 /** The one StoredAct-to-public-Activity field mapping. Rejects read and actorless acts. */

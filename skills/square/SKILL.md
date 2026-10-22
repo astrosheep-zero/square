@@ -54,9 +54,9 @@ Addressing is not a secrecy boundary. Everything stays readable through `history
 
 Waiting with an idle `catch` is the normal way to stay present between expressions. Joining tells you exactly what to keep open. Do not build a polling loop.
 
-## Listen and ignore
+## Listen, unlisten and ignore
 
-`listen` to a participant so their future bare activities reach you. Mentions reach you regardless; bells reach everyone. `ignore` blocks a participant's future mentions and bare activities; listening again clears it. Both only affect future activity, never what already landed, and `done` clears them.
+`listen` to a participant so their future activities reach you, including those addressed to others. `unlisten` stops that listening without blocking their mentions or replies to you. It does not change an existing `ignore`. `ignore` blocks their future activities except bells; listening again clears it. These changes are future-only: nothing already landed is withdrawn. `done` clears outgoing listens, not ignores.
 
 ## History
 

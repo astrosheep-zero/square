@@ -290,26 +290,37 @@ test('Ctrl-C cancels the initial express open while SQLite is locked and keeps t
   const database = new DatabaseSync(file);
   database.exec('BEGIN EXCLUSIVE');
   const body = 'raw locked body\r\n';
-  const child = spawn(process.execPath, [CLI, ...withName(file, 'Alice', ['express', '--no-mention', '-'])], {
-    cwd: ROOT, env: testEnv(), stdio: ['pipe', 'pipe', 'pipe'],
+  const readyModule = path.join(path.dirname(file), 'open-ready.mjs');
+  fs.writeFileSync(readyModule, `import { DatabaseSync } from 'node:sqlite';
+const prepare = DatabaseSync.prototype.prepare;
+let announced = false;
+DatabaseSync.prototype.prepare = function(sql, ...args) {
+  if (!announced && sql.includes('application_id')) { announced = true; process.send('opening'); }
+  return prepare.call(this, sql, ...args);
+};`);
+  const child = spawn(process.execPath, ['--import', readyModule, CLI, ...withName(file, 'Alice', ['express', '--no-mention', '-'])], {
+    cwd: ROOT, env: testEnv(), stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
   });
-  let stdout = '', stderr = '';
+  const opening = once(child, 'message'), exited = once(child, 'exit');
+  let stdout = '', stderr = '', timeout, locked = true;
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
-  const exited = once(child, 'exit');
   child.stdin.end(body);
-  // Let module loading complete and the open reach its cancellable SQLite retry.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  child.kill('SIGINT');
-  // Recovery is deliberately uncancelled: it may reopen only after the lock releases.
-  const draftDirectory = path.join(path.dirname(file), 'drafts');
-  const deadline = Date.now() + 1500;
-  while (!fs.existsSync(draftDirectory) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-  const savedWhileLocked = fs.existsSync(draftDirectory);
-  database.exec('ROLLBACK');
-  database.close();
-  let timeout;
   try {
+    // Rendezvous at the actual locked open, not a guess about module startup speed.
+    const [message] = await Promise.race([opening, exited.then(() => { throw new Error(stdout + stderr); }), new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('express never started opening the artifact')), 5000);
+    })]);
+    clearTimeout(timeout);
+    assert.equal(message, 'opening');
+    child.kill('SIGINT');
+    // Recovery is deliberately uncancelled: it may reopen only after the lock releases.
+    const draftDirectory = path.join(path.dirname(file), 'drafts');
+    const deadline = Date.now() + 1500;
+    while (!fs.existsSync(draftDirectory) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    const savedWhileLocked = fs.existsSync(draftDirectory);
+    database.exec('ROLLBACK');
+    locked = false;
     const [code] = await Promise.race([exited, new Promise((_, reject) => {
       timeout = setTimeout(() => reject(new Error('express open ignored Ctrl-C')), 3000);
     })]);
@@ -319,6 +330,8 @@ test('Ctrl-C cancels the initial express open while SQLite is locked and keeps t
     assert.equal((await says(file)).length, 0);
   } finally {
     clearTimeout(timeout);
+    if (locked) database.exec('ROLLBACK');
+    database.close();
     if (child.exitCode === null) child.kill('SIGKILL');
   }
 });

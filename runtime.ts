@@ -47,7 +47,7 @@ export function readCursor(facts: SquareRead, name: string): number {
   const block = facts.directed(name, { afterIndex: boundary, unseenOnly: true }, { edge: 'oldest', limit: 1 }).items[0]?.index;
   const last = facts.activityHeads({
     afterIndex: boundary, ...(block === undefined ? {} : { beforeIndex: block }), actorRequired: true,
-    kinds: ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore'],
+    kinds: ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore', 'unlisten'],
   }, { edge: 'newest', limit: 1 }).items[0]?.index;
   return Math.max(boundary, last ?? boundary);
 }

@@ -1,4 +1,4 @@
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, coreUnlisten, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { isSquareError, nameKey, SquareError, validateName, type StoredAct } from './model.js';
 import { participantIdentity } from './participant-identity.js';
 import type { WakeTransportPort } from './ports.js';
@@ -221,11 +221,11 @@ export interface ListenerCommittedResult {
   readonly activity: Activity | null;
   readonly observation: LandingContext;
 }
-async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore', actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> {
+async function landListenerChange(square: OperationContext, verb: 'listen' | 'ignore' | 'unlisten', actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> {
   throwIfAborted(control);
   const now = square.clock();
   const committed = (await square.artifact.transact((facts) => {
-    const act = verb === 'listen' ? coreListen(facts, actor, target, now) : coreIgnore(facts, actor, target, now);
+    const act = verb === 'listen' ? coreListen(facts, actor, target, now) : verb === 'ignore' ? coreIgnore(facts, actor, target, now) : coreUnlisten(facts, actor, target, now);
     const stored = act === undefined ? null : facts.land(act);
     return { stored, observation: { standingCount: inSquareCount(facts), held: facts.hold().active, now } };
   }, control?.signal)).value;
@@ -233,6 +233,7 @@ async function landListenerChange(square: OperationContext, verb: 'listen' | 'ig
 }
 export function listen(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> { return landListenerChange(square, 'listen', actor, target, control); }
 export function ignore(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> { return landListenerChange(square, 'ignore', actor, target, control); }
+export function unlisten(square: OperationContext, actor: string, target: string, control?: OperationControl): Promise<ListenerCommittedResult> { return landListenerChange(square, 'unlisten', actor, target, control); }
 export async function listening(square: OperationContext, actor: string, control?: OperationControl): Promise<readonly string[]> { return (await square.artifact.read((facts) => coreListening(facts, actor), control?.signal)).value; }
 
 export interface LifecycleCommittedResult extends ActivityResult {

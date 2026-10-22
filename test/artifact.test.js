@@ -20,7 +20,7 @@ async function cells(t) {
   return ports;
 }
 
-test('new artifacts own only the closed v2 schema, preserve explicit import facts and rebuild in place', async t => {
+test('new artifacts own only the closed current schema, preserve explicit import facts and rebuild in place', async t => {
   const file = location(t), state = empty();
   const weird = 'A\u0000\ud800';
   state.acts = [
@@ -36,7 +36,7 @@ test('new artifacts own only the closed v2 schema, preserve explicit import fact
   assert.deepEqual((await readSquareSnapshot(file)).state, state);
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
     assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='square_snapshot'").get().n, 0);
     assert.deepEqual(JSON.parse(db.prepare('SELECT payload_json FROM activities WHERE act_index=2').get().payload_json), { body: '\udfff\u0000' });

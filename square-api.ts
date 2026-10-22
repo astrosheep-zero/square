@@ -9,7 +9,7 @@ import { directedSuffix } from './activity-feed.js';
 import { assertLiveOwner } from './participant-host.js';
 import type { WakeTransportPort } from './ports.js';
 import { buildMemorySquare, openSquare, closeOpenSquare, type OpenSquare } from './open-square.js';
-import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
+import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, unlisten, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
 import { recoveryObservation, currentParticipant, entryPresentation, resolveParticipant, snapshot, queryStatus,
   queryParticipants, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ,
   HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
@@ -269,9 +269,9 @@ class ParticipantHandle implements Participant {
         ...(result === undefined ? {} : { landedId: result.activity.id }) });
     }
   }
-  private async listener(verb: 'listen' | 'ignore', target: string, options: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult> {
+  private async listener(verb: 'listen' | 'ignore' | 'unlisten', target: string, options: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult> {
     const name = (await resolveParticipant(this.square, this.name, control)).name;
-    const { observation: committed, ...result } = await (verb === 'listen' ? listen : ignore)(this.square, name, target, control);
+    const { observation: committed, ...result } = await (verb === 'listen' ? listen : verb === 'ignore' ? ignore : unlisten)(this.square, name, target, control);
     return { ...result, ...(!options.observe ? {} : { observation: {
           ...observedContext(this.square, committed.standingCount, committed.held, name, committed.now),
           participant: name, requestedTarget: target, target: result.activity?.target ?? target,
@@ -279,6 +279,7 @@ class ParticipantHandle implements Participant {
   }
   listen(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('listen', target, options, control); }
   ignore(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('ignore', target, options, control); }
+  unlisten(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('unlisten', target, options, control); }
   async listening(options: ObservationOptions = {}, control?: OperationControl): Promise<ListeningResult> {
     const name = (await resolveParticipant(this.square, this.name, control)).name;
     return { listening: await listening(this.square, name, control),

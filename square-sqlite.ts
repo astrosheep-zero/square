@@ -23,6 +23,8 @@ export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
 
 export const APPLICATION_ID = 0x53515245;
 const V1_USER_VERSION = 1;
+export const V2_USER_VERSION = 2;
+export const CURRENT_USER_VERSION = 3;
 export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
@@ -66,6 +68,28 @@ export function validateLegacyFraming(database: DatabaseSync, applicationId: num
 function normalizedLegacySql(sql: string): string {
     return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
 }
+const V2_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','hold','resume','read','listen','ignore')";
+const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','hold','resume','read','listen','ignore','unlisten')";
+export const ACTIVITIES_TABLE_SQL = `CREATE TABLE activities (
+  act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
+  at REAL NOT NULL,
+  kind TEXT NOT NULL CHECK (${CURRENT_ACTIVITY_KIND_CHECK}),
+  actor_json TEXT COLLATE BINARY,
+  actor_key_json TEXT COLLATE BINARY,
+  reach TEXT CHECK (reach = 'bell'),
+  reply_index INTEGER CHECK (reply_index >= 0 AND reply_index < act_index),
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),
+  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),
+  CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))
+);`;
+export const ACTIVITY_INDEXES_SQL = [
+  'CREATE INDEX activity_kind_index ON activities(kind, act_index)',
+  'CREATE INDEX activity_actor_index ON activities(actor_key_json, act_index)',
+  "CREATE INDEX activity_say_actor_index ON activities(actor_key_json, act_index) WHERE kind='say'",
+  "CREATE INDEX activity_say_time ON activities(at, act_index) WHERE kind='say'",
+  "CREATE INDEX activity_bell_actor_time ON activities(actor_key_json, at, act_index) WHERE kind='say' AND reach='bell'",
+] as const;
 export const SCHEMA_SQL = `CREATE TABLE square_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
@@ -75,24 +99,8 @@ export const SCHEMA_SQL = `CREATE TABLE square_meta (
   preamble_json TEXT NOT NULL CHECK (json_valid(preamble_json)),
   warmup_json TEXT NOT NULL CHECK (json_valid(warmup_json))
 );
-CREATE TABLE activities (
-  act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
-  at REAL NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('join','done','say','hold','resume','read','listen','ignore')),
-  actor_json TEXT COLLATE BINARY,
-  actor_key_json TEXT COLLATE BINARY,
-  reach TEXT CHECK (reach = 'bell'),
-  reply_index INTEGER CHECK (reply_index >= 0 AND reply_index < act_index),
-  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
-  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),
-  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),
-  CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))
-);
-CREATE INDEX activity_kind_index ON activities(kind, act_index);
-CREATE INDEX activity_actor_index ON activities(actor_key_json, act_index);
-CREATE INDEX activity_say_actor_index ON activities(actor_key_json, act_index) WHERE kind='say';
-CREATE INDEX activity_say_time ON activities(at, act_index) WHERE kind='say';
-CREATE INDEX activity_bell_actor_time ON activities(actor_key_json, at, act_index) WHERE kind='say' AND reach='bell';
+${ACTIVITIES_TABLE_SQL}
+${ACTIVITY_INDEXES_SQL.join(';\n')};
 
 CREATE TABLE receipts (
   owner_json TEXT COLLATE BINARY NOT NULL,
@@ -150,6 +158,8 @@ CREATE TABLE landed_audience (
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
 const EXPECTED_SCHEMA_SQL = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
+export const SCHEMA_SQL_V2 = SCHEMA_SQL.replace(CURRENT_ACTIVITY_KIND_CHECK, V2_ACTIVITY_KIND_CHECK);
+const EXPECTED_SCHEMA_SQL_V2 = SCHEMA_SQL_V2.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 // All strings, including identity keys, are JSON encoded before SQLite binding.
 type Row = Record<string, string | number | null>;
 const encode = JSON.stringify;
@@ -207,7 +217,7 @@ function immutable<T>(value: T): T {
     }
     return value;
 }
-const kinds = ['join', 'done', 'say', 'hold', 'resume', 'read', 'listen', 'ignore'];
+const kinds = ['join', 'done', 'say', 'hold', 'resume', 'read', 'listen', 'ignore', 'unlisten'];
 function head(row: Row): ActivityHead {
     const index = integer(row.act_index), at = finite(row.at);
     requireFact(kinds.includes(string(row.kind)));
@@ -255,6 +265,7 @@ export function validateStoredActivity(value: unknown): StoredAct {
             break;
         case 'listen':
         case 'ignore':
+        case 'unlisten':
             shape(a, [...common, 'target']);
             string(a.target, true);
             break;
@@ -265,7 +276,7 @@ export function validateStoredActivity(value: unknown): StoredAct {
 function activity(row: Row): StoredAct {
     const h = head(row), payload = object(json(row.payload_json));
     // Payload cannot shadow indexed structural columns.
-    const allowed = h.kind === 'say' ? ['body', 'mentions'] : h.kind === 'done' || h.kind === 'hold' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' ? ['target'] : [];
+    const allowed = h.kind === 'say' ? ['body', 'mentions'] : h.kind === 'done' || h.kind === 'hold' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
     requireFact(Object.keys(payload).every(k => allowed.includes(k)));
     return immutable(validateStoredActivity({ ...h, ...payload }));
 }
@@ -333,6 +344,17 @@ function route(row: Row): RouteFact {
     }));
 }
 function normalizedSql(sql: string): string { return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1'); }
+function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], location: string): void {
+    const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();
+    requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
+    requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
+}
+export function validateRowFraming(db: DatabaseSync, version: 2 | 3, location = ''): void {
+    const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
+    requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
+    requireFact(identity.user_version === version, 'unsupported SQLite format version.');
+    validateOwnedSchema(db, version === V2_USER_VERSION ? EXPECTED_SCHEMA_SQL_V2 : EXPECTED_SCHEMA_SQL, location);
+}
 export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
@@ -340,10 +362,12 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
         validateLegacyFraming(db, APPLICATION_ID, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    requireFact(identity.user_version === 2, 'unsupported SQLite format version.');
-    const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();
-    requireFact(actual.length === EXPECTED_SCHEMA_SQL.length && actual.every((sql, i) => sql === EXPECTED_SCHEMA_SQL[i]), 'unsupported row schema.');
-    requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
+    if (identity.user_version === V2_USER_VERSION) {
+        validateRowFraming(db, V2_USER_VERSION, location);
+        throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
+    }
+    requireFact(identity.user_version === CURRENT_USER_VERSION, 'unsupported SQLite format version.');
+    validateRowFraming(db, CURRENT_USER_VERSION, location);
     return createSqliteDriver(db).header();
 }
 interface Selection {
@@ -579,6 +603,12 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             }
             if (effect.removeListeningOf !== undefined)
                 run("DELETE FROM attention WHERE listener_key_json=? AND kind='listen'", [key(effect.removeListeningOf)]);
+            if (effect.removeListening !== undefined) {
+                const target = effect.removeListening;
+                string(target.listener, true);
+                string(target.target, true);
+                run("DELETE FROM attention WHERE listener_key_json=? AND target_key_json=? AND kind='listen'", [key(target.listener), key(target.target)]);
+            }
             if (effect.replaceAttention) {
                 const t = effect.replaceAttention;
                 string(t.listener, true);

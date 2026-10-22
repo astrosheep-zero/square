@@ -186,7 +186,7 @@ function parseListener(argv: string[], context: CommandContext, targetRequired: 
   return targetRequired ? { target: argv[0] } : {};
 }
 
-function listenerCommand(verb: 'listen' | 'ignore'): CommandSpec<ListenerIntent, string> {
+function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<ListenerIntent, string> {
   return {
     parse(argv, context) { return parseListener(argv, context, true); },
     async execute(intent, context) {
@@ -195,8 +195,12 @@ function listenerCommand(verb: 'listen' | 'ignore'): CommandSpec<ListenerIntent,
       const actor = participantIdentity(projection.participant);
       const target = participantIdentity(projection.target);
       const action = data.activity !== null
-        ? verb === 'listen' ? `${actor} turns an ear toward ${target}` : `${actor} turns away from ${target}`
-        : verb === 'listen' ? `${actor} already turns an ear toward ${target}` : `${actor} is not turned toward ${target}`;
+        ? verb === 'listen' ? `${actor} turns an ear toward ${target}`
+          : verb === 'ignore' ? `${actor} turns away from ${target}`
+            : `${actor} stops listening to ${target}`
+        : verb === 'listen' ? `${actor} already turns an ear toward ${target}`
+          : verb === 'ignore' ? `${actor} is not turned toward ${target}`
+            : `${actor} is not listening to ${target}`;
       return withPathOutput(projection.location, `${data.activity === null ? '○' : '·'} ${action}`, {
         participantCount: projection.standingCount, held: projection.held,
       });
@@ -206,6 +210,7 @@ function listenerCommand(verb: 'listen' | 'ignore'): CommandSpec<ListenerIntent,
 }
 export const listenCommand = listenerCommand('listen');
 export const ignoreCommand = listenerCommand('ignore');
+export const unlistenCommand = listenerCommand('unlisten');
 export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(_intent, context) {

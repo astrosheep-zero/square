@@ -8,7 +8,7 @@ export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
   readonly id: ActivityId;
   readonly at: number;
-  readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore';
+  readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' | 'unlisten';
   readonly actor: string;
   readonly body?: string;
   readonly mentions: readonly string[];
@@ -179,6 +179,7 @@ export interface Participant {
   express(body: string, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
   listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
+  unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
   history(query?: HistoryQuery, control?: OperationControl): Promise<HistoryResult>;

@@ -10,7 +10,7 @@ import { canonicalPath } from './canonical-path.js';
 import { InternalSquareError, SquareError, type BuildOptions } from './model.js';
 import type { SquareArtifactPort, SquareRead, SquareWrite } from './ports.js';
 import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
-import { APPLICATION_ID, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader, emptyRuntimeState, type SquareState } from './square-sqlite.js';
+import { APPLICATION_ID, CURRENT_USER_VERSION, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader, emptyRuntimeState, type SquareState } from './square-sqlite.js';
 
 const guideContents = new Map<string, string>();
 function readGuide(name: string): string {
@@ -125,7 +125,7 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
         database = new DatabaseSync(':memory:');
         try {
             initializeSqlite(database, initial);
-            database.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=2`);
+            database.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${CURRENT_USER_VERSION}`);
         }
         catch (error) {
             database.close();
@@ -288,7 +288,7 @@ async function initializeFile(location: string, state: SquareState, signal?: Abo
         db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL');
         await inSqliteTransaction(db, true, () => { }, () => {
             initializeSqlite(db, state);
-            db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=2`);
+            db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${CURRENT_USER_VERSION}`);
         }, signal);
     }
     finally {

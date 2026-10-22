@@ -1,4 +1,4 @@
-// Explicit atomic migration from v1 snapshots to v2 rows.
+// Explicit atomic migration from v1 snapshots to the current row format.
 //
 // The fixture half runs against the frozen v1 writer in test/fixtures and needs
 // no v2 code. The migration half is gated on the row-backed runtime landing in
@@ -223,7 +223,7 @@ test('migration preserves the whole v1 authority losslessly', { skip: gate(MIGRA
 
   const framing = v1Framing(squarePath);
   assert.equal(framing.applicationId, V1_APPLICATION_ID);
-  assert.equal(framing.userVersion, 2);
+  assert.equal(framing.userVersion, 3);
   assert.equal(framing.journalMode, 'delete');
   assert.equal(framing.objects.some((object) => object.name === 'square_snapshot'), false);
 
@@ -349,7 +349,7 @@ test('a second migration is a no-op that leaves the artifact byte-identical', { 
   const before = digest(squarePath);
   const second = run(['--location', squarePath, 'migrate']);
   assert.equal(second.status, 0, second.stderr);
-  assert.match(second.stdout, /format 2/i);
+  assert.match(second.stdout, /already current format/i);
   assert.equal(digest(squarePath), before);
 
   const { database, driver } = await openV2(squarePath);
@@ -377,7 +377,7 @@ test('invalid or unsupported artifacts refuse without writing', { skip: gate(MIG
   add('unsupported.square', (file) => {
     writeV1Artifact(file, legacyFixtureState(), 1);
     const database = openRaw(file);
-    try { database.exec('PRAGMA user_version = 3'); } finally { database.close(); }
+    try { database.exec('PRAGMA user_version = 999'); } finally { database.close(); }
   }, /unsupported SQLite format version/);
   add('extra-table.square', (file) => {
     writeV1Artifact(file, legacyFixtureState(), 1);
@@ -649,9 +649,9 @@ test('a second migrator follows the same in-lock check', { skip: gate(MIGRATION,
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
   for (const result of [first, second]) {
-    assert.match(result.stdout, /migrated to row storage|already format 2/);
+    assert.match(result.stdout, /migrated to current row storage|already current format/);
   }
-  assert.equal([first, second].filter((result) => /migrated to row storage/.test(result.stdout)).length === 1, true,
+  assert.equal([first, second].filter((result) => /migrated to current row storage/.test(result.stdout)).length === 1, true,
     `exactly one migrator converts: ${first.stdout}${second.stdout}`);
 
   const { database, driver, exportSqliteState } = await openV2(squarePath);
@@ -711,7 +711,7 @@ test('an old v1 writer lands before the conversion and meets the version gate af
   }
 });
 
-test('the v2 runtime refuses a v1 artifact with the exact migration recovery command', { skip: gate(V2, GATE) }, (t) => {
+test('the current row runtime refuses a v1 artifact with the exact migration recovery command', { skip: gate(V2, GATE) }, (t) => {
   const dir = fixtureDirectory(t);
   const squarePath = path.join(dir, 'legacy.square');
   writeV1Artifact(squarePath, legacyFixtureState(), 7);
@@ -783,5 +783,7 @@ test('the migrate command takes no options and is documented', { skip: gate(MIGR
   const help = run(['help', 'migrate']);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /square \[--location <square>\] migrate/);
+  assert.match(help.stdout, /version 1 or 2/);
+  assert.match(help.stdout, /version 3 square is left untouched/);
   assert.match(run(['help']).stdout, /migrate/);
 });

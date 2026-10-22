@@ -88,9 +88,12 @@ and their total count is unbounded. Do not
 roll back to retained NDJSON files after SQLite writes have begun.
 
 Each `.square` artifact is a transactional SQLite database using DELETE journal
-mode and FULL synchronous writes. A version 1 artifact must be converted with
-`square --location <path> migrate` while nothing uses it; unrelated or
-unsupported artifacts are refused without a write.
+mode and FULL synchronous writes. A version 1 or 2 artifact must be explicitly converted to current format 3 with
+`square --location <path> migrate` while nothing uses it. Back it up first, run
+`doctor` afterward, and reopen it only with upgraded runtimes: older versions
+refuse format 3. Unlisten does not change the host-ledger format; package updates
+never migrate artifacts automatically. Unrelated or unsupported artifacts are
+refused without a write.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

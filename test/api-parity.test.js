@@ -67,6 +67,13 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   const caught = await alice.catch();
   cli(terminal, 'Alice', ['catch']);
   assert.deepEqual(await call('catch', { as: 'Alice' }), caught);
+  const stopped = await alice.unlisten('Bob');
+  assert.equal(stopped.activity.kind, 'unlisten');
+  cli(terminal, 'Alice', ['unlisten', 'Bob']);
+  assert.deepEqual(await call('unlisten', { as: 'Alice', target: 'Bob' }), stopped);
+  assert.equal((await alice.unlisten('Bob')).activity, null);
+  cli(terminal, 'Alice', ['unlisten', 'Bob']);
+  assert.deepEqual(await call('unlisten', { as: 'Alice', target: 'Bob' }), { activity: null });
   await alice.ignore('Bob');
   cli(terminal, 'Alice', ['ignore', 'Bob']);
   await call('ignore', { as: 'Alice', target: 'Bob' });

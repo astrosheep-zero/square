@@ -211,6 +211,8 @@ export function renderRoomChangeText(event: RoomChangeAct | Activity): string {
       return `${identity} turned an ear toward ${participantIdentity(event.target ?? 'someone')}`;
     case 'ignore':
       return `${identity} turned away from ${participantIdentity(event.target ?? 'someone')}`;
+    case 'unlisten':
+      return `${identity} stopped listening to ${participantIdentity(event.target ?? 'someone')}`;
     default:
       throw new Error('Expected a lifecycle activity');
   }
@@ -254,6 +256,7 @@ function renderEventCliFacts(
       return { text: `${style('release', '✓')} ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'listen':
     case 'ignore':
+    case 'unlisten':
       return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'say': {
       const body = renderedBody(event.body, maxBody);

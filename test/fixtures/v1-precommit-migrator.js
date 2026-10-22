@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
+import { CURRENT_USER_VERSION } from '../../dist/square-sqlite.js';
 
 const [cli, squarePath, readyFile] = process.argv.slice(2);
 const commit = DatabaseSync.prototype.exec;
@@ -15,7 +16,7 @@ let armed = true;
 DatabaseSync.prototype.exec = function interposed(sql, ...rest) {
   if (armed && /^commit;?$/i.test(String(sql).trim())) {
     const version = this.prepare('SELECT user_version AS version FROM pragma_user_version').get().version;
-    if (version === 2) {
+    if (version === CURRENT_USER_VERSION) {
       armed = false;
       fs.writeFileSync(readyFile, 'precommit');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);

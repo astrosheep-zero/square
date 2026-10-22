@@ -159,12 +159,13 @@ export function coreDone(facts: SquareRead, name: string, body: string, now: num
   requireStanding(current);
   return { kind: 'done', actor: current.name, at: now };
 }
-function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore', actor: string, target: string, now: number): TimedAct<'listen' | 'ignore'> | undefined {
+function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore' | 'unlisten', actor: string, target: string, now: number): TimedAct<'listen' | 'ignore' | 'unlisten'> | undefined {
   const current = resolveStanding(facts, actor);
   validateName(target);
   requireStanding(current);
   const outgoing = facts.attention(current.name);
   const existing = outgoing.find((item) => sameName(item.target, target));
+  if (kind === 'unlisten') return existing?.kind === 'listen' ? { kind, actor: current.name, target, at: now } : undefined;
   if (kind === 'listen' && existing?.kind !== 'listen' && outgoing.filter((item) => item.kind === 'listen').length >= MAX_IDENTITY_SET_SIZE) {
     throw new SquareError('invalid_args', `A participant can listen to at most ${MAX_IDENTITY_SET_SIZE} others`);
   }
@@ -172,6 +173,7 @@ function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore', actor: st
 }
 export function coreListen(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'listen', actor, target, now); }
 export function coreIgnore(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'ignore', actor, target, now); }
+export function coreUnlisten(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'unlisten', actor, target, now); }
 export function coreListening(facts: SquareRead, actor: string): readonly string[] {
   const current = resolveStanding(facts, actor);
   return facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target);

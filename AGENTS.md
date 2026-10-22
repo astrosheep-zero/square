@@ -26,8 +26,9 @@ Boundaries should be light and useful:
   speaker is told the author is not here.
   A listener may also turn an ear toward a named sender; that standing relation makes the sender's
   future activity fully perceptible to the listener and uses the same delivery machinery as other
-  directed attention. A listener turns away explicitly or loses every outgoing listening relation
-  when leaving the square. Audience is fixed when each activity lands; later listening changes never
+  directed attention. `unlisten` removes only that listener's chosen listening relation, leaving
+  direct mentions and replies available; it never clears an existing ignore. A listener also loses
+  every outgoing listening relation when leaving the square. Audience is fixed when each activity lands; later listening changes never
   rewrite history.
   An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The core library and CLI never treat an empty audience as invalid. A bell reaches all joined participants (everyone watching
   with `--mention` receives it).

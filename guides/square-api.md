@@ -42,7 +42,7 @@ try {
 ## One set of operations and defaults
 
 Square owns `history`, `status`, `participants`, `snapshot`, `stream`, and recovery observations.
-Participant owns `express`, `catch`, `listen`, `ignore`, `listening`, `hold`, `resume`, `done`;
+Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`;
 its `history` delegates to the same Square history operation.
 
 - Express waits while held/throttled unless `noWait: true`, for **every** caller. `ExpressResult`
@@ -58,6 +58,10 @@ its `history` delegates to the same Square history operation.
   bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts.
 - `participants()` returns `{participants, observation?}` and `listening()` returns
   `{listening, observation?}`, not arrays carrying metadata.
+- `unlisten(target)` removes only that participant's current listen edge to the target, without
+  leaving or blocking future mentions/replies. It returns the same `ListenerChangeResult` as listen
+  and ignore, with `activity: null` when no listen exists. Existing ignores are unchanged. Earlier
+  landed audiences and receipts are never rewritten; listening again remains available.
 - Lifecycle operations keep contextual reentry/ownership policy. In particular, done retains its
   native owner epoch fence instead of blindly joining first. Done accepts no message.
 
@@ -94,6 +98,23 @@ resources. Express wire output omits the internal delivery diagnostic as before.
 `diagnoseSquare(input, control?)`, and `migrateSquare(input, control?)` are ordinary public exports.
 They are not methods on a synthetic cross-square object. Diagnose/migrate resolve a path without
 opening a valid current-format Square first.
+
+## Artifact format and explicit migration
+
+The current artifact format is 3. It records `unlisten` as a real history activity; the derived
+attention table still contains only listen or ignore edges. New artifacts use format 3. Ordinary
+opens refuse older formats with migration guidance, and never migrate implicitly.
+
+Stop all sessions and services using a particular artifact, back it up offline (or use SQLite's
+backup API), then run `square --location <path.square> migrate` and `doctor` before reopening it
+with upgraded runtimes. Older runtimes refuse format 3; do not mix versions against a migrated
+artifact. Updating a package does not migrate any file.
+
+Format 2 migration changes only the activities table's accepted event kinds and the format marker,
+inside one transaction. Existing rows, revision, assigned indices, attention, landed audiences,
+receipts, leases, and routes remain unchanged. Format 1 snapshots import directly into the current
+format. Repeated migration of a current artifact is a byte-preserving no-op. This is separate from
+host-ledger migration, whose format does not change for unlisten.
 
 ## Deliberate migration breaks
 

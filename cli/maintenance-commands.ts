@@ -22,10 +22,10 @@ export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
     const outcome = await migrateSquare(squareInput(context));
     const body = outcome.status === 'migrated' && outcome.counts !== undefined
       ? [
-        '✓ migrated to row storage',
+        '✓ migrated to current row storage',
         `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
       ].join('\n')
-      : '· already format 2 — nothing changed';
+      : '· already current format — nothing changed';
     return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };
   },
   present(result) {

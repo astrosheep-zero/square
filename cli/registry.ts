@@ -1,4 +1,4 @@
-import { buildCommand, doneCommand, expressCommand, holdCommand, ignoreCommand, joinCommand, listenCommand, listeningCommand, resumeCommand } from './square-commands.js';
+import { buildCommand, doneCommand, expressCommand, holdCommand, ignoreCommand, joinCommand, listenCommand, listeningCommand, resumeCommand, unlistenCommand } from './square-commands.js';
 import { doctorCommand, migrateCommand } from './maintenance-commands.js';
 import { ledgerCommand } from './ledger-command.js';
 import { type CommandContext, type CommandSpec } from './context.js';
@@ -35,6 +35,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['express'], spec: expressCommand },
   { names: ['listen'], spec: listenCommand },
   { names: ['ignore'], spec: ignoreCommand },
+  { names: ['unlisten'], spec: unlistenCommand },
   { names: ['listening'], spec: listeningCommand },
   { names: ['done'], spec: doneCommand },
   { names: ['hold'], spec: holdCommand },

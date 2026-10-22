@@ -44,7 +44,8 @@ const COMMANDS: readonly CommandHelp[] = [
       '  --no-wait         If held or throttled, save a draft and return instead of waiting. A held wait gives up on its own after 10 minutes.',
     ],
   },
-  { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future bare says.' },
+  { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },
+  { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: 'Stop listening without blocking that participant\'s mentions or replies.' },
   { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Ignore one participant\'s future mentions and bare says.' },
   { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening is future-only: the edge is fixed when a say lands; it never rewrites history.'] },
   {
@@ -99,8 +100,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
-    summary: 'Convert an existing version 1 square to row storage in place.',
-    details: ['For the selected .square artifact only. Global identity and delivery records use square ledger migrate instead.', 'Stop sessions and services using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 2 square is left untouched; an unrelated or unsupported artifact is refused without a write. There is no --check, --backup or --force.'],
+    summary: 'Convert an existing version 1 or 2 square to current format 3 in place.',
+    details: ['For the selected .square artifact only. Global identity and delivery records use square ledger migrate instead.', 'Stop sessions and services using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 3 square is left untouched; an unrelated or unsupported artifact is refused without a write. There is no --check, --backup or --force.'],
   },
   {
     names: ['ledger'], usage: 'ledger <verify|migrate|gc>', usesSquare: false, group: 'maintenance',
@@ -119,7 +120,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate', 'ledger'] },
   ];

@@ -107,6 +107,7 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'express',
   'listen',
   'ignore',
+  'unlisten',
   'listening',
   'done',
   'hold',

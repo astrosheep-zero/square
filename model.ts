@@ -140,7 +140,7 @@ export interface WatchOptions {
 }
 
 export type PublicAct = Extract<StoredAct, { kind: 'say' | 'done' }>;
-export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' }>;
+export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' | 'unlisten' }>;
 
 export function formatHardCap(hardCap: HardCap): string {
   return hardCap === null ? '-1' : String(hardCap);

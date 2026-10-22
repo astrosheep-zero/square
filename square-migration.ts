@@ -5,9 +5,8 @@ import { inSqliteTransaction } from './sqlite-transaction.js';
 import { canonicalPath } from './canonical-path.js';
 import { isWakeRouteKind, type StoredAct } from './model.js';
 import { parseActivityId } from './square-core.js';
-import {
-  APPLICATION_ID, V1_SNAPSHOT_TABLE, createSqliteDriver, initializeSqlite, invalidArtifact,
-  validateLegacyFraming, validateSqliteHeader, validateStoredActivity, validateWatchLease,
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V1_SNAPSHOT_TABLE, createSqliteDriver, initializeSqlite, invalidArtifact,
+  validateLegacyFraming, validateRowFraming, validateSqliteHeader, validateStoredActivity, validateWatchLease,
   type SquareRuntimeState, type SquareState,
 } from './square-sqlite.js';
 
@@ -63,7 +62,7 @@ function validateActs(value: unknown): value is StoredAct[] {
   try {
     for (const candidate of value) {
       const act = validateStoredActivity(candidate);
-      if (act.index <= previous) return false;
+      if (act.kind === 'unlisten' || act.index <= previous) return false;
       previous = act.index;
     }
   } catch { return false; }
@@ -124,7 +123,7 @@ export interface MigrationCounts {
 }
 
 export interface MigrationOutcome {
-  readonly status: 'migrated' | 'already-format-2';
+  readonly status: 'migrated' | 'already-current';
   /** Participants standing after the conversion, for the CLI header. */
   readonly standing: number;
   readonly counts?: MigrationCounts;
@@ -160,57 +159,79 @@ function counts(state: SquareState): MigrationCounts {
   };
 }
 
+function rowCounts(database: DatabaseSync): MigrationCounts {
+  const count = (table: string): number => Number((database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: unknown }).n);
+  return { activities: count('activities'), receipts: count('receipts'), leases: count('catch_leases'), routes: count('routes') };
+}
+
+const ACTIVITY_INDEX_NAMES = ['activity_kind_index', 'activity_actor_index', 'activity_say_actor_index', 'activity_say_time', 'activity_bell_actor_time'] as const;
+function rebuildV2Activities(database: DatabaseSync): void {
+  database.exec([
+    ...ACTIVITY_INDEX_NAMES.map((name) => `DROP INDEX ${name};`),
+    'ALTER TABLE activities RENAME TO activities_v2;',
+    ACTIVITIES_TABLE_SQL,
+    'INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) SELECT act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json FROM activities_v2 ORDER BY act_index;',
+    'DROP TABLE activities_v2;',
+    ...ACTIVITY_INDEXES_SQL.map((sql) => `${sql};`),
+  ].join('\n'));
+}
+
+function validateMigrationSource(database: DatabaseSync, location: string): 1 | 2 | undefined {
+  const before = identity(database);
+  if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
+  if (before.userVersion === 1) {
+    validateLegacyFraming(database, APPLICATION_ID, location);
+    return 1;
+  }
+  if (before.userVersion === V2_USER_VERSION) {
+    validateRowFraming(database, V2_USER_VERSION, location);
+    createSqliteDriver(database).header();
+    return 2;
+  }
+  if (before.userVersion === CURRENT_USER_VERSION) {
+    validateSqliteHeader(database, location);
+    return undefined;
+  }
+  throw invalidArtifact('unsupported SQLite format version.');
+}
+
 /**
- * Explicit in-place conversion of a normally persisted version 1 artifact.
- *
- * The legacy snapshot is read, validated and written here and nowhere else in
- * production; the row schema, codec and landing transition come from the driver.
- * One transaction: preflight framing, the same recheck under the lock, the
- * preserved authority, the derived facts, the format flip and a single COMMIT.
+ * Explicit in-place conversion of a version 1 snapshot or version 2 row
+ * artifact. Each source is validated before and under the write lock; v1 is
+ * imported through the normal current row initializer, while v2 rebuilds only
+ * activities and its indexes before publishing the new format version.
  */
 export async function migrateSquareFile(location: string, signal?: AbortSignal): Promise<MigrationOutcome> {
   const squarePath = await canonicalPath(location);
   const database = openExistingSquareDatabase(squarePath);
   try {
-    // Owned framing, read-only, before any pragma or DDL touches the artifact.
-    // Every preflight statement reads one snapshot taken in the helper's
-    // retryable stage: a transient writer lock is waited out like any other
-    // acquisition, and a migrator that commits while we look cannot move the
-    // artifact between the identity read and the schema reads.
-    let alreadyConverted: MigrationOutcome | undefined;
+    let alreadyCurrent: MigrationOutcome | undefined;
     const preflight = await inSqliteTransaction(database, false, () => {
-      const before = identity(database);
-      if (before.applicationId === APPLICATION_ID && before.userVersion === 1) {
-        validateLegacyFraming(database, APPLICATION_ID, squarePath);
-        return;
-      }
-      // A row artifact means another migrator finished here; anything else is
-      // refused by the row header itself.
-      validateSqliteHeader(database, squarePath);
-      alreadyConverted = { status: 'already-format-2', standing: standing(database) };
-    }, () => alreadyConverted, signal);
-    if (preflight !== undefined) return preflight;
+      const source = validateMigrationSource(database, squarePath);
+      if (source === undefined) alreadyCurrent = { status: 'already-current', standing: standing(database) };
+      return source;
+    }, (source) => source, signal);
+    if (preflight === undefined) return alreadyCurrent!;
 
     database.exec('PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL');
-    const result: { outcome?: MigrationOutcome; converted?: boolean } = {};
+    const result: { outcome?: MigrationOutcome; source?: 1 | 2 } = {};
     await inSqliteTransaction(database, true, () => {
-      // Another migration may have finished between preflight and this lock.
-      const locked = identity(database);
-      if (locked.applicationId !== APPLICATION_ID || locked.userVersion !== 1) {
-        // A valid row artifact is done already; anything else is refused here.
-        validateSqliteHeader(database, squarePath);
-        return;
-      }
-      validateLegacyFraming(database, APPLICATION_ID, squarePath);
-      result.converted = true;
+      const source = validateMigrationSource(database, squarePath);
+      result.source = source;
     }, () => {
-      if (result.converted !== true) return;
-      const legacy = decodeLegacySnapshot(database);
-      initializeSqlite(database, legacy.state, legacy.revision);
-      database.exec(`DROP TABLE ${V1_SNAPSHOT_TABLE}; PRAGMA user_version = 2`);
-      result.outcome = { status: 'migrated', standing: standing(database), counts: counts(legacy.state) };
+      if (result.source === 1) {
+        const legacy = decodeLegacySnapshot(database);
+        initializeSqlite(database, legacy.state, legacy.revision);
+        database.exec(`DROP TABLE ${V1_SNAPSHOT_TABLE}; PRAGMA user_version = ${CURRENT_USER_VERSION}`);
+        result.outcome = { status: 'migrated', standing: standing(database), counts: counts(legacy.state) };
+      }
+      else if (result.source === 2) {
+        rebuildV2Activities(database);
+        database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION}`);
+        result.outcome = { status: 'migrated', standing: standing(database), counts: rowCounts(database) };
+      }
     }, signal);
-    return result.outcome ?? { status: 'already-format-2', standing: standing(database) };
+    return result.outcome ?? { status: 'already-current', standing: standing(database) };
   } finally {
     database.close();
   }

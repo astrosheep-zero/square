@@ -74,6 +74,9 @@ test('Pi calls use live context, preserve environment, and return structured dat
     assert.equal(invalid.structuredContent.error.code, 'invalid_args');
   }
   await call('join', { as: 'bob' });
+  await call('listen', { as: 'bob', target: 'rei' });
+  assert.equal((await call('unlisten', { as: 'bob', target: 'rei' })).structuredContent.activity.kind, 'unlisten');
+  assert.deepEqual((await call('listening', { as: 'bob' })).structuredContent.listening, []);
   const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
   assert.deepEqual(bare.structuredContent.activity.mentions, []);
   const directed = await call('express', { as: 'rei', body: 'hello', noMention: true, mentions: ['bob'], force: true });

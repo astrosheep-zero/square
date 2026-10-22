@@ -1,78 +1,75 @@
-# Migrating an existing square to row storage
+# Migrating an existing square
 
 Square stores authority in one versioned SQLite artifact. Version 1 kept the
-whole history as one JSON snapshot; version 2 keeps typed rows — activities,
-sparse receipts, catch leases, ordered routes and the small configuration
-facts — in one in-place database.
+whole history as one JSON snapshot. Version 2 introduced typed rows. Current
+format 3 adds the `unlisten` history event without changing the other tables.
 
-Existing artifacts are **not** converted automatically. A normal read of a
-version 1 artifact refuses with a descriptive offline-migration requirement.
-The CLI adds the concrete recovery command; native tools retain the description:
+Existing artifacts are **not** converted automatically. Ordinary reads and
+writes refuse versions 1 and 2 with an offline-migration requirement. The CLI
+adds the concrete recovery command; native tools retain the description:
 
 ```sh
 square --location /path/to/SQUARE.square migrate
 ```
 
-That is the only migration command. There is no `--check`, `--backup`,
-`--force`, bulk mode, sidecar, daemon or dual reader, and no operator
-configuration to set.
+This is the only artifact migration command. There is no `--check`, `--backup`,
+`--force`, bulk mode, sidecar, daemon or dual reader. The host ledger is a
+separate resource; unlisten does not change its format.
 
 ## What the command does
 
-It converts the artifact **in place**, in **one transaction**:
+Both supported conversions happen **in place**, in **one transaction**:
 
-1. Reads the owned legacy framing before touching anything (application id,
-   format version, `DELETE` journal mode, the exact snapshot schema) and
-   refuses anything that is not an owned version 1 square.
-2. Takes `BEGIN IMMEDIATE`, re-checks that framing under the lock, and decodes
-   and validates the complete snapshot inside the lock.
-3. Creates the row schema and writes the preserved authority: activity indices
-   and their gaps, optional-field presence, raw receipt and lease owner keys,
-   route order and duplicates, string content and finite fractional timestamps.
-4. Rebuilds the derived participant, hold, attention and landed-audience facts
-   through the same single landing transition the runtime uses.
-5. Drops the snapshot table, sets the format version, and commits once.
+1. Read the owned framing before any persistent pragma or DDL: application id,
+   source format, `DELETE` journal mode, and exact known schema.
+2. Take `BEGIN IMMEDIATE` and re-check that framing under the lock.
+3. Convert the source using its explicit path:
+   - **Version 1:** decode and validate the complete snapshot, create current
+     rows, and preserve activity indices/gaps, optional fields, raw receipt and
+     lease owners, ordered routes, strings and finite fractional timestamps.
+     Rebuild derived participant, hold, attention and landed-audience facts
+     with the runtime's shared landing transition, then drop the snapshot.
+   - **Version 2:** rebuild only `activities` and its indexes to accept
+     `unlisten`, copying every existing activity row unchanged. All other
+     tables, including attention, landed audience, receipts, leases, routes
+     and configuration, remain untouched. No history is reinterpreted.
+4. Set format 3 and commit once.
 
-The revision is preserved; migration never invents or advances it. Nothing is
-published piecemeal, and the file keeps its path, inode and registry identity.
-
-Two shapes are already fine and change nothing:
-
-- an artifact that is already version 2 (reported as already format 2);
-- an artifact converted by another process while this one waited for the lock.
+Revision and assigned activity indices are preserved. Migration adds no domain
+activity. Nothing is published piecemeal, and path, inode and registry identity
+remain unchanged. A format-3 artifact is reported as already current without
+writing, including when another migrator finished while this one waited.
 
 ## What it refuses
 
-Nothing is written when the input is not a normally persisted version 1 square:
-a missing file, an unrelated SQLite database, an unsupported format version, a
-different journal mode, an unknown snapshot schema, unreadable snapshot JSON, or
-a route carrying a non-finite number (an exponent-overflow value such as
-`1e999`, which the previous permissive check accepted and an ordinary JSON round
-trip cannot carry) are all refused before any write. The refusal names the
-offending route property.
-
-Journal mode is never rewritten to make a migration possible.
+Missing files, unrelated databases, unsupported versions, different journal
+modes, unknown schemas and malformed headers are refused without a write.
+Version-1 snapshot JSON and activity vocabulary must be valid for that source
+format. Non-finite numbers anywhere in a legacy route, including nested extra
+properties, are refused with the offending property named; they are not
+silently coerced to null. Journal mode is never rewritten to make conversion
+possible, and migration is not a corruption-repair command.
 
 ## Before you migrate
 
-- Stop attached runtimes, or upgrade them together with the migration. An
-  in-flight remote delivery is not revoked by migration, and a version 1 writer
-  either commits before the conversion or is refused afterwards — it can never
-  overwrite converted rows.
-- An offline backup is optional and, if you want one, ordinary: copy the file
-  while no writer is attached. The command does not manage backups.
+Stop every session and service using that artifact. Make an offline backup, or
+use SQLite's backup facilities rather than copying a live database. The command
+does not manage backups, stop processes, revoke in-flight remote deliveries,
+or update installed runtimes.
 
-## Crash safety
+Upgrade all attached runtimes before reopening the migrated artifact. Both
+version-1 and version-2 runtimes refuse format 3; do not mix old and new
+processes against the converted file. An older writer either commits before
+conversion or meets the new version gate afterwards.
 
-Before `COMMIT`, SQLite's own journal recovers the complete version 1 artifact;
-after it, the complete version 2 rows are there. A process killed mid-migration
-therefore leaves one or the other, never a partial artifact, and re-running the
-command finishes the job. A busy `COMMIT` retries the same transaction and never
-re-runs the conversion.
+## Crash safety and checking
 
-## Checking an artifact
+Before `COMMIT`, SQLite's journal recovers the complete source version; after
+it, complete format-3 rows are present. A failure or process death cannot leave
+a partial conversion. A busy `COMMIT` retries the same transaction, never the
+copy or domain callback.
 
-`square --location <path> doctor` is read-only. On a legacy artifact it
-recognizes version 1 and prints the migration command; it does not call the
-artifact damaged. On version 2 it validates the rows and recomputes the derived
-indices to compare them against the stored ones.
+`square --location <path> doctor` is read-only. On versions 1 and 2 it prints
+the migration requirement without calling the artifact damaged. On current
+format 3 it validates rows and recomputes derived indices for comparison.
+Run it after migration and before restarting upgraded clients.

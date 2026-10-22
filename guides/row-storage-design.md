@@ -1,6 +1,9 @@
 # Row-oriented artifact design
 
-**Status: design closed; row runtime candidate implemented and measured, awaiting independent review/acceptance.**
+**Historical accepted design for artifact format 2.** The current runtime uses format 3 for the
+`unlisten` event; see [Square API](square-api.md#artifact-format-and-explicit-migration) for current
+format/migration behavior. The schema and delivery-stage terms below record the original row-storage
+replacement, not a pending implementation or a second current-format definition.
 Source baseline: `99679eb` (0.3.70). This document specifies the design; [runtime delivery evidence](row-runtime-delivery-evidence.md) records implementation verification and actual capacity measurements. Explicit migration remains a separately accepted delivery.
 
 ## Decision in brief
