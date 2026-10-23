@@ -1,7 +1,8 @@
 # Deploy
 
 Install the published Square CLI, then install its integrations through the
-native harness commands. Pi receives Square as the published npm package.
+native harness commands. Pi receives Square as the published npm package unless
+an existing local Square package is already configured; that source is preserved.
 
 ## Requirements
 
@@ -27,6 +28,11 @@ admission alone is not presentation. User cancellation suppresses the local
 pending batch, not OpenCode's already admitted inbox or unrelated execution.
 No legacy tool-output injection fallback is installed; other builds are not
 claimed as validated.
+
+Pi treats local paths and npm names as different package identities. Do not configure
+both sources for Square: they register the same tools twice. `square install pi`
+(and `--all`) preserves an existing local source instead of adding an npm copy;
+`square harness doctor pi` checks that local package as the active installation.
 
 ## Plugin sources
 

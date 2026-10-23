@@ -30,7 +30,26 @@ function requireSuccess(result: PiCommandResult, action: string): void {
   throw new Error(`Pi ${action} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
 }
 
+function localSquareRoot(homeDir: string): string | undefined {
+  const agentDir = path.join(homeDir, '.pi', 'agent');
+  const settingsPath = path.join(agentDir, 'settings.json');
+  if (!fs.existsSync(settingsPath)) return undefined;
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as { packages?: (string | { source: string })[] };
+  for (const entry of settings.packages ?? []) {
+    const source = typeof entry === 'string' ? entry : entry.source;
+    if (/^(?:npm:|git:|https?:\/\/)/.test(source)) continue;
+    const root = source.startsWith('~/') ? path.resolve(homeDir, source.slice(2)) : path.resolve(agentDir, source);
+    const manifestPath = path.join(root, 'package.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    if (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).name === SQUARE_IDENTITY.packageName) return root;
+  }
+  return undefined;
+}
+
 export function installPiPackage(homeDir: string, run: PiCommandRunner = runPi): string[] {
+  // Pi treats local paths and npm names as distinct sources, even for the same package.
+  const local = localSquareRoot(homeDir);
+  if (local !== undefined) return [local];
   requireSuccess(run(homeDir, ['install', piPackageSource()]), 'package install');
   return [piPackageRoot(homeDir)];
 }
@@ -42,7 +61,8 @@ export function uninstallPiPackage(homeDir: string, run: PiCommandRunner = runPi
 
 export function doctorPiPackage(homeDir: string, run: PiCommandRunner = runPi): string[] {
   const listed = run(homeDir, ['list']);
-  const root = piPackageRoot(homeDir);
+  const local = localSquareRoot(homeDir);
+  const root = local ?? piPackageRoot(homeDir);
   const manifestPath = path.join(root, 'package.json');
   let manifest: { version?: unknown; pi?: { extensions?: unknown } } | undefined;
   try {
@@ -52,7 +72,7 @@ export function doctorPiPackage(homeDir: string, run: PiCommandRunner = runPi): 
   }
   const extensions = manifest?.pi?.extensions;
   return [
-    listed.status === 0 && listed.stdout.includes(SQUARE_IDENTITY.packageName)
+    local !== undefined || listed.status === 0 && listed.stdout.includes(SQUARE_IDENTITY.packageName)
       ? `✓ Pi package ${SQUARE_IDENTITY.packageName} configured`
       : `○ Pi package ${SQUARE_IDENTITY.packageName} not configured`,
     manifest?.version === SQUARE_IDENTITY.packageVersion

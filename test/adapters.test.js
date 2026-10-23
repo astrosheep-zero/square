@@ -287,6 +287,37 @@ test('Pi package lifecycle uses Pi installation as the single extension owner', 
   }
 });
 
+test('Pi installation preserves a configured local Square source without adding an npm copy', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-local-'));
+  const agentDir = path.join(home, '.pi', 'agent');
+  const root = path.join(home, 'Developer', 'square');
+  const settingsPath = path.join(agentDir, 'settings.json');
+  const source = '../../Developer/square';
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    name: SQUARE_IDENTITY.packageName, version: SQUARE_IDENTITY.packageVersion,
+    pi: { extensions: ['./plugins/pi/square-pi.js'] },
+  }));
+  const calls = [];
+  const run = (_home, args) => {
+    calls.push(args);
+    return { status: 0, stdout: source, stderr: '' };
+  };
+  try {
+    for (const entry of [source, { source, skills: [] }]) {
+      const settings = JSON.stringify({ packages: ['npm:unrelated', entry], defaultTools: ['read'] });
+      fs.writeFileSync(settingsPath, settings);
+      calls.length = 0;
+      assert.deepEqual(installPiPackage(home, run), [root]);
+      assert.deepEqual(calls, [], 'a local source must not invoke pi install');
+      assert.equal(fs.readFileSync(settingsPath, 'utf8'), settings);
+      assert.ok(doctorPiPackage(home, run).some((line) => line.includes(root)));
+      assert.deepEqual(calls, [['list']]);
+    }
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test('package facade participant verbs persist through shared actions', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-actions-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
