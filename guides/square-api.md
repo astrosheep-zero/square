@@ -1,8 +1,11 @@
 # Square and Participant API
 
-`Square` is the actual resource handle shared by SDK, CLI, MCP and Pi. Its implementation is
-`square-api.ts`; `square.ts` remains the executable CLI entrypoint. `square-facade.ts` contains
-only public types. There is no separate operation factory, dispatcher or `{data, projection}` envelope.
+`Square` is the actual resource handle shared by SDK, CLI, MCP and Pi. `square-api.ts` selects a
+structural backend resource: `sqlite-square.ts` owns existing local semantics, and `square-stdio.ts`
+adapts that same API over a process connection. `square.ts` remains the executable CLI entrypoint.
+`square-facade.ts` contains only public types. There is no separate operation factory, policy
+dispatcher or `{data, projection}` envelope. See [backends.md](backends.md) for runnable configuration,
+URI encoding, the versioned protocol and explicit remote limitations.
 
 ## Open, select, join, close
 
@@ -27,9 +30,11 @@ try {
 - `Square.build({path, markdown, hardCap?, throttlePerMinute?, template?, force?, ...})` returns
   the same open resource. `Square.inMemory({markdown, ...})` is synchronous and creates no default
   native wake transport.
-- `Square.at` accepts `path`, optional `cwd`, captured `env`, `clock`, `hostLedger`, `wakeTransport`
-  and default `participant`. An omitted path uses captured `SQUARE_LOCATION`; relative paths use
-  `cwd`. Explicit participant, configured default, nonblank captured `SQUARE_PARTICIPANT_NAME`,
+- `Square.at` accepts `path`, optional `cwd`, captured `env`, `clock`, `hostLedger`, `wakeTransport`,
+  `backends`, and default `participant`. The `backends` configuration selects explicit named stdio
+  aliases. Paths resolve against `cwd`;
+  `stdio://name/key` stays a canonical URI and routes before filesystem access. An omitted path uses
+  captured `SQUARE_LOCATION`. Explicit participant, configured default, nonblank captured `SQUARE_PARTICIPANT_NAME`,
   then an unambiguous current-session ledger binding determine a name, in that order.
 - `await square.participant(name?)` selects a handle **without joining, claiming or reentering**.
   Discovery happens on each selection, not through a cached session-to-name decision.
@@ -40,7 +45,8 @@ try {
 - A Square owns its connection unless `resources: createSquareResourceOwner()` lends it one.
   Closing a borrowing handle leaves that owner open. Request signals never become the borrowed
   connection's lifetime. The MCP server drains cancelled/in-flight work before closing its owner;
-  explicit location overrides get independent request-owned connections.
+  explicit location overrides get independent request-owned connections. Stdio opens always own
+  their process connection (SQLite resource lending does not pool remote processes).
 
 ## One set of operations and defaults
 

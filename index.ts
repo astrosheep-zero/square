@@ -6,4 +6,5 @@ export { createHostLedgerPort, FileHostLedgerPort } from './host-ledger-file-ada
 export type { HostLedgerPort, PresenceRecord, EvidenceRecord } from './host-ledger.js';
 export type { PresentationSinkPort } from './ports.js';
 // Public operation contracts; no alternate runtime surface.
+export type * from './square-backend.js';
 export type * from './square-facade.js';

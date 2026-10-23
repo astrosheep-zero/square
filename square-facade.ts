@@ -1,3 +1,4 @@
+import type { SquareBackends } from './square-backend.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { StoredAct } from './model.js';
 import type { HostLedgerPort, WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
@@ -151,6 +152,7 @@ export interface SquareLocation {
   readonly env?: NodeJS.ProcessEnv;
 }
 export interface SquareAtInput extends SquareLocation, OpenOptions {
+  readonly backends?: SquareBackends;
   readonly participant?: string;
   /** A caller-owned connection; closing this Square never closes its owner. */
   readonly resources?: SquareResourceOwner;

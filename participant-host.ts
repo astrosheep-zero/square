@@ -6,6 +6,7 @@ import { defaultWakeRouteCapabilities, publishWakeRoute, retireWakeRouteFromArti
 
 export interface HostContext {
   readonly artifact: SquareArtifactPort;
+  readonly automaticDelivery?: boolean;
   readonly clock: () => number;
   readonly location?: string;
   readonly hostLedger?: HostLedgerPort;
@@ -18,7 +19,7 @@ export function processIdentity(env: NodeJS.ProcessEnv): { session: string; chan
 }
 
 export async function identityRouteDraft(context: HostContext, participant: string): Promise<Omit<WakeRoute, 'updatedAt'> | undefined> {
-  if (context.location === undefined || context.location === 'memory') return undefined;
+  if (context.automaticDelivery === false || context.location === undefined || context.location === 'memory') return undefined;
   const identity = processIdentity(context.env ?? process.env);
   if (identity.channel === 'unknown') return undefined;
   const provider = identity.channel === 'claude-code' ? 'claude' : identity.channel === 'opencode' ? 'opencode' : identity.channel === 'pi' ? 'pi' : identity.channel === 'paseo' ? 'paseo' : 'codex' as WakeBoundaryProvider;

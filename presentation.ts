@@ -65,6 +65,7 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath)) return squarePath;
   if (!path.isAbsolute(squarePath)) return squarePath.split(path.sep).join('/');
   const comparableCwd = fs.realpathSync.native(cwd);
   let comparableSquarePath = squarePath;
@@ -112,7 +113,7 @@ export function commandPrefix(squarePath: string): string {
 }
 
 export function participantCommandPrefix(squarePath: string, name: string): string {
-  return `square --location ${quoteShell(path.resolve(squarePath))} --as ${quoteShell(name)}`;
+  return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}`;
 }
 
 /** Blocked actions end with a full copy-pasteable recovery command. */

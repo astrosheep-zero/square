@@ -134,7 +134,8 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] <command> [args...]',
-    'Environment: SQUARE_LOCATION sets the CLI location; square-accessing commands require it or --location. SQUARE_PARTICIPANT_NAME sets the participant name.',
+    'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. SQUARE_PARTICIPANT_NAME sets the participant name.',
+    'Backends: SQUARE_BACKENDS_CONFIG selects {backends:{name:{command,args?,cwd?,env?}}}; default ~/.config/square/backends.json. See guides/backends.md.',
     'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
     '',
     ...commandLines,
