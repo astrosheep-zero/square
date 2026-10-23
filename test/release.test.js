@@ -46,7 +46,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(packageJson.files.includes('plugins'), true);
   assert.equal(claudePlugin.version, packageJson.version);
   assert.equal(codexPlugin.version, packageJson.version);
-  assert.equal(paseoPlugin.requirements.paseo, '0.12.1-square.1', 'vanilla Paseo does not provide the native delivery lifecycle API');
+  assert.equal(paseoPlugin.requirements.paseo, '>=0.11.2');
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
   assert.deepEqual(claudeHooks, { modules: ['./register.js'] });
@@ -120,8 +120,6 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/pi/square-pi.js',
     'plugins/paseo/paseo-plugin.json',
     'plugins/paseo/index.client.tsx',
-    'plugins/paseo/index.server.ts',
-    'plugins/paseo/server/record-delivery.ts',
     'plugins/paseo/client/square-message.tsx',
     'dist/plugins/opencode/index.js',
     'dist/plugins/opencode/index.d.ts',

@@ -37,19 +37,20 @@ changes `crossSessionInbound`. After bytes may have been sent, `unknown` remains
 attention-wide and prevents another send through Paseo, even if routes later change.
 
 Each native send persists a message ID before writing; the wire `uuid` and
-`msg_id` carry that ID. On a matching Paseo build, the Square server plugin records
-`held`, `released` and `dropped` observations from `agent.delivery_status` on the
-original host-ledger wake attempt. The event ID is deduplicated and the native
-reason and observation time remain diagnostic only. Neither a release nor a drop
-is a queue receipt, proof of consumption or retry authorization. Unknown IDs do
-not create evidence; older attempts without message IDs cannot be backfilled.
+`msg_id` carry that ID. Square records no native custody telemetry from Paseo:
+official Paseo exposes no delivery-status lifecycle event, so a held message stays
+`unknown` with `native_admission_unconfirmed`. Recording a `held`, `released` or
+`dropped` observation would require a Paseo-provided event; Square does not patch
+Paseo to invent one. Even when such an observation exists, the event ID is
+deduplicated and the native reason and observation time remain diagnostic only.
+Neither a release nor a drop is a queue receipt, proof of consumption or retry
+authorization.
 
 `square harness doctor delivery` shows native custody separately from pending
 attention, including after the activity is seen or the participant leaves. Paseo
-also presents the native state in its timeline. This integration requires the
-matching local Paseo 0.12.1-square.1 lifecycle API and plugin SDK; see
-[the Paseo plugin](../plugins/paseo/README.md). Acceptance means normal delivery
-when policy allows it, or a visible reason without bypass/replay when policy holds it.
+presents the `peer_message_hold` state in its own timeline. Acceptance means normal
+delivery when the receiver allows it, or a visible reason without bypass/replay when
+policy holds it.
 
 ## MCP tools and call identity
 
