@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from './square-tools.js';
-import { operationEnv } from './automatic-session.js';
+import { operationEnv } from './participant-identity.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
 import { Square, createSquareResourceOwner } from './square-api.js';

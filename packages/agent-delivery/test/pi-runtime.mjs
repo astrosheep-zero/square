@@ -44,8 +44,14 @@ const eventsFile = join(root, 'events.jsonl')
 await writeFile(eventsFile, '')
 const extension = `import squareExtension from ${JSON.stringify(pathToFileURL(join(squareRoot, 'plugins/pi/square-pi.js')).href)};
 import { appendFileSync } from 'node:fs';
+import { Square } from ${JSON.stringify(pathToFileURL(join(squareRoot, 'dist/index.js')).href)};
 export default function(pi) {
   squareExtension(pi);
+  pi.on('session_start', async (_event, ctx) => {
+    const square = await Square.at({ path: process.env.VALIDATION_SQUARE,
+      env: { ...process.env, PI_SESSION_ID: ctx.sessionManager.getSessionId() } });
+    try { await square.join('PiFixture'); } finally { await square.close(); }
+  });
   pi.registerProvider('validation-local', { baseUrl: process.env.LOCAL_PROVIDER_URL,
     api: 'openai-completions', apiKey: 'dummy-local-not-a-credential', models: [{ id: 'dummy', name: 'Dummy',
     reasoning: false, input: ['text'], contextWindow: 64000, maxTokens: 1000,
@@ -85,6 +91,7 @@ const server = http.createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 env.LOCAL_PROVIDER_URL = `http://127.0.0.1:${server.address().port}/v1`
 env.VALIDATION_EVENTS = eventsFile
+env.VALIDATION_SQUARE = squarePath
 const endpoint = join(root, 'ipc/p.sock')
 const child = spawn(process.execPath, [join(piRoot, 'dist/bundle/cli.js'), '--offline', '--no-context-files', '--mode', 'rpc',
   '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-approve', '--tools', 'read',
@@ -159,9 +166,9 @@ try {
     checks.push('busy ' + delivery + ': native placement at correct continuation boundary')
   }
   // The actual packed Square extension, not a stand-in direct caller, sends a directed activity.
-  await wait(async () => (await square.participants()).some((p) => p.name === 'PiFixture'), 'automatic Square join')
+  await wait(async () => (await square.participants()).participants.some((p) => p.name === 'PiFixture'), 'explicit Square join')
   n = settled()
-  await alice.express('real shared Square leaf @PiFixture')
+  await alice.participant.express('real shared Square leaf @PiFixture')
   await awaitSettled(n)
   const nativeSquare = (await messages()).find((e) => e.message.customType === 'square' && e.message.content.includes('real shared Square leaf'))
   assert.ok(nativeSquare); assert.equal(nativeSquare.message.display, true)

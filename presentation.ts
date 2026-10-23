@@ -158,18 +158,6 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
   return lines;
 }
 
-const EXPRESS_HINTS = [
-  '*asterisks* are your body — slam a table, shrug, sketch in the air',
-  "answer someone's actual words — they're standing right there",
-  "say the half-shaped thing — that's what the square is for",
-];
-
-export function expressHintLine(ownActivityCount: number): string | undefined {
-  if (ownActivityCount !== 1 && ownActivityCount % 5 !== 0) return undefined;
-  const hint = EXPRESS_HINTS[Math.floor(ownActivityCount / 5) % EXPRESS_HINTS.length];
-  return `· ${hint}`;
-}
-
 const BODY_PREVIEW_LENGTH = 200;
 
 export function truncateChars(body: string, maxChars: number): { text: string; remaining: number } {

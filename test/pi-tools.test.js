@@ -79,8 +79,14 @@ test('Pi calls use live context, preserve environment, and return structured dat
   assert.deepEqual((await call('listening', { as: 'bob' })).structuredContent.listening, []);
   const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
   assert.deepEqual(bare.structuredContent.activity.mentions, []);
+  assert.equal(typeof bare.structuredContent.hint, 'string', 'the first expression carries the shared hint');
   const directed = await call('express', { as: 'rei', body: 'hello', noMention: true, mentions: ['bob'], force: true });
   assert.deepEqual(directed.structuredContent.activity.mentions, ['bob']);
+  assert.equal(directed.structuredContent.hint, undefined);
+  const caught = await call('catch', { as: 'bob' });
+  assert.equal(caught.structuredContent.activities.length, 1);
+  assert.equal(typeof caught.structuredContent.hint, 'string', 'the first catch carries the shared hint');
+  assert.equal((await call('catch', { as: 'bob' })).structuredContent.hint, undefined, 'an empty catch carries no hint');
   const history = await call('history');
   assert.deepEqual(history.structuredContent.activities.filter(a => a.kind === 'say').map(a => a.body), ['literal @bob', 'hello']);
   const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', force: true });

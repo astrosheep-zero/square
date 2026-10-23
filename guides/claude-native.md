@@ -50,9 +50,9 @@ protocol, resident service or ledger schema migration is introduced.
 
 ## Membership and lifecycle
 
-If `.square/PUBLIC.square` already exists, the mod joins the automatic participant.
-It never creates PUBLIC. Existing manual memberships also reconcile independently
-of PUBLIC. Main-conversation tool completion (including failed/aborted tools) and
+Participants join explicitly. The mod never discovers or joins a square from its
+filename; `PUBLIC.square` has no special behavior. Existing memberships reconcile
+on startup. Main-conversation tool completion (including failed/aborted tools) and
 conversation start reconcile late memberships: the receiver itself publishes
 routes; the CLI cannot infer mod capability from a socket or session environment.
 This reconciliation injects no activity and does not poll. Its recovery sweep

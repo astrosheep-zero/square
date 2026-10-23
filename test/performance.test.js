@@ -178,8 +178,9 @@ test('catch fences selection and captures the page facts in its receipt transact
       },
     };
     const caught = await catchUp({ ...square, artifact }, 'Bob', { limit: 1 }, undefined, 'replacement');
+    assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
     assert.deepEqual(caught, {
-      participant: 'Bob', activities: [{ kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], index: 2, at: 100 }],
+      hint: caught.hint, participant: 'Bob', activities: [{ kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], index: 2, at: 100 }],
       consumedThrough: 'act/2', remaining: 1, sayNumbers: { 2: 1 }, standingCount: 2,
       held: false, now: 100, ownActivityCount: 0, hardCap: 5, terminalStatus: undefined,
     });

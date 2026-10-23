@@ -6,7 +6,8 @@ import { Square } from '../../dist/square-api.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
-import { automaticSessionEnd, automaticSessionStart, operationEnv } from '../../dist/automatic-session.js';
+import { operationEnv } from '../../dist/participant-identity.js';
+import { endSessionMemberships } from '../../dist/session-lifecycle.js';
 import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { formatActivityId } from '../../dist/square-core.js';
@@ -174,7 +175,6 @@ export default function squarePiExtension(pi) {
     get endpoint() { return pi.getFlag('agent-delivery-socket'); },
   });
   let sessionId;
-  let sessionCwd;
   let watcher;
   let watcherAbort;
   let generation = 0;
@@ -382,28 +382,12 @@ export default function squarePiExtension(pi) {
     activeTurn = undefined;
     currentRunSignal = undefined;
     sessionId = ctx.sessionManager.getSessionId();
-    sessionCwd = ctx.cwd || process.cwd();
     const token = generation;
     await stopped;
     if (token !== generation) return;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
-    const startup = automaticSessionStart('pi', sessionId, sessionCwd, sessionEnv(sessionId)).then((context) => {
-      if (context === undefined || sessionId === undefined || token !== generation) return;
-      const messageContent = framePiMessage(context);
-      const landing = waitForLanding(messageContent, signal, 'nextTurn');
-      try {
-        sendPiMessage(pi,
-          { customType: 'square', content: messageContent, display: true },
-          { deliverAs: 'nextTurn' },
-        );
-      } catch {
-        // Joining context is advisory; an unavailable Pi transport does not block startup.
-        landing.ack.settle(new Error('Pi joining-context injection failed'));
-      }
-      void landing.promise.catch(() => undefined);
-    }).catch(() => undefined);
-    watcher = Promise.allSettled([startup, wake(token, signal)]).then(() => undefined);
+    watcher = wake(token, signal).catch(() => undefined);
   });
 
   pi.on('agent_start', async (_event, ctx) => {
@@ -474,14 +458,12 @@ export default function squarePiExtension(pi) {
     failAcks(new Error('Pi session ended'));
     const stopped = stopWatcher();
     const endedId = sessionId;
-    const endedCwd = sessionCwd;
     const endedEnv = sessionEnv(endedId);
     sessionId = undefined;
-    sessionCwd = undefined;
     retryWait = undefined;
     activeTurn = undefined;
     currentRunSignal = undefined;
     await stopped;
-    if (endedId && endedCwd) await automaticSessionEnd('pi', endedId, endedCwd, endedEnv).catch(() => undefined);
+    if (endedId) await endSessionMemberships('pi', endedId, endedEnv).catch(() => undefined);
   });
 }

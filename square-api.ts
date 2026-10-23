@@ -6,6 +6,7 @@ import { resolveKnownName, validateDoneBody } from './decisions.js';
 import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
+import { expressHint } from './hints.js';
 import { assertLiveOwner } from './participant-host.js';
 import type { WakeTransportPort } from './ports.js';
 import { buildMemorySquare, openSquare, closeOpenSquare, type OpenSquare } from './open-square.js';
@@ -257,7 +258,8 @@ class ParticipantHandle implements Participant {
       }, control?.signal)).value;
       result = await landExpression(this.square, name, body, options, this.transport, control);
       const { observation: committed, ...data } = result;
-      return { ...data, ...(feed === undefined ? {} : { observation: {
+      const hint = expressHint(committed.ownActivityCount);
+      return { ...data, ...(hint === undefined ? {} : { hint }), ...(feed === undefined ? {} : { observation: {
             ...observedContext(this.square, committed.standingCount, committed.held, name, committed.now), ...committed, ...feed, participant: name,
             ...(entry.activity === null ? {} : { reentry: entry.activity }),
           } }) };
@@ -291,7 +293,7 @@ class ParticipantHandle implements Participant {
     const status = stop === 'already-active' || stop === 'replaced' || stop === 'capped' || stop === 'quorum' ? stop : undefined;
     return { activities: view.activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' as const })),
       consumedThrough: view.consumedThrough, remaining: view.remaining, idleExpired: stop === 'stale',
-      ...(status === undefined ? {} : { status }), ...(!options.observe ? {} : { observation: {
+      ...(status === undefined ? {} : { status }), ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
           ...observedContext(this.square, view.standingCount, view.held, view.participant, view.now), participant: view.participant,
           sayNumbers: view.sayNumbers, ownActivityCount: view.ownActivityCount, hardCap: view.hardCap, stop,
           ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }), waitStarted: result.waitStarted, replaced: result.replaced,

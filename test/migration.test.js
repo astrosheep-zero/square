@@ -14,7 +14,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   fixtureDirectory, legacyFixtureState, nonFiniteRouteText, readV1SnapshotRow, readV1State,
@@ -25,7 +25,9 @@ import { run, runAsync, testEnv } from './square-cli-helpers.js';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'square.js');
 const FIXTURES = path.join(ROOT, 'test', 'fixtures');
-const PINNED_V1_ROOT = process.env.SQUARE_V1_PINNED_ROOT ?? '/opt/homebrew/lib/node_modules/@astrosheep/square';
+// Exact dev dependency: a globally installed Square can be upgraded out of v1.
+const PINNED_V1_ROOT = process.env.SQUARE_V1_PINNED_ROOT
+  ?? path.resolve(path.dirname(fileURLToPath(import.meta.resolve('square-v1'))), '..');
 const PINNED_V1_CLI = path.join(PINNED_V1_ROOT, 'dist', 'square.js');
 
 const V2 = fs.existsSync(path.join(ROOT, 'dist', 'square-sqlite.js'));
@@ -34,8 +36,6 @@ const GATE = 'awaits kei/replace-whole-state-runtime-with-de1c';
 const MIGRATION_GATE = V2 ? 'awaits the explicit migrate command in this worktree' : GATE;
 // The differential oracle belongs to the runtime delivery's test fixtures.
 const ORACLE = path.join(ROOT, 'test', 'fixtures', 'legacy-square-core.js');
-const hasPinnedV1 = fs.existsSync(PINNED_V1_CLI);
-const PINNED_GATE = `awaits a pinned shipped v1 runtime at ${PINNED_V1_ROOT}`;
 const gate = (ok, reason) => (ok ? false : reason);
 
 function normalizeSql(sql) {
@@ -151,7 +151,7 @@ test('the frozen v1 writer produces the exact shipped v1 framing', (t) => {
   assert.deepEqual(readV1State(squarePath), legacyFixtureState());
 });
 
-test('the representative fixture is readable by the pinned shipped v1 runtime', { skip: gate(hasPinnedV1, PINNED_GATE) }, (t) => {
+test('the representative fixture is readable by the pinned shipped v1 runtime', (t) => {
   const dir = fixtureDirectory(t);
   const squarePath = path.join(dir, 'legacy.square');
   writeV1Artifact(squarePath, legacyFixtureState(), 7);
@@ -166,7 +166,7 @@ test('the representative fixture is readable by the pinned shipped v1 runtime', 
   assert.match(result.stdout, /Zoë\/legacy-key/);
 });
 
-test('the frozen v1 writer agrees with the pinned shipped v1 writer', { skip: gate(hasPinnedV1, PINNED_GATE) }, async (t) => {
+test('the frozen v1 writer agrees with the pinned shipped v1 writer', async (t) => {
   const dir = fixtureDirectory(t);
   const frozenPath = path.join(dir, 'frozen.square');
   const pinnedPath = path.join(dir, 'pinned.square');
@@ -664,7 +664,7 @@ test('a second migrator follows the same in-lock check', { skip: gate(MIGRATION,
   }
 });
 
-test('an old v1 writer lands before the conversion and meets the version gate after it', { skip: gate(MIGRATION && hasPinnedV1, MIGRATION ? PINNED_GATE : MIGRATION_GATE) }, async (t) => {
+test('an old v1 writer lands before the conversion and meets the version gate after it', { skip: gate(MIGRATION, MIGRATION_GATE) }, async (t) => {
   const dir = fixtureDirectory(t);
   const state = legacyFixtureState();
   // A bare reach: without --no-mention the shipped CLI refuses the command itself

@@ -5,7 +5,7 @@ import { isSquareError } from '../model.js';
 import { type Square, formatActivityId, parseActivityId } from '../square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressResult, ExpressOptions } from '../square-facade.js';
 import {
-  expressHintLine, formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
+  formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
   renderActivityUncertain, renderExpressNoWait, renderExpressWaiting, renderPendingFeed,
   joinRecoveryCommand, participantIdentity, participantsRecoveryCommand,
   participantCommandPrefix, commandPrefix, quoteShell, takeoverRecoveryLines, withPathOutput,
@@ -63,14 +63,13 @@ export function renderExpression(squarePath: string, data: ExpressResult): strin
     : `● ${activity.mentions.length > 0
       ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
       : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
-  const hint = expressHintLine(ownCount);
   const replyNotice = data.replyAuthorNotHere === undefined ? ''
     : `\n○ ${participantIdentity(data.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
   const unmatchedNotice = data.unmatchedMentions?.length
     ? `\n  · ${data.unmatchedMentions.map((token) => `@${token} isn't standing here`).join('; ')} — ${activity.mentions.length === 0 && activity.reply === undefined ? 'activity landed bare' : 'left as literal text'}` : '';
   return withPathOutput(projection.location ?? squarePath,
     (projection.reentry === undefined ? '' : '● you stepped back into the square\n')
-      + confirmation + (hint ? `\n${style('dim', hint)}` : '') + replyNotice + unmatchedNotice + pending,
+      + confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + replyNotice + unmatchedNotice + pending,
     { participantCount: projection.standingCount, held: projection.held });
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@astrosheep/square",
-  "version": "0.3.81",
+  "version": "0.3.82",
   "description": "A shared public square where agents join, catch activity, express, and step out when done.",
   "type": "module",
   "bin": {
@@ -45,6 +45,7 @@
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
+    "square-v1": "npm:@astrosheep/square@0.3.70",
     "typescript": "^5.8",
     "ws": "^8.21.3"
   },

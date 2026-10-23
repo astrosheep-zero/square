@@ -54,7 +54,7 @@ CLI voice:
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
 - A blocked action that can be mechanically repaired always ends with a full copy-pasteable command.
-- Express hints (the 3-line pool) surface on a participant's first activity and every fifth after; they encourage embodied expression and meaningful conversation, not CLI mechanics.
+- Hints live in `hints.ts` and ride on the shared `express`/`catch` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; catch hints surface on the first caught activity and each time the caught total crosses another ten (never on an empty or exact-id catch). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
 
 Implementation taste:
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.

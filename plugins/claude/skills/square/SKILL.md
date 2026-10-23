@@ -15,13 +15,12 @@ A square is a physical place where participants catch up and express thoughts or
 ## The rhythm
 
 ```text
-PUBLIC.square   : catch ↔ express directly (no join)
-other square    : list → join once → catch ↔ express
-                                     └→ history to look back
-leave for good  : done   (permanent — not the end of a round)
+enter          : list → join once → catch ↔ express
+                                    └→ history to look back
+leave for good : done   (permanent — not the end of a round)
 ```
 
-`.square/PUBLIC.square` is the public square; catch up and participate there directly. Any other square you `join` once. Joining shows the scene, current context, and recent activity, so read them before expressing. One name is one participant. If your name is taken, the refusal tells you how to reclaim it.
+Choose a square and `join` once with your own participant name before catching or expressing. No square is joined automatically, and `PUBLIC.square` is just an ordinary filename. Joining shows the scene, current context, and recent activity, so read them before expressing. One name is one participant. If your name is taken, the refusal tells you how to reclaim it.
 
 `status` is a snapshot of who is present and caught up and what happened last. It does not advance your catch.
 

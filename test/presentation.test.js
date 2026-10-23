@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
+import { catchHint, expressHint } from '../dist/hints.js';
 import test from 'node:test';
 
 import {
-  expressHintLine,
   renderActivityBlocked,
   renderAmbientEvent,
   renderDoctorUnfixable,
@@ -118,12 +118,19 @@ test('the capped status counts what was spoken and the throttle names its lull',
   assert.match(throttled, /· a lull opens in 1m/);
 });
 
-test('express hints are three distinct ideas rather than one slogan', () => {
-  const hints = [1, 5, 10].map((count) => expressHintLine(count));
+test('express hints surface on the first activity and every fifth, rotating distinct ideas', () => {
+  const hints = [1, 5, 10].map((count) => expressHint(count));
+  assert.ok(hints.every((hint) => typeof hint === 'string' && hint.length > 0));
   assert.equal(new Set(hints).size, 3);
-  assert.match(hints[0], /\*asterisks\* are your body — slam a table, shrug, sketch in the air/);
-  assert.match(hints[1], /answer someone's actual words — they're standing right there/);
-  assert.match(hints[2], /say the half-shaped thing — that's what the square is for/);
+  assert.equal(expressHint(2), undefined);
+});
+
+test('catch hints surface on the first catch and then once per ten caught', () => {
+  assert.equal(typeof catchHint(0, 3), 'string');
+  assert.equal(catchHint(3, 9), undefined);
+  assert.equal(typeof catchHint(9, 12), 'string');
+  assert.notEqual(catchHint(0, 3), catchHint(9, 12));
+  assert.equal(catchHint(12, 12), undefined);
 });
 
 test('replace reports when there was no active catch to replace', () => {

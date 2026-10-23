@@ -66,24 +66,6 @@ test('Pi lifecycle awaits watcher retirement after cancellation and replacement'
   await handlers.get('session_shutdown')({}, ctx);
   assert.equal(closed, opened, 'shutdown returned with owned watchers still open');
 
-  let releaseStartup;
-  const startup = new Promise((resolve) => { releaseStartup = resolve; });
-  const access = fs.promises.access.bind(fs.promises);
-  t.mock.method(fs.promises, 'access', async (...args) => {
-    await startup;
-    return access(...args);
-  });
-  await handlers.get('session_start')({}, ctx);
-  let ended = false;
-  const shutdown = handlers.get('session_shutdown')({}, ctx).then(() => { ended = true; });
-  try {
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(ended, false, 'shutdown overtook in-flight automatic session startup');
-  } finally {
-    releaseStartup();
-    await shutdown;
-  }
-  assert.equal(closed, opened);
 });
 
 test('a retiring watcher cannot suppress an unsent notification in its replacement', async (t) => {

@@ -385,7 +385,7 @@ test('a stale done paused across a completed takeover refuses and appends nothin
       await closeOpenSquare(owner);
     }
     assert.equal((await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch, 1);
-    // The old shutdown captured its owner epoch before the pause, exactly like automaticSessionEnd.
+    // The old shutdown captured its owner epoch before the pause, exactly like session-end cleanup.
     const expectedEpoch = (await readParticipantOwner(squarePath, 'Alice', createHostLedgerPort()))?.epoch;
 
     // While the old done is paused, the epoch-2 takeover completes its full lifecycle.

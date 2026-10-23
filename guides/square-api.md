@@ -6,10 +6,13 @@ only public types. There is no separate operation factory, dispatcher or `{data,
 
 ## Open, select, join, close
 
+Membership is explicit: no harness joins a square based on its filename or working directory.
+`PUBLIC.square` has exactly the same behavior as any other square file.
+
 ```ts
 import { Square } from '@astrosheep/square';
 
-const square = await Square.at({ path: './PUBLIC.square', env: { ...process.env } });
+const square = await Square.at({ path: './discussion.square', env: { ...process.env } });
 try {
   const joined = await square.join('Alice');
   const alice = joined.participant;

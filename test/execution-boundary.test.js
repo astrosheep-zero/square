@@ -560,7 +560,7 @@ test('postcommit catch publication and presence failure cannot erase its consume
   armed = true;
   const caught = await (await bob.participant()).catch({ observe: true });
   assert.equal(committed, true, 'the injected failures begin only after the delivered receipt');
-  const { observation, ...receipt } = caught;
+  const { observation, hint: _hint, ...receipt } = caught;
   assert.deepEqual(receipt, {
     activities: [{ ...expressed.activity, perception: 'full' }],
     consumedThrough: 'act/2', remaining: 0, idleExpired: false,

@@ -37,6 +37,18 @@ export const harnessSessionSources: readonly HarnessSessionSource[] = [
   { variable: 'PASEO_AGENT_ID', channel: 'paseo' },
 ];
 
+/** Scope a native call without changing the harness-owned process environment. */
+export function operationEnv(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const scoped: NodeJS.ProcessEnv = { ...env };
+  // Clear other native coordinates (and the Claude child flag); PASEO_AGENT_ID stays as it is.
+  for (const source of harnessSessionSources) {
+    if (source.provider === undefined) continue;
+    scoped[source.variable] = source.provider === provider ? sessionId : '';
+    if (source.childVariable !== undefined) scoped[source.childVariable] = '';
+  }
+  return scoped;
+}
+
 /** Raw nonempty harness session ids in table order. Duplicates are preserved, never collapsed. */
 export function sessionIdsFromEnvironment(env: NodeJS.ProcessEnv = process.env): readonly string[] {
   return harnessSessionSources

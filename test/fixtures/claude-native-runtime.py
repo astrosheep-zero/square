@@ -13,8 +13,8 @@ shipped_module=(R/'plugin/hooks/register.js').read_bytes()
 NODE=shutil.which('node')
 DRIVER=str(REPO/'test/fixtures/claude-runtime-driver.mjs')
 SANDBOX=str(REPO/'test/sandbox-env.js')
-def driver(op):
- result=subprocess.run([NODE,'--import',SANDBOX,DRIVER,str(R),op],capture_output=True,text=True,timeout=8)
+def driver(op,*args):
+ result=subprocess.run([NODE,'--import',SANDBOX,DRIVER,str(R),op,*args],capture_output=True,text=True,timeout=8)
  if result.returncode: raise RuntimeError(result.stderr)
  return result.stdout
 print('setup',driver('setup'))
@@ -49,7 +49,8 @@ with fixture.run(args,reply):
    records.append({'kind':i.get('operation'),'id':i.get('sessionId'),'socket':i.get('endpoint'),'out':out,'bindings':out.get('bindings')})
   ready=[x for x in records if x.get('kind')=='start' and x.get('out',{}).get('available') and x.get('socket')]
   if ready and not sent_prompt:
-   if IS_FORK: actions.append('forked '+fork_from+' to '+ready[-1]['id']);assert ready[-1]['id']!=fork_from and ready[-1].get('bindings')
+   driver('join',ready[-1]['id']);actions.append('explicitly joined receiver before its first prompt')
+   if IS_FORK: actions.append('forked '+fork_from+' to '+ready[-1]['id']);assert ready[-1]['id']!=fork_from
    os.write(master,b'Abort fixture.\r' if MODE=='cancel' else b'Reply fixture hello.\r');sent_prompt=True;actions.append('typed initial synthetic prompt')
   if ready and sent_prompt and calls and not sent_native and ((MODE in ['busy','cancel'] and tool_pending.is_set()) or (MODE not in ['busy','cancel'] and time.time()-beg>8)):
    out=driver('send');sent_native=True;native_at=time.time();actions.append('shipped Square coordinator sent native body: '+out.strip());(R/'dispatch-result.json').write_text(out)

@@ -237,7 +237,6 @@ const integrationEdges = new Map([
   ['cli/harness-command.ts -> harness.ts', ['executeHarnessTarget', 'harnessTargets']],
   ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHookAsync']],
-  ['mcp.ts -> automatic-session.ts', ['operationEnv']],
   ['mcp.ts -> claude-mcp-context.ts', ['readClaudeMcpCall']],
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['verifyHostLedger', 'migrateHostLedger']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['gcHostLedger']],
@@ -246,7 +245,7 @@ const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
   ['runtime.ts', ['HELD_WAIT_BUDGET_MS']],
   ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
-  ['participant-identity.ts', ['participantIdentity']],
+  ['participant-identity.ts', ['participantIdentity', 'operationEnv']],
   ['search.ts', ['grepSnippet']],
 ]);
 const pureTypeBindings = new Map([
@@ -315,12 +314,12 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     ['cli/nested.ts', "import './render.js';"],
     ['cli/render.ts', "export { history } from '../views.js'; export { createArtifactPort } from '../artifact.js';"],
     ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
-    ['mcp.ts', "import { automaticSessionStart } from './automatic-session.js'; import { beginClaudeMcpCall } from './claude-mcp-context.js'; import './square-tools.js';"],
+    ['mcp.ts', "import * as identity from './participant-identity.js'; import { beginClaudeMcpCall } from './claude-mcp-context.js'; import './square-tools.js';"],
     ['square-tools.ts', "import { express } from './square-actions.js';"],
   ]);
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
-    'integration exception exceeded: mcp.ts -> automatic-session.ts (automaticSessionStart)',
     'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
+    'private binding: mcp.ts -> participant-identity.ts (*)',
     'private binding: presentation.ts -> runtime.ts (nowMs)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',

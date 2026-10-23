@@ -1,7 +1,7 @@
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { InboxMembership } from './model.js';
-import { automaticSessionEnd, automaticSessionStart } from './automatic-session.js';
+import { endSessionMemberships } from './session-lifecycle.js';
 import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeAdapter } from './delivery.js';
@@ -100,16 +100,11 @@ export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEn
   if (typeof value.session_id !== 'string') return runCodexHook(inputText, env);
   if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
     await recordCodexBoundary(value.session_id, 'non-stop', env, AbortSignal.timeout(hookBudgetMs(env)));
-    const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
-    try {
-      const context = await automaticSessionStart('codex', value.session_id, cwd, env);
-      return context === undefined ? '' : `${JSON.stringify({ hookSpecificOutput: { hookEventName: value.hook_event_name, additionalContext: context } })}\n`;
-    } catch { return ''; }
+    return '';
   }
   if (value.hook_event_name === 'SessionEnd') {
     await clearCodexBoundary(value.session_id, env, AbortSignal.timeout(hookBudgetMs(env)));
-    const cwd = typeof value.cwd === 'string' ? value.cwd : process.cwd();
-    try { await automaticSessionEnd('codex', value.session_id, cwd, env); } catch { /* end remains bounded */ }
+    try { await endSessionMemberships('codex', value.session_id, env); } catch { /* end remains bounded */ }
     return '';
   }
   return runCodexHook(inputText, env);

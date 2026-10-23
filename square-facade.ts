@@ -41,6 +41,8 @@ export interface ExpressResult extends ActivityResult {
   readonly replyAuthorNotHere?: string;
   /** Body @name tokens with no standing match at landing; never stored on the activity. */
   readonly unmatchedMentions?: readonly string[];
+  /** Occasional participant-facing nudge; not part of the activity. */
+  readonly hint?: string;
   readonly observation?: ExpressObservation;
 }
 export interface ListenerChangeResult {
@@ -68,6 +70,8 @@ export interface CatchResult {
   readonly idleExpired: boolean;
   readonly remaining: number;
   readonly status?: CatchTerminalStatus;
+  /** Occasional participant-facing nudge; not part of any activity. */
+  readonly hint?: string;
   readonly observation?: CatchObservation;
 }
 export interface CatchWaitStart {

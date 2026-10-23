@@ -4,6 +4,7 @@ import { SquareError, type StoredAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
 import type { CatchOptions } from './square-facade.js';
+import { catchHint } from './hints.js';
 
 export interface CatchSelection {
   readonly participant: string;
@@ -17,6 +18,7 @@ export interface CatchSelection {
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
   readonly terminalStatus: 'capped' | 'quorum' | undefined;
+  readonly hint?: string;
 }
 
 /** Capture a selected page (or an empty completion) without opening another resource. */
@@ -79,6 +81,11 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
     filter = page.filter;
     delivered = facts.activities(page.indexes);
   }
-  facts.markSeen(viewer, delivered.map((item) => item.index), at);
-  return observeCatchSelection(facts, viewer, delivered, filter, at);
+  const marked = facts.markSeen(viewer, delivered.map((item) => item.index), at);
+  const selection = observeCatchSelection(facts, viewer, delivered, filter, at);
+  // Receipts are the durable catch count: everything directed here minus what is still unseen.
+  const caught = facts.directedCount(viewer, {}) - facts.directedCount(viewer, { unseenOnly: true });
+  // An exact id catch is a targeted fetch and stays repeatable, so it carries no nudge.
+  const hint = options.id === undefined ? catchHint(caught - marked, caught) : undefined;
+  return hint === undefined ? selection : { ...selection, hint };
 }

@@ -1,4 +1,4 @@
-import { automaticSessionStart, operationEnv } from './automatic-session.js';
+import { operationEnv } from './participant-identity.js';
 import { claimSessionParticipant, hostLedgerForEnv } from './registry.js';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
@@ -86,7 +86,6 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       catch { await ledger.removePresenceIfUnchanged(claimed.record); }
       finally { await square.close(); }
     }
-    await automaticSessionStart('claude', input.sessionId, input.cwd, env);
   }
   if (input.operation === 'start' || input.operation === 'reconcile' || input.operation === 'cancel' || input.cancelAt !== undefined) {
     const memberships = await ledger.listPresence({ session: input.sessionId });

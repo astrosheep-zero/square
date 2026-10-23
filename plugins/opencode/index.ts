@@ -1,4 +1,4 @@
-import { automaticSessionStart, operationEnv } from '../../automatic-session.js';
+import { operationEnv } from '../../participant-identity.js';
 import { hostLedgerForEnv } from '../../registry.js';
 import { canonicalPath } from '../../canonical-path.js';
 import { openSquare } from '../../open-square.js';
@@ -60,7 +60,6 @@ export default {
         const target = await validate(sessionId);
         if (!target) { stop(sessionId); continue; }
         const scopedEnv = operationEnv('opencode', sessionId, env);
-        if (sessionId === activeSession) await automaticSessionStart('opencode', sessionId, directory, scopedEnv);
         if (!await publishOpenCodeRoutes(sessionId, scopedEnv, lifetime.signal)) { stop(sessionId); continue; }
         if (receivers.get(sessionId)?.settled === false) continue;
         const abort = new AbortController();

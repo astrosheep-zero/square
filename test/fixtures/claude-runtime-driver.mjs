@@ -6,6 +6,8 @@ import { openSquare, closeOpenSquare } from '../../dist/open-square.js';
 import { createHostLedgerPort } from '../../dist/host-ledger-file-adapter.js';
 import { writeClaudeNative } from '../../dist/packages/agent-delivery/src/claude-native.js';
 import { processActNotificationsOnce } from '../../dist/notifications.js';
+import { Square } from '../../dist/square-api.js';
+import { operationEnv } from '../../dist/participant-identity.js';
 const root = process.argv[2];
 const op = process.argv[3];
 const squarePath = path.join(root, 'work/.square/PUBLIC.square');
@@ -13,6 +15,11 @@ const ledger = createHostLedgerPort({ rootPath: path.join(root, 'ledger') });
 if (op === 'setup') {
   fs.mkdirSync(path.dirname(squarePath), { recursive: true });
   await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['Isolated dummy API fixture.'], acts: [], runtime: emptyRuntimeState(0) });
+} else if (op === 'join') {
+  // The fixture explicitly enters using the real receiver coordinate, before its first prompt.
+  const env = operationEnv('claude', process.argv[4], { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger') });
+  const square = await Square.at({ path: squarePath, hostLedger: ledger, env });
+  try { await square.join('fixture-receiver'); } finally { await square.close(); }
 } else if (op === 'send') {
   const presence = await ledger.listPresence();
   const receiver = presence.find((row) => row.channel === 'claude-code');

@@ -97,6 +97,17 @@ async function fixture(t, beforeSetup) {
   };
 }
 
+test('native prompt reconciliation does not autojoin an existing PUBLIC filename', async (t) => {
+  const f = await fixture(t);
+  const publicPath = path.join(path.dirname(f.squarePath), '.square', 'PUBLIC.square');
+  const publicSquare = await Square.build({ path: publicPath, env: f.env, markdown: 'Ordinary filename' });
+  try {
+    await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+    assert.deepEqual((await publicSquare.participants()).participants, []);
+    assert.deepEqual(await f.ledger.listPresence({ location: publicPath }), []);
+  } finally { await publicSquare.close(); }
+});
+
 test('v2 native body admission is not presentation; exact prepared primary context is full/clipped and idempotent', async (t) => {
   const f = await fixture(t);
   const index = await f.express('BODY for Bob');

@@ -4,6 +4,7 @@ import {
   participantCommandPrefix, renderAmbientEvent, renderWatchAlreadyActive, renderWatchForceTakeover,
   renderWatchReplaceMissing, renderWatchReplaced, renderWatchStatus, withPathOutput,
 } from '../presentation.js';
+import { style } from '../tty-style.js';
 
 export function renderCatchProgress(squarePath: string, progress: OperationProgress): string | undefined {
   if (progress.kind !== 'catch-started' || !progress.replacementRequested) return undefined;
@@ -55,8 +56,9 @@ export function renderCatchOutcome(
   });
   const fallback = stop === undefined && !projection.automaticDeliveryAvailable && data.remaining === 0
     ? `${participantCommandPrefix(location, name)} catch --idle 30m\n  stay available for new activity` : '';
+  const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return {
-    stdout: withPathOutput(location, [terminal, rendered, remaining, fallback].filter(Boolean).join('\n\n'), header),
+    stdout: withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header),
     exitCode: stop === 'capped' ? 1 : 0,
   };
 }
