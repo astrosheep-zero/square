@@ -4,13 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-native.js';
 import { connect } from '../dist/packages/agent-delivery/src/index.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { observeClaudeDelivery } from '../dist/claude-delivery.js';
+import { recordClaudeDeliveryStatus } from '../dist/claude-delivery-status.js';
+import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { createHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
@@ -24,11 +26,11 @@ import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { sessionInbox } from '../dist/inbox.js';
 
 const supported = { skip: process.platform !== 'darwin' };
-async function fixture(t, body = 'hello @Bob') {
+async function fixture(t, body = 'hello @Bob', envOverrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-native-'));
   const squarePath = path.join(root, 'S.square');
   const endpoint = path.join(root, 'in.sock');
-  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger'), SQUARE_REGISTRY: path.join(root, 'sessions'), SQUARE_DISABLE_PASEO_WAKE: '1' };
+  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger'), SQUARE_REGISTRY: path.join(root, 'sessions'), SQUARE_DISABLE_PASEO_WAKE: '1', ...envOverrides };
   const acts = [{ kind: 'join', actor: 'Alice', at: 1, index: 0 }, { kind: 'join', actor: 'Bob', at: 2, index: 1 }, { kind: 'say', actor: 'Alice', at: 3, index: 2, body, mentions: ['Bob'] }, { kind: 'say', actor: 'Alice', at: 4, index: 3, body: 'not for Bob', mentions: ['Alice'] }];
   await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts: acts.slice(0, 2), runtime: { ...emptyRuntimeState(2), nextActIndex: 2 } });
   const ledger = createHostLedgerPort({ rootPath: env.SQUARE_HOST_LEDGER_ROOT });
@@ -67,12 +69,107 @@ test('plain native transport prepares tokenless session-targeted NDJSON and only
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: f.coordinate.endpoint }, '字\nbody', { deadline: Date.now() + 1000 })).outcome, 'written');
   await f.firstFrame;
   assert.equal(f.frames.length, 1);
-  assert.deepEqual(Object.keys(f.frames[0]).sort(), ['message', 'msgV', 'msg_id', 'priority', 'session_id', 'type']);
+  assert.deepEqual(Object.keys(f.frames[0]).sort(), ['message', 'msgV', 'msg_id', 'priority', 'session_id', 'type', 'uuid']);
+  assert.equal(f.frames[0].uuid, f.frames[0].msg_id);
   assert.equal(f.frames[0].session_id, 'target');
   assert.deepEqual(f.frames[0].message, { role: 'user', content: '字\nbody' });
   assert.equal((await evidence(f)).length, 0);
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: f.coordinate.endpoint }, 'body', { deadline: Date.now() - 1 })).outcome, 'unavailable');
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: path.join(f.root, 'dead.sock') }, 'body', { deadline: Date.now() + 1000 })).outcome, 'unavailable');
+});
+
+test('native custody stays on its original attempt without authorizing delivery or replay', supported, async (t) => {
+  const f = await fixture(t);
+  await dispatch(f);
+  await f.firstFrame;
+  const original = (await evidence(f)).find((row) => row.kind === 'wake');
+  const status = { provider: 'claude', sessionId: f.coordinate.sessionId, messageId: original.nativeDelivery.messageId,
+    eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() };
+  assert.equal(f.frames[0].uuid, status.messageId);
+  assert.equal(f.frames[0].msg_id, status.messageId);
+  assert.equal(await recordClaudeDeliveryStatus(status, f.env), true);
+  assert.equal(await recordClaudeDeliveryStatus(status, f.env), true);
+  const held = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.deepEqual(held, { ...original, nativeObservations: [statusObservation(status)] });
+  assert.match((await doctorDeliveryHealth(f.squarePath, 0, Date.now(), f.env)).join('\n'), /native held \(no-mode-asserted\)/);
+  for (const changed of [{ sessionId: 'another-session' }, { messageId: randomUUID() }, { eventId: 'bad' },
+    { state: 'presented' }, { state: 'held', reason: undefined }, { state: 'released' },
+    { state: 'dropped', reason: 'not-real' }, { observedAt: NaN }]) {
+    assert.equal(await recordClaudeDeliveryStatus({ ...status, ...changed }, f.env), false);
+  }
+  assert.deepEqual((await evidence(f)).find((row) => row.kind === 'wake'), held);
+  assert.deepEqual(await f.bridge({ operation: 'status', sessionId: 'wrong', status }), { recorded: false });
+  const released = { ...status, eventId: randomUUID(), state: 'released', reason: undefined, observedAt: status.observedAt + 1 };
+  assert.deepEqual(await f.bridge({ operation: 'status', status: released }), { recorded: true });
+  assert.equal((await evidence(f)).find((row) => row.kind === 'wake').outcome, 'unknown');
+  assert.equal(await seen(f), undefined);
+  assert.equal((await dispatch(f)).attempted, 0);
+  await stored(f, original.nativeDelivery.payload);
+  assert.equal(await seen(f), 'seen');
+  const accepted = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.equal(accepted.outcome, 'accepted');
+  assert.deepEqual(accepted.nativeObservations, [statusObservation(status), statusObservation(released)]);
+  const dropped = { ...status, eventId: randomUUID(), state: 'dropped', reason: 'expired', observedAt: status.observedAt + 2 };
+  assert.equal(await recordClaudeDeliveryStatus(dropped, f.env), true);
+  const late = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.deepEqual(late, { ...accepted, nativeObservations: [...accepted.nativeObservations, statusObservation(dropped)] });
+  const doctor = (await doctorDeliveryHealth(f.squarePath, 0, Date.now(), f.env)).join('\n');
+  assert.match(doctor, /no pending delivery attention/);
+  assert.match(doctor, /held \(no-mode-asserted\) → released → dropped \(expired\)/);
+  assert.equal((await dispatch(f)).attempted, 0);
+});
+
+function statusObservation({ eventId, messageId, state, reason, observedAt }) {
+  return { eventId, messageId, state, ...(reason === undefined ? {} : { reason }), observedAt };
+}
+
+test('managed Claude keeps native through tool publication and reconciliation; held is never replayed via Paseo', supported, async (t) => {
+  const f = await fixture(t, 'hello @Bob', { PASEO_AGENT_ID: 'managed-agent' });
+  const scoped = { ...f.env, CLAUDE_CODE_SESSION_ID: f.coordinate.sessionId };
+  await dispatch(f);
+  await f.firstFrame;
+  const original = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.equal(await recordClaudeDeliveryStatus({ provider: 'claude', sessionId: f.coordinate.sessionId,
+    messageId: original.nativeDelivery.messageId, eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() }, f.env), true);
+  const square = await Square.at({ path: f.squarePath, hostLedger: f.ledger, env: scoped });
+  try { await (await square.participant('Bob')).express('*waves*', { force: true, noMention: true }); }
+  finally { await square.close(); }
+  assert.equal((await readSquareSnapshot(f.squarePath)).state.routes.find((row) => row.participant === 'Bob').kind, 'claude-native');
+  await f.bridge({ operation: 'reconcile' });
+  assert.equal((await dispatch(f)).attempted, 0);
+  assert.equal(f.frames.length, 1);
+  const held = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.equal(held.outcome, 'unknown');
+  assert.equal(held.nativeObservations[0].reason, 'no-mode-asserted');
+  // Explicit native unavailability can expose the registered fallback, but never replay this attention.
+  await f.bridge({ operation: 'reconcile', endpoint: 'unavailable' });
+  const fallback = await Square.at({ path: f.squarePath, hostLedger: f.ledger, env: scoped });
+  try { await (await fallback.participant('Bob')).express('*waits*', { force: true, noMention: true }); }
+  finally { await fallback.close(); }
+  assert.equal((await readSquareSnapshot(f.squarePath)).state.routes.find((row) => row.participant === 'Bob').kind, 'paseo');
+  assert.equal((await dispatch(f)).attempted, 0);
+  assert.equal((await evidence(f)).filter((row) => row.kind === 'wake').length, 1);
+  assert.equal(f.frames.length, 1);
+});
+
+test('an observation arriving before write completion survives finishing the wake claim', supported, async (t) => {
+  const f = await fixture(t);
+  const prepare = f.ledger.prepareNativeWake.bind(f.ledger);
+  f.ledger.prepareNativeWake = async (input) => {
+    const prepared = await prepare(input);
+    assert.equal(prepared, true);
+    assert.equal(await recordClaudeDeliveryStatus({ provider: 'claude', sessionId: input.session,
+      messageId: input.nativeDelivery.messageId, eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() }, f.env), true);
+    return prepared;
+  };
+  const square = await openSquare(f.squarePath, { hostLedger: f.ledger });
+  try { await deliverPending({ artifact: square.artifact, hostLedger: f.ledger,
+    transport: await createDefaultWakeTransport(f.ledger, Date.now, f.env, []), location: f.squarePath, activity: 2 }); }
+  finally { await closeOpenSquare(square); }
+  const row = (await evidence(f)).find((row) => row.kind === 'wake');
+  assert.equal(row.outcome, 'unknown');
+  assert.equal(row.nativeObservations.length, 1);
+  assert.equal(row.nativeObservations[0].reason, 'no-mode-asserted');
 });
 
 test('slow Claude auth stays inside the original deadline and never sends after timeout', async (t) => {

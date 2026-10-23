@@ -61,6 +61,22 @@ test('delivery diagnostics show release reasons even when nothing is pending', (
   assert.match(lines[2], /selection/);
 });
 
+test('native custody remains visible beyond pending detail limits and never renders transport secrets', () => {
+  const items = Array.from({ length: 25 }, (_, i) => deliveryItem('awaiting', i));
+  const native = {
+    at: 0, attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', actIndex: 99 },
+    outcome: 'unknown', routeKind: 'claude-native', attemptN: 1, claimToken: 'SECRET-TOKEN',
+    nativeDelivery: { harness: 'claude', endpoint: '/SECRET-SOCKET', payload: 'SECRET-PAYLOAD' },
+    nativeObservations: [{ eventId: 'event-1', messageId: 'message-1', state: 'held', reason: 'no-mode-asserted', observedAt: 0 }],
+  };
+  for (const pending of [items, []]) {
+    const text = renderDeliveryHealth(pending, [], 1_000, [native]).join('\n');
+    assert.match(text, /Claude native custody · 1/);
+    assert.match(text, /act\/99 → @Bob · unknown · native held \(no-mode-asserted\) · 1s · message message-1/);
+    assert.doesNotMatch(text, /SECRET/);
+  }
+});
+
 test('delivery health presentation ellipsizes recipient, actor, and wake signature fields', () => {
   const recipient = `recipient-${'r'.repeat(160)}`;
   const actor = `actor-${'a'.repeat(160)}`;

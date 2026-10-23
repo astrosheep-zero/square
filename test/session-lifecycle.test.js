@@ -342,7 +342,7 @@ test('kick replacement retires the old session route and keeps the new one', { c
   assert.deepEqual((await loadSquare(item.squarePath)).acts.map((act) => act.kind), ['join', 'done', 'join']);
   assert.deepEqual((await readWakeRoutes({ location: item.squarePath })).map((route) => route.sessionId), ['new-session']);
 });
-test('Paseo is the preferred wake route when a native session runs under Paseo', { concurrency: false }, async () => {
+test('Paseo is available when a Claude session has no registered native mod route', { concurrency: false }, async () => {
   const item = await fixture();
   await withEnv({ ...item.env, PASEO_AGENT_ID: 'paseo-agent' }, async (env) => {
     await joinSession('claude', 'claude-session', item.squarePath, env);

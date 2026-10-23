@@ -219,6 +219,16 @@ export class FileHostLedgerPort implements HostLedgerPort {
       return current.outcome === 'accepted' ? current : finishWake(current, 'accepted', { signature: 'native_queue_confirmed', message: undefined, diagnostic: undefined });
     });
   }
+  async observeNativeDelivery(i: EvidenceRecord & { readonly claimToken: string }, observation: import('./host-ledger.js').NativeDeliveryObservation): Promise<boolean> {
+    return this.updateWake(i, (current) => {
+      const native = current.nativeDelivery;
+      if (native?.harness !== 'claude' || native.messageId !== observation.messageId) return undefined;
+      const observations = current.nativeObservations ?? [];
+      if (observations.some((prior) => prior.eventId === observation.eventId)) return current;
+      // Native custody is diagnostic evidence, never permission to retry or a queue receipt.
+      return { ...current, nativeObservations: [...observations, observation] };
+    });
+  }
   async claimEvidence(i: EvidenceClaim): Promise<ClaimResult> {
     if ((i.kind as string) === 'wake') return { status: 'degraded', error: new Error('wake attempts are claimed with claimWakeAttempt') };
     const at = i.now ?? this.clock(), { leaseMs, ...claim } = i;

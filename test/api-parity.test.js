@@ -32,7 +32,8 @@ async function mcp(t, options) {
   return async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
-    assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+    // MCP shows people the same text the CLI prints; facts live in structuredContent.
+    assert.equal(typeof result.content[0].text, 'string');
     return result.structuredContent;
   };
 }
@@ -193,7 +194,7 @@ function measureArtifact(t, squarePath) {
   };
 }
 
-test('optional observations add only requested reads; MCP never pays for a terminal feed', async (t) => {
+test('optional observations add only requested reads; rendering transports pay for the feed they show', async (t) => {
   const options = await fixture(t, 'observations'), { square } = options;
   const { participant: alice } = await square.join('Alice'), { participant: bob } = await square.join('Bob');
   await bob.express('for Alice', { force: true, mentions: ['Alice'] });
@@ -204,13 +205,13 @@ test('optional observations add only requested reads; MCP never pays for a termi
   const { participant, observation, ...receipt } = fullJoin.value;
   assert.deepEqual(dataJoin.value, { ...receipt, participant: participant.name });
   assert.equal(plainJoin.value.observation, undefined);
-  assert.equal(dataJoin.hydrated, 0);
+  assert.ok(dataJoin.hydrated > 0, 'join text hydrates the recent-activity feed it prints');
   assert.ok(fullJoin.hydrated > 0);
   assert.equal(fullJoin.reads - plainJoin.reads, 1);
   const dataExpress = await measure(() => call('express', { as: 'Alice', body: 'data', force: true }));
   const plainExpress = await measure(() => alice.express('plain', { force: true }));
   const fullExpress = await measure(() => alice.express('presented', { force: true, observe: true }));
-  assert.equal(dataExpress.hydrated, 0);
+  assert.ok(dataExpress.hydrated > 0, 'express text hydrates the pending feed it prints');
   assert.equal(plainExpress.value.observation, undefined);
   assert.equal(fullExpress.reads - plainExpress.reads, 1);
   assert.deepEqual(fullExpress.value.observation.pendingPublic.map((act) => act.body), ['for Alice']);

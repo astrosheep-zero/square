@@ -257,7 +257,7 @@ const integrationTypeBindings = new Map([
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['HostLedgerReport']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['LedgerMaintenanceReport']],
 ]);
-const presentationHelpers = new Set(['presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
+const presentationHelpers = new Set(['presentation.ts', 'operation-presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
 
 function transportLeaks(sources, roots) {
   const visited = new Set(), leaks = [];

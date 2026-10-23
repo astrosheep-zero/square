@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { hostLedgerForEnv } from './registry.js';
@@ -10,7 +11,7 @@ import { presentPending } from './presentation-operations.js';
 import { type WakeRoute } from './model.js';
 import { canonicalPath } from './canonical-path.js';
 import { parseActivityId } from './square-core.js';
-import { DeliveryError, connect } from './packages/agent-delivery/src/index.js';
+import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map((match) => match[1]!); }
@@ -22,17 +23,10 @@ function nativeSupported(route: WakeRoute): boolean { return route.address.loade
  * owns the payload, the correlation and the evidence. A local write is never proof
  * of native admission.
  */
-async function writeClaudeWake(sessionId: string, endpoint: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
-  try {
-    const agent = await connect({ harness: 'claude', sessionId, endpoint, timeoutMs });
-    await agent.steer(payload, { signal });
-    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: 'Claude accepted the local write; native admission is unconfirmed.' };
-  } catch (error) {
-    if (error instanceof DeliveryError && !error.maybeDelivered) {
-      return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: error.message };
-    }
-    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: error instanceof Error ? error.message : String(error) };
-  }
+async function writeClaudeWake(sessionId: string, endpoint: string, messageId: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
+  const result = await writeClaudeNative({ sessionId, endpoint, messageId }, payload, { deadline: Date.now() + timeoutMs, signal });
+  if (result.outcome === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: result.message };
+  return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: result.outcome === 'written' ? 'Claude accepted the local write; native admission is unconfirmed.' : result.message };
 }
 
 export function createClaudeWakeTransport(hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
@@ -79,11 +73,11 @@ async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, 
       payload = nativePayload(request.claimToken, preview.payload);
     } finally { await closeOpenSquare(square); }
     if (!await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'not-capable', diagnostic: 'Native activity was consumed before send.' };
-    const native = { harness: 'claude' as const, payload, epoch: owner.epoch ?? 0, endpoint: request.route.address.endpoint! };
+    const native = { harness: 'claude' as const, payload, epoch: owner.epoch ?? 0, endpoint: request.route.address.endpoint!, messageId: randomUUID() };
     const row = { location: request.location, participant: request.participant, session: request.route.sessionId, activity: request.activity, kind: 'wake' as const, outcome: 'dispatching', routeKind: 'claude-native' as const, attemptN: request.attemptN, claimToken: request.claimToken, nativeDelivery: native };
     if (!await currentDelivery(row, hostLedger) || !await hostLedger.prepareNativeWake(row)) return { outcome: 'not-capable', diagnostic: 'Native delivery is no longer current.' };
     if (!await (beforeSend?.() ?? Promise.resolve(true)) || !await currentDelivery(row, hostLedger)) return { outcome: 'not-capable', diagnostic: 'Catch, cancellation or consumption won before native write.' };
-    return writeClaudeWake(row.session, native.endpoint, payload, timeoutMs, signal);
+    return writeClaudeWake(row.session, native.endpoint, native.messageId, payload, timeoutMs, signal);
   }, signal);
 }
 

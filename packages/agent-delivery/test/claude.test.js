@@ -69,12 +69,13 @@ test('connect exposes one capability: steer writes exactly one user frame and re
   await received(f, 1)
   const { msg_id, ...body } = f.frames[0]
   assert.equal(msg_id, receipt.id)
-  assert.deepEqual(body, { msgV: 1, type: 'user', session_id: 'explicit-session', message: { role: 'user', content: text }, priority: 'next' })
+  assert.deepEqual(body, { msgV: 1, uuid: receipt.id, type: 'user', session_id: 'explicit-session', message: { role: 'user', content: text }, priority: 'next' })
 
   const second = await agent.steer('again')
   await received(f, 2)
   assert.notEqual(second.id, receipt.id)
   assert.equal(f.frames[1].msg_id, second.id)
+  assert.equal(f.frames[1].uuid, second.id)
 })
 
 test('connect preconditions reject before any socket work', async (t) => {

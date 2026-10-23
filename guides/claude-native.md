@@ -19,6 +19,38 @@ peer/plugin authority. Native OS-user socket permissions and Claude policy apply
 `square harness doctor delivery` derives current routes/evidence without sending.
 An absent/broken endpoint is unavailable; it does not consume Square activity.
 
+## Native-first routing and policy holds
+
+Native delivery is preferred, including under Paseo. Codex proposes its capable
+native queue before Paseo. Claude and OpenCode receivers register their native
+routes only through their loaded integrations. The common publication transaction
+keeps a fresh native registration ahead of a Paseo proposal for the same
+participant, session, channel and ownership epoch. Tool operations cannot flip it
+back to Paseo between receiver reconciliations. An absent, expired or explicitly
+retired native registration does not block a Paseo fallback; a replacement epoch
+cannot inherit an older native registration.
+
+This is route preference, not permission to bypass receiver policy. Claude can
+legitimately hold an unsolicited peer message with `no-mode-asserted`, especially
+under `bypassPermissions`. Square neither asserts a made-up permission mode nor
+changes `crossSessionInbound`. After bytes may have been sent, `unknown` remains
+attention-wide and prevents another send through Paseo, even if routes later change.
+
+Each native send persists a message ID before writing; the wire `uuid` and
+`msg_id` carry that ID. On a matching Paseo build, the Square server plugin records
+`held`, `released` and `dropped` observations from `agent.delivery_status` on the
+original host-ledger wake attempt. The event ID is deduplicated and the native
+reason and observation time remain diagnostic only. Neither a release nor a drop
+is a queue receipt, proof of consumption or retry authorization. Unknown IDs do
+not create evidence; older attempts without message IDs cannot be backfilled.
+
+`square harness doctor delivery` shows native custody separately from pending
+attention, including after the activity is seen or the participant leaves. Paseo
+also presents the native state in its timeline. This integration requires the
+matching local Paseo 0.12.1-square.1 lifecycle API and plugin SDK; see
+[the Paseo plugin](../plugins/paseo/README.md). Acceptance means normal delivery
+when policy allows it, or a visible reason without bypass/replay when policy holds it.
+
 ## MCP tools and call identity
 
 The plugin's `.mcp.json` starts the existing Square MCP server. The mod no longer

@@ -104,7 +104,7 @@ test('stale publication refreshes at the observed owner epoch and retains cancel
   assert.equal(local.cancelledThrough, 42);
   assert.ok(local.updatedAt > Date.now() - 1000);
   assert.deepEqual((await routes()).map((route) => [route.epoch, route.kind, route.address, route.updatedAt]),
-    [[7, 'paseo', { agentId: 'new-address' }, 100 + ROUTE_FRESH_MS]]);
+    [[7, 'codex-queue', { threadId: 'local' }, 100 + ROUTE_FRESH_MS]]);
 });
 
 test('takeover publishes the explicit claim epoch while its old standing owner remains visible', async (t) => {
@@ -155,11 +155,14 @@ test('unreadable observation cannot invent an owner; readable presence and route
   ledger.listPresence = list;
   const owner = (await list({ location: square.location, participant: 'Alice' }))[0];
   await ensure({ ...owner, updatedAt: Date.now() - ROUTE_FRESH_MS - 1 });
+  await square.artifact.transact((facts) => facts.replaceRoutes(facts.routes().map((route) => route.participant === 'Alice'
+    ? { ...route, address: { threadId: 'obsolete' } } : route)));
   ledger.ensurePresence = async () => { throw new Error('presence write unavailable'); };
   const changed = { ...square, env: { ...square.env, PASEO_AGENT_ID: 'changed' } };
   const expressed = await express(changed, 'Alice', 'committed despite presence failure', { force: true });
   assert.equal(expressed.activity.body, 'committed despite presence failure');
-  assert.equal((await routes())[0].kind, 'paseo', 'readable observation still allows the independent route attempt');
+  assert.equal((await routes())[0].kind, 'codex-queue');
+  assert.deepEqual((await routes())[0].address, { threadId: 'local' }, 'readable observation still allows the independent route attempt');
   assert.match(warnings.join(''), /host presence degraded: presence write unavailable/);
 
   const transact = square.artifact.transact.bind(square.artifact);

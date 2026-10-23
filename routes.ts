@@ -23,8 +23,8 @@ export async function defaultWakeRouteCapabilities(hostLedger?: import('./host-l
 export function resolvePrimaryWakeRoute(boundary: WakeBoundary, env: NodeJS.ProcessEnv, capabilities: WakeRouteCapabilities): Omit<WakeRoute, 'updatedAt'> | undefined {
   const paseoAgentId = env.PASEO_AGENT_ID?.trim();
   const candidates: Array<{ kind: WakeRouteKind; address: Record<string, string> }> = [];
-  if (paseoAgentId) candidates.push({ kind: 'paseo', address: { agentId: paseoAgentId } });
   if (boundary.provider === 'codex') candidates.push({ kind: 'codex-queue', address: { threadId: boundary.sessionId } });
+  if (paseoAgentId) candidates.push({ kind: 'paseo', address: { agentId: paseoAgentId } });
   const chosen = candidates.find((candidate) => Object.values(candidate.address).every((value) => value.trim() !== '') && capabilities.canUse(candidate.kind, candidate.address));
   return chosen === undefined ? undefined : { location: boundary.location, participant: boundary.participant, sessionId: boundary.sessionId, channel: boundary.provider === 'paseo' ? 'paseo' : boundary.provider === 'claude' ? 'claude-code' : boundary.provider, ...chosen };
 }
@@ -91,6 +91,10 @@ export async function publishWakeRoute(
       || routes.some((item) => nameKey(item.participant) === nameKey(route.participant) && canonicalPathSync(item.location) === location && item.sessionId !== route.sessionId))) return;
     const identity = routeIdentityKey(route, location);
     const matching = routes.filter((item) => routeIdentityKey(item, canonicalPathSync(item.location)) === identity);
+    // A receiver's fresh native registration outranks a generic Paseo proposal.
+    // Arbitrate in the write transaction so tool publication and mod reconciliation cannot flip it back.
+    if (route.kind === 'paseo' && matching.some((item) => item.kind !== 'paseo' && item.channel === route.channel
+      && item.epoch === route.epoch && item.updatedAt <= at && item.updatedAt > at - ROUTE_FRESH_MS)) return;
     const existing = matching[0];
     if (matching.length === 1 && existing.updatedAt > at - ROUTE_FRESH_MS && existing.kind === route.kind
       && existing.channel === route.channel && sameRouteAddress(existing.address, route.address) && existing.epoch === route.epoch) return;

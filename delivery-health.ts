@@ -3,7 +3,8 @@ import { formatActivityId } from './square-core.js';
 import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
 import { projectWakeEvidence } from './wake-eligibility.js';
-import type { WakeAttempt, WakeReleaseDiagnostic } from './wake-evidence.js';
+import { decodeWakeEvidence, type WakeAttempt, type WakeReleaseDiagnostic } from './wake-evidence.js';
+import { hostLedgerForEnv } from './registry.js';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { readWakeReleaseDiagnostics } from './wake-attempts.js';
@@ -89,7 +90,7 @@ function displayField(value: string): string {
   return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
 }
 
-export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], releases: readonly WakeReleaseDiagnostic[] = [], now = Date.now()): string[] {
+export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], releases: readonly WakeReleaseDiagnostic[] = [], now = Date.now(), nativeAttempts: readonly WakeAttempt[] = []): string[] {
   const out = items.length === 0 ? ['✓ no pending delivery attention'] : [`· delivery attention · ${items.length} pending`];
   if (items.length > 0) {
     let displayed = 0;
@@ -105,6 +106,16 @@ export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], relea
       displayed += details.length;
     }
     if (items.length > DETAIL_LIMIT) out.push(`${DETAIL_LIMIT} of ${items.length} pending details shown`);
+  }
+  if (nativeAttempts.length > 0) {
+    out.push(`· Claude native custody · ${nativeAttempts.length}`);
+    out.push(...nativeAttempts.slice(0, DETAIL_LIMIT).map((attempt) => {
+      const observations = [...attempt.nativeObservations ?? []].sort((a, b) => a.observedAt - b.observedAt);
+      const last = observations.at(-1)!;
+      const states = observations.map((observation) => `${observation.state}${observation.reason ? ` (${observation.reason})` : ''}`).join(' → ');
+      return `  · ${formatActivityId(attempt.attention.actIndex)} → ${displayField(participantIdentity(attempt.attention.recipient))} · ${attempt.outcome} · native ${displayField(states)} · ${formatDuration(Math.max(0, now - last.observedAt))} · message ${displayField(last.messageId)}`;
+    }));
+    if (nativeAttempts.length > DETAIL_LIMIT) out.push(`${DETAIL_LIMIT} of ${nativeAttempts.length} native custody details shown`);
   }
   if (releases.length > 0) {
     out.push(`· recent wake releases · ${releases.length}`);
@@ -131,5 +142,10 @@ export async function doctorDeliveryHealth(
 ): Promise<string[]> {
   const items = await classifyDeliveryHealth(squarePath, { graceMs, now, env });
   const releases = await readWakeReleaseDiagnostics({ location: squarePath, now, env });
-  return renderDeliveryHealth(items, releases, now);
+  const rows = await hostLedgerForEnv(env).listEvidence({ location: squarePath, kind: 'wake', includeReleased: true, now });
+  const nativeAttempts = rows.flatMap((row) => {
+    const decoded = decodeWakeEvidence(row, now);
+    return decoded?.kind === 'attempt' && decoded.value.nativeObservations?.length ? [decoded.value] : [];
+  }).sort((a, b) => Math.max(...b.nativeObservations!.map((row) => row.observedAt)) - Math.max(...a.nativeObservations!.map((row) => row.observedAt)));
+  return renderDeliveryHealth(items, releases, now, nativeAttempts);
 }

@@ -1,8 +1,9 @@
-import type { EvidenceRecord, WakeAttention } from './host-ledger.js';
+import type { EvidenceRecord, WakeAttention, NativeDeliveryObservation } from './host-ledger.js';
 import type { WakeRouteKind } from './model.js';
 import { parseActivityId } from './square-core.js';
 
 export interface WakeAttempt {
+  readonly nativeObservations?: readonly NativeDeliveryObservation[];
   readonly at: number;
   readonly attention: WakeAttention;
   readonly routeKind: WakeRouteKind;
@@ -52,5 +53,6 @@ export function decodeWakeEvidence(record: EvidenceRecord, now: number): Decoded
   }
   if (record.outcome !== 'accepted' && record.outcome !== 'unknown' && record.outcome !== 'failed') return undefined;
   if (record.routeKind === undefined || typeof record.attemptN !== 'number') return undefined;
-  return { kind: 'attempt', value: { ...value, routeKind: record.routeKind, attemptN: record.attemptN, outcome: record.outcome } };
+  return { kind: 'attempt', value: { ...value, routeKind: record.routeKind, attemptN: record.attemptN, outcome: record.outcome,
+    ...(record.nativeObservations === undefined ? {} : { nativeObservations: record.nativeObservations }) } };
 }

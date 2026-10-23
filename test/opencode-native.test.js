@@ -138,6 +138,20 @@ test('v2 native body admission is not presentation; exact prepared primary conte
   assert.equal(f.sent.length, 2);
 });
 
+test('managed OpenCode keeps native across tool publication and prompt reconciliation', async (t) => {
+  const f = await fixture(t);
+  await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+  const managed = await Square.at({ path: f.squarePath, env: { ...f.env, PASEO_AGENT_ID: 'managed-agent' } });
+  try { await (await managed.participant('Bob')).express('*waves*', { force: true, noMention: true }); }
+  finally { await managed.close(); }
+  assert.equal((await readSquareSnapshot(f.squarePath)).state.routes.find((row) => row.participant === 'Bob').kind, 'opencode-server');
+  await f.hooks.get('prompt')({ sessionID: 'opencode-fixture' });
+  const index = await f.express('native still owns this BODY');
+  await waitFor(async () => (await f.evidence()).some((row) => row.activity === `act/${index}` && row.outcome === 'accepted'));
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /native still owns this BODY/);
+});
+
 test('a transient receiver ledger failure recovers on reconciliation without plugin reload', async (t) => {
   let failures = 0;
   const f = await fixture(t, async () => {

@@ -49,9 +49,11 @@ export async function writeClaudeNative(target: ClaudeNativeTarget, text: string
   try {
     scope.check()
     const token = await scope.wait(resolveClaudeToken({ endpoint, token: target.token, claudeHome: target.claudeHome, env: target.env, platform: target.platform }, scope.signal))
+    const messageId = target.messageId ?? randomUUID()
     const frames = [
       ...(token === undefined ? [] : [{ type: 'auth', token }]),
-      { msgV: 1, msg_id: target.messageId ?? randomUUID(), type: 'user', session_id: target.sessionId, message: { role: 'user', content: text }, priority: 'next' },
+      // Claude's SDK custody events echo uuid, not the peer-protocol msg_id.
+      { msgV: 1, msg_id: messageId, uuid: messageId, type: 'user', session_id: target.sessionId, message: { role: 'user', content: text }, priority: 'next' },
     ]
     scope.check()
     if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')

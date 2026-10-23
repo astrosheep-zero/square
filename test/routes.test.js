@@ -150,6 +150,32 @@ test('publication preserves nonmatching route envelopes and order, collapses eve
   } finally { await artifact.close(); }
 });
 
+test('publication atomically keeps fresh same-generation native ahead of Paseo in either publication order', async () => {
+  const location = '/square-native-priority.square';
+  const artifact = createArtifactPort(':memory:', emptyState());
+  const base = { location, participant: 'Bob', sessionId: 'native-session', channel: 'claude-code', epoch: 1 };
+  const native = { ...base, kind: 'claude-native', address: { endpoint: '/tmp/receiver.sock', loaded: 'true' } };
+  const paseo = { ...base, kind: 'paseo', address: { agentId: 'managed-agent' } };
+  try {
+    await publishWakeRoute(artifact, paseo, { at: 100 });
+    await publishWakeRoute(artifact, native, { at: 101 });
+    const registered = (await artifact.read((facts) => facts.routes())).value;
+    const revision = await artifact.revision();
+    await publishWakeRoute(artifact, paseo, { at: 102 });
+    assert.deepEqual((await artifact.read((facts) => facts.routes())).value, registered);
+    assert.equal(await artifact.revision(), revision, 'a lower-priority publisher must not churn the native route');
+    await retireWakeRouteFromArtifact(artifact, native, { expectedEpoch: 1 });
+    await publishWakeRoute(artifact, paseo, { at: 103 });
+    assert.equal((await artifact.read((facts) => facts.routes())).value[0].kind, 'paseo', 'retired native no longer prevents the fallback');
+    await publishWakeRoute(artifact, native, { at: 104 });
+    await publishWakeRoute(artifact, { ...paseo, epoch: 2 }, { at: 105 });
+    assert.equal((await artifact.read((facts) => facts.routes())).value[0].epoch, 2, 'old native registration must not pin a new generation');
+    await publishWakeRoute(artifact, { ...native, epoch: 2 }, { at: 106 });
+    await publishWakeRoute(artifact, { ...paseo, epoch: 2 }, { at: 106 + ROUTE_FRESH_MS });
+    assert.equal((await artifact.read((facts) => facts.routes())).value[0].kind, 'paseo', 'expired native registration does not claim availability');
+  } finally { await artifact.close(); }
+});
+
 test('session route cleanup compares canonical locations', async () => {
   const item = fixture();
   try {
@@ -250,16 +276,22 @@ test('done to joined clears stale participant routes before publishing the curre
   } finally { await closeOpenSquare(item.square); fs.rmSync(item.item.root, { recursive: true, force: true }); }
 });
 
-test('primary route selection gives Paseo global precedence without changing session key', () => {
+test('primary route selection prefers capable native without changing the harness session key', () => {
   const route = resolvePrimaryWakeRoute(
     { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
     { PASEO_AGENT_ID: ' agent-1 ', CODEX_THREAD_ID: 'thread-1' },
     { canUse: (kind) => kind === 'paseo' || kind === 'codex-queue' },
   );
-  assert.deepEqual(route, { location: '/square', participant: 'Bob', sessionId: 'thread-1', channel: 'codex', kind: 'paseo', address: { agentId: 'agent-1' } });
+  assert.deepEqual(route, { location: '/square', participant: 'Bob', sessionId: 'thread-1', channel: 'codex', kind: 'codex-queue', address: { threadId: 'thread-1' } });
+  const fallback = resolvePrimaryWakeRoute(
+    { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
+    { PASEO_AGENT_ID: 'agent-1' }, { canUse: (kind) => kind === 'paseo' },
+  );
+  assert.equal(fallback.kind, 'paseo');
+  assert.equal(fallback.sessionId, 'thread-1');
 });
 
-test('primary route selection falls back to native only when capable', () => {
+test('primary route selection requires a capable candidate even without Paseo', () => {
   const native = resolvePrimaryWakeRoute(
     { location: '/square', participant: 'Bob', sessionId: 'thread-1', provider: 'codex' },
     {},
