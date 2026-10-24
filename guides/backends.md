@@ -170,3 +170,11 @@ inspect history before deciding whether to send again.
   into the client's host ledger or notification watchers.
 - No process pooling, reconnection, automatic retries, server daemon, Slack IDs, credentials, live
   external sends, installation or release management is introduced.
+
+## Slack is a bridge, not a backend
+
+Slack never becomes a Square location and does not change the backend grammar. To bring Slack humans
+into a square, run `packages/slack-bridge` (`square-slack-bridge`) against one channel and one local
+artifact: Slack messages land as ordinary activities from `slack/<name>` participants, and Square
+`say` activities appear in the channel. The artifact stays authoritative, so mentions, replies, catch,
+notifications and previews are the existing native behavior; no core, CLI, MCP or Pi code changes.

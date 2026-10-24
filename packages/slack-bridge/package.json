@@ -1,0 +1,29 @@
+{
+  "name": "@astrosheep/square-slack-bridge",
+  "version": "0.1.0",
+  "description": "Mirror one Slack channel and one local square in both directions.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": "^22.16.0 || >=24.0.0" },
+  "bin": { "square-slack-bridge": "dist/cli.js" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --import ./test/sandbox-env.js --test test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@astrosheep/square": "file:../..",
+    "@slack/socket-mode": "3.1.0",
+    "@slack/web-api": "8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.0",
+    "typescript": "^5.8.0"
+  }
+}
