@@ -171,7 +171,7 @@ test('a capped express counts what was spoken and keeps the draft and the done c
 
   const capped = run(withName(file, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'one more @Alice\n' });
   assert.equal(capped.status, 1, capped.stdout + capped.stderr);
-  assert.match(capped.stdout, /✕ nothing left in you — 1\/1 spoken/);
+  assert.match(capped.stdout, /✕ you’ve reached your speaking cap — 1\/1 spoken/);
   assert.match(capped.stdout, /draft kept/);
   assert.match(capped.stdout, /· your draft stays unsent; done only steps out/);
   assert.match(capped.stdout, /done\n$/);

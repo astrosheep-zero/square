@@ -16,6 +16,7 @@ export interface OpenSquare {
   readonly env?: NodeJS.ProcessEnv;
   /** False when a long-lived owner lent the connection; closing this view leaves it open. */
   readonly ownsArtifact: boolean;
+  readonly automaticDelivery?: boolean;
 }
 export interface SquareBuildOptions {
   markdown: string;
@@ -32,6 +33,7 @@ export interface SquareBuildOptions {
 export interface SquareOpenOptions extends Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env' | 'signal'> {
   /** A caller-owned connection to reuse; this view never closes it. */
   readonly artifact?: SquareArtifactPort;
+  readonly automaticDelivery?: boolean;
 }
 
 export async function openSquare(
@@ -47,7 +49,7 @@ export async function openSquare(
   try {
     await artifact.read(facts => facts.header(), control?.signal);
     return {
-      artifact, clock: options.clock ?? Date.now, location: squarePath, env, ownsArtifact: borrowed === undefined,
+      artifact, automaticDelivery: options.automaticDelivery, clock: options.clock ?? Date.now, location: squarePath, env, ownsArtifact: borrowed === undefined,
       hostLedger: options.hostLedger ?? createHostLedgerPort({ rootPath: hostLedgerRoot(env) }),
       wakeTransport: options.wakeTransport,
     };

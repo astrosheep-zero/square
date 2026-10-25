@@ -4,10 +4,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { run, tempSquare, withName, withPath, ROOT } from './square-cli-helpers.js';
 
-const joinBanner = "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.";
-const skillGuidance = "Don't treat Square as a public dumping ground. Speak here only when you genuinely think someone else needs to know; otherwise you are needlessly interrupting them.";
+const joinBanner = 'stay within earshot — keep this catch open for new activity';
+const skillGuidance = '**Always give speech a body.**';
 
-test('join feedback and packaged skill make responsibility for others attention explicit', (t) => {
+test('join gives actionable listening guidance while the skill preserves embodied expression', (t) => {
   const file = tempSquare();
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
   const built = run(withPath(file, ['build']), { input: 'A scene worth keeping' });
@@ -15,7 +15,8 @@ test('join feedback and packaged skill make responsibility for others attention 
   for (const args of [['join'], ['join'], ['join', '--kick']]) {
     const joined = run(withName(file, 'Alice', args), { env: { CODEX_THREAD_ID: args.includes('--kick') ? 'guidance-takeover' : 'guidance-join' } });
     assert.equal(joined.status, 0, joined.stderr);
-    assert.ok(joined.stdout.includes(joinBanner));
+    assert.match(joined.stdout, /stay within earshot|when someone calls you, you’ll hear them here/);
+    assert.doesNotMatch(joined.stdout, /every word here lands on a real ear/);
   }
   assert.ok(fs.readFileSync(path.join(ROOT, 'skills/square/SKILL.md'), 'utf8').includes(skillGuidance));
   const history = run(withPath(file, ['history', '--no-truncate']));

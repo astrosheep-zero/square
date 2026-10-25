@@ -140,7 +140,7 @@ test('participants bound the roster without pagination', async () => {
   const rows = defaultPage.stdout.split('\n').filter((line) => /^  [◎●○] \S+ ·/.test(line));
   assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(1).reverse());
   assert.doesNotMatch(defaultPage.stdout, /@Peer/);
-  assert.match(defaultPage.stdout, /^  ○ 20 of 21 participants shown$/m);
+  assert.match(defaultPage.stdout, /^  · 20 of 21 participants shown$/m);
   assert.match(defaultPage.stdout, new RegExp(`square --location '${file}' participants --limit 21`));
 
   const complete = run(withPath(file, ['participants', '--limit', '21']), { env: { SQUARE_NOW_MS: '100000' } });
@@ -168,7 +168,7 @@ test('participants do not offer a rejected complete-roster limit', async () => {
 
   const page = run(withPath(file, ['participants', '--limit', '100']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(page.status, 0, page.stderr);
-  assert.match(page.stdout, /^  ○ 100 of 101 participants shown$/m);
+  assert.match(page.stdout, /^  · 100 of 101 participants shown$/m);
   assert.doesNotMatch(page.stdout, /participants --limit 101/);
 });
 
@@ -234,7 +234,7 @@ test('catch --mention renders matching says and suppresses room changes', async 
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--mention']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.match(watched.stdout, /calls your name across the square — @Alice/);
-  assert.match(watched.stdout, /@Bob\s+#1/);
+  assert.match(watched.stdout, /@Bob\s+·/);
   assert.doesNotMatch(watched.stdout, /while your back was turned/);
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
 });
@@ -270,7 +270,7 @@ test('catch --from renders named peers and rejects the removed --by flag', async
   const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.doesNotMatch(watched.stdout, /@Bob stepped into the square/);
-  assert.match(watched.stdout, /@Bob\s+#1/);
+  assert.match(watched.stdout, /@Bob\s+·/);
   assert.doesNotMatch(watched.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
   assert.doesNotMatch(watched.stdout, /hello from cara/);
@@ -308,7 +308,7 @@ test('history with an explicit page and no truncation renders the archive', asyn
 
   const activities = run(withPath(file, ['history', '--limit', '100', '--no-truncate']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
-  assert.match(activities.stdout, /@Bob\s+#1/);
+  assert.match(activities.stdout, /@Bob\s+·/);
   assert.match(activities.stdout, /hello @Alice/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
   assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
@@ -386,7 +386,7 @@ test('history --since excludes older public activity', async () => {
   const boundary = new Date(say.at + Math.floor((done.at - say.at) / 2)).toISOString();
   const activities = run(withPath(file, ['history', '--since', boundary]), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(activities.status, 0, activities.stderr);
-  assert.doesNotMatch(activities.stdout, /Bob\s+#1/);
+  assert.doesNotMatch(activities.stdout, /Bob\s+·/);
   assert.doesNotMatch(activities.stdout, /hello @Alice/);
   assert.match(activities.stdout, /@Bob stepped out of the square — done/);
 });
@@ -437,7 +437,7 @@ test('ambient catch and history render full body to a mention target and presenc
   const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(bobWatch.status, 0, bobWatch.stderr);
   assert.match(bobWatch.stdout, /secret reach phrase/);
-  assert.match(bobWatch.stdout, /@Alice\s+#1/);
+  assert.match(bobWatch.stdout, /@Alice\s+·/);
 
   const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
@@ -446,7 +446,7 @@ test('ambient catch and history render full body to a mention target and presenc
 
   const ambient = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(ambient.status, 0, ambient.stderr);
-  assert.match(ambient.stdout, /● @Alice #1 · act\/3 · .*\n  secret reach phrase @Bob/);
+  assert.match(ambient.stdout, /● @Alice · act\/3 · .*\n  secret reach phrase @Bob/);
   assert.match(ambient.stdout, /→ @Alice, @Bob were here/);
   assert.doesNotMatch(ambient.stdout, /→ @(?:Alice|Bob|Cara) was here/);
   assert.doesNotMatch(ambient.stdout, /Cara were here/);
@@ -466,8 +466,8 @@ test('ambient catch and history render full body to a mention target and presenc
   assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Cara', '--mention', 'bob', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
   const laterJoin = run(withName(file, 'Dan', ['join', '--last', '100']), { env: { SQUARE_NOW_MS: '11000' } });
   assert.equal(laterJoin.status, 0, laterJoin.stderr);
-  assert.match(laterJoin.stdout, /● @Alice #1 · act\/3 · .*\n  talked to @Bob/);
-  assert.match(laterJoin.stdout, /● @Alice #2 · act\/4 · .*\n  talked to @Cara and @Bob/);
+  assert.match(laterJoin.stdout, /● @Alice · act\/3 · .*\n  talked to @Bob/);
+  assert.match(laterJoin.stdout, /● @Alice · act\/4 · .*\n  talked to @Cara and @Bob/);
   assert.doesNotMatch(laterJoin.stdout, /secret reach phrase/);
   assert.doesNotMatch(laterJoin.stdout, /two targets/);
 });
@@ -542,7 +542,7 @@ test('history expands one result, previews multiple results, and --no-truncate e
   assert.equal(multiple.status, 0, multiple.stderr);
   assert.doesNotMatch(multiple.stdout, new RegExp(firstTail));
   assert.doesNotMatch(multiple.stdout, new RegExp(secondTail));
-  assert.match(multiple.stdout, /history --no-truncate/);
+  assert.match(multiple.stdout, /history --at act\/1,act\/2 --no-truncate/);
 
   const expanded = run(withPath(file, ['history', '--limit', '2', '--no-truncate']));
   assert.equal(expanded.status, 0, expanded.stderr);
@@ -807,7 +807,7 @@ test('status shows attention state and stable activity ids', async () => {
   assert.equal(waiting.status, 0, waiting.stderr);
   assert.match(waiting.stdout, /@Alice.*caught up/);
   assert.match(waiting.stdout, /@Bob.*1 mention waiting/);
-  assert.match(waiting.stdout, /● @Alice #1 · act\/2 · .*\n    talked to @Bob/);
+  assert.match(waiting.stdout, /● @Alice · act\/2 · .*\n    talked to @Bob/);
   assert.doesNotMatch(waiting.stdout, /please check @Bob/);
 
   const personal = run(withName(file, 'Bob', ['status']), { env: { SQUARE_NOW_MS: '4000' } });

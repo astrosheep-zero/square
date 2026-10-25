@@ -36,9 +36,9 @@ export function renderJoinResult(data: JoinPresentation): string | undefined {
     actNumber: event.kind === 'say' ? entry!.sayNumbers[event.index] : undefined,
     perception: entry!.perceptions[event.index],
   })).filter(Boolean).join('\n\n');
-  const fallback = after.automaticDeliveryAvailable ? [] : [
+  const fallback = after.automaticDeliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
     '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
-    '  the square has no way to call you — keep this catch open and stay within earshot',
+    '  · stay within earshot — keep this catch open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
     : data.kind === 'reconnected' ? '● you are already in the square'
@@ -48,7 +48,6 @@ export function renderJoinResult(data: JoinPresentation): string | undefined {
     ? '*the flagstones are where you left them. so is your shadow.*' : entry.scene;
   return withPathOutput(after.location, [
     entryLine, '',
-    "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
     ...(entryScene === '' ? [] : ['', entryScene]),
     ...(isRejoin || !entry?.joinContext ? [] : ['', style('dim', 'context'), entry.joinContext]),
     ...(after.enrichmentUnavailable ? ['  · joined; recent activity and context are unavailable right now'] : []),
@@ -125,7 +124,7 @@ export function renderCatchOutcome(
     perception: activity.perception, mention: options.mention ? name : undefined,
   })).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
-    : `○ ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
+    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
     ...(stop === 'stale' && options.idle !== undefined ? { idleMs: options.idle } : {}),
@@ -161,9 +160,9 @@ function renderHistoryProjection(
       if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
     }
   }
-  if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
+  if (chunks.length === 0) return '○ no activity matches this history query';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
-    chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
+    chunks.push(`${commandPrefix(squarePath)} history --at ${shown.map((activity) => formatActivityId(activity.index)).join(',')} --no-truncate`);
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
   return chunks.join('\n\n');
@@ -229,7 +228,7 @@ export function renderParticipantsResult(
   const tail = participants.length <= limit
     ? []
     : [
-        style('dim', `  ○ ${lines.length} of ${participants.length} participants shown`),
+        style('dim', `  · ${lines.length} of ${participants.length} participants shown`),
         ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
           `${participantsLimitCommand(squarePath, participants.length)}`,
         ] : []),
@@ -339,10 +338,10 @@ export function renderListenerChange(squarePath: string, verb: ListenerVerb, dat
   const target = participantIdentity(projection.target);
   const action = data.activity !== null
     ? verb === 'listen' ? `${actor} turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} turns away from ${target}`
-        : `${actor} stops listening to ${target}`
+      : verb === 'ignore' ? `${actor} turns away from ${target} — only bells will reach you from them`
+        : `${actor} stops listening to ${target} — direct mentions and replies still reach you unless ignored`
     : verb === 'listen' ? `${actor} already turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} is not turned toward ${target}`
+      : verb === 'ignore' ? `${actor} already ignores ${target} — only bells will reach you from them`
         : `${actor} is not listening to ${target}`;
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
     participantCount: projection.standingCount, held: projection.held,

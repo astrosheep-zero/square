@@ -18,7 +18,7 @@ export { renderExpression } from '../operation-presentation.js';
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> { readonly reply?: string; }
 
 export function saveActivityDraft(squarePath: string, name: string, body: string, now = Date.now()): string {
-  const draftDir = path.join(path.dirname(squarePath), 'drafts');
+  const draftDir = path.join(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? process.cwd() : path.dirname(squarePath), 'drafts');
   fs.mkdirSync(draftDir, { recursive: true });
   const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 8);
   const stamp = new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:.]/g, '-');
@@ -97,7 +97,6 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     if (isSquareError(error)) {
       if (error.code === 'behind' && fresh?.activitySummaries !== undefined) {
         process.stdout.write(renderActivityBlocked({ ...output, retryCommand,
-          forceCommand: activityRetryCommand(squarePath, name, opts, true),
           activitySummaries: fresh.activitySummaries.map((summary) => ({ ...summary, previews: [...summary.previews] })),
         }));
         exitCode(1); return;

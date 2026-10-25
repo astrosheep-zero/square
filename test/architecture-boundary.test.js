@@ -54,7 +54,7 @@ function resolvedTarget(file, module) {
 function storageLeaks(sources) {
   const artifactBindings = new Map([
     ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
-    ['square-api.ts', ['createSquare', 'diagnoseSquareFile']],
+    ['sqlite-square.ts', ['createSquare', 'diagnoseSquareFile']],
     ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
     ['ledger-maintenance.ts', ['createArtifactPort']],
     ['stream.ts', ['observeSquareRevision']],
@@ -197,7 +197,7 @@ test('product adapters stay behind the facade and close boundary', () => {
   const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'ledger-maintenance.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The real Square resource is the only entry into participant execution.
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['square-api.ts']);
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['sqlite-square.ts']);
   assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, []);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);

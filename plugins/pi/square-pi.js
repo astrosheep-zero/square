@@ -3,7 +3,7 @@ import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
 import { Square } from '../../dist/square-api.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from '../../dist/square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
@@ -159,12 +159,12 @@ export default function squarePiExtension(pi) {
             participant: args.as,
           }, { signal });
           let data;
-          try { data = await tool.run(square, args, { signal }); }
+          try { data = await tool.run(square, args, { signal, observe: true }); }
           finally { await square.close(); }
-          return { content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+          return { content: [{ type: 'text', text: tool.render(data, args) ?? '' }], details: data, structuredContent: data };
         } catch (error) {
           const data = { error: squareToolFailure(error, signal) };
-          return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(data.error, { location: args.location ?? process.env.SQUARE_LOCATION, participant: args.as ?? process.env.SQUARE_PARTICIPANT_NAME }) }], details: data, structuredContent: data };
         }
       },
     });

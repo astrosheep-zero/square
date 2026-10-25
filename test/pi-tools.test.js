@@ -51,7 +51,8 @@ test('Pi calls use live context, preserve environment, and return structured dat
   const before = { ...process.env };
   const joined = await call('join', { as: 'rei' });
   assert.equal(joined.structuredContent.participant, 'rei');
-  assert.deepEqual(JSON.parse(joined.content[0].text), joined.structuredContent);
+  assert.match(joined.content[0].text, /you stepped into the square/);
+  assert.doesNotMatch(joined.content[0].text, /"observation"/);
   const owner = await readParticipantOwner(squarePath, 'rei', hostLedgerForEnv());
   assert.equal(owner.channel, 'pi');
   assert.equal(owner.session, 'pi-tools-first');

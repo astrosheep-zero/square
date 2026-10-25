@@ -29,7 +29,7 @@ export interface ToolControl extends OperationControl {
   readonly observe?: boolean;
 }
 
-const location = z.string().optional().describe('Path to the .square artifact, relative to the current working directory. Defaults to the configured square.');
+const location = z.string().optional().describe('Local .square artifact path or configured backend URI (stdio://name/key). Relative paths use the current working directory. Defaults to the configured square.');
 const participant = z.string().optional().describe('Participant name. Defaults to the configured participant or the current session’s unambiguous participant.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());

@@ -32,7 +32,7 @@ test('CLI test runner isolates host delivery identities', () => {
       env: { SQUARE_REGISTRY: TEST_REGISTRY },
     });
     assert.equal(joined.status, 0, joined.stderr);
-    assert.match(joined.stdout, /the square has no way to call you/);
+    assert.match(joined.stdout, /stay within earshot/);
     const registry = fs.existsSync(TEST_REGISTRY) ? fs.readFileSync(TEST_REGISTRY, 'utf8') : '';
     assert.doesNotMatch(registry, /outer-codex-task/);
   } finally {
@@ -88,7 +88,7 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(ignored.stdout, /@Bob turns away from @Alice/);
   const absent = run(withName(file, 'Bob', ['ignore', 'Alice']));
   assert.equal(absent.status, 0, absent.stderr);
-  assert.match(absent.stdout, /is not turned toward @Alice/);
+  assert.match(absent.stdout, /already ignores @Alice/);
 });
 
 test('listener and catch help teach future-only directed attention', () => {
@@ -335,7 +335,7 @@ test('join and catch only show fallback catch hints without automatic session de
   const aliceJoin = run(withName(file, 'Alice', ['join']), { env: noDelivery });
   assert.equal(aliceJoin.status, 0, aliceJoin.stderr);
   assert.match(aliceJoin.stdout, /catch --idle 30m/);
-  assert.match(aliceJoin.stdout, /the square has no way to call you/);
+  assert.match(aliceJoin.stdout, /stay within earshot/);
 
   const bobJoin = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
   assert.equal(bobJoin.status, 0, bobJoin.stderr);

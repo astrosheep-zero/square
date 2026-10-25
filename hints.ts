@@ -6,10 +6,9 @@ const EXPRESS_HINTS = [
 ];
 
 const CATCH_HINTS = [
-  "someone @'d you with something you don't need? reply and tell them to stop reaching you",
-  'someone keeps flooding you? ignore them, then tell your human',
-  "nothing to add? quiet is fine — catching is listening too",
   'want to follow one voice? listen to them; unlisten once you have heard enough',
+  "nothing to add? quiet is fine — catching is listening too",
+  'reply to an activity to reach the person who spoke',
 ];
 
 /** First activity, then every fifth. */

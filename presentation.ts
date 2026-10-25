@@ -34,7 +34,6 @@ interface ActivityLimitOptions extends ParticipantOutputOptions {
 
 interface ActivityBlockedOptions extends ParticipantOutputOptions {
   retryCommand: string;
-  forceCommand: string;
   activitySummaries: readonly UnreadActivitySummary[];
   draftPath?: string;
 }
@@ -65,6 +64,7 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath)) return squarePath;
   if (!path.isAbsolute(squarePath)) return squarePath.split(path.sep).join('/');
   const comparableCwd = fs.realpathSync.native(cwd);
   let comparableSquarePath = squarePath;
@@ -112,7 +112,7 @@ export function commandPrefix(squarePath: string): string {
 }
 
 export function participantCommandPrefix(squarePath: string, name: string): string {
-  return `square --location ${quoteShell(path.resolve(squarePath))} --as ${quoteShell(name)}`;
+  return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}`;
 }
 
 /** Blocked actions end with a full copy-pasteable recovery command. */
@@ -254,7 +254,7 @@ function renderEventCliFacts(
           ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${replyId(event.reply)}`;
-      const meta = ` #${opts.actNumber ?? 1} · ${eventId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
+      const meta = ` · ${eventId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
       return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
     }
     case 'done': {
@@ -281,7 +281,7 @@ function renderPresenceOnlySay(
   opts: { now?: number; actNumber?: number } = {}
 ): string {
   const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
-  const meta = style('dim', ` #${opts.actNumber ?? 1} · ${eventId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
+  const meta = style('dim', ` · ${eventId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
   if (targets.length === 0) {
     return `● ${participantIdentity(event.actor)}${meta}`;
   }
@@ -356,14 +356,12 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
   return withPathOutput(
     opts.squarePath,
     [
-      `${style('blocked', '✕')} your activity doesn't land — the square moved behind your back`,
+      `${style('blocked', '✕')} your activity hasn't landed — someone spoke while you were away`,
       ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, viewer: opts.name }),
       ...draftSavedLines(opts.draftPath),
       `${readNowCommand}`,
       '  · take it in, then retry:',
       withDraftInput(opts.retryCommand, opts.draftPath),
-      '  · optional: express over unread activity with --force:',
-      withDraftInput(opts.forceCommand, opts.draftPath),
     ].join('\n'),
     { participantCount: opts.participantCount, held: opts.held }
   );
@@ -389,7 +387,7 @@ function holdReasonLines(reason: string | undefined): string[] {
 }
 
 function heldMainLine(holder: string | undefined, styled: boolean): string {
-  const glyph = styled ? style('blocked', '✕') : '✕';
+  const glyph = styled ? style('blocked', '✕') : '·';
   const who = holder === undefined ? 'a hand is raised' : `${participantIdentity(holder)} has a hand raised`;
   return `${glyph} ${who} — voices drop, yours too`;
 }
@@ -397,7 +395,7 @@ function heldMainLine(holder: string | undefined, styled: boolean): string {
 export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
   if (opts.reason === 'throttled') {
     return [
-      '✕ the square is packed — shoulder to shoulder',
+      '· the square is packed — your activity is waiting',
       `  · a lull opens in ${formatDuration(opts.delayMs)}`,
       '  · --no-wait saves a draft and returns now',
     ].join('\n');
@@ -496,7 +494,7 @@ export function renderActivityLimit(opts: ActivityLimitOptions): string {
   const spoken = opts.count !== undefined && opts.hardCap !== undefined ? ` — ${opts.count}/${opts.hardCap} spoken` : '';
   const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done`;
   return withPathOutput(opts.squarePath, [
-    `${style('blocked', '✕')} nothing left in you${spoken}`,
+    `${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`,
     ...draftSavedLines(opts.draftPath),
     '  · your draft stays unsent; done only steps out',
     doneCommand,
@@ -558,7 +556,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       const spoken = opts.hardCap === undefined || opts.hardCap === null
         ? ''
         : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
-      return [`${style('blocked', '✕')} nothing left in you${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
+      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
     }
   }
 }

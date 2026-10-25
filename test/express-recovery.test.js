@@ -200,7 +200,7 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
   assert.equal((await says(file)).at(-1).body, body.trim());
 });
 
-test('behind recovery offers catch then an ordinary retry and labels force as optional', shellReplay, async () => {
+test('behind recovery offers catch then an ordinary retry without promoting a bypass', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = (await square.join('Bob')).participant;
@@ -208,11 +208,10 @@ test('behind recovery offers catch then an ordinary retry and labels force as op
   });
   const body = 'answer\n';
   const saved = recovery(run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', 'act/2', '-']), { input: body }), body);
-  assert.equal(saved.commands.length, 2);
+  assert.equal(saved.commands.length, 1);
   assert.doesNotMatch(saved.commands[0], /--force/);
   assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/2 -/);
-  assert.match(saved.output, /optional: express over unread activity with --force/);
-  assert.match(saved.commands[1], /express --force --no-wait --mention 'Bob' --reply act\/2 -/);
+  assert.doesNotMatch(saved.output, /optional: express over unread activity with --force/);
   assert.match(saved.output, /catch\n  · take it in, then retry:/);
   assert.doesNotMatch(saved.output, /catch --now/);
   assert.ok(saved.output.indexOf('catch') < saved.output.indexOf(saved.commands[0]));

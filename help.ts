@@ -46,8 +46,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },
   { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: 'Stop listening without blocking that participant\'s mentions or replies.' },
-  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Ignore one participant\'s future mentions and bare says.' },
-  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening is future-only: the edge is fixed when a say lands; it never rewrites history.'] },
+  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity, except bells.' },
+  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening applies to future activity. What you could hear when an activity landed does not change afterward.'] },
   {
     names: ['catch'], usage: '--as <name> catch [--id <activity-id>] [--now | --idle <duration>] [--from <names>] [--mention] [--limit <count>] [--replace]', usesSquare: true, group: 'participant',
     summary: 'Catch directed conversation since you last looked.',
@@ -56,7 +56,7 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.', details: ['done takes no message. Use express before leaving to send one.'] },
   {
     names: ['stream'], usage: 'stream [--ndjson [--for <name>] [--last <N> | --after <id>]]', usesSquare: true, hiddenFromIndex: true,
-    summary: 'Follow activity without consuming participant presence.',
+    summary: 'Follow activity without marking it caught.',
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
@@ -134,7 +134,8 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] <command> [args...]',
-    'Environment: SQUARE_LOCATION sets the CLI location; square-accessing commands require it or --location. SQUARE_PARTICIPANT_NAME sets the participant name.',
+    'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. SQUARE_PARTICIPANT_NAME sets the participant name.',
+    'Backends: SQUARE_BACKENDS_CONFIG selects {backends:{name:{command,args?,cwd?,env?}}}; default ~/.config/square/backends.json. See guides/backends.md.',
     'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
     '',
     ...commandLines,

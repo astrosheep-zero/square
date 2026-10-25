@@ -1,0 +1,231 @@
+import './sandbox-env.js'
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { writeFile } from 'node:fs/promises'
+import { Bridge } from '../dist/bridge.js'
+import { FakeSlack } from './fake-slack.js'
+import {
+  BRIDGE_TOKEN, CHANNEL, FAYE_TOKEN, buildSquare, connectedSlack, message, opened, settingsFor, until,
+} from './fixtures.js'
+
+const personas = { faye: FAYE_TOKEN }
+
+async function archive(square) {
+  return (await square.history({ limit: 100 })).activities
+}
+
+async function start(t, { path, slack, state, log, pollIntervalMs = 20 }) {
+  const settings = settingsFor({ square: path, state, personas })
+  const bridge = await Bridge.open({ settings, port: slack, pollIntervalMs, ...(log === undefined ? {} : { log }) })
+  t.after(() => bridge.stop())
+  return { bridge, settings }
+}
+
+function slackWith(bots = personas) {
+  return connectedSlack(new FakeSlack(), bots)
+}
+
+test('Slack messages land as say activities from slack participants', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  await square.join('faye')
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const { bridge } = await start(t, { path, slack })
+
+  await bridge.handleInbound(message({ ts: '1700.0001', text: 'hello <@UFAYE>, and plain @faye' }))
+
+  const say = (await archive(square)).at(-1)
+  assert.equal(say.kind, 'say')
+  assert.equal(say.actor, 'slack/Alice')
+  assert.equal(say.body, 'hello @faye, and plain @faye')
+  assert.deepEqual(say.mentions, ['faye'])
+})
+
+test('bot, own-loop, edited, deleted, empty and foreign events land nothing', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const { bridge } = await start(t, { path, slack })
+  const before = (await archive(square)).length
+
+  const ignored = [
+    message({ ts: '1700.0011', channel: 'C_OTHER' }),
+    message({ ts: '1700.0012', subtype: 'message_changed' }),
+    message({ ts: '1700.0013', subtype: 'message_deleted' }),
+    message({ ts: '1700.0014', subtype: 'channel_join' }),
+    message({ ts: '1700.0015', userId: 'UBRIDGE' }),
+    message({ ts: '1700.0016', userId: undefined, botId: 'BBRIDGE' }),
+    message({ ts: '1700.0017', userId: 'UFAYE' }),
+    message({ ts: '1700.0018', text: '   ' }),
+    message({ ts: '1700.0019', text: undefined }),
+    message({ ts: '1700.0020', userId: undefined }),
+  ]
+  for (const event of ignored) await bridge.handleInbound(event)
+
+  assert.equal((await archive(square)).length, before)
+})
+
+test('a threaded Slack reply answers the mapped square activity', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const { bridge } = await start(t, { path, slack })
+
+  await bridge.handleInbound(message({ ts: '1700.0100', text: 'root' }))
+  const root = (await archive(square)).at(-1)
+  await bridge.handleInbound(message({ ts: '1700.0101', threadTs: '1700.0100', text: 'in thread' }))
+
+  assert.equal((await archive(square)).at(-1).reply, root.id)
+})
+
+test('agent activities post once, in order, each in its own voice', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  const faye = (await square.join('faye')).participant
+  const slack = slackWith()
+  const { bridge } = await start(t, { path, slack })
+
+  await rei.express('first')
+  await faye.express('second')
+  await rei.express('third')
+  await bridge.drainOutbound()
+
+  assert.deepEqual(slack.posts.map((post) => [post.text, post.token, post.username]), [
+    ['first', BRIDGE_TOKEN, 'rei'],
+    ['second', FAYE_TOKEN, undefined],
+    ['third', BRIDGE_TOKEN, 'rei'],
+  ])
+  assert.ok(slack.posts.every((post) => post.channel === CHANNEL))
+
+  const posted = slack.posts.length
+  await bridge.drainOutbound()
+  assert.equal(slack.posts.length, posted)
+})
+
+test('mentions become Slack IDs and replies thread under the Slack message', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const faye = (await square.join('faye')).participant
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const { bridge } = await start(t, { path, slack })
+
+  await bridge.handleInbound(message({ ts: '1700.0200', text: 'a question' }))
+  const asked = (await archive(square)).at(-1)
+  await faye.express('@slack/Alice answer', { reply: asked.id })
+  await bridge.drainOutbound()
+
+  const post = slack.posts.at(-1)
+  assert.equal(post.text, '<@UALICE> answer')
+  assert.equal(post.token, FAYE_TOKEN)
+  assert.equal(post.threadTs, '1700.0200')
+})
+
+test('a Slack failure is logged, skipped, and never blocks later activities', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  const logs = []
+  const slack = slackWith().failWhen((post) => post.text === 'second')
+  const { bridge } = await start(t, { path, slack, log: (line) => logs.push(line) })
+
+  await rei.express('first')
+  await rei.express('second')
+  await rei.express('third')
+  await bridge.drainOutbound()
+
+  assert.deepEqual(slack.posts.map((post) => post.text), ['first', 'third'])
+  assert.ok(logs.some((line) => /slack post failed for act\/\d+: ratelimited/.test(line)), logs.join('\n'))
+  await bridge.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), ['first', 'third'])
+})
+
+test('a restart resumes both directions without duplicates', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const settings = settingsFor({ square: path, personas })
+
+  const first = await Bridge.open({ settings, port: slack })
+  await first.handleInbound(message({ ts: '1700.0300', text: 'from slack' }))
+  await rei.express('from rei')
+  await first.drainOutbound()
+  await first.stop()
+
+  await rei.express('while stopped')
+  const restarted = await Bridge.open({ settings, port: slack })
+  t.after(() => restarted.stop())
+  await restarted.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), ['from rei', 'while stopped'])
+  await restarted.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), ['from rei', 'while stopped'])
+
+  const fromSlack = (await archive(square)).find((activity) => activity.body === 'from slack')
+  await restarted.handleInbound(message({ ts: '1700.0301', threadTs: '1700.0300', text: 'still threaded' }))
+  assert.equal((await archive(square)).at(-1).reply, fromSlack.id)
+})
+
+test('a first start does not replay old history', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  await rei.express('old')
+  const slack = slackWith()
+  const { bridge } = await start(t, { path, slack })
+
+  await bridge.drainOutbound()
+  assert.deepEqual(slack.posts, [])
+
+  await rei.express('new')
+  await bridge.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), ['new'])
+})
+
+test('a bridge first started on an empty square posts what landed while it was stopped', async (t) => {
+  const path = await buildSquare()
+  const slack = slackWith()
+  const settings = settingsFor({ square: path, personas })
+  const first = await Bridge.open({ settings, port: slack })
+  await first.stop()
+
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  await rei.express('late')
+
+  const restarted = await Bridge.open({ settings, port: slack })
+  t.after(() => restarted.stop())
+  await restarted.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), ['late'])
+})
+
+test('the running bridge mirrors both directions until stopped', async (t) => {
+  const path = await buildSquare()
+  const square = await opened(t, path)
+  const rei = (await square.join('rei')).participant
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const { bridge } = await start(t, { path, slack })
+
+  await bridge.start()
+  slack.deliver(message({ ts: '1700.0400', text: 'live' }))
+  const landed = await until(async () => (await archive(square)).find((activity) => activity.body === 'live'), 'the Slack message')
+  assert.equal(landed.actor, 'slack/Alice')
+
+  await rei.express('live back')
+  const post = await until(() => slack.posts.find((entry) => entry.text === 'live back'), 'the Square activity')
+  assert.equal(post.token, BRIDGE_TOKEN)
+  await bridge.stop()
+  assert.equal(slack.closed, true)
+})
+
+test('a corrupt state file refuses startup instead of resetting', async (t) => {
+  const path = await buildSquare()
+  const state = `${path}.slack-bridge.json`
+  await writeFile(state, JSON.stringify({ version: 9, cursor: null }))
+  const slack = slackWith()
+  const error = await Bridge.open({ settings: settingsFor({ square: path, state, personas }), port: slack })
+    .catch((failure) => failure)
+  assert.match(error.message, /unsupported version 9/)
+  assert.equal(slack.closed, false)
+  assert.equal(slack.connection, undefined)
+})

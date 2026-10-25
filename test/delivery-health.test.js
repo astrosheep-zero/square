@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import ts from 'typescript';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,7 +27,15 @@ test('delivery evidence writers and health labels stay inside their owning modul
     closure.add(name);
     const source = sourceByName.get(name);
     if (source === undefined) return;
-    for (const match of source.matchAll(/from ['"]\.\/(.+)\.js['"]/g)) visit(`${match[1]}.ts`);
+    const parsed = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
+    for (const node of parsed.statements) {
+      if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) continue;
+      if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier)) continue;
+      if (ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) continue;
+      if (ts.isExportDeclaration(node) && node.isTypeOnly) continue;
+      const match = /^\.\/(.+)\.js$/.exec(node.moduleSpecifier.text);
+      if (match) visit(`${match[1]}.ts`);
+    }
   };
   visit('delivery-health.ts');
   assert.equal(closure.has('notifications.ts'), false);

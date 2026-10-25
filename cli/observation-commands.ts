@@ -143,7 +143,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     if (!intent.ndjson) {
-      process.stderr.write(`✕ interactive stream was removed\nsquare --location ${quoteShell(path.resolve(context.cwd, squarePath))} stream --ndjson\n`);
+      process.stderr.write(`✕ interactive stream was removed\nsquare --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(context.cwd, squarePath))} stream --ndjson\n`);
       process.exitCode = 2;
       return;
     }
