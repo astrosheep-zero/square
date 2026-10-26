@@ -166,7 +166,7 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
         if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
           cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => ({
             ...membership, notifications: pendingNotifications(facts, membership.seat.participant).map(({ item, route }) => ({
-              actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route,
+              actIndex: item.index, actor: item.actor, at: item.at, body: item.body ?? '(structured activity)', route,
             })),
           })) };
         }
@@ -219,7 +219,7 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
   const item = facts.activity(input.actIndex);
   if (item?.kind !== 'say') return undefined;
   return { payload: renderSquareReminder([renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body })]), clipped: attentionBodyIsClipped(item.body) };
+    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)' })]), clipped: attentionBodyIsClipped(item.body ?? '(structured activity)') };
 }
 
 export interface SessionIdentityQuery { readonly channel: string; readonly session: string; readonly allAgents?: true; }

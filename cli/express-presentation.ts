@@ -15,7 +15,11 @@ import { formatDuration } from '../time.js';
 
 export { renderExpression } from '../operation-presentation.js';
 
-export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> { readonly reply?: string; }
+export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {
+  readonly reply?: string;
+  readonly metadataJson?: string;
+  readonly bodyProvided?: boolean;
+}
 
 export function saveActivityDraft(squarePath: string, name: string, body: string, now = Date.now()): string {
   const draftDir = path.join(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? process.cwd() : path.dirname(squarePath), 'drafts');
@@ -42,11 +46,13 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
   const reach = (opts.reach === 'bell' ? ' --bell' : '')
     + (opts.mentions ?? []).map((target) => ` --mention ${quoteShell(target)}`).join('')
     + (opts.noMention === true ? ' --no-mention' : '');
-  return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${replyArgument(opts.reply)} -`;
+  const metadata = opts.metadataJson === undefined ? '' : ` --metadata ${quoteShell(opts.metadataJson)}`;
+  const body = opts.bodyProvided === false ? '' : ' -';
+  return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${metadata}${replyArgument(opts.reply)}${body}`;
 }
 
 /** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
-export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string, opts: ActivityOptions): Promise<void> {
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions): Promise<void> {
   let square: Square | undefined;
   let attempted = false;
   let announcedWait: 'held' | 'throttled' | undefined;
@@ -60,8 +66,9 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     const participant = await square.participant(requestedName);
     name = participant.name;
     attempted = true;
-    const outcome = await participant.express(rawInput.replace(/\r\n/g, '\n').trim(), {
-      ...opts, reply: opts.reply as ActivityId | undefined, observe: true,
+    const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, ...expressOptions } = opts;
+    const outcome = await participant.express(rawInput === undefined ? undefined : rawInput.replace(/\r\n/g, '\n').trim(), {
+      ...expressOptions, reply: opts.reply as ActivityId | undefined, observe: true,
     }, {
       signal: controller.signal,
       onProgress(progress) {
@@ -78,7 +85,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     const detail = (error as OperationError | undefined)?.operation;
     name = detail?.participant ?? name ?? 'participant';
     // This MUST precede recovery: even an unreadable artifact cannot eat the raw body.
-    const draftPath = saveActivityDraft(squarePath, name, rawInput);
+    const draftPath = saveActivityDraft(squarePath, name, rawInput ?? '');
     if (square === undefined) square = await open().catch(() => undefined);
     const fresh = await square?.recovery(name).catch(() => undefined);
     name = fresh?.participant ?? name;
@@ -87,6 +94,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       && detail?.expressEffect !== 'landed' && detail?.expressEffect !== 'unknown'
       && (!attempted || detail?.expressEffect === 'unsent' || (isSquareError(error) && error.facts?.activityUnsent === true));
     const retryCommand = activityRetryCommand(squarePath, name, opts);
+    const retryInput = opts.bodyProvided === false ? retryCommand : `${retryCommand} < ${quoteShell(draftPath)}`;
     const exitCode = (code: number) => { process.exitCode = controller.signal.aborted ? 130 : code; };
     if (!confirmedUnsent) {
       process.stderr.write(renderActivityUncertain({ ...output, landedId: landedId ?? detail?.landedId,
@@ -96,7 +104,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     }
     if (isSquareError(error)) {
       if (error.code === 'behind' && fresh?.activitySummaries !== undefined) {
-        process.stdout.write(renderActivityBlocked({ ...output, retryCommand,
+        process.stdout.write(renderActivityBlocked({ ...output, retryCommand: retryInput,
           activitySummaries: fresh.activitySummaries.map((summary) => ({ ...summary, previews: [...summary.previews] })),
         }));
         exitCode(1); return;
@@ -108,7 +116,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         exitCode(1); return;
       }
       if (error.code === 'held' || error.code === 'throttled') {
-        process.stdout.write(renderExpressNoWait({ ...output, reason: error.code, retryCommand,
+        process.stdout.write(renderExpressNoWait({ ...output, reason: error.code, retryCommand: retryInput,
           delayMs: error.facts?.retryAfterMs ?? 1, holder: error.facts?.holder, holdReason: error.facts?.holdReason,
         }));
         exitCode(1); return;
@@ -116,7 +124,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       if (error.code === 'bell_quota') {
         process.stdout.write(withPathOutput(squarePath, [
           '✕ the bell stays quiet for now', `  · you can ring it again in ${formatDuration(error.facts?.retryAfterMs ?? 1)}`,
-          `· draft kept: ${draftPath}`, '  · retry when the bell is ready:', `${retryCommand} < ${quoteShell(draftPath)}`,
+          `· draft kept: ${draftPath}`, '  · retry when the bell is ready:', retryInput,
         ].join('\n'), output));
         exitCode(1); return;
       }
@@ -141,7 +149,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         lines.push(participantsRecoveryCommand(squarePath), reason === 'bell_mention_conflict'
           ? '  · ring the bell without explicit mentions:'
           : '  · retry without explicit recipients:',
-        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })} < ${quoteShell(draftPath)}`);
+        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })}${opts.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
         if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
@@ -152,12 +160,12 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       lines.push(
         `${commandPrefix(squarePath)} history --limit 10`,
         '  · choose a valid --reply from history, or send without a reply using this repair:',
-        `${activityRetryCommand(squarePath, name, withoutReply)} < ${quoteShell(draftPath)}`,
+        `${activityRetryCommand(squarePath, name, withoutReply)}${withoutReply.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`,
       );
     } else if (!repair) {
       lines.push(
         '  · correct the problem above before retrying; keep your intended recipients and reply:',
-        `${retryCommand} < ${quoteShell(draftPath)}`,
+        `${retryInput}`,
       );
     }
     process.stderr.write(formatRefusal(squarePath, lines, output));

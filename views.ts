@@ -26,6 +26,7 @@ export function toPublicActivity(stored: StoredAct): Activity {
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
+    ...(stored.kind === 'say' && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
     mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }

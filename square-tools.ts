@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { isSquareError } from './model.js';
 import { CATCH_DEFAULT_LIMIT, type Square } from './square-api.js';
 import type {
-  ActivityId, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult, JoinResult,
+  ActivityId, ActivityMetadata, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult, JoinResult,
   LifecycleResult, ListenerChangeResult, ListeningResult, OperationControl, OperationFailureDetail,
   ParticipantsResult, StatusResult,
 } from './square-facade.js';
@@ -64,13 +64,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
       return { ...receipt, participant: participant.name };
     },
     rendering((result: JoinPresentation) => renderJoinResult(result))),
-  tool('express', 'Express a message or embodied action in the square. Mentions and replies direct attention; bell reaches everyone and keeps body @names literal. Bell cannot combine with explicit mentions. Bare activity is valid even with no listeners.', {
-    as: participant, body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(),
+  tool('express', 'Express a message, structured metadata, or embodied action in the square. Mentions and replies direct attention; bell reaches everyone and keeps body @names literal. Bell cannot combine with explicit mentions. Bare activity is valid even with no listeners.', {
+    as: participant, body: z.string().optional(), metadata: z.record(z.string(), z.unknown()).optional(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(),
     reply: activityId.optional(), noMention: z.boolean().optional().describe('Disable body @name scanning; explicit mentions and reply still apply.'),
     force: z.boolean().optional().describe('Speak without first catching unread activity or satisfying attention etiquette.'),
     noWait: z.boolean().optional().describe('Return an error rather than waiting when held or throttled.'),
-  }, async (square, { body, as, ...options }, control) => {
-    const { delivery: _delivery, ...result } = await (await square.participant(as)).express(body, { ...options, ...observation(control) }, control);
+  }, async (square, { body, metadata, as, ...options }, control) => {
+    const { delivery: _delivery, ...result } = await (await square.participant(as)).express({ body, metadata: metadata as ActivityMetadata, ...options, ...observation(control) }, control);
     return result;
   }, rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
   tool('catch', 'Catch and consume activities perceptible to the participant. idle waits for relevant activity or this many milliseconds of quiet; omitted means immediate. id catches one activity and cannot be combined with filters, idle or limit.', {

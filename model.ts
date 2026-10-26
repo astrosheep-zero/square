@@ -8,6 +8,78 @@ export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'claude-nativ
 export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+export type ActivityMetadata = Readonly<Record<string, JsonValue>>;
+export const ACTIVITY_METADATA_MAX_BYTES = 16 * 1024;
+export const ACTIVITY_METADATA_MAX_DEPTH = 256;
+
+/** Validate the bounded, lossless JSON object carried by a say. */
+export function validateActivityMetadata(value: unknown): ActivityMetadata | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new SquareError('invalid_args', 'Activity metadata must be a non-null JSON object.');
+
+  type Frame = { readonly value: unknown; readonly depth: number; readonly exit?: object };
+  const visiting = new Set<object>();
+  const stack: Frame[] = [{ value, depth: 0 }];
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.exit !== undefined) {
+      visiting.delete(frame.exit);
+      continue;
+    }
+    const item = frame.value;
+    if (item === null || typeof item === 'boolean' || typeof item === 'string') continue;
+    if (typeof item === 'number') {
+      if (!Number.isFinite(item)) throw new SquareError('invalid_args', 'Activity metadata must contain only finite JSON values.');
+      continue;
+    }
+    if (typeof item !== 'object') throw new SquareError('invalid_args', 'Activity metadata must contain only JSON values.');
+    if (frame.depth > ACTIVITY_METADATA_MAX_DEPTH)
+      throw new SquareError('invalid_args', `Activity metadata nesting cannot exceed ${ACTIVITY_METADATA_MAX_DEPTH} levels.`);
+    if (visiting.has(item)) throw new SquareError('invalid_args', 'Activity metadata cannot contain a cycle.');
+    visiting.add(item);
+    stack.push({ value: item, depth: frame.depth, exit: item });
+
+    if (Array.isArray(item)) {
+      if (Object.getOwnPropertySymbols(item).length > 0 || Object.keys(item).length !== item.length)
+        throw new SquareError('invalid_args', 'Activity metadata arrays must be dense JSON arrays.');
+      const names = Object.getOwnPropertyNames(item);
+      if (names.some(name => name !== 'length' && (!/^(0|[1-9]\d*)$/.test(name) || Number(name) >= item.length)))
+        throw new SquareError('invalid_args', 'Activity metadata arrays must contain only indexed values.');
+      for (const key of Object.keys(item).reverse()) {
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (descriptor === undefined || !('value' in descriptor)) throw new SquareError('invalid_args', 'Activity metadata cannot contain accessors.');
+        stack.push({ value: descriptor.value, depth: frame.depth + 1 });
+      }
+      continue;
+    }
+
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== null)
+      throw new SquareError('invalid_args', 'Activity metadata must contain only plain JSON objects.');
+    if (Object.getOwnPropertySymbols(item).length > 0)
+      throw new SquareError('invalid_args', 'Activity metadata cannot contain symbol keys.');
+    const names = Object.getOwnPropertyNames(item);
+    if (names.some(name => !Object.prototype.propertyIsEnumerable.call(item, name)))
+      throw new SquareError('invalid_args', 'Activity metadata cannot contain non-enumerable properties.');
+    for (const name of names.reverse()) {
+      const descriptor = Object.getOwnPropertyDescriptor(item, name)!;
+      if (!('value' in descriptor)) throw new SquareError('invalid_args', 'Activity metadata cannot contain accessors.');
+      stack.push({ value: descriptor.value, depth: frame.depth + 1 });
+    }
+  }
+
+  let serialized: string;
+  try { serialized = JSON.stringify(value)!; }
+  catch { throw new SquareError('invalid_args', 'Activity metadata must contain only lossless JSON values.'); }
+  if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > ACTIVITY_METADATA_MAX_BYTES)
+    throw new SquareError('invalid_args', `Activity metadata cannot exceed ${ACTIVITY_METADATA_MAX_BYTES} UTF-8 bytes.`);
+  return value as ActivityMetadata;
+}
+
+export function activityMetadataHasContent(metadata: ActivityMetadata | undefined): boolean {
+  return metadata !== undefined && Object.keys(metadata).length > 0;
+}
 
 export interface Body {
   readonly channel: string;

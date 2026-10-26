@@ -19,7 +19,7 @@ export function wakePreview(facts: SquareRead, request: WakeRequest): string | u
   if (head === undefined || item?.kind !== 'say') return undefined;
   return renderSquareReminder([renderAttentionPreview({
     squarePath: request.location, recipient: request.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body,
+    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)',
   })]);
 }
 export interface RoutedNotification {

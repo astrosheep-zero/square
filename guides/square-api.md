@@ -77,6 +77,18 @@ its `history` delegates to the same Square history operation.
 - Express waits while held/throttled unless `noWait: true`, for **every** caller. `ExpressResult`
   includes the committed `activity`, `waited`, optional `delivery`, and landing-time warnings
   (`unmatchedMentions`, `replyAuthorNotHere`). Warnings are not stored on the activity.
+- A say may carry `metadata`, an immutable JSON object with nested JSON values and a maximum serialized
+  UTF-8 size of 16 KiB (`ACTIVITY_METADATA_MAX_BYTES`). `alice.express({body?, metadata?, ...options}, control?)`
+  is the object form; the existing `express(body, options?, control?)` form remains valid. A non-empty
+  body may carry `{}`; an omitted, empty or whitespace-only body requires non-empty metadata. Metadata-only
+  says omit `body` from public activity records. Invalid objects, cycles, unsupported values and oversized
+  metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
+  catch, status/latest, unread projections and stream records,
+  including stdio and structured tools. It does not affect mentions, replies, listening, audience, delivery,
+  ordering, consumption or permissions. Metadata may nest up to 256 levels; the bound is enforced before
+  persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
+  metadata JSON. There is no metadata filter, query language or index; CLI `--metadata <json>` is the only
+  metadata input flag.
 - Catch returns `{activities, consumedThrough, remaining, idleExpired, status?, observation?}`.
   Omitted/zero idle is immediate; positive idle uses the single leased quiet wait. Receipt selection,
   ordinals, counts and terminal facts settle in the receipt transaction. Cancellation/replacement

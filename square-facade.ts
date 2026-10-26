@@ -1,10 +1,10 @@
 import type { SquareBackends } from './square-backend.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Body, StoredAct, WakeAddress } from './model.js';
+import type { Body, StoredAct, WakeAddress, ActivityMetadata, JsonValue } from './model.js';
 import type { WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { Body, WakeAddress } from './model.js';
+export type { Body, WakeAddress, ActivityMetadata, JsonValue } from './model.js';
 /** Indexed archive event, including read and historical actorless lifecycle records. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -13,6 +13,7 @@ export interface Activity {
   readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' | 'unlisten';
   readonly actor: string;
   readonly body?: string;
+  readonly metadata?: ActivityMetadata;
   readonly mentions: readonly string[];
   readonly reach?: Reach;
   readonly target?: string;
@@ -26,12 +27,16 @@ export interface ObservationOptions {
   readonly observe?: boolean;
 }
 export interface ExpressOptions extends ObservationOptions {
+  readonly metadata?: ActivityMetadata;
   readonly force?: boolean;
   readonly mentions?: readonly string[];
   readonly reach?: Reach;
   readonly reply?: ActivityId;
   readonly noMention?: boolean;
   readonly noWait?: boolean;
+}
+export interface ExpressInput extends ExpressOptions {
+  readonly body?: string;
 }
 export interface ActivityResult {
   readonly activity: Activity;
@@ -181,7 +186,8 @@ export interface JoinResult {
 }
 export interface Participant {
   readonly name: string;
-  express(body: string, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
+  express(body: string | undefined, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
+  express(input: ExpressInput, control?: OperationControl): Promise<ExpressResult>;
   listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;

@@ -76,7 +76,7 @@ export function renderExpression(squarePath: string, data: ExpressResult): strin
     ? `● you ring the bell — everyone turns · ${activity.id}${style('dim', capCount)}`
     : `● ${activity.mentions.length > 0
       ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
-      : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
+      : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
   const replyNotice = data.replyAuthorNotHere === undefined ? ''
     : `\n○ ${participantIdentity(data.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
   const unmatchedNotice = data.unmatchedMentions?.length
@@ -160,7 +160,7 @@ function renderHistoryProjection(
     }
   }
   if (chunks.length === 0) return '○ no activity matches this history query';
-  if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
+  if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
     chunks.push(`${commandPrefix(squarePath)} history --at ${shown.map((activity) => formatActivityId(activity.index)).join(',')} --no-truncate`);
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));

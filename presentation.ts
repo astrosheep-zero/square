@@ -248,6 +248,9 @@ function renderEventCliFacts(
       return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'say': {
       const body = renderedBody(event.body, maxBody);
+      const visibleBody = body.text === '' && event.metadata !== undefined
+        ? { text: '(structured activity)', clipped: false }
+        : body;
       const mention = opts.mention;
       const mentionSuffix =
         mention !== undefined && (event.reach === 'bell' || event.mentions?.some((name) => sameName(name, mention)))
@@ -255,7 +258,7 @@ function renderEventCliFacts(
           : '';
       const replySuffix = event.reply === undefined ? '' : ` · replies to ${replyId(event.reply)}`;
       const meta = ` · ${eventId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
-      return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
+      return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(visibleBody.text)}`, bodyClipped: visibleBody.clipped };
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
@@ -337,8 +340,10 @@ function renderUnreadSummary(opts: { activitySummaries: readonly UnreadActivityS
         if (preview.perception === 'presence') {
           return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`);
         }
-        const compact = preview.act.body.replace(/\s+/g, ' ').trim();
-        const bodyPreview = compact === '' ? { text: '(empty)', remaining: 0 } : truncateChars(compact, UNREAD_PREVIEW_CHARS);
+        const compact = (preview.act.body ?? '').replace(/\s+/g, ' ').trim();
+        const bodyPreview = compact === ''
+          ? { text: preview.act.metadata === undefined ? '(empty)' : '(structured activity)', remaining: 0 }
+          : truncateChars(compact, UNREAD_PREVIEW_CHARS);
         const bodyText = bodyPreview.remaining === 0 ? bodyPreview.text : `${bodyPreview.text}${style('dim', `… (+${bodyPreview.remaining} chars)`)}`;
         return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${bodyText}"`);
       }),

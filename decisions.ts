@@ -1,5 +1,5 @@
 import {
-  SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type Act, type StoredAct, type Reach, sameName, nameKey, validateName,
+  SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type Act, type StoredAct, type Reach, type ActivityMetadata, sameName, nameKey, validateName, validateActivityMetadata, activityMetadataHasContent,
 } from './model.js';
 import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
@@ -92,11 +92,19 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
-export function decideAct(facts: SquareRead, input: { name: string; body: string; force: boolean; now: number; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {
-  const { now, force, body, reach, reply } = input;
+export function decideAct(facts: SquareRead, input: { name: string; body?: string; force: boolean; now: number; metadata?: ActivityMetadata; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {
+  const { now, force, reach, reply } = input;
+  let metadata: ActivityMetadata | undefined;
+  try { metadata = validateActivityMetadata(input.metadata); }
+  catch (error) {
+    if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true };
+    throw error;
+  }
+  if (input.body !== undefined && typeof input.body !== 'string') throw activityRefusal('invalid_args', 'express body must be a string');
+  const body = input.body?.trim() === '' ? undefined : input.body;
+  if (body === undefined && !activityMetadataHasContent(metadata)) throw activityRefusal('invalid_args', 'express requires a non-empty body or metadata');
   const current = resolveStanding(facts, input.name, true);
   const name = current.name;
-  if (body.trim() === '') throw activityRefusal('invalid_args', 'express body cannot be empty');
   const roster = facts.roster();
   const joinedNames = roster.filter((participant) => participant.joined).map((participant) => participant.name);
   if (reach === 'bell' && input.mentions?.length) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: [...input.mentions] });
@@ -112,7 +120,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
     if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
     addMention(resolved);
   }
-  const bodyMentions = reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(body);
+  const bodyMentions = reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(body ?? '');
   const unmatchedMentions: string[] = [];
   for (const token of bodyMentions) {
     const resolved = resolveMention(token, joinedNames);
@@ -144,7 +152,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body: string
     const activitySummaries = unreadActivitySummaries(facts, name, now);
     if (activitySummaries.length > 0 && activitySummaries[0].latestActivityAgeMs > UNREAD_BLOCK_GRACE_MS) return { type: 'blocked', activitySummaries };
   }
-  return { type: 'sent', act: { kind: 'say', actor: name, at: now, body, mentions: mentionNames,
+  return { type: 'sent', act: { kind: 'say', actor: name, at: now, ...(body === undefined ? {} : { body }), ...(metadata === undefined ? {} : { metadata }), mentions: mentionNames,
     ...(reach === undefined ? {} : { reach }), ...(reply === undefined ? {} : { reply }) },
     ...(unmatchedMentions.length === 0 ? {} : { unmatchedMentions }),
     ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }) };

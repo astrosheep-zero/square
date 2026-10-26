@@ -1,5 +1,5 @@
 import { type BuildOptions, type HardCap, formatHardCap } from '../model.js';
-import type { Reach } from '../square-facade.js';
+import type { Reach, ActivityMetadata } from '../square-facade.js';
 import {
   commandPrefix,
   participantCommandPrefix,
@@ -27,13 +27,15 @@ interface JoinIntent {
   kick: boolean;
 }
 interface ActivityIntent {
-  activity: string;
+  activity?: string;
   force: boolean;
   noWait: boolean;
   noMention: boolean;
   mentions: string[];
   reach?: Reach;
   reply?: string;
+  metadata?: ActivityMetadata;
+  metadataJson?: string;
 }
 interface BodyIntent {
   body?: string;
@@ -120,6 +122,8 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   let noMention = false;
   const mentions: string[] = [];
   let reply: string | undefined;
+  let metadata: ActivityMetadata | undefined;
+  let metadataJson: string | undefined;
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -134,24 +138,31 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     } else if (argument === '--reply') {
       reply = requireValue(argv, index, argument);
       index += 1;
+    } else if (argument === '--metadata') {
+      metadataJson = requireValue(argv, index, argument);
+      try { metadata = JSON.parse(metadataJson) as ActivityMetadata; }
+      catch { fail('✕ invalid --metadata: expected JSON'); }
+      index += 1;
     }
     else bodyArgs.push(argument);
   }
   const reach = bell ? 'bell' : undefined;
-  if (bodyArgs.length !== 1) {
-    if (bodyArgs.length === 0 && !process.stdin.isTTY) bodyArgs.push('-');
-    else fail("express requires a body argument (a quoted string or '-' with piped stdin)");
+  if (bodyArgs.length > 1) fail("express accepts one body argument (a quoted string or '-')");
+  if (bodyArgs.length === 0 && metadataJson === undefined) {
+    if (!process.stdin.isTTY) bodyArgs.push('-');
+    else fail("express requires a body argument or --metadata <json>");
   }
-  return { activity: bodyArgs[0], force, noWait, noMention, mentions, reach, reply };
+  return { activity: bodyArgs[0], force, noWait, noMention, mentions, reach, reply, metadata, metadataJson };
 }
 
 export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
-    const rawInput = await resolveBody(intent.activity);
+    const rawInput = intent.activity === undefined ? undefined : await resolveBody(intent.activity);
     await executeExpression((control) => Square.at(squareInput(context), control), requireSquarePath(context), context.name, rawInput, {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
-      mentions: intent.mentions, reach: intent.reach, reply: intent.reply,
+      mentions: intent.mentions, reach: intent.reach, reply: intent.reply, metadata: intent.metadata,
+      metadataJson: intent.metadataJson, bodyProvided: intent.activity !== undefined,
     });
   },
   present: () => {},

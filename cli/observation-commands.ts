@@ -387,6 +387,7 @@ function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRec
     body: 'body' in act && typeof act.body === 'string' ? act.body : '',
     number: act.kind === 'say' ? sayNumbers[act.index] : null,
     mentions: act.kind === 'say' ? [...(act.mentions ?? [])] : [],
+    metadata: act.kind === 'say' ? act.metadata ?? null : null,
     reach: act.kind === 'say' ? act.reach ?? null : null,
     reply: act.kind === 'say' && act.reply !== undefined ? formatActivityId(act.reply) : null,
   });

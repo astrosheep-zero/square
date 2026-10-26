@@ -27,7 +27,7 @@ import type {
   ExpressOptions, ExpressResult, HistoryQuery, HistoryResult, JoinOptions, JoinResult, ListenerChangeResult,
   ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
   SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
-  RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions,
+  RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, ExpressInput,
 } from './square-facade.js';
 
 export type * from './square-facade.js';
@@ -130,8 +130,12 @@ export class SqliteSquare {
   private static readonly ParticipantHandle = class implements Participant {
     constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly seat?: Seat) { }
 
-    async express(body: string, options: ExpressOptions = {}, control?: OperationControl): Promise<ExpressResult> {
+    async express(bodyOrInput: string | undefined | ExpressInput, optionsOrControl: ExpressOptions | OperationControl = {}, operationControl?: OperationControl): Promise<ExpressResult> {
       const square = this.owner;
+      const input = typeof bodyOrInput === 'object' && bodyOrInput !== null ? bodyOrInput : undefined;
+      const body: string | undefined = typeof bodyOrInput === 'string' || bodyOrInput === undefined ? bodyOrInput : bodyOrInput.body;
+      const options = (input ?? optionsOrControl) as ExpressOptions;
+      const control = input === undefined ? operationControl : optionsOrControl as OperationControl;
       let name = this.name, effect: 'unsent' | 'unknown' | 'landed' = 'unsent';
       let landedId: ExpressResult['activity']['id'] | undefined;
       let waited = false, heldWaitedMs = 0;
@@ -158,7 +162,7 @@ export class SqliteSquare {
             });
             const committed = (await square.artifact.transactAs(participantAuthority(seat), facts => {
               // Decoding selected rows is storage work, not proof of safe admission refusal.
-              const proposed = decideAct(facts, { name, body, force: options.force ?? false, now, mentions: options.mentions,
+              const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
                 ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
               const holder = proposed.type === 'held' ? facts.hold().actor : undefined;
               const decision = rejectUnsentActivity(() => {

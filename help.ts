@@ -27,7 +27,7 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --last <N>  Show the last N public activities (default 10, maximum 100).', '  --kick      End the standing participant and reclaim the name for this session.'],
   },
   {
-    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--mention <name>... | --bell] [--no-mention] [--reply <activity-id>] <activity | ->', usesSquare: true, group: 'participant',
+    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--metadata <json>] [--mention <name>... | --bell] [--no-mention] [--reply <activity-id>] [<activity> | -]', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
     details: [
       'Reach:',
@@ -42,6 +42,8 @@ const COMMANDS: readonly CommandHelp[] = [
       'Options:',
       '  -f, --force       Express without first catching unread activity or satisfying attention etiquette.',
       '  --no-wait         If held or throttled, save a draft and return instead of waiting. A held wait gives up on its own after 10 minutes.',
+      '  --metadata <json> Attach a bounded JSON object (at most 16 KiB UTF-8 and 256 nesting levels); it may be the only content.',
+      '                    Metadata is returned in structured activity results but is not shown in human text or searchable.',
     ],
   },
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },

@@ -5,7 +5,7 @@ import { SquareError, type SquareErrorCode, type SquareErrorFacts } from './mode
 import { harnessSessionSources } from './participant-identity.js';
 import type { SquareBackends, SquareBackend } from './square-backend.js';
 import type { ParsedSquareLocation } from './square-location.js';
-import type { Participant, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import type { Participant, ExpressInput, ExpressOptions, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { requireJoinName } from './seats.js';
 
 export const STDIO_PROTOCOL_VERSION = 1;
@@ -143,7 +143,11 @@ class StdioSquare implements SquareBackend {
   private participantHandle(name: string): Participant {
     return {
       name,
-      express: (body, options, control) => this.call('express', [body, options], control, name),
+      express: ((bodyOrInput: string | undefined | ExpressInput, optionsOrControl?: ExpressOptions | OperationControl, control?: OperationControl) => {
+        if (typeof bodyOrInput === 'object' && bodyOrInput !== null)
+          return this.call('express', [bodyOrInput, undefined], optionsOrControl as OperationControl, name);
+        return this.call('express', [bodyOrInput, optionsOrControl], control, name);
+      }) as Participant['express'],
       catch: (options, control) => this.call('catch', [options], control, name),
       listen: (target, options, control) => this.call('listen', [target, options], control, name),
       ignore: (target, options, control) => this.call('ignore', [target, options], control, name),
