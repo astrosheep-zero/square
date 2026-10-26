@@ -35,8 +35,16 @@ export function pendingHead(facts: SquareRead, name: string, index: number): Dir
   return facts.directedAt(participant.name, index);
 }
 
-/** Complete recipient projection, assembled inside its one transaction. */
-export function pendingNotifications(facts: SquareRead, name: string): PlannedNotification[] {
+/** One activity's landed recipients that still owe a wake; the rest of the roster is untouched. */
+export function pendingRecipients(facts: SquareRead, index: number): DirectedHead[] {
+  return facts.audience(index).flatMap(({ recipient }) => {
+    const head = pendingHead(facts, recipient, index);
+    return head === undefined ? [] : [head];
+  });
+}
+
+/** Still-pending directed heads for one recipient, oldest first. Bodies belong to presentation. */
+export function pendingHeads(facts: SquareRead, name: string): DirectedHead[] {
   const participant = facts.participant(name);
   if (!participant?.joined) return [];
   const heads: DirectedHead[] = [];
@@ -47,9 +55,15 @@ export function pendingNotifications(facts: SquareRead, name: string): PlannedNo
     if (!page.hasMore) break;
     afterIndex = page.items.at(-1)!.index;
   }
+  return heads;
+}
+
+/** Complete recipient projection, assembled inside its one transaction. */
+export function pendingNotifications(facts: SquareRead, name: string): PlannedNotification[] {
+  const heads = pendingHeads(facts, name), recipient = heads[0]?.recipient ?? name;
   const routes = new Map(heads.map((head) => [head.index, head.route]));
   return facts.activities(heads.map((head) => head.index)).flatMap((item) => item.kind === 'say'
-    ? [{ item, recipient: participant.name, route: routes.get(item.index)! }] : []);
+    ? [{ item, recipient, route: routes.get(item.index)! }] : []);
 }
 
 export interface PendingScan {
@@ -90,18 +104,12 @@ export function pendingFacts(facts: SquareRead, scan: PendingScan, heads: readon
     && pendingHead(facts, head.recipient, head.index) !== undefined) };
 }
 
-/** Global discovery alone uses pendingAudience; exact dispatch uses its one landed audience. */
-export async function collectPending(artifact: SquareArtifactPort, index?: number) {
-  const { value: initial } = await artifact.read((facts) => ({
-    scan: capturePendingScan(facts),
-    pending: index === undefined ? [] : facts.audience(index).flatMap(({ recipient }) => {
-      const head = pendingHead(facts, recipient, index);
-      return head === undefined ? [] : [head];
-    }),
-  }));
-  const pending = [...initial.pending];
-  if (index === undefined) for await (const page of pendingPages(artifact, initial.scan)) pending.push(...page);
-  const { value } = await artifact.read((facts) => ({ scan: initial.scan, ...pendingFacts(facts, initial.scan, pending) }));
+/** Global discovery alone sweeps pendingAudience; exact dispatch uses pendingRecipients. */
+export async function collectPending(artifact: SquareArtifactPort) {
+  const { value: scan } = await artifact.read(capturePendingScan);
+  const pending: DirectedHead[] = [];
+  for await (const page of pendingPages(artifact, scan)) pending.push(...page);
+  const { value } = await artifact.read((facts) => ({ scan, ...pendingFacts(facts, scan, pending) }));
   return value;
 }
 

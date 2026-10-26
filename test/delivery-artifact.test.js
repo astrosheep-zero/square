@@ -224,3 +224,69 @@ test('presentation consumes only the captured seat generation', async t => {
   assert.notEqual(state.replacement.generation, bob.generation);
   assert.equal(state.evidence[0].outcome, 'dispatching');
 });
+
+/** Counts what one delivery actually reads: body hydration and per-recipient directed history. */
+function countingArtifact(artifact) {
+  const counters = { hydrated: [], directedRecipients: [] };
+  return {
+    counters,
+    port: {
+      ...artifact,
+      read: (select, signal) => artifact.read((facts) => select(Object.assign({}, facts, {
+        activities: (indexes) => { counters.hydrated.push([...indexes]); return facts.activities(indexes); },
+        directedAt: (recipient, index) => { counters.directedRecipients.push(recipient); return facts.directedAt(recipient, index); },
+      })), signal),
+    },
+  };
+}
+
+test('one requested activity wakes its landed audience without hydrating other unread history', async t => {
+  const artifact = createArtifactPort(':memory:', empty());
+  t.after(() => artifact.close());
+  const bodyOf = (name) => ({ channel: 'test', session: name.toLowerCase() });
+  const wake = (agentId) => ({ kind: 'paseo', address: { agentId } });
+  const join = (name, at, wakeAddress) => artifact.transactAs({ kind: 'join', participant: name, body: bodyOf(name), wakeAddress }, (facts) => {
+    facts.land({ kind: 'join', actor: name, at });
+    return facts.seat(name);
+  }).then(({ value }) => value);
+  const alice = await join('Alice', 1, wake('alice'));
+  const bob = await join('Bob', 2, wake('bob'));
+  const carol = await join('Carol', 3, wake('carol'));
+  const others = [];
+  for (let index = 0; index < 24; index += 1) others.push(await join(`Other${index}`, 4 + index, wake(`other${index}`)));
+  await artifact.transactAs({ kind: 'participant', seat: alice }, (facts) => {
+    for (let round = 0; round < 20; round += 1) {
+      for (const { participant } of others) {
+        facts.land({ kind: 'say', actor: 'Alice', at: 100 + round, body: `unread ${round} for ${participant}`, mentions: [participant] });
+      }
+    }
+  });
+  const caught = await artifact.transactAs({ kind: 'participant', seat: alice }, (facts) =>
+    facts.land({ kind: 'say', actor: 'Alice', at: 200, body: 'caught before delivery', mentions: ['Bob'] }));
+  await artifact.transactAs({ kind: 'participant', seat: bob }, (facts) => facts.markSeen('Bob', [caught.value.index], 201));
+  const beforeRejoin = await artifact.transactAs({ kind: 'participant', seat: alice }, (facts) =>
+    facts.land({ kind: 'say', actor: 'Alice', at: 202, body: 'landed before the rejoin', mentions: ['Carol'] }));
+  await artifact.transactAs({ kind: 'takeover', participant: 'Carol', body: bodyOf('carol-rejoined'), expectedGeneration: carol.generation }, (facts) => {
+    facts.land({ kind: 'done', actor: 'Carol', at: 203 });
+    facts.land({ kind: 'join', actor: 'Carol', at: 204 });
+  });
+  const delivery = await artifact.transactAs({ kind: 'participant', seat: alice }, (facts) =>
+    facts.land({ kind: 'say', actor: 'Alice', at: 205, body: 'the only delivery', mentions: ['Bob'] }));
+
+  const { counters, port } = countingArtifact(artifact);
+  const deliver = (activity, attempt) => deliverPending({ artifact: port, location: '/tmp/one.square', activity, transport: { attempt }, now: 300 });
+  const noWake = () => assert.fail('an excluded recipient must not be woken');
+  assert.deepEqual(await deliver(`act/${caught.value.index}`, noWake),
+    { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 }, 'a caught activity has no pending recipient');
+  assert.deepEqual(await deliver(`act/${beforeRejoin.value.index}`, noWake),
+    { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 }, 'a replaced seat generation is not the landed recipient');
+  const sends = [];
+  assert.deepEqual(await deliver(`act/${delivery.value.index}`, async (request, _timeout, gate) => {
+    assert.equal(await gate(), true);
+    sends.push(request.participant);
+    return { outcome: 'accepted' };
+  }), { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
+  assert.deepEqual(sends, ['Bob']);
+  assert.deepEqual(counters.hydrated, [], 'a requested delivery must never hydrate activity bodies');
+  assert.deepEqual([...new Set(counters.directedRecipients)], ['Bob'], 'only the landed audience is consulted');
+});

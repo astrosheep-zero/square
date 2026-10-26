@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { sameBody, type Seat, type StoredAct, type WakeRoute } from './model.js';
-import type { SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, DeliveryEvidence, SeatRef } from './ports.js';
-import { pendingNotifications, pendingHead } from './delivery.js';
+import { sameBody, type Seat, type WakeRoute } from './model.js';
+import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, DeliveryEvidence, SeatRef } from './ports.js';
+import { pendingHead, pendingHeads, pendingRecipients } from './delivery.js';
 import { asSeatRef } from './seats.js';
 import { canonicalPath } from './canonical-path.js';
 import { freshWatchLease } from './runtime.js';
@@ -77,37 +77,27 @@ async function attemptWakeWithin(
 
 interface Candidate {
   readonly seat: Seat;
-  readonly activity: StoredAct & { readonly kind: 'say' };
+  readonly head: DirectedHead;
 }
 
 async function candidates(artifact: SquareArtifactPort, requested?: number): Promise<Candidate[]> {
-  const { value } = await artifact.read((facts) => facts.roster().flatMap((participant) => {
-    if (!participant.joined) return [];
-    const seat = facts.seat(participant.name);
-    if (seat === undefined) return [];
-    return pendingNotifications(facts, participant.name)
-      .filter(({ item }) => requested === undefined || item.index === requested)
-      .map(({ item }) => ({ seat, activity: item }));
-  }));
+  const { value } = await artifact.read((facts) => {
+    const heads = requested === undefined
+      ? facts.roster().flatMap((participant) => participant.joined ? pendingHeads(facts, participant.name) : [])
+      : pendingRecipients(facts, requested);
+    return heads.flatMap((head) => {
+      const seat = facts.seat(head.recipient);
+      return seat === undefined ? [] : [{ seat, head }];
+    });
+  });
   return value;
 }
 
-async function finishClaim(input: {
-  readonly artifact: SquareArtifactPort;
-  readonly seat: SeatRef;
-  readonly activity: ActivityId;
-  readonly claimToken: string;
-  readonly outcome: 'failed' | 'unknown' | 'released';
-  readonly now: number;
-  readonly signature?: string;
-  readonly message?: string;
-  readonly diagnostic?: unknown;
-}): Promise<void> {
-  await input.artifact.completeDelivery({ seat: input.seat, activity: input.activity, claimToken: input.claimToken,
-    outcome: input.outcome, at: input.now,
-    ...(input.signature === undefined ? {} : { signature: input.signature }),
-    ...(input.message === undefined ? {} : { message: input.message }),
-    ...(input.diagnostic === undefined ? {} : { diagnostic: safeJson(input.diagnostic) }),
+function releaseClaim(artifact: SquareArtifactPort, seat: SeatRef, activity: ActivityId, claimToken: string,
+  signature: string, message?: string, diagnostic?: unknown): Promise<boolean> {
+  return artifact.completeDelivery({ seat, activity, claimToken, outcome: 'released', at: Date.now(), signature,
+    ...(message === undefined ? {} : { message }),
+    ...(diagnostic === undefined ? {} : { diagnostic: safeJson(diagnostic) }),
   }).catch(() => false);
 }
 
@@ -128,12 +118,11 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
 
   const pending = await candidates(input.artifact, requested);
   let attempted = 0, accepted = 0, failed = 0, unknown = 0, notCapable = 0;
-  for (const candidate of pending) {
-    const { seat, activity } = candidate;
+  for (const { seat, head } of pending) {
     const route = routeFor(location, seat, input.now ?? Date.now());
     if (route === undefined) { notCapable += 1; continue; }
     const request = {
-      location, participant: seat.participant, activity: formatActivityId(activity.index), actor: activity.actor,
+      location, participant: seat.participant, activity: formatActivityId(head.index), actor: head.actor,
       seat: asSeatRef(seat), route,
       artifact: input.artifact,
     } satisfies WakeRequest;
@@ -160,16 +149,11 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
       return !suppressed;
     };
 
-    let before: Currentness;
-    try { before = await currentness(input.artifact, withClaim, input.now ?? Date.now()); }
-    catch {
-      await finishClaim({ artifact: input.artifact, seat: request.seat, activity: request.activity, claimToken,
-        outcome: 'released', now: Date.now(), signature: 'pre_send_revalidation_failed', message: 'Square delivery state could not be verified.' });
-      continue;
-    }
-    if (!before.current) {
-      await finishClaim({ artifact: input.artifact, seat: request.seat, activity: request.activity, claimToken,
-        outcome: 'released', now: Date.now(), signature: 'pre_send_revalidation_failed', message: 'The notification is no longer current.', diagnostic: before });
+    let before: Currentness | undefined;
+    try { before = await currentness(input.artifact, withClaim, input.now ?? Date.now()); } catch { /* unverifiable */ }
+    if (!before?.current) {
+      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
+        before === undefined ? 'Square delivery state could not be verified.' : 'The notification is no longer current.', before);
       continue;
     }
 
@@ -177,15 +161,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     try { outcome = await attemptWakeWithin(input.transport, withClaim, leaseMs, beforeSend); }
     catch (error) { outcome = { outcome: 'unknown', diagnostic: error instanceof Error ? error.message : String(error) }; }
     if (suppressed) {
-      await finishClaim({ artifact: input.artifact, seat: request.seat, activity: request.activity, claimToken,
-        outcome: 'released', now: Date.now(), signature: 'pre_send_revalidation_failed',
-        message: 'The notification changed before the final send check.', diagnostic: final ?? { observationAvailable: false } });
+      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
+        'The notification changed before the final send check.', final ?? { observationAvailable: false });
       continue;
     }
 
     if (outcome.outcome === 'not-capable') {
-      await finishClaim({ artifact: input.artifact, seat: request.seat, activity: request.activity, claimToken,
-        outcome: 'released', now: Date.now(), signature: 'transport_not_capable', diagnostic: outcome.diagnostic });
+      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'transport_not_capable', undefined, outcome.diagnostic);
       notCapable += 1;
       continue;
     }
@@ -217,12 +199,10 @@ export async function sweepPending(input: {
   if (input.limit <= 0) return [];
   const pending = await candidates(input.artifact);
   const selected: number[] = [];
-  for (const { activity } of pending) {
-    if (input.now - activity.at <= input.graceMs) continue;
-    if (!selected.includes(activity.index)) selected.push(activity.index);
+  for (const { head } of pending) {
+    if (input.now - head.at <= input.graceMs) continue;
+    if (!selected.includes(head.index)) selected.push(head.index);
     if (selected.length >= input.limit) break;
   }
   return selected;
 }
-
-export { presentationBlocksWake };
