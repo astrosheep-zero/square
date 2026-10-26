@@ -836,14 +836,19 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
     let refusedCommit = false;
     let failNextCommit = false;
     const exec = DatabaseSync.prototype.exec;
+    const writing = new WeakSet();
     const artifactLocation = fs.realpathSync.native(item.squarePath);
     t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
-      if (failNextCommit && sql === 'COMMIT' && this.location() === artifactLocation) {
+      if (sql === 'BEGIN IMMEDIATE') writing.add(this);
+      if (failNextCommit && sql === 'COMMIT' && writing.has(this) && this.location() === artifactLocation
+        && this.prepare("SELECT 1 FROM delivery_evidence WHERE kind='presentation' AND outcome='failed'").get()) {
         failNextCommit = false;
         refusedCommit = true;
         throw new Error('database is locked');
       }
-      return exec.call(this, sql, ...args);
+      const result = exec.call(this, sql, ...args);
+      if (sql === 'COMMIT' || sql === 'ROLLBACK') writing.delete(this);
+      return result;
     });
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
@@ -854,8 +859,10 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
       await piTurnStart(handlers);
       failNextCommit = true;
       await piTurnEnd(handlers);
+      assert.equal(sent.length, 1, 'the first empty turn must not drop the queued steer');
+      await piTurnStart(handlers);
+      await piTurnEnd(handlers);
       await waitUntil(() => refusedCommit, 'the dropped-presentation artifact commit did not encounter the injected busy');
-      assert.equal(sent.length, 1);
       await waitUntil(() => failNextCommit === false, 'the artifact did not retry its transient commit');
       await piTurnStart(handlers);
       await piTurnEnd(handlers);

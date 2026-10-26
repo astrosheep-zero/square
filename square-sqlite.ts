@@ -1,5 +1,5 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, sameBody, validateBody, type ActivityId, type ActivityObservation, type Body, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
+import { SquareError, nameKey, isWakeRouteKind, validateBody, type ActivityId, type ActivityObservation, type Body, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
 import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, SeatRef, DeliveryClaimInput, DeliveryClaimResult, DeliveryCompletion, DeliveryPreparation, DeliveryEvidence } from './ports.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
 import { legacyRowFramingIssue } from './square-legacy-framing.js';
@@ -708,13 +708,12 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return true;
         },
         updateWakeAddress(value, wakeAddress) {
-            const current = read.seat(value.participant);
-            if (current === undefined || !sameBody(current.body, value.body) || current.generation !== value.generation) return false;
+            const current = one('SELECT wake_address_json FROM seats WHERE participant_key_json=? AND generation_json=?', [key(value.participant), encode(value.generation)])!;
             if (wakeAddress !== undefined) {
                 requireFact(isWakeRouteKind(wakeAddress.kind));
                 requireFact(Object.values(wakeAddress.address).every((item) => typeof item === 'string'));
             }
-            if (stableJson(current.wakeAddress ?? null) === stableJson(wakeAddress ?? null)) return false;
+            if (stableJson(current.wake_address_json === null ? null : json(current.wake_address_json)) === stableJson(wakeAddress ?? null)) return false;
             const count = run('UPDATE seats SET wake_address_json=? WHERE participant_key_json=? AND generation_json=?', [wakeAddress === undefined ? null : encode(wakeAddress), key(value.participant), encode(value.generation)]);
             if (count) deliveryChanged = true;
             return count > 0;
@@ -722,7 +721,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         removeSeat(value) {
             // Done hides current authority; retain only its latest coordinate for exact-body resume.
             const row = one(`SELECT s.* FROM ${latestSeats} WHERE p.done=1 AND s.participant_key_json=?`, [key(value.participant)]);
-            if (row === undefined || !sameBody(bodyFrom(row), value.body) || decoded(row.generation_json) !== value.generation) return false;
+            if (row === undefined || decoded(row.generation_json) !== value.generation) return false;
             run('UPDATE seats SET wake_address_json=NULL WHERE participant_key_json=?', [key(value.participant)]);
             run('DELETE FROM catch_leases WHERE owner_json=?', [encode(value.participant)]);
             changed = true; deliveryChanged = true;
@@ -814,8 +813,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     };
     const delivery = {
         claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult {
-            const current = read.seat(input.seat.participant);
-            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return { status: 'stale' };
             requireFact(input.kind === 'wake' || input.kind === 'presentation');
             const index = activityIndex(input.activity);
             finite(input.at);
@@ -848,8 +845,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return { status: 'acquired', claimToken: input.claimToken, attemptN };
         },
         prepareDelivery(input: DeliveryPreparation): boolean {
-            const current = read.seat(input.seat.participant);
-            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return false;
             const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
             if (row === undefined || row.outcome !== 'dispatching') return false;
             const correlation = nativeCorrelation(input.correlation);
@@ -860,8 +855,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return count > 0;
         },
         completeDelivery(input: DeliveryCompletion): boolean {
-            const current = read.seat(input.seat.participant);
-            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return false;
             const index = activityIndex(input.activity);
             finite(input.at);
             requireFact(['accepted', 'failed', 'unknown', 'released', 'presented', 'clipped'].includes(input.outcome));
@@ -878,9 +871,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         },
         observeNativeDelivery(input: { readonly seat: SeatRef; readonly claimToken: string; readonly observation: NonNullable<DeliveryEvidence['nativeObservations']>[number] }): boolean {
             const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
-            const current = read.seat(input.seat.participant);
-            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation
-                || row === undefined || !['dispatching', 'accepted', 'unknown'].includes(string(row.outcome))) return false;
+            if (row === undefined || !['dispatching', 'accepted', 'unknown'].includes(string(row.outcome))) return false;
             const observation = input.observation;
             requireFact(typeof observation.eventId === 'string' && observation.eventId.length > 0);
             requireFact(typeof observation.messageId === 'string' && observation.messageId.length > 0);

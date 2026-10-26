@@ -153,6 +153,57 @@ test('a catch receipt committed before the final send gate suppresses the wake a
   assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome]), [['wake', 'released']]);
 });
 
+test('delivery evidence retains claim leases, token scoping and terminal transition conditions', async t => {
+  const { artifact, bob, activity } = await fixture();
+  t.after(() => artifact.close());
+  const input = { seat: bob, activity, kind: 'wake', at: 4, leaseMs: 10, claimToken: 'first' };
+  assert.equal((await artifact.claimDelivery(input)).status, 'acquired');
+  assert.equal((await artifact.claimDelivery({ ...input, at: 5, claimToken: 'busy' })).status, 'busy');
+  assert.equal(await artifact.completeDelivery({ ...input, claimToken: 'wrong', outcome: 'accepted' }), false);
+  const interrupted = await artifact.claimDelivery({ ...input, at: 14, claimToken: 'expired' });
+  assert.equal(interrupted.status, 'terminal');
+  assert.equal(interrupted.evidence.outcome, 'unknown');
+  assert.equal(interrupted.evidence.diagnostic, 'interrupted dispatch');
+  assert.equal(await artifact.prepareDelivery({ seat: bob, claimToken: 'first', correlation: { harness: 'pi', token: 'late' } }), false);
+  assert.equal(await artifact.completeDelivery({ ...input, at: 15, outcome: 'failed' }), false);
+  assert.equal(await artifact.completeDelivery({ ...input, at: 16, outcome: 'accepted' }), true);
+  assert.equal(await artifact.completeDelivery({ ...input, at: 17, outcome: 'accepted' }), true);
+  assert.equal((await artifact.claimDelivery({ ...input, at: 18, claimToken: 'no-replay' })).status, 'terminal');
+  assert.equal((await artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, activity))).value.length, 1);
+
+  const presentation = { ...input, kind: 'presentation', at: 20, claimToken: 'presentation' };
+  assert.equal((await artifact.claimDelivery(presentation)).status, 'acquired');
+  assert.equal(await artifact.completeDelivery({ ...presentation, at: 21, outcome: 'failed' }), true);
+  const retry = await artifact.claimDelivery({ ...presentation, at: 22, claimToken: 'retry' });
+  assert.equal(retry.status, 'acquired');
+  assert.equal(retry.attemptN, 1);
+  assert.equal(await artifact.completeDelivery({ ...presentation, at: 23, outcome: 'presented' }), false);
+  assert.equal(await artifact.completeDelivery({ ...presentation, claimToken: 'retry', at: 24, outcome: 'presented' }), true);
+});
+
+test('wake revalidates the captured seat after asynchronous takeover and refuses stale completion', async t => {
+  const { artifact, bob, activity } = await fixture();
+  t.after(() => artifact.close());
+  let sent = false;
+  let oldToken;
+  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4,
+    transport: { async attempt(request, _timeout, beforeSend) {
+      oldToken = request.claimToken;
+      await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: { ...bob.body, agent: 'replacement' }, expectedGeneration: bob.generation }, facts => {
+        facts.land({ kind: 'done', actor: 'Bob', at: 5 });
+        facts.land({ kind: 'join', actor: 'Bob', at: 6 });
+      });
+      sent = await beforeSend();
+      return sent ? { outcome: 'accepted' } : { outcome: 'not-capable' };
+    } } });
+  assert.equal(sent, false);
+  assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  await assert.rejects(artifact.completeDelivery({ seat: bob, activity, claimToken: oldToken, at: 7, outcome: 'accepted' }),
+    error => error.code === 'already_joined');
+  assert.equal((await artifact.read(facts => facts.deliveryByToken(oldToken))).value.outcome, 'dispatching');
+  assert.notEqual((await artifact.read(facts => facts.seat('Bob'))).value.generation, bob.generation);
+});
+
 test('presentation consumes only the captured seat generation', async t => {
   const { artifact, bob, activity } = await fixture();
   t.after(() => artifact.close());
