@@ -1,15 +1,12 @@
 import { createHash } from 'node:crypto';
-import { createArtifactPort, observeSquareRevision } from '../../artifact.js';
-import { canonicalPath } from '../../canonical-path.js';
+import { createArtifactPort } from '../../artifact.js';
 import { deliverPending } from '../../delivery-operations.js';
-import { nativePendingPreview, projectPresentation } from '../../inbox.js';
-import { leaseOwnsNotification } from '../../delivery.js';
-import { sameBody, type InboxMembership, type Seat } from '../../model.js';
-import type { DeliveryEvidence, SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
-import { createWakeTransport } from '../../notifications.js';
+import { nativePendingPreview, observeSessionPending } from '../../inbox.js';
+import { automaticWakeEligible, presentationBlocksWake } from '../../delivery.js';
+import { sameBody, type Seat } from '../../model.js';
+import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
 import { formatActivityId, parseActivityId } from '../../square-core.js';
-import { indexedSquareEntries, observeSquareIndex } from '../../square-index.js';
-import { freshWatchLease } from '../../runtime.js';
+import { indexedSquareEntries } from '../../square-index.js';
 import { asSeatRef } from '../../seats.js';
 import { presentPending } from '../../presentation-operations.js';
 import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
@@ -61,44 +58,6 @@ function sameSeat(left: Seat | undefined, right: Seat): boolean {
   return left !== undefined && left.generation === right.generation && sameBody(left.body, right.body);
 }
 
-function presentationIsTerminal(rows: readonly DeliveryEvidence[], now: number): boolean {
-  return rows.some((row) => row.kind === 'presentation' && (
-    row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
-    || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)
-  ));
-}
-
-function wakeIsTerminal(rows: readonly DeliveryEvidence[], now: number): boolean {
-  return rows.some((row) => row.kind === 'wake' && (
-    row.outcome === 'accepted' || row.outcome === 'unknown'
-    || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)
-  ));
-}
-
-async function openCodeInbox(location: string, seat: Seat, signal?: AbortSignal): Promise<InboxMembership | undefined> {
-  const artifact = createArtifactPort(location, undefined, signal);
-  try {
-    const { value } = await artifact.read((facts) => {
-      if (!sameSeat(facts.seat(seat.participant), seat)) return undefined;
-      const projection = projectPresentation(facts, {
-        location, participant: seat.participant, sessionId: seat.body.session, channel: 'opencode', updatedAt: 0,
-      });
-      if (!projection.joined || projection.binding.seat === undefined) return undefined;
-      const lease = freshWatchLease(facts, seat.participant, Date.now());
-      const notifications = projection.notifications.filter((notification) => {
-        if (lease !== undefined && leaseOwnsNotification(lease, { ...notification, recipient: seat.participant })) return false;
-        const evidence = facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex));
-        return !presentationIsTerminal(evidence, Date.now()) && !wakeIsTerminal(evidence, Date.now());
-      });
-      return notifications.length === 0 ? undefined : {
-        name: seat.participant, squarePath: location, notifications, seat,
-        ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }),
-      };
-    }, signal);
-    return value;
-  } finally { await artifact.close(); }
-}
-
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
   return {
     probe: async (route) => !lifetime.aborted && route.kind === routeKind
@@ -107,7 +66,7 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
       const index = parseActivityId(request.activity);
       const artifact = request.artifact;
       if (artifact === undefined || request.claimToken === undefined || index === undefined
-        || request.seat.body.channel !== 'opencode' || request.seat.body.session !== target.sessionId
+        || !sameBody(request.seat.body, bodyFor(target.sessionId))
         || request.route.kind !== routeKind || request.route.address.sessionId !== target.sessionId) {
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention has no matching artifact claim or session.' };
       }
@@ -163,7 +122,7 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
             || evidence.correlation?.payloadHash !== hash) return [];
           const prepared = preview(facts, location, seat, index);
           if (prepared === undefined || payloadHash(prepared.payload) !== hash
-            || presentationIsTerminal(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), Date.now())) return [];
+            || presentationBlocksWake(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), Date.now())) return [];
           return [{ evidence, index, hash, clipped: prepared.clipped }];
         });
       }, signal);
@@ -188,47 +147,46 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
 
 /** The native receiver owns no claims outside the artifact; HOME is used only for discovery. */
 export async function receiveOpenCodePending(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  const index = await observeSquareIndex(env);
-  const observers = new Map<string, Awaited<ReturnType<typeof observeSquareRevision>>>();
+  const observer = await observeSessionPending(bodyFor(target.sessionId), env);
+  const transport = createOpenCodeWakeTransport(target, signal);
+  let waiting: ReturnType<typeof observer.wait> | undefined;
   try {
     while (!signal.aborted) {
-      const presenceVersion = await index.read(signal);
-      const paths = await candidatePaths(target.sessionId, env);
-      const pathSet = new Set(paths);
-      for (const [location, observer] of observers) {
-        if (pathSet.has(location)) continue;
-        observer.close();
-        observers.delete(location);
-      }
-      for (const location of paths) if (!observers.has(location)) observers.set(location, await observeSquareRevision(location));
-      const baselines = new Map<string, number | null>();
-      for (const [location, observer] of observers) baselines.set(location, await observer.read(signal));
-      const seats = await seatsAt(paths, target.sessionId, signal);
-      for (const { location, seat } of seats) {
+      const armed = new Promise<boolean>((resolve) => {
+        waiting = observer.wait(Infinity, { signal, skipImmediate: true, onChangeArmed: resolve });
+        void waiting.catch(() => resolve(false));
+      });
+      if (!await armed) { await waiting; break; }
+      for (const membership of await observer.read({ signal })) {
+        const seat = membership.seat;
         if (signal.aborted) return;
-        const membership = await openCodeInbox(location, seat, signal);
-        if (membership === undefined) continue;
+        if (seat === undefined) continue;
+        const location = membership.squarePath;
         const artifact = createArtifactPort(location, undefined, signal);
         try {
-          const transport = createWakeTransport([], Date.now, { [routeKind]: createOpenCodeWakeTransport(target, signal) });
-          for (const note of membership.notifications) {
+          const { value: notifications } = await artifact.read((facts) => {
+            if (!sameSeat(facts.seat(seat.participant), seat)) return [];
+            return membership.notifications.filter((note) => automaticWakeEligible(
+              facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(note.actIndex)), Date.now()));
+          }, signal);
+          for (const note of notifications) {
             if (signal.aborted) return;
             await deliverPending({ artifact, transport, location, activity: formatActivityId(note.actIndex), now: Date.now() });
           }
+        } catch (error) {
+          if (signal.aborted) throw signal.reason ?? error;
+          // A candidate that became unreadable cannot authorize sending; the shared observer
+          // keeps its subscription and will reconsider the artifact after repair.
         } finally { await artifact.close(); }
       }
-      const cancelled = new AbortController();
-      const waitSignal = AbortSignal.any([signal, cancelled.signal]);
-      const waits = [index.changed(presenceVersion, Infinity, waitSignal), ...[...observers].flatMap(([location, observer]) => {
-        const baseline = baselines.get(location);
-        return baseline === undefined ? [] : [observer.changed(baseline, Infinity, waitSignal)];
-      })];
-      try { await Promise.race(waits); }
-      finally { cancelled.abort(); await Promise.allSettled(waits); }
+      await waiting;
+      waiting = undefined;
     }
+  } catch (error) {
+    if (!signal.aborted) throw error;
   } finally {
-    index.close();
-    for (const observer of observers.values()) observer.close();
+    observer.close();
+    await waiting?.catch(() => {});
   }
 }
 

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { sameBody, type Seat, type WakeRoute } from './model.js';
-import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, DeliveryEvidence, SeatRef } from './ports.js';
-import { pendingHead, pendingHeads, pendingRecipients } from './delivery.js';
+import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
+import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
 import { canonicalPath } from './canonical-path.js';
 import { freshWatchLease } from './runtime.js';
@@ -14,12 +14,6 @@ function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefi
     location, participant: seat.participant, sessionId: seat.body.session, channel: seat.body.channel,
     kind: seat.wakeAddress.kind, address: { ...seat.wakeAddress.address }, updatedAt: now,
   };
-}
-
-function presentationBlocksWake(evidence: readonly DeliveryEvidence[], now: number): boolean {
-  return evidence.some((row) => row.kind === 'presentation'
-    && (row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
-      || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)));
 }
 
 interface Currentness {

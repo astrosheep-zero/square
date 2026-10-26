@@ -1,5 +1,5 @@
 import type { DirectedNotificationRoute, StoredAct, WatchLease, WakeRouteKind } from './model.js';
-import type { DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeOutcome } from './ports.js';
+import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeOutcome } from './ports.js';
 import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
@@ -26,6 +26,19 @@ export interface RoutedNotification {
   actor: string;
   route: DirectedNotificationRoute;
   recipient: string;
+}
+
+/** Presentation custody blocks a wake, independently of native wake acceptance. */
+export function presentationBlocksWake(evidence: readonly DeliveryEvidence[], now: number): boolean {
+  return evidence.some((row) => row.kind === 'presentation'
+    && (row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
+      || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)));
+}
+
+/** Preselection only: an expired wake dispatch is uncertain, never safe automatic replay. */
+export function automaticWakeEligible(evidence: readonly DeliveryEvidence[], now: number): boolean {
+  return !presentationBlocksWake(evidence, now) && !evidence.some((row) => row.kind === 'wake'
+    && (row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'dispatching'));
 }
 
 /** Notification pending is not cursor suffix or historical catch membership. */
