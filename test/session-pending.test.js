@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
-import { observeSessionPending, sessionInbox } from '../dist/inbox.js';
+import { observeSessionPending, projectSessionBindings, sessionInbox } from '../dist/inbox.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 
 async function fixture(t, leaseMs, hasPending = true) {
@@ -63,6 +63,114 @@ function armedWait(observer, options = {}, timeoutMs = 4_000) {
   const pending = observer.wait(timeoutMs, { ...options, onChangeArmed: armed });
   return { ready, pending };
 }
+
+test('several exact bodies on one canonical artifact share one coherent projection transaction', async t => {
+  const item = await fixture(t);
+  await item.bind();
+  const writer = createArtifactPort(item.file);
+  try {
+    for (const [participant, agent] of [['Cara', 'child-a'], ['Dana', 'child-b']]) {
+      const body = { channel: 'pi', session: 'one', agent };
+      await writer.transactAs({ kind: 'join', participant, body }, facts => facts.land({ kind: 'join', actor: participant, at: 4 }));
+      await rememberSquarePath(item.file, body, item.env.SQUARE_INDEX);
+    }
+    const alice = (await writer.read(facts => facts.seat('Alice'))).value;
+    await writer.transactAs({ kind: 'participant', seat: alice }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: 5, body: 'all exact bodies', mentions: ['Bob', 'Cara', 'Dana'] }));
+  } finally { await writer.close(); }
+  const alias = path.join(item.root, 'alias.square');
+  fs.symlinkSync(item.file, alias);
+  fs.appendFileSync(item.env.SQUARE_INDEX, `${JSON.stringify({ location: alias, body: { channel: 'pi', session: 'one' } })}\n`);
+
+  // Count connections AND transactions, not notification hydration alone: the old path
+  // hydrated each recipient once while still reopening the same artifact in several stages.
+  let connections = new Set(), transactions = 0, selecting = new Set();
+  const prepare = DatabaseSync.prototype.prepare, exec = DatabaseSync.prototype.exec;
+  t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
+    if (/^BEGIN\b/.test(sql)) { transactions++; connections.add(this); }
+    return exec.call(this, sql, ...args);
+  });
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/SELECT s\.\* FROM seats/.test(sql)) selecting.add(this);
+    return prepare.call(this, sql, ...args);
+  });
+  const reset = () => { connections = new Set(); selecting = new Set(); transactions = 0; };
+  const query = { channel: 'pi', session: 'one', allAgents: true };
+  const inbox = await sessionInbox(query, item.env);
+  assert.deepEqual(inbox.map(member => member.name), ['Bob', 'Cara', 'Dana']);
+  assert.deepEqual(inbox.map(member => member.seat.body.agent), [undefined, 'child-a', 'child-b']);
+  assert.ok(inbox.every(member => member.notifications.at(-1).body === 'all exact bodies'));
+  assert.equal(connections.size, 1);
+  assert.equal(transactions, 1);
+  reset();
+  assert.equal((await projectSessionBindings({ channel: 'pi', sessionId: 'one', env: item.env })).length, 3);
+  assert.equal(transactions, 1, 'binding-only consumers use the same grouped projection path');
+  reset();
+  const observer = await observeSessionPending(query, item.env);
+  t.after(() => observer.close());
+  assert.equal((await observer.read()).length, 3);
+  assert.equal(transactions, 1, 'explicit current reads combine binding, pending and eligibility');
+  reset();
+  assert.equal((await observer.wait(0)).length, 3);
+  assert.equal(selecting.size, 1, 'revision capture precedes one authoritative selection connection');
+  assert.equal(transactions, 3, 'two distinct revision captures plus one projection, independent of body count');
+  reset();
+  assert.equal((await observer.read()).length, 3);
+  assert.equal(transactions, 1, 'cache currentness and seat generations are checked in one current transaction');
+});
+
+test('delivery-only cancellation invalidates cached eligibility without delayed filesystem hints', async t => {
+  const item = await fixture(t);
+  await item.bind();
+  t.mock.method(fs, 'watch', () => ({ on() { return this; }, close() {} }));
+  t.mock.method(globalThis, 'setInterval', () => undefined);
+  assert.equal((await item.observer.read())[0].notifications[0].body, 'hello');
+  const writer = createArtifactPort(item.file);
+  try {
+    const bob = (await writer.read(facts => facts.seat('Bob'))).value;
+    const revision = await writer.revision();
+    const deliveryRevision = await writer.deliveryRevision();
+    await writer.cancelDeliveries(bob);
+    assert.equal(await writer.revision(), revision, 'cancellation is not a conversation change');
+    assert.ok(await writer.deliveryRevision() > deliveryRevision);
+    assert.deepEqual(await item.observer.read(), []);
+    const alice = (await writer.read(facts => facts.seat('Alice'))).value;
+    await writer.transactAs({ kind: 'participant', seat: alice }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: 4, body: 'after cancellation', mentions: ['Bob'] }));
+    assert.deepEqual((await item.observer.read())[0].notifications.map(note => note.body), ['after cancellation']);
+  } finally { await writer.close(); }
+});
+
+test('cached conversation payload keeps lease creation, renewal, removal and current reads live', async t => {
+  const item = await fixture(t);
+  await item.bind();
+  const writer = createArtifactPort(item.file);
+  t.after(() => writer.close());
+  let now = 1000, leaseReads = 0, hydrations = 0;
+  t.mock.method(Date, 'now', () => now);
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/SELECT \* FROM catch_leases/.test(sql)) leaseReads++;
+    if (sql.includes('act_index IN (SELECT value FROM json_each')) hydrations++;
+    return prepare.call(this, sql, ...args);
+  });
+  assert.equal((await item.observer.read())[0].notifications[0].body, 'hello');
+  const bob = (await writer.read(facts => facts.seat('Bob'))).value;
+  const put = expiresAt => writer.transactAs({ kind: 'participant', seat: bob }, facts =>
+    facts.putLease('Bob', { leaseId: 'catch', heartbeatAt: now, expiresAt, filter: { mention: 'Bob' } }, bob.generation));
+  await put(now + 100);
+  assert.deepEqual(await item.observer.read(), []);
+  await put(now + 1000);
+  now += 150;
+  assert.deepEqual(await item.observer.read(), [], 'a renewed lease outlives its cached earlier expiry');
+  const reads = leaseReads, bodies = hydrations;
+  await markPresentation(item, 2, 'failed');
+  assert.deepEqual(await item.observer.read(), []);
+  assert.ok(leaseReads > reads, 'even a conversation-cache hit reads the current lease facts');
+  assert.equal(hydrations, bodies, 'delivery-only evidence leaves the cached conversation payload intact');
+  await writer.transactAs({ kind: 'participant', seat: bob }, facts => facts.removeLease('Bob', 'catch', bob.generation));
+  assert.equal((await item.observer.read())[0].notifications[0].body, 'hello', 'removal releases the formerly owned pending item');
+});
 
 test('an initially undiscovered body notices index publication without an artifact write', async (t) => {
   const item = await fixture(t);
@@ -121,6 +229,7 @@ test('an unrelated index entry leaves projections cold while activity in a candi
 test('an unreadable artifact cannot reuse stale pending and repair restores delivery', async (t) => {
   const item = await fixture(t);
   await item.bind();
+  assert.equal((await item.observer.read())[0].notifications[0].body, 'hello', 'prime the current projection cache');
   const saved = fs.readFileSync(item.file);
   fs.writeFileSync(item.file, 'not a SQLite database');
   await sleep(30);
@@ -133,6 +242,7 @@ test('an unreadable artifact cannot reuse stale pending and repair restores deli
 test('artifact presentation evidence suppresses a clipped activity but fresh conversation remains eligible', async (t) => {
   const item = await fixture(t);
   await item.bind();
+  assert.equal((await item.observer.read())[0].notifications[0].actIndex, 2);
   await markPresentation(item, 2, 'clipped');
   assert.deepEqual(await item.observer.read(), []);
   const cell = createArtifactPort(item.file);
@@ -152,9 +262,25 @@ test('failed delivery evidence cannot spin deferred retries; conversation change
   await waiting.ready;
   let resolved = false;
   waiting.pending.then(() => { resolved = true; });
+  let transactions = 0;
+  const exec = DatabaseSync.prototype.exec;
+  t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
+    if (/^BEGIN\b/.test(sql)) transactions++;
+    return exec.call(this, sql, ...args);
+  });
+  let hydrations = 0;
+  const prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (sql.includes('act_index IN (SELECT value FROM json_each')) hydrations++;
+    return prepare.call(this, sql, ...args);
+  });
   await markPresentation(item, 2, 'failed');
   await sleep(100);
   assert.equal(resolved, false);
+  assert.equal(hydrations, 0, 'delivery-only evidence must not rehydrate cached conversation bodies');
+  const settled = transactions;
+  await sleep(100);
+  assert.equal(transactions, settled, 'unchanged delivery evidence must settle, not repeatedly reproject');
   await cell.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new activity after failed delivery', mentions: ['Bob'] }));
   const pending = await waiting.pending;
   assert.deepEqual(pending[0].notifications.map((notification) => notification.body), ['hello', 'new activity after failed delivery']);
@@ -255,6 +381,47 @@ test('an unrepaired candidate respects timeout and cancellation', async (t) => {
   await waiting.ready;
   controller.abort();
   assert.deepEqual(await waiting.pending, []);
+});
+
+test('a takeover between revision capture and projection uses the new exact-body seat', async t => {
+  const item = await fixture(t, undefined, false);
+  const body = { channel: 'pi', session: 'two', agent: 'new-child' };
+  await rememberSquarePath(item.file, body, item.env.SQUARE_INDEX);
+  const observer = await observeSessionPending(body, item.env);
+  const writer = createArtifactPort(item.file);
+  t.after(async () => { observer.close(); await writer.close(); });
+  const { value: seats } = await writer.read(facts => ({ bob: facts.seat('Bob'), alice: facts.seat('Alice') }));
+  let captured = 0, selections = 0, transition;
+  const close = DatabaseSync.prototype.close, prepare = DatabaseSync.prototype.prepare, realpath = fs.promises.realpath;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    if (/SELECT s\.\* FROM seats/.test(sql)) selections++;
+    return prepare.call(this, sql, ...args);
+  });
+  t.mock.method(DatabaseSync.prototype, 'close', function (...args) {
+    const result = close.apply(this, args);
+    if (++captured === 2) {
+      assert.equal(selections, 0, 'both revision baselines must be captured before authoritative selection');
+      transition = (async () => {
+        await writer.transactAs({ kind: 'takeover', participant: 'Bob', body, expectedGeneration: seats.bob.generation }, facts => {
+          facts.land({ kind: 'done', actor: 'Bob', at: 4 });
+          facts.land({ kind: 'join', actor: 'Bob', at: 5 });
+        });
+        await writer.transactAs({ kind: 'participant', seat: seats.alice }, facts =>
+          facts.land({ kind: 'say', actor: 'Alice', at: 6, body: 'new generation pending', mentions: ['Bob'] }));
+      })();
+    }
+    return result;
+  });
+  t.mock.method(fs.promises, 'realpath', async (...args) => {
+    if (transition !== undefined && String(args[0]) === item.file) await transition;
+    return realpath.apply(fs.promises, args);
+  });
+  const pending = await observer.wait(4_000);
+  assert.ok(transition);
+  await transition;
+  assert.equal(pending[0].seat.generation, 'act/3');
+  assert.deepEqual(pending[0].seat.body, body);
+  assert.deepEqual(pending[0].notifications.map(note => note.body), ['new generation pending']);
 });
 
 test('a takeover after empty binding selection cannot be hidden behind a newer revision baseline', async t => {

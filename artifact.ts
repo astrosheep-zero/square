@@ -233,15 +233,6 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
                 return inSqliteTransaction(db, false, () => validate(db), (header) => header.deliveryRevision, s);
             }, signal);
         },
-        async deliveryChanged(since, timeout, signal) {
-            const s = combined(signal), deadline = Date.now() + Math.max(0, timeout);
-            do {
-                if (await this.deliveryRevision(s) > since) return true;
-                if (Date.now() >= deadline) return false;
-                await sleep(Math.min(25, deadline - Date.now()), undefined, { signal: s });
-            } while (!closed);
-            return false;
-        },
         async claimDelivery(input, signal) {
             return (await this.transactAs({ kind: 'participant', seat: input.seat }, (facts) => (facts as SquareWrite & { claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult }).claimDelivery(input), signal)).value;
         },

@@ -1,4 +1,4 @@
-import { type Body, type InboxMembership, nameKey, sameBody } from './model.js';
+import { type Body, type InboxMembership, sameBody } from './model.js';
 import type { PresentationProjection, SessionBindingProjection, SquareRead } from './ports.js';
 import { createArtifactPort, observeSquareDeliveryRevision, observeSquareRevision } from './artifact.js';
 import { indexedSquareEntries, observeSquareIndex } from './square-index.js';
@@ -18,11 +18,6 @@ export interface PendingWaitOptions {
   onChangeArmed?: (armed: boolean) => void;
 }
 
-function bindingCoordinate(binding: SessionBindingProjection): string {
-  return JSON.stringify([binding.location, nameKey(binding.participant), binding.sessionId, binding.channel,
-    binding.seat?.generation, binding.seat?.body]);
-}
-
 function notificationKey(membership: InboxMembership, actIndex: number): string {
   return membership.squarePath + '\0' + membership.name.toLocaleLowerCase() + '\0' + actIndex;
 }
@@ -37,33 +32,37 @@ export function pendingAtBoundary(inbox: readonly InboxMembership[]): InboxMembe
   }).filter((membership) => membership.notifications.length > 0);
 }
 
-/** HOME is a candidate path index; current seats and delivery evidence live in the artifact. */
+function eligibleNotifications(facts: SquareRead, membership: InboxMembership) {
+  const seat = facts.seat(membership.name);
+  if (seat === undefined || membership.seat !== undefined
+    && (seat.generation !== membership.seat.generation || !sameBody(seat.body, membership.seat.body))) return [];
+  const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
+  return membership.notifications.filter(notification =>
+    (cancelledThrough === undefined || notification.actIndex > cancelledThrough)
+    && !facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex))
+      .some(row => row.kind === 'presentation' && (row.outcome === 'presented' || row.outcome === 'clipped')));
+}
+
+/** Revalidate a supplied batch immediately before the boundary's independent claim/send checks. */
 export async function projectBoundaryEligibility(inbox: readonly InboxMembership[]): Promise<InboxMembership[]> {
-  const pending: InboxMembership[] = [];
+  const grouped = new Map<string, InboxMembership[]>();
   for (const membership of pendingAtBoundary(inbox)) {
-    let artifact: import('./ports.js').SquareArtifactPort | undefined;
+    const entries = grouped.get(membership.squarePath) ?? [];
+    entries.push(membership);
+    grouped.set(membership.squarePath, entries);
+  }
+  const pending: InboxMembership[] = [];
+  for (const [location, memberships] of grouped) {
+    const artifact = createArtifactPort(location);
     try {
-      artifact = createArtifactPort(membership.squarePath);
-      const { value: notifications } = await artifact.read((facts) => {
-        const seat = facts.seat(membership.name);
-        if (seat === undefined || membership.seat !== undefined
-          && (seat.generation !== membership.seat.generation
-            || seat.body.channel !== membership.seat.body.channel
-            || seat.body.session !== membership.seat.body.session
-            || seat.body.agent !== membership.seat.body.agent)) return [];
-        const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
-        return membership.notifications.filter((notification) =>
-          (cancelledThrough === undefined || notification.actIndex > cancelledThrough)
-          && !facts.deliveryEvidence(
-            seat.participant, seat.generation, formatActivityId(notification.actIndex),
-          ).some((row) => row.kind === 'presentation' && (row.outcome === 'presented' || row.outcome === 'clipped')));
-      });
-      if (notifications.length > 0) pending.push({ ...membership, notifications });
+      const { value } = await artifact.read(facts => memberships.flatMap(membership => {
+        const notifications = eligibleNotifications(facts, membership);
+        return notifications.length === 0 ? [] : [{ ...membership, notifications }];
+      }));
+      pending.push(...value);
     } catch {
       // An unreadable or stale candidate cannot authorize boundary presentation.
-    } finally {
-      if (artifact !== undefined) await artifact.close();
-    }
+    } finally { await artifact.close(); }
   }
   return pending;
 }
@@ -93,26 +92,69 @@ export async function projectSessionCandidates(input: {
   return [...candidates.values()];
 }
 
-/** Verify discovery candidates against the current artifact seats before exposing bindings. */
-export async function projectArtifactBindings(candidates: readonly SessionBindingCandidate[]): Promise<readonly SessionBindingProjection[]> {
-  const bindings: SessionBindingProjection[] = [];
-  for (const candidate of candidates) {
-    const artifact = createArtifactPort(candidate.location);
+interface ArtifactInbox {
+  readonly bindings: SessionBindingProjection[];
+  readonly inbox: InboxMembership[];
+}
+interface CachedInbox {
+  readonly coordinate: string;
+  readonly version: number;
+  readonly value: ArtifactInbox;
+}
+
+/** One authoritative read per canonical artifact, even when discovery names several bodies. */
+async function projectCandidates(candidates: readonly SessionBindingCandidate[], pending = false,
+  cache?: Map<string, CachedInbox>, signal?: AbortSignal): Promise<ArtifactInbox[]> {
+  const grouped = new Map<string, Body[]>();
+  for (const { location, body } of candidates) {
+    const bodies = grouped.get(location) ?? [];
+    bodies.push(body);
+    grouped.set(location, bodies);
+  }
+  const projections: ArtifactInbox[] = [];
+  for (const [location, bodies] of grouped) {
+    signal?.throwIfAborted();
+    const artifact = createArtifactPort(location, undefined, signal);
     try {
-      const { value } = await artifact.read(facts => facts.seatsForBody(candidate.body).flatMap(seat => {
-        const index = parseActivityId(seat.generation);
-        const joined = index === undefined ? undefined : facts.activity(index);
-        return joined?.kind !== 'join' ? [] : [{ location: candidate.location, participant: seat.participant,
-          sessionId: seat.body.session, channel: seat.body.channel, updatedAt: joined.at, seat: {
-            participant: seat.participant, body: seat.body, generation: seat.generation,
-          } }];
-      }));
-      bindings.push(...value);
-    } catch {
-      // A stale or unreadable candidate is not a current membership, but remains a watch target.
+      const { value: current } = await artifact.read(facts => {
+        const seats = bodies.flatMap(body => facts.seatsForBody(body));
+        const coordinate = JSON.stringify([bodies, seats.map(seat => [seat.participant, seat.body, seat.generation])]);
+        const header = facts.header();
+        let cached = cache?.get(location);
+        if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
+          const bindings = seats.flatMap(seat => {
+            const index = parseActivityId(seat.generation);
+            const joined = index === undefined ? undefined : facts.activity(index);
+            return joined?.kind !== 'join' ? [] : [{ location, participant: seat.participant,
+              sessionId: seat.body.session, channel: seat.body.channel, updatedAt: joined.at, seat: {
+                participant: seat.participant, body: seat.body, generation: seat.generation,
+              } }];
+          });
+          cached = { coordinate, version: header.revision,
+            value: { bindings, inbox: pending ? inboxProjection(facts, bindings) : [] } };
+        }
+        // Cache conversation content, never leases or delivery eligibility: evidence can change
+        // without a conversation revision and must not force body hydration or self-wake retries.
+        return { cached, projection: { ...cached.value, inbox: cached.value.inbox.map(membership => {
+          const catchLease = freshWatchLease(facts, membership.name);
+          return { ...membership, notifications: eligibleNotifications(facts, membership),
+            ...(catchLease === undefined ? {} : { catchLease }) };
+        }) } };
+      }, signal);
+      cache?.set(location, current.cached);
+      projections.push(current.projection);
+    } catch (error) {
+      cache?.delete(location);
+      if (signal?.aborted) throw signal.reason ?? error;
+      // Unreadable candidates remain watch targets, but never authorize cached content.
     } finally { await artifact.close(); }
   }
-  return bindings;
+  return projections;
+}
+
+/** Verify discovery candidates against the current artifact seats before exposing bindings. */
+export async function projectArtifactBindings(candidates: readonly SessionBindingCandidate[]): Promise<readonly SessionBindingProjection[]> {
+  return (await projectCandidates(candidates)).flatMap(projection => projection.bindings);
 }
 
 export async function projectSessionBindings(input: {
@@ -146,7 +188,7 @@ export interface NativePendingPreview {
 }
 export type NativePendingPreviewInput = {
   readonly location: string; readonly sessionId: string; readonly participant: string;
-  readonly actIndex: number; readonly epoch?: number; readonly cancelledThrough?: number; readonly now: number;
+  readonly actIndex: number; readonly cancelledThrough?: number; readonly now: number;
 } & (
   | { readonly routeKind: 'claude-native'; readonly address: { readonly endpoint: string } }
   | { readonly routeKind: 'opencode-server'; readonly address: { readonly sessionId: string } }
@@ -173,36 +215,21 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
     actor: item.actor, route: head.route, body: item.body })]), clipped: attentionBodyIsClipped(item.body) };
 }
 
-async function readInboxMembership(binding: SessionBindingProjection, signal?: AbortSignal) {
-  const artifact = createArtifactPort(binding.location, undefined, signal);
-  try {
-    return await artifact.read((facts): InboxMembership | undefined => {
-      const projection = projectPresentation(facts, binding);
-      if (!projection.joined) return undefined;
-      return { name: projection.binding.participant, squarePath: projection.binding.location, notifications: [...projection.notifications], seat: projection.binding.seat,
-        ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }) };
-    }, signal);
-  } finally { await artifact.close(); }
+function inboxProjection(facts: SquareRead, bindings: readonly SessionBindingProjection[]): InboxMembership[] {
+  return bindings.map(binding => {
+    const projection = projectPresentation(facts, binding);
+    return { name: binding.participant, squarePath: binding.location, seat: projection.binding.seat,
+      notifications: [...projection.notifications] };
+  });
 }
 
 export interface SessionIdentityQuery { readonly channel: string; readonly session: string; readonly allAgents?: true; }
 export type SessionIdentity = Body | SessionIdentityQuery;
 
 export async function sessionInbox(identity: SessionIdentity, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<InboxMembership[]> {
-  const inbox: InboxMembership[] = [];
   const query = 'allAgents' in identity ? { channel: identity.channel, sessionId: identity.session, env }
     : { body: identity, env };
-  for (const binding of await projectSessionBindings(query)) {
-    if (signal?.aborted) throw signal.reason;
-    try {
-      const { value: membership } = await readInboxMembership(binding, signal);
-      if (membership !== undefined) inbox.push(membership);
-    } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
-      // A stale or unreadable membership cannot disable delivery for other memberships.
-    }
-  }
-  return inbox;
+  return (await projectCandidates(await projectSessionCandidates(query), true, undefined, signal)).flatMap(projection => projection.inbox);
 }
 
 interface CapturedChange<T = unknown> {
@@ -247,30 +274,20 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
   const artifacts = new Map<string, {
     observer: VersionObserver<number | null>;
     delivery: VersionObserver<number | null>;
-    inbox: Map<string, { binding: string; version: number; value: InboxMembership | undefined }>;
   }>();
+  const cache = new Map<string, CachedInbox>();
   const lifetime = new AbortController();
-  const bindingsNow = async () => Promise.all((await projectSessionBindings(query)).map(async (binding) =>
-    ({ ...binding, location: await canonicalPath(binding.location) })));
-  const candidatesNow = async () => projectSessionCandidates(query);
-  async function membershipAt(binding: SessionBindingProjection, version: number | null | undefined, signal: AbortSignal) {
-    const cache = artifacts.get(binding.location)?.inbox;
-    const name = nameKey(binding.participant);
-    const coordinate = bindingCoordinate(binding);
-    let cached = cache?.get(name);
-    if (cached === undefined || cached.version !== version || cached.binding !== coordinate) {
-      cached = { ...await readInboxMembership(binding, signal), binding: coordinate };
-      cache?.set(name, cached);
-    }
-    const membership = cached.value;
-    if (membership === undefined) return undefined;
-    const { catchLease, ...rest } = membership;
+  async function currentInbox(candidates: readonly SessionBindingCandidate[], signal: AbortSignal) {
+    const inbox = (await projectCandidates(candidates, true, cache, signal)).flatMap(projection => projection.inbox);
     const now = Date.now();
-    return catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
-      ? membership : rest;
+    return inbox.map((membership): InboxMembership => {
+      const { catchLease, ...rest } = membership;
+      return catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
+        ? membership : rest;
+    });
   }
-  async function eligibleInbox(inbox: InboxMembership[], excludeKeys?: ReadonlySet<string>) {
-    const eligible = await projectBoundaryEligibility(inbox);
+  function eligibleInbox(inbox: InboxMembership[], excludeKeys?: ReadonlySet<string>) {
+    const eligible = pendingAtBoundary(inbox);
     return excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
       const notifications = membership.notifications.filter((notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)));
       return notifications.length === 0 ? [] : [{ ...membership, notifications }];
@@ -280,27 +297,8 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
     async read(options = {}) {
       const signal = AbortSignal.any([lifetime.signal, ...(options.signal === undefined ? [] : [options.signal])]);
       signal.throwIfAborted();
-      const bindings = await bindingsNow();
-      const revisions = new Map<string, number>();
-      const inbox: InboxMembership[] = [];
-      for (const binding of bindings) {
-        signal.throwIfAborted();
-        try {
-          let version = revisions.get(binding.location);
-          if (version === undefined) {
-            const artifact = createArtifactPort(binding.location);
-            try { version = await artifact.revision(signal); }
-            finally { await artifact.close(); }
-            revisions.set(binding.location, version);
-          }
-          const membership = await membershipAt(binding, version, signal);
-          if (membership !== undefined) inbox.push(membership);
-        } catch (error) {
-          if (signal.aborted) throw signal.reason ?? error;
-          // An unreadable current revision must never authorize cached content.
-        }
-      }
-      const pending = await eligibleInbox(inbox, options.excludeKeys);
+      const inbox = await currentInbox(await projectSessionCandidates(query), signal);
+      const pending = eligibleInbox(inbox, options.excludeKeys);
       signal.throwIfAborted();
       return pending;
     },
@@ -324,47 +322,29 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
           const presence = sources[0];
           const currentPresence = presence.value;
           if (!discoveredCandidates || currentPresence !== undefined && !Object.is(currentPresence, candidatePresence)) {
-            candidates = await candidatesNow();
+            candidates = await projectSessionCandidates(query);
             candidatePresence = currentPresence;
             discoveredCandidates = true;
           }
           const paths = new Set(candidates.map((candidate) => candidate.location));
           for (const [file, entry] of artifacts) {
-            if (!paths.has(file)) { entry.observer.close(); entry.delivery.close(); artifacts.delete(file); }
+            if (!paths.has(file)) { entry.observer.close(); entry.delivery.close(); artifacts.delete(file); cache.delete(file); }
           }
           for (const file of paths) {
             if (artifacts.has(file)) continue;
             const observer = await observeSquareRevision(file);
             const delivery = await observeSquareDeliveryRevision(file);
             if (signal.aborted) { observer.close(); delivery.close(); return []; }
-            artifacts.set(file, { observer, delivery, inbox: new Map() });
+            artifacts.set(file, { observer, delivery });
           }
-          const revisions = new Map<string, number | null | undefined>();
-          for (const [file, entry] of artifacts) {
-            const source = await capture(entry.observer, 'artifact', signal);
-            sources.push(source);
+          // Capture both revision baselines before selecting seats and pending facts. A takeover
+          // during an empty selection must remain visible to the already armed observers.
+          for (const entry of artifacts.values()) {
+            sources.push(await capture(entry.observer, 'artifact', signal));
             sources.push(await capture(entry.delivery, 'delivery', signal));
-            revisions.set(file, source.value);
           }
-          // Capture revisions before projecting bindings, so a concurrent join cannot hide
-          // behind a newer revision baseline after an empty authoritative selection.
-          const bindings = await projectArtifactBindings(candidates);
-          for (const [file, entry] of artifacts) {
-            const names = new Set(bindings.filter((binding) => binding.location === file).map((binding) => nameKey(binding.participant)));
-            for (const name of entry.inbox.keys()) if (!names.has(name)) entry.inbox.delete(name);
-          }
-          const inbox: InboxMembership[] = [];
-          for (const binding of bindings) {
-            if (signal.aborted) return [];
-            try {
-              const membership = await membershipAt(binding, revisions.get(binding.location), signal);
-              if (membership !== undefined) inbox.push(membership);
-            } catch (error) {
-              if (signal.aborted) throw signal.reason ?? error;
-              // Unreadable projections are retried, never cached as current.
-            }
-          }
-          const pending = await eligibleInbox(inbox, options.excludeKeys);
+          const inbox = await currentInbox(candidates, signal);
+          const pending = eligibleInbox(inbox, options.excludeKeys);
           const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => notificationKey(membership, note.actIndex))).sort());
           if (previousEligible !== undefined && previousEligible !== eligibleKeys) canReturn = true;
           previousEligible = eligibleKeys;
@@ -407,6 +387,7 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
       index.close();
       for (const entry of artifacts.values()) { entry.observer.close(); entry.delivery.close(); }
       artifacts.clear();
+      cache.clear();
     },
   };
 }

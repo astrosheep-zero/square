@@ -178,7 +178,6 @@ export interface SquareArtifactPort {
   transactAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
   revision(signal?: AbortSignal): Promise<number>;
   deliveryRevision(signal?: AbortSignal): Promise<number>;
-  deliveryChanged(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   claimDelivery(input: DeliveryClaimInput, signal?: AbortSignal): Promise<DeliveryClaimResult>;
   prepareDelivery(input: DeliveryPreparation, signal?: AbortSignal): Promise<boolean>;
   completeDelivery(input: DeliveryCompletion, signal?: AbortSignal): Promise<boolean>;
@@ -226,7 +225,6 @@ export interface PresentationSinkPort {
 
 /** Stable projection of a host binding; storage rows never cross this boundary. */
 export interface SessionBindingProjection {
-  readonly epoch?: number;
   readonly cancelledThrough?: number;
   readonly location: string;
   readonly participant: string;
