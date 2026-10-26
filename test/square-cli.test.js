@@ -4,14 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { createArtifactPort } from '../dist/artifact.js';
 import { formatActivityId } from '../dist/square-core.js';
+import { squareInput } from '../dist/cli/context.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
 import { Square } from '../dist/index.js';
-import { hostLedgerForEnv } from '../dist/registry.js';
-import { readWakeRoutes } from './wake-routes.js';
 import {
   ROOT,
-  TEST_REGISTRY,
   run,
   runAsync,
   tempSquare,
@@ -22,19 +21,61 @@ import {
 } from './square-cli-helpers.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
 
-test('CLI test runner isolates host delivery identities', () => {
+test('CLI input derives an explicit body from each harness coordinate', () => {
+  const coordinates = [
+    ['CLAUDE_CODE_SESSION_ID', 'claude-code', 'claude-session'],
+    ['CODEX_THREAD_ID', 'codex', 'codex-session'],
+    ['OPENCODE_SESSION_ID', 'opencode', 'opencode-session'],
+    ['PI_SESSION_ID', 'pi', 'pi-session'],
+    ['PASEO_AGENT_ID', 'paseo', 'paseo-agent'],
+  ];
+  const inputFor = (env) => squareInput({
+    command: 'join', cwd: '/square-cli-test', env, squarePath: '/square-cli-test.square', name: 'Alice', homeDir: '/tmp',
+  });
+
+  for (const [variable, channel, session] of coordinates) {
+    const input = inputFor({ [variable]: ` ${session} ` });
+    assert.deepEqual(input.body, { channel, session }, variable);
+    if (channel === 'paseo') assert.deepEqual(input.wakeAddress, { kind: 'paseo', address: { agentId: session } }, variable);
+  }
+  const nativeWithPaseo = inputFor({ CODEX_THREAD_ID: 'codex-session', PASEO_AGENT_ID: 'paseo-agent' });
+  assert.deepEqual(nativeWithPaseo.body, { channel: 'codex', session: 'codex-session' });
+  assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'paseo', address: { agentId: 'paseo-agent' } });
+  const withoutCoordinate = inputFor({ SQUARE_PARTICIPANT_NAME: 'Alice' });
+  assert.equal(Object.hasOwn(withoutCoordinate, 'body'), false);
+  assert.equal(Object.hasOwn(withoutCoordinate, 'wakeAddress'), false);
+  assert.throws(() => inputFor({ CLAUDE_CODE_SESSION_ID: 'claude', CODEX_THREAD_ID: 'codex' }), /Multiple harness execution coordinates/);
+  const childWithoutAgent = inputFor({ CLAUDE_CODE_SESSION_ID: 'claude', CLAUDE_CODE_CHILD_SESSION: '1', PASEO_AGENT_ID: 'top-level-paseo' });
+  assert.equal(Object.hasOwn(childWithoutAgent, 'body'), false);
+  assert.equal(Object.hasOwn(childWithoutAgent, 'wakeAddress'), false);
+});
+
+test('CLI read-only opens need no identity; participant writes do', async () => {
+  const file = tempSquare();
+  assert.equal(build(file).status, 0);
+  const square = await Square.at(squareInput({
+    command: 'status', cwd: ROOT, env: {}, squarePath: file, name: 'Alice', homeDir: os.homedir(),
+  }));
+  try {
+    assert.equal((await square.snapshot()).participants.length, 0);
+    await assert.rejects(square.join('Alice'), /explicit body: channel and session/);
+  } finally { await square.close(); }
+});
+
+test('CLI test runner does not inherit the parent execution identity', async () => {
   const previous = process.env.CODEX_THREAD_ID;
   process.env.CODEX_THREAD_ID = 'outer-codex-task';
   const file = tempSquare();
   try {
     assert.equal(build(file).status, 0);
-    const joined = run(withName(file, 'Alice', ['join']), {
-      env: { SQUARE_REGISTRY: TEST_REGISTRY },
-    });
+    const joined = run(withName(file, 'Alice', ['join']));
     assert.equal(joined.status, 0, joined.stderr);
-    assert.match(joined.stdout, /the square has no way to call you/);
-    const registry = fs.existsSync(TEST_REGISTRY) ? fs.readFileSync(TEST_REGISTRY, 'utf8') : '';
-    assert.doesNotMatch(registry, /outer-codex-task/);
+    assert.match(joined.stdout, /when someone calls you/);
+    const artifact = createArtifactPort(file);
+    try {
+      const seat = (await artifact.read((facts) => facts.seat('Alice'))).value;
+      assert.deepEqual(seat?.body, { channel: 'codex', session: path.resolve(file) });
+    } finally { await artifact.close(); }
   } finally {
     if (previous === undefined) delete process.env.CODEX_THREAD_ID;
     else process.env.CODEX_THREAD_ID = previous;
@@ -44,9 +85,7 @@ test('CLI test runner isolates host delivery identities', () => {
 test('participants renders roster names without mention syntax', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const joined = run(withName(file, 'Alice', ['join']), {
-    env: { SQUARE_REGISTRY: TEST_REGISTRY },
-  });
+  const joined = run(withName(file, 'Alice', ['join']));
   assert.equal(joined.status, 0, joined.stderr);
   const roster = run(withPath(file, ['participants']));
   assert.equal(roster.status, 0, roster.stderr);
@@ -88,7 +127,7 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(ignored.stdout, /@Bob turns away from @Alice/);
   const absent = run(withName(file, 'Bob', ['ignore', 'Alice']));
   assert.equal(absent.status, 0, absent.stderr);
-  assert.match(absent.stdout, /is not turned toward @Alice/);
+  assert.match(absent.stdout, /already ignores @Alice/);
 });
 
 test('listener and catch help teach future-only directed attention', () => {
@@ -284,7 +323,7 @@ test('build defaults to unlimited, accepts its explicit spelling, and rejects th
   assert.match(removed.stderr, /positive integer or unlimited/);
 });
 
-test('CLI flags override Square location and participant environment values', () => {
+test('CLI flags override Square location and participant environment values', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-env-precedence-'));
   const configured = path.join(root, 'configured.square');
   const explicit = path.join(root, 'explicit.square');
@@ -300,7 +339,11 @@ test('CLI flags override Square location and participant environment values', ()
     env: { SQUARE_LOCATION: configured, SQUARE_PARTICIPANT_NAME: 'Configured' },
   });
   assert.equal(joined.status, 0, joined.stderr);
-  assert.match(joined.stdout, /Explicit/);
+  const artifact = createArtifactPort(explicit);
+  try {
+    const seat = (await artifact.read((facts) => facts.seat('Explicit'))).value;
+    assert.deepEqual(seat?.body, { channel: 'codex', session: path.resolve(explicit) });
+  } finally { await artifact.close(); }
 });
 
 test('square-accessing commands refuse to invent a default location', () => {
@@ -317,78 +360,79 @@ test('square-accessing commands refuse to invent a default location', () => {
   }
 });
 
-test('join and catch only show fallback catch hints without automatic session delivery', async () => {
+test('join and catch preserve CLI behavior while seat ownership follows the active body', async () => {
   const file = tempSquare();
-  const registry = `${file}.sessions.ndjsonl`;
-  const noDelivery = {
-    SQUARE_REGISTRY: registry,
-    CLAUDE_CODE_SESSION_ID: '',
-    CODEX_THREAD_ID: '',
-    OPENCODE_SESSION_ID: '',
-    PI_SESSION_ID: '',
-    PASEO_AGENT_ID: '',
-  };
-  const codexDelivery = { ...noDelivery, CODEX_THREAD_ID: 'codex-bob' };
+  const aliceBody = { CODEX_THREAD_ID: 'codex-alice' };
+  const bobBody = { CODEX_THREAD_ID: 'codex-bob' };
 
   assert.equal(build(file).status, 0);
 
-  const aliceJoin = run(withName(file, 'Alice', ['join']), { env: noDelivery });
+  const aliceJoin = run(withName(file, 'Alice', ['join']), { env: aliceBody });
   assert.equal(aliceJoin.status, 0, aliceJoin.stderr);
-  assert.match(aliceJoin.stdout, /catch --idle 30m/);
-  assert.match(aliceJoin.stdout, /the square has no way to call you/);
+  assert.match(aliceJoin.stdout, /when someone calls you/);
+  assert.doesNotMatch(aliceJoin.stdout, /catch --idle 30m/);
 
-  const bobJoin = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
+  const bobJoin = run(withName(file, 'Bob', ['join']), { env: bobBody });
   assert.equal(bobJoin.status, 0, bobJoin.stderr);
-  assert.doesNotMatch(bobJoin.stdout, /catch --/);
+  assert.match(bobJoin.stdout, /when someone calls you/);
+  assert.doesNotMatch(bobJoin.stdout, /catch --idle 30m/);
 
-  assert.equal(run(withName(file, 'Bob', ['express', '--force', '--mention', 'Alice', 'hello Alice @Alice']), { env: codexDelivery }).status, 0);
-  const aliceCatch = run(withName(file, 'Alice', ['catch', '--now']), { env: noDelivery });
+  assert.equal(run(withName(file, 'Bob', ['express', '--force', '--mention', 'Alice', 'hello Alice @Alice']), { env: bobBody }).status, 0);
+  const aliceCatch = run(withName(file, 'Alice', ['catch', '--now']), { env: aliceBody });
   assert.equal(aliceCatch.status, 0, aliceCatch.stderr);
   assert.match(aliceCatch.stdout, /hello Alice/);
-  assert.match(aliceCatch.stdout, /catch --idle 30m/);
-  assert.match(aliceCatch.stdout, /stay available for new activity/);
-  const aliceQuiet = run(withName(file, 'Alice', ['catch', '--now']), { env: noDelivery });
+  assert.doesNotMatch(aliceCatch.stdout, /catch --idle 30m/);
+  const aliceQuiet = run(withName(file, 'Alice', ['catch', '--now']), { env: aliceBody });
   assert.match(aliceQuiet.stdout, /only footsteps/);
-  assert.match(aliceQuiet.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(aliceQuiet.stdout, /catch --idle 30m/);
 
-  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'hello Bob @Bob']), { env: noDelivery }).status, 0);
-  const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: codexDelivery });
+  assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'hello Bob @Bob']), { env: aliceBody }).status, 0);
+  const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: bobBody });
   assert.equal(bobCatch.status, 0, bobCatch.stderr);
   assert.match(bobCatch.stdout, /hello Bob/);
-  assert.doesNotMatch(bobCatch.stdout, /catch --/);
-  const bobQuiet = run(withName(file, 'Bob', ['catch', '--now']), { env: codexDelivery });
+  assert.doesNotMatch(bobCatch.stdout, /catch --idle 30m/);
+  const bobQuiet = run(withName(file, 'Bob', ['catch', '--now']), { env: bobBody });
   assert.match(bobQuiet.stdout, /only footsteps/);
-  assert.doesNotMatch(bobQuiet.stdout, /catch --/);
+  assert.doesNotMatch(bobQuiet.stdout, /catch --idle 30m/);
 
-  const rebound = run(withName(file, 'Bob', ['join']), { env: codexDelivery });
+  const rebound = run(withName(file, 'Bob', ['join']), { env: bobBody });
   assert.equal(rebound.status, 0, rebound.stderr);
   assert.match(rebound.stdout, /you are already in the square/);
-  assert.doesNotMatch(rebound.stdout, /catch --/);
+  assert.doesNotMatch(rebound.stdout, /catch --idle 30m/);
 
-  const sameName = run(withName(file, 'Bob', ['join']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  const takeoverBody = { CODEX_THREAD_ID: 'codex-other' };
+  const sameName = run(withName(file, 'Bob', ['join']), { env: takeoverBody });
   assert.equal(sameName.status, 2, sameName.stderr);
   assert.match(sameName.stderr, /@Bob shoos you out of the square/);
   assert.match(sameName.stderr, /If this is your name to reclaim/);
   assert.match(sameName.stderr, /join --kick/);
 
-  const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: { ...codexDelivery, CODEX_THREAD_ID: 'codex-other' } });
+  const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: takeoverBody });
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stdout, /you banished the original @Bob/);
-  assert.doesNotMatch(takeover.stdout, /catch --/);
+  assert.doesNotMatch(takeover.stdout, /catch --idle 30m/);
 
   const historySquare = await Square.at({ path: file });
   const lifecycle = ((await historySquare.history({ limit: 100 })).activities).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
   await historySquare.close();
   assert.deepEqual(lifecycle, ['join', 'done', 'join']);
-  const ledger = hostLedgerForEnv({ SQUARE_REGISTRY: registry });
-  assert.equal((await ledger.listPresence({ session: 'codex-bob' })).length, 0);
-  assert.equal((await ledger.listPresence({ session: 'codex-other' })).some((binding) => binding.participant === 'Bob'), true);
-  assert.deepEqual((await readWakeRoutes({ location: file, participant: 'Bob' })).map((route) => route.sessionId), ['codex-other']);
+  const artifact = createArtifactPort(file);
+  try {
+    const seats = (await artifact.read((facts) => ({
+      current: facts.seat('Bob'),
+      oldBody: facts.seatsForBody({ channel: 'codex', session: 'codex-bob' }),
+      newBody: facts.seatsForBody({ channel: 'codex', session: 'codex-other' }),
+    }))).value;
+    assert.equal(seats.oldBody.length, 0);
+    assert.deepEqual(seats.current?.body, { channel: 'codex', session: 'codex-other' });
+    assert.equal(seats.newBody.length, 1);
+    assert.equal(seats.newBody[0].participant, 'Bob');
+  } finally { await artifact.close(); }
 });
 
 test('a foreign catch cannot take ownership of a standing participant', async () => {
   const file = tempSquare();
-  const env = { SQUARE_REGISTRY: `${file}.sessions.ndjsonl`, CODEX_THREAD_ID: 'coordinator' };
+  const env = { CODEX_THREAD_ID: 'coordinator' };
   const worker = { ...env, CODEX_THREAD_ID: 'worker' };
   assert.equal(build(file).status, 0);
   assert.equal(run(withName(file, 'Alice', ['join']), { env }).status, 0);
@@ -403,23 +447,36 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   assert.doesNotMatch(caught.stderr, /error/i);
   assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join --kick`));
   assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
-  assert.equal((await hostLedgerForEnv(env).listPresence({ session: 'worker' })).length, 0);
+  const artifact = createArtifactPort(file);
+  try {
+    const seats = (await artifact.read((facts) => ({
+      current: facts.seat('Alice'),
+      worker: facts.seatsForBody({ channel: 'codex', session: 'worker' }),
+    }))).value;
+    assert.deepEqual(seats.current?.body, { channel: 'codex', session: 'coordinator' });
+    assert.equal(seats.worker.length, 0);
+  } finally { await artifact.close(); }
   const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
   assert.equal(foreign.status, 2, foreign.stdout);
   const original = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'still mine']), { env });
   assert.equal(original.status, 0, original.stderr);
 });
 
-test('join --kick reclaims a name when a secondary inherited session matches the standing owner', async () => {
+test('join --kick replaces a participant seat after a different body is refused', async () => {
   const file = tempSquare();
-  const env = { SQUARE_REGISTRY: `${file}.sessions.ndjsonl`, PI_SESSION_ID: 'standing-pi' };
+  const standing = { PI_SESSION_ID: 'standing-pi' };
+  const caller = { CODEX_THREAD_ID: 'new-codex' };
   assert.equal(build(file).status, 0);
-  const joined = run(withName(file, 'Alice', ['join']), { env });
+  const joined = run(withName(file, 'Alice', ['join']), { env: standing });
   assert.equal(joined.status, 0, joined.stderr);
-  const caller = { ...env, CODEX_THREAD_ID: 'new-codex' };
+  const artifact = createArtifactPort(file);
+  let originalSeat;
+  try { originalSeat = (await artifact.read((facts) => facts.seat('Alice'))).value; }
+  finally { await artifact.close(); }
+
   const rejected = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'before']), { env: caller });
   assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /already stands here — another session holds the name/);
+  assert.match(rejected.stderr, /not held by this body/);
   const reconnect = run(withName(file, 'Alice', ['join']), { env: caller });
   assert.equal(reconnect.status, 2);
   assert.match(reconnect.stderr, /join --kick/);
@@ -427,9 +484,22 @@ test('join --kick reclaims a name when a secondary inherited session matches the
   assert.equal(takeover.status, 0, takeover.stderr);
   const expressed = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'after']), { env: caller });
   assert.equal(expressed.status, 0, expressed.stderr);
-  const bindings = await hostLedgerForEnv(env).listPresence({ session: 'standing-pi' });
-  assert.equal(bindings.length, 0);
-  assert.equal((await hostLedgerForEnv(env).listPresence({ session: 'new-codex' })).length, 1);
+
+  const currentArtifact = createArtifactPort(file);
+  let takeoverSeat;
+  try {
+    const seats = (await currentArtifact.read((facts) => ({
+      current: facts.seat('Alice'),
+      oldBody: facts.seatsForBody({ channel: 'pi', session: 'standing-pi' }),
+      newBody: facts.seatsForBody({ channel: 'codex', session: 'new-codex' }),
+    }))).value;
+    takeoverSeat = seats.current;
+    assert.equal(seats.oldBody.length, 0);
+    assert.deepEqual(takeoverSeat?.body, { channel: 'codex', session: 'new-codex' });
+    assert.notEqual(takeoverSeat?.generation, originalSeat?.generation);
+    assert.equal(seats.newBody.length, 1);
+  } finally { await currentArtifact.close(); }
+
   const selfKick = run(withName(file, 'Alice', ['join', '--kick']), { env: caller });
   assert.equal(selfKick.status, 0, selfKick.stderr);
   const square = await Square.at({ path: file });
@@ -441,20 +511,24 @@ test('join --kick reclaims a name when a secondary inherited session matches the
   } finally {
     await square.close();
   }
+  const finalArtifact = createArtifactPort(file);
+  try {
+    const seat = (await finalArtifact.read((facts) => facts.seat('Alice'))).value;
+    assert.deepEqual(seat?.body, { channel: 'codex', session: 'new-codex' });
+    assert.notEqual(seat?.generation, takeoverSeat?.generation);
+  } finally { await finalArtifact.close(); }
 });
 
 test('unknown participant errors end with the join recovery command', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const noDelivery = { SQUARE_REGISTRY: TEST_REGISTRY };
-
-  const caught = run(withName(file, 'Stranger', ['catch', '--now']), { env: noDelivery });
+  const caught = run(withName(file, 'Stranger', ['catch', '--now']));
   assert.equal(caught.status, 2);
-  assert.match(caught.stderr, /✕ @Stranger has never stepped into this square/);
-  assert.match(caught.stderr, /in the square/);
+  assert.match(caught.stderr, /has never stepped into this square/);
+  assert.match(caught.stderr, /join/);
   assert.match(caught.stderr, /--as 'Stranger' join/);
 
-  const expressed = run(withName(file, 'Stranger', ['express', '--no-mention', 'hello']), { env: noDelivery });
+  const expressed = run(withName(file, 'Stranger', ['express', '--no-mention', 'hello']));
   assert.equal(expressed.status, 2);
   assert.match(expressed.stderr, /✕ @Stranger has never stepped into this square/);
   assert.match(expressed.stderr, /· draft kept:/);
@@ -466,7 +540,7 @@ test('an unknown recipient errors with the roster command instead of a join', as
     await square.join('Alice');
   });
 
-  const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']), { env: { SQUARE_REGISTRY: TEST_REGISTRY } });
+  const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
   assert.equal(expressed.status, 2);
   assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
   assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));

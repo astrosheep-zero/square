@@ -1,7 +1,8 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, type ActivityObservation, type HardCap, type StoredAct, type WakeRoute, type WatchLease } from './model.js';
-import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, RouteFact } from './ports.js';
+import { SquareError, nameKey, isWakeRouteKind, sameBody, validateBody, type ActivityId, type ActivityObservation, type Body, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
+import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, SeatRef, DeliveryClaimInput, DeliveryClaimResult, DeliveryCompletion, DeliveryPreparation, DeliveryEvidence } from './ports.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
+import { legacyRowFramingIssue } from './square-legacy-framing.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -14,7 +15,6 @@ export interface SquareState {
     preamble: string[];
     warmup: string[];
     acts: StoredAct[];
-    routes?: WakeRoute[];
     runtime: SquareRuntimeState;
 }
 export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
@@ -24,7 +24,8 @@ export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
 export const APPLICATION_ID = 0x53515245;
 const V1_USER_VERSION = 1;
 export const V2_USER_VERSION = 2;
-export const CURRENT_USER_VERSION = 3;
+export const V3_USER_VERSION = 3;
+export const CURRENT_USER_VERSION = 4;
 export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
@@ -68,8 +69,8 @@ export function validateLegacyFraming(database: DatabaseSync, applicationId: num
 function normalizedLegacySql(sql: string): string {
     return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
 }
-const V2_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','hold','resume','read','listen','ignore')";
 const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','hold','resume','read','listen','ignore','unlisten')";
+
 export const ACTIVITIES_TABLE_SQL = `CREATE TABLE activities (
   act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
   at REAL NOT NULL,
@@ -93,6 +94,7 @@ export const ACTIVITY_INDEXES_SQL = [
 export const SCHEMA_SQL = `CREATE TABLE square_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  delivery_revision INTEGER NOT NULL CHECK (delivery_revision BETWEEN 0 AND 9007199254740991),
   next_act_index INTEGER NOT NULL CHECK (next_act_index BETWEEN 0 AND 9007199254740991),
   hard_cap INTEGER CHECK (hard_cap BETWEEN 1 AND 9007199254740991),
   throttle_per_minute INTEGER CHECK (throttle_per_minute BETWEEN 1 AND 9007199254740991),
@@ -111,22 +113,45 @@ CREATE TABLE receipts (
 CREATE INDEX receipt_owner_time ON receipts(owner_json, at);
 CREATE TABLE catch_leases (
   owner_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+  generation_json TEXT NOT NULL DEFAULT '""',
   lease_id_json TEXT NOT NULL,
   heartbeat_at REAL NOT NULL,
   expires_at REAL NOT NULL CHECK (expires_at >= heartbeat_at),
   filter_json TEXT CHECK (filter_json IS NULL OR json_valid(filter_json))
 ) WITHOUT ROWID;
 
-CREATE TABLE routes (
-  position INTEGER PRIMARY KEY CHECK (position >= 0),
+CREATE TABLE seats (
+  participant_key_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+  participant_json TEXT NOT NULL,
+  channel_json TEXT NOT NULL,
+  session_json TEXT NOT NULL,
+  agent_json TEXT,
+  generation_json TEXT NOT NULL,
+  wake_address_json TEXT CHECK (wake_address_json IS NULL OR json_valid(wake_address_json))
+) WITHOUT ROWID;
+CREATE INDEX seat_body ON seats(channel_json, session_json, agent_json);
+CREATE TABLE delivery_evidence (
   participant_key_json TEXT COLLATE BINARY NOT NULL,
-  session_json TEXT COLLATE BINARY NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('opencode-server','codex-queue','claude-native','paseo')),
-  updated_at REAL NOT NULL,
-  payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
-);
-CREATE INDEX route_participant ON routes(participant_key_json, position);
-CREATE INDEX route_session ON routes(session_json, position);
+  participant_json TEXT NOT NULL,
+  generation_json TEXT NOT NULL,
+  act_index INTEGER NOT NULL CHECK (act_index BETWEEN 0 AND 9007199254740991),
+  kind TEXT NOT NULL CHECK (kind IN ('wake','presentation')),
+  attempt_n INTEGER NOT NULL CHECK (attempt_n >= 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('dispatching','accepted','failed','unknown','released','presented','clipped')),
+  at REAL NOT NULL,
+  expires_at REAL,
+  claim_token_json TEXT,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  PRIMARY KEY (participant_key_json,generation_json,act_index,kind,attempt_n)
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX delivery_claim_token ON delivery_evidence(claim_token_json) WHERE claim_token_json IS NOT NULL;
+CREATE INDEX delivery_activity ON delivery_evidence(participant_key_json,generation_json,act_index,kind,attempt_n);
+CREATE TABLE delivery_cancellations (
+  participant_key_json TEXT COLLATE BINARY NOT NULL,
+  generation_json TEXT NOT NULL,
+  through_index INTEGER NOT NULL CHECK (through_index BETWEEN 0 AND 9007199254740991),
+  PRIMARY KEY (participant_key_json,generation_json)
+) WITHOUT ROWID;
 
 CREATE TABLE participants (
   name_key_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
@@ -158,8 +183,6 @@ CREATE TABLE landed_audience (
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
 const EXPECTED_SCHEMA_SQL = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
-export const SCHEMA_SQL_V2 = SCHEMA_SQL.replace(CURRENT_ACTIVITY_KIND_CHECK, V2_ACTIVITY_KIND_CHECK);
-const EXPECTED_SCHEMA_SQL_V2 = SCHEMA_SQL_V2.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 // All strings, including identity keys, are JSON encoded before SQLite binding.
 type Row = Record<string, string | number | null>;
 const encode = JSON.stringify;
@@ -314,34 +337,85 @@ export function validateWatchLease(value: unknown): WatchLease {
 // Sorted object keys express small-value structural equality, never whole-state comparison.
 function stableJson(value: unknown): string {
     if (value === null || typeof value !== 'object') {
-        requireFact(value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value), 'route contains a non-finite or unsupported JSON value.');
+        requireFact(value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value), 'value contains a non-finite or unsupported JSON value.');
         return encode(value);
     }
     if (Array.isArray(value))
         return '[' + value.map(stableJson).join(',') + ']';
     return '{' + Object.keys(value).sort().map(k => encode(k) + ':' + stableJson((value as Record<string, unknown>)[k])).join(',') + '}';
 }
-export function validateRoute(value: unknown): RouteFact {
-    const r = shape(value, ['location', 'participant', 'sessionId', 'channel', 'kind', 'address', 'updatedAt', 'extra'], ['epoch']);
-    for (const k of ['location', 'participant', 'sessionId', 'channel'])
-        string(r[k]);
-    requireFact(isWakeRouteKind(r.kind));
-    finite(r.updatedAt);
-    requireFact(Object.values(object(r.address)).every(v => typeof v === 'string'));
-    const extra = object(r.extra);
-    requireFact(Object.keys(extra).every(k => !['location', 'participant', 'sessionId', 'channel', 'kind', 'address', 'updatedAt', 'epoch'].includes(k)));
-    stableJson(extra);
-    if (Object.hasOwn(r, 'epoch'))
-        stableJson(r.epoch);
-    return value as RouteFact;
+function activityId(value: unknown): ActivityId {
+    const parsed = typeof value === 'string' ? /^act\/(0|[1-9]\d*)$/.exec(value) : null;
+    requireFact(parsed !== null, 'activity generation is malformed.');
+    const index = Number(parsed![1]);
+    requireFact(Number.isSafeInteger(index));
+    return value as ActivityId;
 }
-function route(row: Row): RouteFact {
-    integer(row.position);
-    const payload = shape(json(row.payload_json), ['location', 'participant', 'channel', 'address', 'extra'], ['epoch']);
-    requireFact(row.participant_key_json === key(string(payload.participant)));
-    return immutable(validateRoute({
-        ...payload, sessionId: decoded(row.session_json), kind: row.kind, updatedAt: row.updated_at
-    }));
+function activityIndex(value: unknown): number {
+    const parsed = activityId(value);
+    return integer(Number(parsed.slice(4)));
+}
+function wakeAddress(value: unknown): WakeAddress {
+    const address = shape(value, ['kind', 'address']);
+    requireFact(isWakeRouteKind(address.kind));
+    const entries = object(address.address);
+    requireFact(Object.values(entries).every((item) => typeof item === 'string'));
+    stableJson(entries);
+    return immutable({ kind: address.kind, address: entries as Record<string, string> });
+}
+function bodyFrom(row: Row): Body {
+    const body = { channel: decoded(row.channel_json, true), session: decoded(row.session_json, true), ...(row.agent_json === null ? {} : { agent: decoded(row.agent_json, true) }) };
+    validateBody(body);
+    return immutable(body);
+}
+function seat(row: Row): Seat {
+    const participant = decoded(row.participant_json, true);
+    requireFact(row.participant_key_json === key(participant));
+    const generation = activityId(decoded(row.generation_json, true));
+    const parsedWake = row.wake_address_json === null ? undefined : wakeAddress(json(row.wake_address_json));
+    return immutable({ participant, body: bodyFrom(row), generation, ...(parsedWake === undefined ? {} : { wakeAddress: parsedWake }) });
+}
+function nativeCorrelation(value: unknown): NonNullable<DeliveryEvidence['correlation']> {
+    const item = shape(value, ['harness'], ['token', 'messageId', 'payloadHash']);
+    requireFact(['claude', 'opencode', 'pi'].includes(string(item.harness)));
+    for (const key of ['token', 'messageId', 'payloadHash']) if (Object.hasOwn(item, key)) string(item[key], true);
+    return immutable({ harness: item.harness as 'claude' | 'opencode' | 'pi',
+        ...(item.token === undefined ? {} : { token: item.token as string }),
+        ...(item.messageId === undefined ? {} : { messageId: item.messageId as string }),
+        ...(item.payloadHash === undefined ? {} : { payloadHash: item.payloadHash as string }) });
+}
+function deliveryEvidence(row: Row): DeliveryEvidence {
+    const payload = object(json(row.payload_json));
+    const participant = decoded(row.participant_json, true);
+    requireFact(row.participant_key_json === key(participant));
+    const generation = activityId(decoded(row.generation_json, true));
+    const activity = activityId(`act/${integer(row.act_index)}`);
+    requireFact(['wake', 'presentation'].includes(string(row.kind)) && ['dispatching', 'accepted', 'failed', 'unknown', 'released', 'presented', 'clipped'].includes(string(row.outcome)));
+    requireFact(Number.isSafeInteger(row.attempt_n) && (row.attempt_n as number) >= 0);
+    const nativeObservations = payload.nativeObservations === undefined ? undefined : (() => {
+        requireFact(Array.isArray(payload.nativeObservations));
+        return payload.nativeObservations.map((value) => {
+            const item = shape(value, ['eventId', 'messageId', 'state', 'observedAt'], ['reason']);
+            requireFact(['held', 'released', 'dropped'].includes(string(item.state)));
+            return {
+                eventId: string(item.eventId, true), messageId: string(item.messageId, true),
+                state: item.state as 'held' | 'released' | 'dropped',
+                ...(Object.hasOwn(item, 'reason') ? { reason: string(item.reason) } : {}), observedAt: finite(item.observedAt),
+            };
+        });
+    })();
+    return immutable({
+        participant, generation, activity, kind: row.kind as DeliveryEvidence['kind'],
+        outcome: row.outcome as DeliveryEvidence['outcome'], attemptN: integer(row.attempt_n), at: finite(row.at),
+        ...(row.expires_at === null ? {} : { expiresAt: finite(row.expires_at) }),
+        ...(row.claim_token_json === null ? {} : { claimToken: decoded(row.claim_token_json, true) }),
+        ...(payload.route === undefined ? {} : { route: wakeAddress(payload.route) }),
+        ...(payload.signature === undefined ? {} : { signature: string(payload.signature) }),
+        ...(payload.message === undefined ? {} : { message: string(payload.message) }),
+        ...(payload.diagnostic === undefined ? {} : { diagnostic: payload.diagnostic as import('./model.js').JsonValue }),
+        ...(payload.correlation === undefined ? {} : { correlation: nativeCorrelation(payload.correlation) }),
+        ...(nativeObservations === undefined ? {} : { nativeObservations }),
+    });
 }
 function normalizedSql(sql: string): string { return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1'); }
 function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], location: string): void {
@@ -349,11 +423,16 @@ function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], loca
     requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
 }
-export function validateRowFraming(db: DatabaseSync, version: 2 | 3, location = ''): void {
+export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4, location = ''): void {
+    if (version === V2_USER_VERSION || version === V3_USER_VERSION) {
+        const issue = legacyRowFramingIssue(db, APPLICATION_ID, version, location, SCHEMA_SQL);
+        if (issue !== undefined) throw invalidArtifact(issue);
+        return;
+    }
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     requireFact(identity.user_version === version, 'unsupported SQLite format version.');
-    validateOwnedSchema(db, version === V2_USER_VERSION ? EXPECTED_SCHEMA_SQL_V2 : EXPECTED_SCHEMA_SQL, location);
+    validateOwnedSchema(db, EXPECTED_SCHEMA_SQL, location);
 }
 export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
@@ -362,13 +441,15 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
         validateLegacyFraming(db, APPLICATION_ID, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    if (identity.user_version === V2_USER_VERSION) {
-        validateRowFraming(db, V2_USER_VERSION, location);
+    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION) {
+        validateRowFraming(db, identity.user_version, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    requireFact(identity.user_version === CURRENT_USER_VERSION, 'unsupported SQLite format version.');
-    validateRowFraming(db, CURRENT_USER_VERSION, location);
-    return createSqliteDriver(db).header();
+    if (identity.user_version === CURRENT_USER_VERSION) {
+        validateRowFraming(db, CURRENT_USER_VERSION, location);
+        return createSqliteDriver(db).header();
+    }
+    throw invalidArtifact('unsupported SQLite format version.');
 }
 interface Selection {
     sql: string;
@@ -413,9 +494,13 @@ function pageLimit(page: IndexPage): number {
 }
 export interface SqliteDriver extends SquareRead, LandingWriter {
     readonly changed: boolean;
+    readonly deliveryChanged: boolean;
+    claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult;
+    prepareDelivery(input: DeliveryPreparation): boolean;
+    completeDelivery(input: DeliveryCompletion): boolean;
 }
 export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
-    let changed = false;
+    let changed = false, deliveryChanged = false;
     const all = (sql: string, args: readonly SQLInputValue[] = []): Row[] => db.prepare(sql).all(...args) as Row[];
     const one = (sql: string, args: readonly SQLInputValue[] = []): Row | undefined => db.prepare(sql).get(...args) as Row | undefined;
     const run = (sql: string, args: readonly SQLInputValue[] = []): number => Number(db.prepare(sql).run(...args).changes);
@@ -445,14 +530,42 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     const directedFrom = 'landed_audience d JOIN activities a ON a.act_index=d.act_index';
     const pendingFrom = `landed_audience d JOIN activities a ON a.act_index=d.act_index JOIN participants p ON p.name_key_json=d.recipient_key_json`;
     const pendingWhere = `p.joined=1 AND d.act_index>COALESCE(p.last_join_index,-1) AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.owner_json=p.name_json AND r.act_index=d.act_index)`;
+    const latestSeats = `seats s JOIN participants p ON p.name_key_json=s.participant_key_json
+        JOIN activities a ON a.act_index=p.last_join_index AND a.kind='join' AND a.actor_key_json=p.name_key_json
+        AND s.generation_json='"act/'||a.act_index||'"'`;
+    function bodySeats(body: Body, lifecycle: 'joined' | 'done'): readonly Seat[] {
+        validateBody(body);
+        return immutable(all(`SELECT s.* FROM ${latestSeats} WHERE p.${lifecycle}=1 AND s.channel_json=? AND s.session_json=? AND s.agent_json IS ? ORDER BY s.participant_key_json`,
+            [encode(body.channel), encode(body.session), body.agent === undefined ? null : encode(body.agent)]).map(seat));
+    }
     const read: SquareRead = {
+        seat(name) {
+            const r = one(`SELECT s.* FROM ${latestSeats} WHERE p.joined=1 AND s.participant_key_json=?`, [key(name)]);
+            return r ? seat(r) : undefined;
+        },
+        seatsForBody: body => bodySeats(body, 'joined'),
+        completedSeatsForBody: body => bodySeats(body, 'done'),
+        deliveryEvidence(participant, generation, activityIndex) {
+            const args: SQLInputValue[] = [key(participant), encode(generation)];
+            const filter = activityIndex === undefined ? '' : ' AND act_index=?';
+            if (activityIndex !== undefined) args.push(integer(Number(activityIndex.slice(4))));
+            return immutable(all(`SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=?${filter} ORDER BY act_index,kind,attempt_n`, args).map(deliveryEvidence));
+        },
+        deliveryByToken(claimToken) {
+            const row = one('SELECT * FROM delivery_evidence WHERE claim_token_json=?', [encode(claimToken)]);
+            return row === undefined ? undefined : deliveryEvidence(row);
+        },
+        cancelledThrough(participant, generation) {
+            const r = one('SELECT through_index FROM delivery_cancellations WHERE participant_key_json=? AND generation_json=?', [key(participant), encode(generation)]);
+            return r === undefined ? undefined : integer(r.through_index);
+        },
         header() {
             const rows = all('SELECT m.*, (SELECT COALESCE(MAX(act_index),-1) FROM activities) AS last_act_index FROM square_meta m');
             requireFact(rows.length === 1 && rows[0].id === 1, 'header row is malformed.');
             const r = rows[0], nextActIndex = integer(r.next_act_index), lastActIndex = integer(r.last_act_index, -1);
             requireFact(nextActIndex > lastActIndex, 'nextActIndex is behind the activity history.');
             return immutable({
-                revision: integer(r.revision), nextActIndex, lastActIndex, hardCap: r.hard_cap === null ? null : integer(r.hard_cap, 1), ...(r.throttle_per_minute === null ? {} : { throttlePerMinute: integer(r.throttle_per_minute, 1) }), preamble: strings(json(r.preamble_json)), warmup: strings(json(r.warmup_json))
+                revision: integer(r.revision), deliveryRevision: integer(r.delivery_revision), nextActIndex, lastActIndex, hardCap: r.hard_cap === null ? null : integer(r.hard_cap, 1), ...(r.throttle_per_minute === null ? {} : { throttlePerMinute: integer(r.throttle_per_minute, 1) }), preamble: strings(json(r.preamble_json)), warmup: strings(json(r.warmup_json))
             });
         },
         participant(name) {
@@ -572,14 +685,58 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         },
         receiptAssignments: () => immutable(all('SELECT owner_json,act_index FROM receipts ORDER BY owner_json,act_index').map(r => ({ owner: decoded(r.owner_json, true), index: integer(r.act_index) }))),
         lease(name) {
-            const r = one('SELECT * FROM catch_leases WHERE owner_json=?', [encode(owner(name))]);
+            const canonical = owner(name), current = read.seat(canonical);
+            const r = current === undefined
+                ? one('SELECT * FROM catch_leases WHERE owner_json=?', [encode(canonical)])
+                : one('SELECT * FROM catch_leases WHERE owner_json=? AND (generation_json=? OR generation_json=?)', [encode(canonical), encode(current.generation), encode('')]);
             return r ? immutable(validateWatchLease({
                 leaseId: decoded(r.lease_id_json, true), heartbeatAt: finite(r.heartbeat_at), expiresAt: finite(r.expires_at), ...(r.filter_json === null ? {} : { filter: json(r.filter_json) })
             })) : undefined;
         },
-        routes: () => immutable(all('SELECT * FROM routes ORDER BY position').map(route)),
     };
-    const writes: LandingWriter = {
+    const writes: Omit<LandingWriter, 'claimDelivery' | 'prepareDelivery' | 'completeDelivery' | 'observeNativeDelivery'> = {
+        storeSeat(value) {
+            validateBody(value.body);
+            activityId(value.generation);
+            string(value.participant, true);
+            const existing = read.seat(value.participant);
+            if (existing !== undefined && stableJson(existing) === stableJson(value)) return false;
+            const wake = value.wakeAddress === undefined ? null : encode(value.wakeAddress);
+            run('INSERT INTO seats(participant_key_json,participant_json,channel_json,session_json,agent_json,generation_json,wake_address_json) VALUES(?,?,?,?,?,?,?) ON CONFLICT(participant_key_json) DO UPDATE SET participant_json=excluded.participant_json,channel_json=excluded.channel_json,session_json=excluded.session_json,agent_json=excluded.agent_json,generation_json=excluded.generation_json,wake_address_json=excluded.wake_address_json', [key(value.participant), encode(value.participant), encode(value.body.channel), encode(value.body.session), value.body.agent === undefined ? null : encode(value.body.agent), encode(value.generation), wake]);
+            run('DELETE FROM catch_leases WHERE owner_json=?', [encode(value.participant)]);
+            deliveryChanged = true;
+            return true;
+        },
+        updateWakeAddress(value, wakeAddress) {
+            const current = read.seat(value.participant);
+            if (current === undefined || !sameBody(current.body, value.body) || current.generation !== value.generation) return false;
+            if (wakeAddress !== undefined) {
+                requireFact(isWakeRouteKind(wakeAddress.kind));
+                requireFact(Object.values(wakeAddress.address).every((item) => typeof item === 'string'));
+            }
+            if (stableJson(current.wakeAddress ?? null) === stableJson(wakeAddress ?? null)) return false;
+            const count = run('UPDATE seats SET wake_address_json=? WHERE participant_key_json=? AND generation_json=?', [wakeAddress === undefined ? null : encode(wakeAddress), key(value.participant), encode(value.generation)]);
+            if (count) deliveryChanged = true;
+            return count > 0;
+        },
+        removeSeat(value) {
+            // Done hides current authority; retain only its latest coordinate for exact-body resume.
+            const row = one(`SELECT s.* FROM ${latestSeats} WHERE p.done=1 AND s.participant_key_json=?`, [key(value.participant)]);
+            if (row === undefined || !sameBody(bodyFrom(row), value.body) || decoded(row.generation_json) !== value.generation) return false;
+            run('UPDATE seats SET wake_address_json=NULL WHERE participant_key_json=?', [key(value.participant)]);
+            run('DELETE FROM catch_leases WHERE owner_json=?', [encode(value.participant)]);
+            changed = true; deliveryChanged = true;
+            return true;
+        },
+        cancelThrough(value, through) {
+            activityId(value.generation);
+            integer(through);
+            const prior = read.cancelledThrough(value.participant, value.generation) ?? -1;
+            if (through <= prior) return false;
+            run('INSERT INTO delivery_cancellations(participant_key_json,generation_json,through_index) VALUES(?,?,?) ON CONFLICT(participant_key_json,generation_json) DO UPDATE SET through_index=excluded.through_index', [key(value.participant), encode(value.generation), through]);
+            deliveryChanged = true;
+            return true;
+        },
         applyLanding(effect) {
             const a = validateStoredActivity(effect.activity);
             requireFact(a.index >= read.header().nextActIndex && a.index < Number.MAX_SAFE_INTEGER, 'activity index cannot advance.');
@@ -634,53 +791,125 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 changed = true;
             return count;
         },
-        putLease(name, value) {
-            const l = validateWatchLease(value), old = read.lease(name);
-            if (old && stableJson(old) === stableJson(l))
+        putLease(name, value, generation) {
+            const l = validateWatchLease(value), canonical = owner(name);
+            const old = read.lease(canonical), row = one('SELECT generation_json FROM catch_leases WHERE owner_json=?', [encode(canonical)]);
+            if (generation !== undefined) activityId(generation);
+            if (row !== undefined && generation !== undefined && decoded(row.generation_json) !== '' && decoded(row.generation_json) !== generation)
                 return false;
-            const canonical = owner(name);
+            if (old && stableJson(old) === stableJson(l) && (generation === undefined || row?.generation_json === encode(generation))) return false;
             string(canonical, true);
-            run('INSERT INTO catch_leases(owner_json,lease_id_json,heartbeat_at,expires_at,filter_json) VALUES(?,?,?,?,?) ON CONFLICT(owner_json) DO UPDATE SET lease_id_json=excluded.lease_id_json,heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at,filter_json=excluded.filter_json', [encode(canonical), encode(l.leaseId), l.heartbeatAt, l.expiresAt, l.filter === undefined ? null : encode(l.filter)]);
+            run('INSERT INTO catch_leases(owner_json,generation_json,lease_id_json,heartbeat_at,expires_at,filter_json) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_json) DO UPDATE SET generation_json=excluded.generation_json,lease_id_json=excluded.lease_id_json,heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at,filter_json=excluded.filter_json', [encode(canonical), encode(generation ?? ''), encode(l.leaseId), l.heartbeatAt, l.expiresAt, l.filter === undefined ? null : encode(l.filter)]);
             changed = true;
             return true;
         },
-        removeLease(name, expected) {
-            const count = run('DELETE FROM catch_leases WHERE owner_json=? AND lease_id_json=?', [encode(owner(name)), encode(expected)]);
+        removeLease(name, expected, generation) {
+            const canonical = owner(name), row = one('SELECT generation_json FROM catch_leases WHERE owner_json=? AND lease_id_json=?', [encode(canonical), encode(expected)]);
+            if (row === undefined || generation !== undefined && decoded(row.generation_json) !== generation) return false;
+            const count = run('DELETE FROM catch_leases WHERE owner_json=? AND lease_id_json=? AND generation_json=?', [encode(canonical), encode(expected), row.generation_json]);
             if (count)
                 changed = true;
             return count > 0;
         },
-        replaceRoutes(values) {
-            values.forEach(validateRoute);
-            if (stableJson(values) === stableJson(read.routes()))
-                return false;
-            run('DELETE FROM routes');
-            values.forEach((r, position) => {
-                const { sessionId, kind, updatedAt, extra, ...payload } = r;
-                run('INSERT INTO routes(position,participant_key_json,session_json,kind,updated_at,payload_json) VALUES(?,?,?,?,?,?)', [position, key(r.participant), encode(sessionId), kind, updatedAt, encode({ ...payload, extra })]);
-            });
-            changed = true;
-            return true;
+    };
+    const delivery = {
+        claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult {
+            const current = read.seat(input.seat.participant);
+            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return { status: 'stale' };
+            requireFact(input.kind === 'wake' || input.kind === 'presentation');
+            const index = activityIndex(input.activity);
+            finite(input.at);
+            const leaseMs = integer(input.leaseMs, 1);
+            string(input.claimToken, true);
+            if (input.route !== undefined) wakeAddress(input.route);
+            if (read.activity(index)?.kind !== 'say' || read.directedAt(input.seat.participant, index) === undefined) return { status: 'stale' };
+            const cancelledThrough = read.cancelledThrough(input.seat.participant, input.seat.generation);
+            if (cancelledThrough !== undefined && index <= cancelledThrough) return { status: 'stale' };
+            const rows = all('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? ORDER BY attempt_n DESC', [key(input.seat.participant), encode(input.seat.generation), index, input.kind]);
+            const decoded = rows.map(deliveryEvidence);
+            const terminal = decoded.find((row) => input.kind === 'wake'
+                ? row.outcome === 'accepted' || row.outcome === 'unknown'
+                : row.outcome === 'presented' || row.outcome === 'unknown');
+            if (terminal !== undefined) return { status: 'terminal', evidence: terminal };
+            const dispatching = decoded.find((row) => row.outcome === 'dispatching');
+            if (dispatching !== undefined && (dispatching.expiresAt === undefined || dispatching.expiresAt > input.at)) return { status: 'busy', evidence: dispatching };
+            if (dispatching !== undefined) {
+                const updated = { ...dispatching, outcome: 'unknown' as const, at: input.at, expiresAt: undefined, diagnostic: 'interrupted dispatch' };
+                const source = rows.find((row) => row.attempt_n === dispatching.attemptN)!;
+                run('UPDATE delivery_evidence SET outcome=?,at=?,expires_at=NULL,payload_json=? WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? AND attempt_n=?', ['unknown', input.at, encode({ ...object(json(source.payload_json)), diagnostic: 'interrupted dispatch' }), key(input.seat.participant), encode(input.seat.generation), index, input.kind, dispatching.attemptN]);
+                deliveryChanged = true;
+                return { status: 'terminal', evidence: updated };
+            }
+            const attemptN = (decoded[0]?.attemptN ?? -1) + 1;
+            const payload = input.route === undefined ? {} : { route: input.route };
+            const expiry = finite(input.at + leaseMs);
+            run('INSERT INTO delivery_evidence(participant_key_json,participant_json,generation_json,act_index,kind,attempt_n,outcome,at,expires_at,claim_token_json,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [key(input.seat.participant), encode(input.seat.participant), encode(input.seat.generation), index, input.kind, attemptN, 'dispatching', input.at, expiry, encode(input.claimToken), encode(payload)]);
+            deliveryChanged = true;
+            return { status: 'acquired', claimToken: input.claimToken, attemptN };
+        },
+        prepareDelivery(input: DeliveryPreparation): boolean {
+            const current = read.seat(input.seat.participant);
+            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return false;
+            const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
+            if (row === undefined || row.outcome !== 'dispatching') return false;
+            const correlation = nativeCorrelation(input.correlation);
+            const payload = object(json(row.payload_json));
+            if (stableJson(payload.correlation ?? null) === stableJson(correlation)) return true;
+            const count = run('UPDATE delivery_evidence SET payload_json=? WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [encode({ ...payload, correlation }), key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
+            if (count) deliveryChanged = true;
+            return count > 0;
+        },
+        completeDelivery(input: DeliveryCompletion): boolean {
+            const current = read.seat(input.seat.participant);
+            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation) return false;
+            const index = activityIndex(input.activity);
+            finite(input.at);
+            requireFact(['accepted', 'failed', 'unknown', 'released', 'presented', 'clipped'].includes(input.outcome));
+            string(input.claimToken, true);
+            const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), index, encode(input.claimToken)]);
+            if (row === undefined) return false;
+            if (row.outcome === 'accepted' && input.outcome === 'accepted') return true;
+            if (row.outcome !== 'dispatching' && !(row.outcome === 'unknown' && input.outcome === 'accepted')) return false;
+            const previous = object(json(row.payload_json));
+            const payload = { ...previous, ...(input.signature === undefined ? {} : { signature: input.signature }), ...(input.message === undefined ? {} : { message: input.message }), ...(input.diagnostic === undefined ? {} : { diagnostic: input.diagnostic }), ...(input.correlation === undefined ? {} : { correlation: input.correlation }) };
+            const count = run('UPDATE delivery_evidence SET outcome=?,at=?,expires_at=NULL,payload_json=? WHERE participant_key_json=? AND generation_json=? AND act_index=? AND claim_token_json=?', [input.outcome, input.at, encode(payload), key(input.seat.participant), encode(input.seat.generation), index, encode(input.claimToken)]);
+            if (count) deliveryChanged = true;
+            return count > 0;
+        },
+        observeNativeDelivery(input: { readonly seat: SeatRef; readonly claimToken: string; readonly observation: NonNullable<DeliveryEvidence['nativeObservations']>[number] }): boolean {
+            const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
+            const current = read.seat(input.seat.participant);
+            if (current === undefined || !sameBody(current.body, input.seat.body) || current.generation !== input.seat.generation
+                || row === undefined || !['dispatching', 'accepted', 'unknown'].includes(string(row.outcome))) return false;
+            const observation = input.observation;
+            requireFact(typeof observation.eventId === 'string' && observation.eventId.length > 0);
+            requireFact(typeof observation.messageId === 'string' && observation.messageId.length > 0);
+            requireFact(observation.state === 'held' || observation.state === 'released' || observation.state === 'dropped');
+            finite(observation.observedAt);
+            if (observation.reason !== undefined) string(observation.reason);
+            const payload = object(json(row.payload_json));
+            const observations = payload.nativeObservations === undefined ? [] : payload.nativeObservations;
+            requireFact(Array.isArray(observations));
+            if (observations.some((item) => object(item).eventId === observation.eventId)) return true;
+            const next = [...observations, observation];
+            const count = run('UPDATE delivery_evidence SET payload_json=? WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [encode({ ...payload, nativeObservations: next }), key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
+            if (count) deliveryChanged = true;
+            return count > 0;
         },
     };
-    return Object.defineProperty(Object.assign(read, writes), 'changed', { get: () => changed }) as SqliteDriver;
-}
-export function legacyRouteFact(value: Record<string, unknown>): RouteFact {
-    const { location, participant, sessionId, channel, kind, address, updatedAt, epoch, ...extra } = value;
-    return validateRoute({
-        location, participant, sessionId, channel, kind, address, updatedAt, ...(Object.hasOwn(value, 'epoch') ? { epoch } : {}), extra
-    });
+    return Object.defineProperties(Object.assign(read, writes, delivery), {
+        changed: { get: () => changed },
+        deliveryChanged: { get: () => deliveryChanged },
+    }) as unknown as SqliteDriver;
 }
 /** Explicit import only. Caller owns transaction, legacy validation and format publication. */
 export function initializeSqlite(db: DatabaseSync, state: SquareState, revision = 0): void {
-    // Reject unsupported routes BEFORE any schema changes, also for direct fixture callers.
-    const routes = (state.routes ?? []).map(r => legacyRouteFact(r as unknown as Record<string, unknown>));
     integer(revision);
     integer(state.runtime.nextActIndex);
     if (state.hardCap !== null) integer(state.hardCap, 1);
     if (state.throttlePerMinute !== undefined) integer(state.throttlePerMinute, 1);
     db.exec(SCHEMA_SQL);
-    db.prepare('INSERT INTO square_meta(id,revision,next_act_index,hard_cap,throttle_per_minute,preamble_json,warmup_json) VALUES(1,?,0,?,?,?,?)').run(revision, state.hardCap, state.throttlePerMinute ?? null, encode(strings(state.preamble)), encode(strings(state.warmup)));
+    db.prepare('INSERT INTO square_meta(id,revision,delivery_revision,next_act_index,hard_cap,throttle_per_minute,preamble_json,warmup_json) VALUES(1,?,0,0,?,?,?,?)').run(revision, state.hardCap, state.throttlePerMinute ?? null, encode(strings(state.preamble)), encode(strings(state.warmup)));
     const driver = createSqliteDriver(db);
     for (const activity of state.acts)
         driver.applyLanding(deriveLanding(validateStoredActivity(activity), landingFacts(driver, activity)));
@@ -703,9 +932,7 @@ export function initializeSqlite(db: DatabaseSync, state: SquareState, revision 
         const l = validateWatchLease(value);
         db.prepare('INSERT INTO catch_leases(owner_json,lease_id_json,heartbeat_at,expires_at,filter_json) VALUES(?,?,?,?,?)').run(encode(owner), encode(l.leaseId), l.heartbeatAt, l.expiresAt, l.filter === undefined ? null : encode(l.filter));
     }
-    driver.replaceRoutes(routes);
 }
-/** Exceptional export projection for fixtures, never a runtime fallback. */
 export function exportSqliteState(db: DatabaseSync): SquareState {
     const d = createSqliteDriver(db), h = d.header();
     const observations: SquareState['runtime']['observations'] = {}, leases: Record<string, WatchLease> = {};
@@ -725,10 +952,7 @@ export function exportSqliteState(db: DatabaseSync): SquareState {
             }), enumerable: true });
     }
     return {
-        hardCap: h.hardCap, ...(h.throttlePerMinute === undefined ? {} : { throttlePerMinute: h.throttlePerMinute }), preamble: [...h.preamble], warmup: [...h.warmup], acts: (db.prepare('SELECT * FROM activities ORDER BY act_index').all() as Row[]).map(activity), routes: d.routes().map(r => {
-            const { extra, ...fields } = r;
-            return { ...fields, ...extra } as unknown as NonNullable<SquareState['routes']>[number];
-        }), runtime: {
+        hardCap: h.hardCap, ...(h.throttlePerMinute === undefined ? {} : { throttlePerMinute: h.throttlePerMinute }), preamble: [...h.preamble], warmup: [...h.warmup], acts: (db.prepare('SELECT * FROM activities ORDER BY act_index').all() as Row[]).map(activity), runtime: {
             nextActIndex: h.nextActIndex, observations, leases
         }
     };

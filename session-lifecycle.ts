@@ -1,19 +1,20 @@
 import { Square } from './square-api.js';
-import { operationEnv, type AutomaticProvider } from './participant-identity.js';
-import { hostLedgerForEnv } from './registry.js';
-import { projectSessionBindings } from './square-projections.js';
+import type { Body } from './model.js';
+import type { AutomaticProvider } from './participant-identity.js';
+import { projectSessionBindings } from './inbox.js';
 
-/** Retire only memberships owned at this session's end, regardless of square filename or cwd. */
+function bodyFor(provider: AutomaticProvider, sessionId: string): Body {
+  return { channel: provider === 'claude' ? 'claude-code' : provider, session: sessionId };
+}
+
+/** Retire only seats held by this exact body, discovered through the rebuildable index. */
 export async function endSessionMemberships(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const scoped = operationEnv(provider, sessionId, env);
-  const hostLedger = hostLedgerForEnv(scoped);
-  const bindings = await projectSessionBindings({ hostLedger, sessionId });
+  const body = bodyFor(provider, sessionId);
+  const bindings = await projectSessionBindings({ body, env });
   for (const binding of bindings) {
-    const square = await Square.at({ path: binding.location, hostLedger, env: scoped });
+    const square = await Square.at({ path: binding.location, env, body, participant: binding.participant });
     try {
-      // The captured epoch fences a same-session rejoin as well as a foreign takeover.
-      // endOwnedSession also settles routes and presence under the ownership claim lock.
-      await square.endOwnedSession(binding.participant, sessionId, binding.epoch ?? 0);
+      await square.endOwnedSession(binding.participant, sessionId, binding.seat?.generation, body);
     } finally { await square.close(); }
   }
 }

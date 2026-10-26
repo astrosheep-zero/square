@@ -11,8 +11,11 @@ const shellReplay = { skip: process.platform === 'win32' ? 'Printed command repl
 /** Execute exactly the printed shell syntax, substituting only the local binary. */
 function executePrinted(command, env = {}) {
   assert.ok(command.startsWith('square '), command);
+  const args = command.slice(7).match(/(?:'[^']*'|\S+)/g) ?? [];
+  const locationIndex = args.findIndex((value) => value === '--location');
+  const squarePath = locationIndex >= 0 ? args[locationIndex + 1]?.replace(/^'|'$/g, '') : undefined;
   return spawnSync('/bin/sh', ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} ${command.slice(7)}`], {
-    cwd: ROOT, encoding: 'utf8', env: testEnv(env), timeout: 10000,
+    cwd: ROOT, encoding: 'utf8', env: testEnv({ ...(squarePath === undefined ? {} : { CODEX_THREAD_ID: path.resolve(squarePath) }), ...env }, squarePath), timeout: 10000,
   });
 }
 
@@ -171,7 +174,7 @@ test('a capped express counts what was spoken and keeps the draft and the done c
 
   const capped = run(withName(file, 'Alice', ['express', '--mention', 'Alice', '-']), { input: 'one more @Alice\n' });
   assert.equal(capped.status, 1, capped.stdout + capped.stderr);
-  assert.match(capped.stdout, /✕ nothing left in you — 1\/1 spoken/);
+  assert.match(capped.stdout, /✕ you’ve reached your speaking cap — 1\/1 spoken/);
   assert.match(capped.stdout, /draft kept/);
   assert.match(capped.stdout, /· your draft stays unsent; done only steps out/);
   assert.match(capped.stdout, /done\n$/);

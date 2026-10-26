@@ -1,0 +1,100 @@
+-- Frozen format-3 row artifact with unlisten, kept independent of the current row driver.
+PRAGMA application_id=1397838405;
+PRAGMA user_version=3;
+CREATE TABLE activities (
+  act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
+  at REAL NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('join','done','say','hold','resume','read','listen','ignore','unlisten')),
+  actor_json TEXT COLLATE BINARY,
+  actor_key_json TEXT COLLATE BINARY,
+  reach TEXT CHECK (reach = 'bell'),
+  reply_index INTEGER CHECK (reply_index >= 0 AND reply_index < act_index),
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),
+  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),
+  CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))
+);
+CREATE TABLE attention (
+  listener_key_json TEXT COLLATE BINARY NOT NULL,
+  target_key_json TEXT COLLATE BINARY NOT NULL,
+  target_json TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('listen','ignore')),
+  since_index INTEGER NOT NULL,
+  PRIMARY KEY (listener_key_json, target_key_json)
+) WITHOUT ROWID;
+CREATE TABLE catch_leases (
+  owner_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+  lease_id_json TEXT NOT NULL,
+  heartbeat_at REAL NOT NULL,
+  expires_at REAL NOT NULL CHECK (expires_at >= heartbeat_at),
+  filter_json TEXT CHECK (filter_json IS NULL OR json_valid(filter_json))
+) WITHOUT ROWID;
+CREATE TABLE landed_audience (
+  act_index INTEGER NOT NULL,
+  recipient_key_json TEXT COLLATE BINARY NOT NULL,
+  recipient_order INTEGER NOT NULL CHECK (recipient_order >= 0),
+  route TEXT NOT NULL CHECK (route IN ('mention','reply','attention','bell')),
+  PRIMARY KEY (act_index, recipient_key_json),
+  UNIQUE (act_index, recipient_order)
+) WITHOUT ROWID;
+CREATE TABLE participants (
+  name_key_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+  name_json TEXT NOT NULL,
+  first_index INTEGER NOT NULL UNIQUE,
+  joined INTEGER NOT NULL CHECK (joined IN (0,1)),
+  done INTEGER NOT NULL CHECK (done IN (0,1)),
+  say_count INTEGER NOT NULL CHECK (say_count >= 0),
+  last_active_at REAL,
+  last_join_index INTEGER,
+  CHECK (NOT (joined=1 AND done=1))
+) WITHOUT ROWID;
+CREATE TABLE receipts (
+  owner_json TEXT COLLATE BINARY NOT NULL,
+  act_index INTEGER NOT NULL CHECK (act_index BETWEEN 0 AND 9007199254740991),
+  at REAL NOT NULL,
+  PRIMARY KEY (owner_json, act_index)
+) WITHOUT ROWID;
+CREATE TABLE routes (
+  position INTEGER PRIMARY KEY CHECK (position >= 0),
+  participant_key_json TEXT COLLATE BINARY NOT NULL,
+  session_json TEXT COLLATE BINARY NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('opencode-server','codex-queue','claude-native','paseo')),
+  updated_at REAL NOT NULL,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+CREATE TABLE square_meta (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
+  next_act_index INTEGER NOT NULL CHECK (next_act_index BETWEEN 0 AND 9007199254740991),
+  hard_cap INTEGER CHECK (hard_cap BETWEEN 1 AND 9007199254740991),
+  throttle_per_minute INTEGER CHECK (throttle_per_minute BETWEEN 1 AND 9007199254740991),
+  preamble_json TEXT NOT NULL CHECK (json_valid(preamble_json)),
+  warmup_json TEXT NOT NULL CHECK (json_valid(warmup_json))
+);
+CREATE INDEX activity_actor_index ON activities(actor_key_json, act_index);
+CREATE INDEX activity_bell_actor_time ON activities(actor_key_json, at, act_index) WHERE kind='say' AND reach='bell';
+CREATE INDEX activity_kind_index ON activities(kind, act_index);
+CREATE INDEX activity_say_actor_index ON activities(actor_key_json, act_index) WHERE kind='say';
+CREATE INDEX activity_say_time ON activities(at, act_index) WHERE kind='say';
+CREATE INDEX attention_target ON attention(target_key_json, kind, listener_key_json);
+CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);
+CREATE INDEX receipt_owner_time ON receipts(owner_json, at);
+CREATE INDEX route_participant ON routes(participant_key_json, position);
+CREATE INDEX route_session ON routes(session_json, position);
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(0,1001,'join','"Alice"','"alice"',NULL,NULL,'{}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(1,1003,'join','"Bob"','"bob"',NULL,NULL,'{}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(2,1005,'join','"Cara"','"cara"',NULL,NULL,'{}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(3,1006,'listen','"Bob"','"bob"',NULL,NULL,'{"target":"Alice"}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(4,1007,'ignore','"Cara"','"cara"',NULL,NULL,'{"target":"Alice"}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(5,1010,'say','"Alice"','"alice"',NULL,NULL,'{"body":"v2 before unlisten","mentions":["Bob","Cara"]}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(6,1014,'say','"Alice"','"alice"',NULL,NULL,'{"body":"v3 pending attention","mentions":[]}');
+INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(7,1015,'unlisten','"Bob"','"bob"',NULL,NULL,'{"target":"Alice"}');
+INSERT INTO attention(listener_key_json,target_key_json,target_json,kind,since_index) VALUES('"cara"','"alice"','"Alice"','ignore',4);
+INSERT INTO catch_leases(owner_json,lease_id_json,heartbeat_at,expires_at,filter_json) VALUES('"Bob"','"frozen-v2-lease"',1010,2010,NULL);
+INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route) VALUES(5,'"bob"',0,'mention');
+INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route) VALUES(6,'"bob"',0,'attention');
+INSERT INTO participants(name_key_json,name_json,first_index,joined,done,say_count,last_active_at,last_join_index) VALUES('"alice"','"Alice"',0,1,0,2,1014,0);
+INSERT INTO participants(name_key_json,name_json,first_index,joined,done,say_count,last_active_at,last_join_index) VALUES('"bob"','"Bob"',1,1,0,0,1015,1);
+INSERT INTO participants(name_key_json,name_json,first_index,joined,done,say_count,last_active_at,last_join_index) VALUES('"cara"','"Cara"',2,1,0,0,1007,2);
+INSERT INTO receipts(owner_json,act_index,at) VALUES('"Bob"',5,1011);
+INSERT INTO square_meta(id,revision,next_act_index,hard_cap,throttle_per_minute,preamble_json,warmup_json) VALUES(1,9,8,NULL,NULL,'["Frozen format-3 artifact"]','["*Light.*","","*At first there is nothing else. No floor, no horizon, no hands — only a white so complete it is hard to tell whether your eyes are open. You don''t know how you got here. You aren''t sure there is a here.*","","*Something hard under your feet. Stone, probably.*","","*The white thins. Pale shapes stand up out of it, tall and evenly spaced — columns, you decide, though for a moment they could be anything. Long blue shadows stretch between them. The ground becomes flagstones, worn smooth. Steps rise somewhere to one side. Above, the brightness pulls back into an open sky.*","","*Sound arrives after sight. Water — a fountain, near the middle. Footsteps crossing. Voices: two people disagreeing, someone laughing, someone drawing a shape in the air while they talk. Nobody is waiting for permission.*","","*It is an agora. It is the square. Your shadow lies on the stone among the others, and everyone here saw you walk in out of the light.*","","*Speak the way you actually think — the sharp opinion, the half-formed idea, the objection, the question you''re not sure is stupid. Agreement for its own sake adds nothing here; neither does politeness that says nothing. If you think someone is wrong, say so. If you don''t know, say that.*","","*Words land, and so does your body. Asterisks are how you move:*","","    *leans against a column*   *drags a finger through the dust to sketch it*","    *frowns*   *sits down on the steps*   *taps the fountain''s rim, impatient*","","*Your eyes have adjusted. Look around. Someone here is saying something worth answering.*"]');

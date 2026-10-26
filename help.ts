@@ -11,7 +11,7 @@ interface CommandHelp {
 const COMMANDS: readonly CommandHelp[] = [
   { names: ['help'], usage: 'help [command]', summary: 'Show the command index or help for one command.' },
   { names: ['version'], usage: 'version', summary: 'Print the installed version.', hiddenFromIndex: true },
-  { names: ['mcp-server'], usage: 'mcp-server', summary: 'Start the MCP stdio server.', usesSquare: true, hiddenFromIndex: true, details: ['Set SQUARE_LOCATION or pass --location before the command.', 'Participant tools accept as on each call. Set the default with SQUARE_PARTICIPANT_NAME or --as.', 'Session identity comes from request _meta.threadId (Codex) or _meta["ai.opencode/sessionID"] (OpenCode), falling back to the startup environment.'] },
+  { names: ['mcp-server'], usage: 'mcp-server', summary: 'Start the MCP stdio server.', usesSquare: true, hiddenFromIndex: true, details: ['Set SQUARE_LOCATION or pass --location before the command.', 'Participant tools accept as on each call. Set the default with --as.', 'Session identity comes from request _meta.threadId (Codex) or _meta["ai.opencode/sessionID"] (OpenCode), falling back to the startup environment.'] },
   {
     names: ['build'], usage: 'build [--cap <N|unlimited>] [--template <name>] [--throttle N] [-f] < body.md', usesSquare: true, group: 'host',
     summary: 'Create a square from Markdown on stdin.',
@@ -46,8 +46,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },
   { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: 'Stop listening without blocking that participant\'s mentions or replies.' },
-  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Ignore one participant\'s future mentions and bare says.' },
-  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening is future-only: the edge is fixed when a say lands; it never rewrites history.'] },
+  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity, except bells.' },
+  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening applies to future activity. What you could hear when an activity landed does not change afterward.'] },
   {
     names: ['catch'], usage: '--as <name> catch [--id <activity-id>] [--now | --idle <duration>] [--from <names>] [--mention] [--limit <count>] [--replace]', usesSquare: true, group: 'participant',
     summary: 'Catch directed conversation since you last looked.',
@@ -56,7 +56,7 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.', details: ['done takes no message. Use express before leaving to send one.'] },
   {
     names: ['stream'], usage: 'stream [--ndjson [--for <name>] [--last <N> | --after <id>]]', usesSquare: true, hiddenFromIndex: true,
-    summary: 'Follow activity without consuming participant presence.',
+    summary: 'Follow activity without marking it caught.',
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
@@ -100,13 +100,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
-    summary: 'Convert an existing version 1 or 2 square to current format 3 in place.',
-    details: ['For the selected .square artifact only. Global identity and delivery records use square ledger migrate instead.', 'Stop sessions and services using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 3 square is left untouched; an unrelated or unsupported artifact is refused without a write. There is no --check, --backup or --force.'],
-  },
-  {
-    names: ['ledger'], usage: 'ledger <verify|migrate|gc>', usesSquare: false, group: 'maintenance',
-    summary: 'Verify, convert, or reclaim the machine-local host ledger.',
-    details: ['verify: read-only SQLite integrity or full legacy readiness with accepted/ignored/rejected counts and source hashes; not-ready exits 2, an empty root stays empty. An older supported SQLite format requires explicit migration. Unsupported versions or invalid databases need diagnosis; migration is not a repair command.', 'migrate: stop agent sessions and MCP services using Square with this ledger first, then convert legacy NDJSON or upgrade supported SQLite version 1 in place. Keep them stopped, run square ledger verify afterward, then start them with the updated Square version. Sources, records, order and observer revisions are preserved; an existing current ledger is an untouched no-op.', 'gc [--dry-run]: reclaim old wake/presentation evidence only where the square artifact proves the recipient is closed — the activity reached them and catch receipted it or they later rejoined. Dispatching, lifecycle and unprovable rows are retained. Deleted rows free reusable pages, not file size (no VACUUM); retired Claude recognition tokens keep growing in total.', 'Run gc with --dry-run first: it reports eligible, retired, cas-miss and unreadable-artifact counts without writing. Eligible rows are candidates only: a changed record or an unusable Claude correlation is retained.', 'No participant or square location is required. Uses SQUARE_HOST_LEDGER_ROOT, then SQUARE_REGISTRY’s directory, then ~/.square/host-ledger.', 'These commands never stop, restart, install into or schedule hosts; conversion and schema upgrade are never automatic. No --force or repair.'],
+    summary: 'Convert an existing version 2 or 3 square to current format 4 in place.',
+    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 2 or 3 square is accepted; version 1, unrelated or unsupported artifacts are refused without a write. There is no --check, --backup or --force.'],
   },
 ];
 
@@ -122,7 +117,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
-    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate', 'ledger'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,
@@ -134,7 +129,7 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] <command> [args...]',
-    'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. SQUARE_PARTICIPANT_NAME sets the participant name.',
+    'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. Use --as to select a participant.',
     'Backends: SQUARE_BACKENDS_CONFIG selects {backends:{name:{command,args?,cwd?,env?}}}; default ~/.config/square/backends.json. See guides/backends.md.',
     'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
     '',

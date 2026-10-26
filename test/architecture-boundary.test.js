@@ -55,8 +55,10 @@ function storageLeaks(sources) {
   const artifactBindings = new Map([
     ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
     ['sqlite-square.ts', ['createSquare', 'diagnoseSquareFile']],
-    ['inbox.ts', ['createArtifactPort', 'observeSquareRevision']],
-    ['ledger-maintenance.ts', ['createArtifactPort']],
+    ['inbox.ts', ['createArtifactPort', 'observeSquareDeliveryRevision', 'observeSquareRevision']],
+    ['claude-delivery-status.ts', ['createArtifactPort']],
+    ['claude-delivery.ts', ['createArtifactPort']],
+    ['plugins/opencode/delivery.ts', ['createArtifactPort', 'observeSquareRevision']],
     ['stream.ts', ['observeSquareRevision']],
     ['square-migration.ts', ['openExistingSquareDatabase']],
   ]);
@@ -73,9 +75,7 @@ function storageLeaks(sources) {
       }
       if (target === 'square-sqlite.ts' && !['artifact.ts', 'square-migration.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
-      if (target === 'host-ledger-sqlite.ts' && !['host-ledger-file-adapter.ts', 'host-ledger-migration.ts'].includes(file))
-        leaks.push(`${file} -> ${target}`);
-      if (target === 'sqlite-transaction.ts' && !['artifact.ts', 'square-migration.ts', 'host-ledger-sqlite.ts', 'host-ledger-migration.ts'].includes(file))
+      if (target === 'sqlite-transaction.ts' && !['artifact.ts', 'square-migration.ts', 'square-migration-host-ledger.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
     }
   }
@@ -92,7 +92,7 @@ test('resolved imports preserve artifact and SQL ownership across native integra
     ['open-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
     ['cli/hidden.ts', "import { withLedger } from '../host-ledger-sqlite.js';"],
     ['decisions.ts', "import { inSqliteTransaction } from './sqlite-transaction.js';"],
-  ])), ['cli/hidden.ts -> host-ledger-sqlite.ts', 'decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
+  ])), ['decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
 });
 
 test('one canonicalizer owns square location keys', () => {
@@ -105,8 +105,8 @@ test('one canonicalizer owns square location keys', () => {
 });
 
 test('SQLite artifact rows stay private to storage framing and explicit migration', () => {
-  const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-migration.ts'];
-  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts', 'host-ledger-sqlite.ts', 'host-ledger-migration.ts', 'sqlite-transaction.ts']), []);
+  const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-legacy-framing.ts', 'square-migration.ts', 'square-migration-host-ledger.ts'];
+  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts', 'sqlite-transaction.ts']), []);
   const driver = productionSources.get('square-sqlite.ts') ?? '';
   assert.match(driver, /CREATE TABLE landed_audience/);
   assert.doesNotMatch(driver, /CREATE (?:TRIGGER|VIEW|VIRTUAL TABLE)/);
@@ -114,13 +114,14 @@ test('SQLite artifact rows stay private to storage framing and explicit migratio
     assert.deepEqual(ownershipLeaks(identifier, boundary), [], `${identifier} escaped the artifact boundary`);
   }
   for (const identifier of ['application_id', 'user_version']) {
-    assert.deepEqual(ownershipLeaks(identifier, [...boundary, 'host-ledger-sqlite.ts']), [], `${identifier} escaped storage framing`);
+    assert.deepEqual(ownershipLeaks(identifier, boundary), [], `${identifier} escaped storage framing`);
   }
 });
 
-test('host ledger SQL and derived lookup columns stay private to its storage codec', () => {
+test('legacy host-ledger rows are readable only inside explicit artifact migration', () => {
+  const allowed = ['square-migration-host-ledger.ts'];
   for (const identifier of ['host_meta', 'host_presence', 'host_evidence', 'row_json', 'presence_revision', 'evidence_revision', 'claim_token_key', 'effective_at']) {
-    assert.deepEqual(ownershipLeaks(identifier, ['host-ledger-sqlite.ts']), [], `${identifier} escaped host ledger storage`);
+    assert.deepEqual(ownershipLeaks(identifier, allowed), [], `${identifier} escaped the migration codec`);
   }
   const transaction = productionSources.get('sqlite-transaction.ts') ?? '';
   assert.doesNotMatch(transaction, /host-ledger|square-sqlite|host_meta|square_meta/, 'busy retry and transaction lifetime have no schema owner');
@@ -129,8 +130,8 @@ test('host ledger SQL and derived lookup columns stay private to its storage cod
 test('artifact callbacks are synchronous typed capabilities, not replacement snapshots', () => {
   const source = productionSources.get('ports.ts') ?? '';
   assert.match(source, /read<R>\(select: \(facts: SquareRead\) => R,/);
-  assert.match(source, /transact<R>\(change: \(facts: SquareWrite\) => R,/);
-  assert.doesNotMatch(source, /SquareState|state\?:/);
+  assert.match(source, /transactAs<R>\(authority: ArtifactWriteAuthority, change: \(facts: SquareWrite\) => R,/);
+  assert.doesNotMatch(source, /\btransact<R>|SquareState|state\?:/);
 });
 
 test('pure landing depends only on domain facts and syntax', () => {
@@ -194,10 +195,10 @@ test('decisions and perception use domain facts, outside host and storage operat
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'ledger-maintenance.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode/delivery.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The real Square resource is the only entry into participant execution.
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)square-actions\.js['"]/, ['sqlite-square.ts']);
+  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)(?:square-actions)\.js['"]/, ['sqlite-square.ts', 'wakes.ts']);
   assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, []);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);
@@ -245,19 +246,19 @@ const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
   ['runtime.ts', ['HELD_WAIT_BUDGET_MS']],
   ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
-  ['participant-identity.ts', ['participantIdentity', 'operationEnv']],
+  ['participant-identity.ts', ['participantIdentity', 'operationEnv', 'harnessSessionSources']],
   ['search.ts', ['grepSnippet']],
 ]);
 const pureTypeBindings = new Map([
   ['square-core.ts', ['ActivityId', 'Perception', 'Reach']],
-  ['model.ts', ['HardCap', 'BuildOptions', 'RoomChangeAct', 'StoredAct', 'PublicAct']],
+  ['model.ts', ['HardCap', 'BuildOptions', 'RoomChangeAct', 'StoredAct', 'PublicAct', 'Body', 'WakeAddress']],
 ]);
 const integrationTypeBindings = new Map([
   ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],
   ['cli/ledger-command.ts -> host-ledger-migration.ts', ['HostLedgerReport']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['LedgerMaintenanceReport']],
 ]);
-const presentationHelpers = new Set(['presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
+const presentationHelpers = new Set(['presentation.ts', 'operation-presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
 
 function transportLeaks(sources, roots) {
   const visited = new Set(), leaks = [];

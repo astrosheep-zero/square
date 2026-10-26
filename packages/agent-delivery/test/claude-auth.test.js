@@ -70,7 +70,7 @@ test('an explicit token becomes the first frame, before the user frame', async (
   await received(f, 2)
   assert.deepEqual(f.frames, [
     { type: 'auth', token: token('a') },
-    { msgV: 1, msg_id: messageId, type: 'user', session_id: 'target', message: { role: 'user', content: 'body' }, priority: 'next' },
+    { msgV: 1, msg_id: messageId, uuid: messageId, type: 'user', session_id: 'target', message: { role: 'user', content: 'body' }, priority: 'next' },
   ])
 })
 
@@ -155,5 +155,5 @@ test('POSIX sends the user frame alone when nothing resolves a token', async (t)
   const result = await writeClaudeNative({ sessionId: 'target', endpoint: f.endpoint, claudeHome: home, env: {} }, 'body', { deadline: deadline() })
   assert.equal(result.outcome, 'written')
   await received(f, 1)
-  assert.deepEqual(Object.keys(f.frames[0]).sort(), ['message', 'msgV', 'msg_id', 'priority', 'session_id', 'type'])
+  assert.deepEqual(Object.keys(f.frames[0]).sort(), ['message', 'msgV', 'msg_id', 'priority', 'session_id', 'type', 'uuid'])
 })

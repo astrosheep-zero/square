@@ -5,8 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 import { Square } from '../dist/square-api.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { SQUARE_TOOLS } from '../dist/square-tools.js';
-import { hostLedgerForEnv, readParticipantOwner } from '../dist/registry.js';
 
 function registeredTools() {
   const tools = new Map();
@@ -30,6 +30,12 @@ async function fixture(t) {
   return { cwd, squarePath, tools, context, call };
 }
 
+async function readSeat(squarePath, participant) {
+  const artifact = createArtifactPort(squarePath);
+  try { return (await artifact.read(facts => facts.seat(participant))).value; }
+  finally { await artifact.close(); }
+}
+
 test('Pi registers the shared contract as namespaced codemode tools', () => {
   const tools = registeredTools();
   assert.deepEqual([...tools.keys()], SQUARE_TOOLS.map(tool => `square_${tool.name}`));
@@ -51,10 +57,10 @@ test('Pi calls use live context, preserve environment, and return structured dat
   const before = { ...process.env };
   const joined = await call('join', { as: 'rei' });
   assert.equal(joined.structuredContent.participant, 'rei');
-  assert.deepEqual(JSON.parse(joined.content[0].text), joined.structuredContent);
-  const owner = await readParticipantOwner(squarePath, 'rei', hostLedgerForEnv());
-  assert.equal(owner.channel, 'pi');
-  assert.equal(owner.session, 'pi-tools-first');
+  assert.match(joined.content[0].text, /you stepped into the square/);
+  assert.doesNotMatch(joined.content[0].text, /"observation"/);
+  const firstSeat = await readSeat(squarePath, 'rei');
+  assert.deepEqual(firstSeat?.body, { channel: 'pi', session: 'pi-tools-first' });
 
   const refused = await call('join', { as: 'rei' }, context('pi-tools-second'));
   assert.equal(refused.isError, true);
@@ -64,9 +70,12 @@ test('Pi calls use live context, preserve environment, and return structured dat
   // A fresh context's cwd, not startup state, resolves the relative location.
   const subdir = path.join(cwd, 'other');
   fs.mkdirSync(subdir);
-  const other = await Square.build({ path: path.join(subdir, 'test.square'), markdown: 'Other square' });
+  const secondSquarePath = path.join(subdir, 'test.square');
+  const other = await Square.build({ path: secondSquarePath, markdown: 'Other square' });
   await other.close();
   assert.equal((await call('join', { as: 'rei' }, context('pi-tools-second', subdir))).structuredContent.kind, 'joined');
+  const secondSeat = await readSeat(secondSquarePath, 'rei');
+  assert.deepEqual(secondSeat?.body, { channel: 'pi', session: 'pi-tools-second' });
 
   for (const args of [{ body: 7 }, { body: 'no', session: 'forged' }, { body: 'no', reply: 'act/01' }]) {
     const invalid = await call('express', args);

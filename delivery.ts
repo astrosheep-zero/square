@@ -86,7 +86,7 @@ export async function* pendingPages(artifact: SquareArtifactPort, scan: PendingS
 /** A pass retains only its captured joins; routes and individual receipts are fresh. */
 export function pendingFacts(facts: SquareRead, scan: PendingScan, heads: readonly DirectedHead[]) {
   const joined = new Set(scan.roster.filter((participant) => sameJoin(facts, participant)).map((participant) => participant.name));
-  return { routes: facts.routes(), pending: heads.filter((head) => joined.has(head.recipient)
+  return { pending: heads.filter((head) => joined.has(head.recipient)
     && pendingHead(facts, head.recipient, head.index) !== undefined) };
 }
 

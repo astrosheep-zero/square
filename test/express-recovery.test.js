@@ -28,8 +28,11 @@ function recovery(result, body) {
 function executeRecovery(command, env = {}) {
   // Execute exactly the printed shell syntax, substituting only the local binary.
   assert.ok(command.startsWith('square '));
+  // The printed command carries its own square, so the retry presents that seat's body.
+  const location = /--location '([^']+)'/.exec(command)?.[1];
   return spawnSync('/bin/sh', ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} ${command.slice(7)}`], {
-    cwd: ROOT, encoding: 'utf8', env: testEnv(env), timeout: 10000,
+    cwd: ROOT, encoding: 'utf8', timeout: 10000,
+    env: testEnv({ ...(location === undefined ? {} : { CODEX_THREAD_ID: path.resolve(location) }), ...env }, location),
   });
 }
 
@@ -200,7 +203,7 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
   assert.equal((await says(file)).at(-1).body, body.trim());
 });
 
-test('behind recovery offers catch then an ordinary retry and labels force as optional', shellReplay, async () => {
+test('behind recovery offers catch then an ordinary retry without promoting a bypass', shellReplay, async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = (await square.join('Bob')).participant;
@@ -208,11 +211,10 @@ test('behind recovery offers catch then an ordinary retry and labels force as op
   });
   const body = 'answer\n';
   const saved = recovery(run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', 'act/2', '-']), { input: body }), body);
-  assert.equal(saved.commands.length, 2);
+  assert.equal(saved.commands.length, 1);
   assert.doesNotMatch(saved.commands[0], /--force/);
   assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/2 -/);
-  assert.match(saved.output, /optional: express over unread activity with --force/);
-  assert.match(saved.commands[1], /express --force --no-wait --mention 'Bob' --reply act\/2 -/);
+  assert.doesNotMatch(saved.output, /optional: express over unread activity with --force/);
   assert.match(saved.output, /catch\n  · take it in, then retry:/);
   assert.doesNotMatch(saved.output, /catch --now/);
   assert.ok(saved.output.indexOf('catch') < saved.output.indexOf(saved.commands[0]));
@@ -231,15 +233,16 @@ test('retry commands quote shell data and keep every original recipient', () => 
 });
 
 test('only admission rejection proves a failed express unsent; post-commit failure never suggests sending again', async () => {
-  const square = buildMemorySquare({ markdown: 'test' });
-  await join(square, 'Alice');
-  await assert.rejects(express(square, 'Alice', 'bad target', { mentions: ['Nobody'] }), (error) => error.facts?.activityUnsent === true);
-  const transact = square.artifact.transact.bind(square.artifact);
-  square.artifact.transact = async (...args) => {
-    await transact(...args);
+  const square = buildMemorySquare({ markdown: 'test', body: { channel: 'test', session: 'express-recovery' } });
+  // Action-level writes present the handle that join established.
+  const opened = { ...square, participantSeat: (await join(square, 'Alice')).seat };
+  await assert.rejects(express(opened, 'Alice', 'bad target', { mentions: ['Nobody'] }), (error) => error.facts?.activityUnsent === true);
+  const transactAs = square.artifact.transactAs.bind(square.artifact);
+  square.artifact.transactAs = async (...args) => {
+    await transactAs(...args);
     throw new SquareError('invalid_args', 'injected failure after the commit');
   };
-  await assert.rejects(express(square, 'Alice', 'actually committed'), (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
+  await assert.rejects(express(opened, 'Alice', 'actually committed'), (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
   assert.equal((await square.artifact.read((facts) => facts.activity(facts.header().lastActIndex))).value.body, 'actually committed');
   for (const landedId of [undefined, 'act/1']) {
     const rendered = renderActivityUncertain({ squarePath: '/tmp/test.square', name: 'Alice', draftPath: '/tmp/draft.md', landedId });
@@ -345,7 +348,7 @@ test('selected artifact corruption never advertises a safely unsent activity', a
   const before = database.prepare('SELECT revision, next_act_index FROM square_meta').get();
   database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":42}');
   database.close();
-  const square = await Square.at({ path: file });
+  const square = await Square.at({ path: file, body: { channel: 'codex', session: path.resolve(file) } });
   try {
     const writer = (await square.join('Writer')).participant;
     await assert.rejects(writer.express('reply', { force: true, reply: 'act/1' }),

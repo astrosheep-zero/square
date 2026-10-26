@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createArtifactPort } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { catchUp } from '../dist/square-actions.js';
 import { inSquareCount, terminalStatusFor, watchTerminalStatus } from '../dist/runtime.js';
 
@@ -12,6 +12,16 @@ function fixture(t, hardCap = null) {
   });
   t.after(() => cell.close());
   return cell;
+}
+
+async function establishSeat(cell, participant, at) {
+  const body = { channel: 'test', session: participant.toLowerCase() };
+  return (await cell.transactAs({ kind: 'join', participant, body }, (facts) => {
+    const joined = facts.land({ kind: 'join', actor: participant, at });
+    const seat = { participant, body, generation: `act/${joined.index}` };
+    facts.storeSeat(seat);
+    return seat;
+  })).value;
 }
 
 test('participant counts are immutable, transaction-scoped facts with read-your-writes and rollback', async (t) => {
@@ -57,9 +67,9 @@ test('participant counts are immutable, transaction-scoped facts with read-your-
 
 test('catch and terminal summaries use aggregate facts and preserve all-known-peer quorum and cap precedence', async (t) => {
   const cell = fixture(t, 1);
+  await establishSeat(cell, 'Alice', 0);
+  const bobSeat = await establishSeat(cell, 'Bob', 1);
   await cell.transact((facts) => {
-    facts.land({ kind: 'join', actor: 'Alice', at: 0 });
-    facts.land({ kind: 'join', actor: 'Bob', at: 1 });
     facts.land({ kind: 'say', actor: 'Ghost', at: 2, body: 'not standing, not done' });
     facts.land({ kind: 'done', actor: 'Alice', at: 3 });
   });
@@ -69,7 +79,7 @@ test('catch and terminal summaries use aggregate facts and preserve all-known-pe
     roster() { assert.fail('summary must not hydrate the roster'); },
     participantCounts() { countReads++; return facts.participantCounts(); },
   });
-  const square = { clock: () => 100, location: 'memory', artifact: {
+  const square = { clock: () => 100, location: 'memory', body: bobSeat.body, participantSeat: bobSeat, artifact: {
     ...cell,
     read: (select, signal) => cell.read((facts) => select(wrap(facts)), signal),
     transact: (change, signal) => cell.transact((facts) => change(wrap(facts)), signal),

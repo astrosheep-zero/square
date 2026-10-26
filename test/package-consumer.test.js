@@ -45,7 +45,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
-    const square = Square.inMemory({ markdown: 'context' });
+    const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'consumer' } });
     const joined: Promise<JoinResult> = square.join('Alice');
     const participant: Promise<Participant> = joined.then(result => result.participant);
     const history: Promise<HistoryResult> = square.history({ limit: null });
@@ -62,7 +62,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { Square } from '@astrosheep/square';
-    const square = Square.inMemory({ markdown: 'context' });
+    const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'consumer' } });
     const { participant: alice } = await square.join('Alice');
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();

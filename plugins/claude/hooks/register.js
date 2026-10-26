@@ -84,7 +84,7 @@ export function register(on) {
     return next(e);
   });
   on('session.end', async ($, e, next) => {
-    // Pinned old ID and captured ownership epochs, never a later current coordinate.
+    // Pinned old ID and captured seat generations, never a later current coordinate.
     const endedAt = await $.clock.now().catch(() => undefined);
     const held = await $.state.get({ plugin: 'square', key: 'inbox', id: e.sessionId }).catch(() => undefined);
     const old = held?.value;

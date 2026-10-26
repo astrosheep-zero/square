@@ -5,20 +5,24 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
-import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { createArtifactPort, readSquareSnapshot } from '../dist/artifact.js';
+import { Square } from '../dist/square-api.js';
 import { CLI, ROOT, testEnv, withName } from './square-cli-helpers.js';
 
 async function fixture(t, held = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-wait-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
-  const state = await prepareSquareBuild({ force: true, hardCap: null }, 'deadline wait');
-  state.acts = [{ kind: 'join', actor: 'Host', index: 0, at: 1 }, { kind: 'join', actor: 'Bob', index: 1, at: 2 }];
-  if (held) state.acts.push({ kind: 'hold', actor: 'Host', index: 2, at: 3, body: 'pause' });
-  state.runtime.nextActIndex = state.acts.length;
-  await writeSquareFile(file, state);
+  // The catching CLI presents this body, so the seats are established with it.
+  const session = `wait-${path.basename(root)}`;
+  const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null, env: testEnv({}, file), body: { channel: 'codex', session } });
+  try {
+    const host = (await square.join('Host')).participant;
+    await square.join('Bob');
+    if (held) await host.hold('pause');
+  } finally { await square.close(); }
   const child = spawn(process.execPath, [CLI, ...withName(file, 'Bob', ['catch', '--mention', '--idle', '120ms'])], {
-    cwd: ROOT, env: testEnv({ SQUARE_WATCH_QUIET_MS: '120', SQUARE_WATCH_POLL_MS: '10000', SQUARE_WATCH_HEARTBEAT_MS: '100', SQUARE_WATCH_STALE_MS: '2000' }),
+    cwd: ROOT, env: testEnv({ CODEX_THREAD_ID: session, SQUARE_WATCH_QUIET_MS: '120', SQUARE_WATCH_POLL_MS: '10000', SQUARE_WATCH_HEARTBEAT_MS: '100', SQUARE_WATCH_STALE_MS: '2000' }, file),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -58,7 +62,8 @@ test('CLI hold keeps its lease alive, pauses quiet expiry, then wakes on resume 
   })(), 'held catch did not renew its lease');
   const cell = createArtifactPort(item.file);
   try {
-    await cell.transact((facts) => {
+    const host = (await cell.read(facts => facts.seat('Host'))).value;
+    await cell.transactAs({ kind: 'participant', seat: host }, facts => {
       facts.land({ kind: 'resume', actor: 'Host', at: Date.now() });
       facts.land({ kind: 'say', actor: 'Host', at: Date.now(), body: 'activity after resume', mentions: ['Bob'] });
     });

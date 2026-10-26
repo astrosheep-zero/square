@@ -2,10 +2,12 @@ import './sandbox-env.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { Square } from '@astrosheep/square'
 import { Bridge } from '../dist/bridge.js'
 import { FakeSlack } from './fake-slack.js'
 import {
-  BRIDGE_TOKEN, CHANNEL, FAYE_TOKEN, buildSquare, connectedSlack, message, opened, settingsFor, until,
+  BRIDGE_TOKEN, CHANNEL, FAYE_TOKEN, bridgeBody, buildSquare, connectedSlack, message, opened, settingsFor, until,
 } from './fixtures.js'
 
 const personas = { faye: FAYE_TOKEN }
@@ -24,6 +26,79 @@ async function start(t, { path, slack, state, log, pollIntervalMs = 20 }) {
 function slackWith(bots = personas) {
   return connectedSlack(new FakeSlack(), bots)
 }
+
+test('the bridge opens its square with stable explicit custody from local settings', async () => {
+  const path = await buildSquare()
+  const settings = settingsFor({ square: path, personas })
+  const slack = slackWith()
+  const originalAt = Square.at
+  let input
+  let bridge
+  Square.at = async (options) => {
+    input = options
+    return { history: async () => ({ activities: [] }), close: async () => {} }
+  }
+  try {
+    bridge = await Bridge.open({ settings, port: slack })
+    assert.equal(input.path, settings.square)
+    assert.deepEqual(input.body, {
+      channel: 'slack-bridge',
+      session: resolve(settings.state),
+      agent: settings.channel,
+    })
+  }
+  finally {
+    Square.at = originalAt
+    await bridge?.stop()
+  }
+})
+
+test('a caller-owned square keeps its explicit identity and stays caller-owned', async (t) => {
+  const path = await buildSquare()
+  const settings = settingsFor({ square: path, personas })
+  const square = await Square.at({ path, body: { channel: 'caller-owned', session: 'caller-resource' } })
+  t.after(() => square.close())
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const originalAt = Square.at
+  let openCalls = 0
+  Square.at = async (...args) => {
+    openCalls += 1
+    return originalAt(...args)
+  }
+  let bridge
+  try {
+    bridge = await Bridge.open({ settings, port: slack, square })
+    await bridge.handleInbound(message({ ts: '1700.0002', text: 'hello from the supplied square' }))
+    await bridge.stop()
+  }
+  finally {
+    Square.at = originalAt
+  }
+
+  assert.equal(openCalls, 0)
+  assert.equal((await archive(square)).at(-1).actor, 'slack/Alice')
+})
+
+test('inbound messages reacquire a participant handle after a seat is replaced', async () => {
+  const path = await buildSquare()
+  const settings = settingsFor({ square: path, personas })
+  const square = await Square.at({ path, body: bridgeBody(settings) })
+  const replacement = await Square.at({ path, body: bridgeBody(settings) })
+  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
+  const bridge = await Bridge.open({ settings, port: slack, square })
+  try {
+    await bridge.handleInbound(message({ ts: '1700.0003', text: 'before replacement' }))
+    await (await replacement.participant('slack/Alice')).done()
+    assert.equal((await replacement.join('slack/Alice')).kind, 'joined')
+
+    await bridge.handleInbound(message({ ts: '1700.0004', text: 'after replacement' }))
+    assert.equal((await archive(square)).at(-1).body, 'after replacement')
+  }
+  finally {
+    await bridge.stop()
+    await Promise.all([square.close(), replacement.close()])
+  }
+})
 
 test('Slack messages land as say activities from slack participants', async (t) => {
   const path = await buildSquare()

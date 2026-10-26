@@ -7,6 +7,43 @@ export type { Act, ActivityId, Audience, Reach } from './square-core.js';
 export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'claude-native', 'paseo'] as const;
 export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+export interface Body {
+  readonly channel: string;
+  readonly session: string;
+  readonly agent?: string;
+}
+
+export interface WakeAddress {
+  readonly kind: WakeRouteKind;
+  readonly address: Readonly<Record<string, string>>;
+}
+
+/** Artifact-owned custody binding. Generation is the join activity that established it. */
+export interface Seat {
+  readonly participant: string;
+  readonly body: Body;
+  readonly generation: ActivityId;
+  readonly wakeAddress?: WakeAddress;
+}
+
+export interface SeatWatchLease {
+  readonly generation: ActivityId;
+  readonly lease: WatchLease;
+}
+
+export function sameBody(left: Body, right: Body): boolean {
+  return left.channel === right.channel && left.session === right.session && left.agent === right.agent;
+}
+
+export function validateBody(body: Body): void {
+  if (!body || typeof body.channel !== 'string' || !body.channel || typeof body.session !== 'string' || !body.session
+    || (body.agent !== undefined && (typeof body.agent !== 'string' || !body.agent))) {
+    throw new SquareError('invalid_args', 'A participant write requires an explicit channel and session body.');
+  }
+}
+
 export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
   return typeof value === 'string' && (WAKE_ROUTE_KINDS as readonly string[]).includes(value);
 }
@@ -127,6 +164,8 @@ export interface InboxMembership {
   squarePath: string;
   notifications: InboxNotification[];
   catchLease?: WatchLease;
+  /** Current artifact seat verified when the membership was read. */
+  seat?: Seat;
 }
 
 export interface WatchOptions {

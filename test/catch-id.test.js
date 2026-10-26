@@ -7,7 +7,9 @@ import { readSquareSnapshot } from '../dist/artifact.js';
 import { run, tempSquare, withName } from './square-cli-helpers.js';
 
 async function setup(t, file) {
-  const square = file ? await Square.build({ path: file, markdown: 'test' }) : Square.inMemory({ markdown: 'test' });
+  // The CLI acts through the Codex body, so the SDK fixture joins both seats through it.
+  const sessionBody = { channel: 'codex', session: file === undefined ? 'catch-id-memory' : path.resolve(file) };
+  const square = file ? await Square.build({ path: file, markdown: 'test', body: sessionBody }) : Square.inMemory({ markdown: 'test', body: sessionBody });
   t.after(() => square.close());
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;

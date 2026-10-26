@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
+import { DatabaseSync } from 'node:sqlite';
 
 import installedSquarePiExtension, {
   inboxKeys,
@@ -14,8 +15,7 @@ import installedSquarePiExtension, {
   renderPiInbox,
   renderSquareCard,
 } from '../plugins/pi/square-pi.js';
-import { readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
-import { emptyRuntimeState } from '../dist/square-sqlite.js';
+import { createArtifactPort, readSquareSnapshot } from '../dist/artifact.js';
 import { SQUARE_IDENTITY } from '../dist/identity.js';
 import {
   CLAUDE_PLUGIN_ID,
@@ -37,8 +37,6 @@ import {
   piPackageSource,
   uninstallPiPackage,
 } from '../dist/harness-pi.js';
-import { hostLedgerForEnv } from '../dist/registry.js';
-import { interceptLedgerSql } from './host-ledger-fixtures.js';
 import { withFileLock } from '../dist/file-lock.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
@@ -321,19 +319,12 @@ test('Pi installation preserves a configured local Square source without adding 
 test('package facade participant verbs persist through shared actions', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-actions-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
-  const squareState = {
-    hardCap: null,
-    preamble: [],
-    warmup: ['warmup'],
-    acts: [],
-    runtime: emptyRuntimeState(0),
-  };
-  await writeSquareFile(squarePath, squareState);
+  const body = { channel: 'pi', session: 'alice-session' };
+  const square = await Square.build({ path: squarePath, markdown: 'warmup', body, participant: 'Alice' });
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
-    const square = await Square.at({ path: squarePath });
-    const alice = (await square.join('Alice')).participant;
+    const alice = (await square.join()).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
@@ -588,31 +579,34 @@ test('the omission line names what the budget dropped and closes the reminder', 
 async function piFixture(sessionId, pending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
   const squarePath = path.join(root, 'SQUARE.square');
-  const registry = path.join(root, 'sessions.ndjsonl');
-  const runtime = { ...emptyRuntimeState(pending ? 3 : 2), nextActIndex: pending ? 3 : 2 };
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 1, index: 0 },
-    { kind: 'join', actor: 'Bob', at: 2, index: 1 },
-    ...(pending ? [{ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'], index: 2 }] : []),
-  ];
-  await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts, runtime });
-  return { root, squarePath, registry, sessionId };
+  const indexPath = path.join(root, 'index.ndjsonl');
+  const aliceBody = { channel: 'pi', session: `${sessionId}-author` };
+  const bobBody = { channel: 'pi', session: sessionId };
+  const env = { ...process.env, SQUARE_INDEX: indexPath };
+  const aliceSquare = await Square.build({ path: squarePath, markdown: 'test', env, body: aliceBody, participant: 'Alice' });
+  try { await aliceSquare.join(); }
+  finally { await aliceSquare.close(); }
+  const bobSquare = await Square.at({ path: squarePath, env, body: bobBody, participant: 'Bob' });
+  try { await bobSquare.join(); }
+  finally { await bobSquare.close(); }
+  if (pending) {
+    const author = await Square.at({ path: squarePath, env, body: aliceBody, participant: 'Alice' });
+    try { await (await author.participant()).express('hello @Bob', { force: true, mentions: ['Bob'] }); }
+    finally { await author.close(); }
+  }
+  return { root, squarePath, indexPath, env, aliceBody, bobBody, sessionId };
 }
 
 async function withPiFixture(sessionId, fn, pending = true) {
   const item = await piFixture(sessionId, pending);
-  const previous = {
-    registry: process.env.SQUARE_REGISTRY,
-    piSession: process.env.PI_SESSION_ID,
-  };
-  process.env.SQUARE_REGISTRY = item.registry;
+  const previous = { squareIndex: process.env.SQUARE_INDEX, piSession: process.env.PI_SESSION_ID };
+  process.env.SQUARE_INDEX = item.indexPath;
   delete process.env.PI_SESSION_ID;
-  await hostLedgerForEnv().ensurePresence({ location: item.squarePath, participant: 'Bob', session: sessionId, channel: 'pi' });
   try {
     await fn(item);
   } finally {
-    if (previous.registry === undefined) delete process.env.SQUARE_REGISTRY;
-    else process.env.SQUARE_REGISTRY = previous.registry;
+    if (previous.squareIndex === undefined) delete process.env.SQUARE_INDEX;
+    else process.env.SQUARE_INDEX = previous.squareIndex;
     if (previous.piSession === undefined) delete process.env.PI_SESSION_ID;
     else process.env.PI_SESSION_ID = previous.piSession;
     // Yield while an aborted presentation releases its file handles on Windows.
@@ -620,15 +614,13 @@ async function withPiFixture(sessionId, fn, pending = true) {
   }
 }
 
-async function expressToPi(item, body) {
-  const square = await Square.at({ path: item.squarePath });
+async function expressToPi(item, text) {
+  const square = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
   try {
-    const alice = (await square.join('Alice')).participant;
-    const result = await alice.express(body, { mentions: ['Bob'] });
+    const alice = await square.participant();
+    const result = await alice.express(text, { mentions: ['Bob'] });
     return Number(result.activity.id.slice('act/'.length));
-  } finally {
-    await square.close();
-  }
+  } finally { await square.close(); }
 }
 
 async function waitUntil(predicate, message) {
@@ -662,9 +654,8 @@ function piTurnEnd(handlers, stopReason = 'stop', ctx = {}) {
 }
 
 function presentationBoundaryLockPath(sessionId) {
-  const root = process.env.SQUARE_HOST_LEDGER_ROOT
-    ?? (process.env.SQUARE_REGISTRY === undefined ? path.join(os.homedir(), '.square', 'host-ledger') : path.dirname(process.env.SQUARE_REGISTRY));
-  return path.join(root, `presentation-boundary-${crypto.createHash('sha256').update(sessionId).digest('hex')}.lock`);
+  const index = path.resolve(process.env.SQUARE_INDEX ?? path.join(os.homedir(), '.square', 'index.ndjsonl'));
+  return `${index}.boundary-${crypto.createHash('sha256').update(JSON.stringify({ channel: 'pi', session: sessionId })).digest('hex')}.lock`;
 }
 
 /** Hold the per-session presentation boundary lock so the next boundary must wait for it. */
@@ -842,21 +833,17 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
       on(event, handler) { handlers.set(event, handler); },
       sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
     };
-    let pendingEvidenceWrite = false;
     let refusedCommit = false;
-    interceptLedgerSql(t, item.root, (method, sql) => {
-      const text = sql ?? '';
-      if (method === 'prepare' && /(INTO|UPDATE|DELETE FROM) host_evidence/.test(text)) pendingEvidenceWrite = true;
-      else if (method === 'exec' && /^(COMMIT|ROLLBACK)/.test(text)) {
-        const wroteEvidence = pendingEvidenceWrite;
-        pendingEvidenceWrite = false;
-        // A recognized transient busy: the shared primitive retries this same commit.
-        if (wroteEvidence && !refusedCommit && sent.length === 1) {
-          refusedCommit = true;
-          throw new Error('database is locked');
-        }
+    let failNextCommit = false;
+    const exec = DatabaseSync.prototype.exec;
+    const artifactLocation = fs.realpathSync.native(item.squarePath);
+    t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
+      if (failNextCommit && sql === 'COMMIT' && this.location() === artifactLocation) {
+        failNextCommit = false;
+        refusedCommit = true;
+        throw new Error('database is locked');
       }
-      return undefined;
+      return exec.call(this, sql, ...args);
     });
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-dropped-session' }, cwd: '/tmp/no-public-square' };
@@ -865,8 +852,11 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
       const actIndex = await expressToPi(item, 'retry the dropped steer @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not attempt the first steer');
       await piTurnStart(handlers);
+      failNextCommit = true;
       await piTurnEnd(handlers);
+      await waitUntil(() => refusedCommit, 'the dropped-presentation artifact commit did not encounter the injected busy');
       assert.equal(sent.length, 1);
+      await waitUntil(() => failNextCommit === false, 'the artifact did not retry its transient commit');
       await piTurnStart(handlers);
       await piTurnEnd(handlers);
       await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
@@ -930,7 +920,144 @@ test('Pi cancels the entire TUI pending batch without resurrecting it on later a
   }, false);
 });
 
-test('Pi cancels notifications during TUI abort instead of deferring a wake', async () => {
+test('Pi cancellation persists its cutoff across watcher restart and admits later activity', async () => {
+  await withPiFixture('pi-durable-cancel-cutoff', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    squarePiExtension(pi);
+    const context = { sessionManager: { getSessionId: () => 'pi-durable-cancel-cutoff' }, cwd: '/tmp/no-public-square' };
+    await handlers.get('session_start')({}, context);
+    try {
+      await waitUntil(() => sent.length === 1, 'Pi did not deliver the initial activity');
+      await piMessageEnd(handlers, sent[0].message.content);
+      await waitUntil(async () => await hasPresentedForOwner('pi-durable-cancel-cutoff', item.squarePath, 'Bob', 2),
+        'Pi did not commit the initial presentation');
+
+      const lock = await holdBoundaryLock('pi-durable-cancel-cutoff');
+      const run = new AbortController();
+      await piAgentStart(handlers, { mode: 'tui', signal: run.signal });
+      const cancelledIndex = await expressToPi(item, 'this pending activity belongs to the aborted run @Bob');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.equal(sent.length, 1, 'the held boundary must keep the pending activity from reaching Pi');
+
+      run.abort();
+      await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+      const artifact = createArtifactPort(item.squarePath);
+      try {
+        await waitUntil(async () => (await artifact.read(facts => {
+          const seat = facts.seat('Bob');
+          return seat === undefined ? undefined : facts.cancelledThrough('Bob', seat.generation);
+        })).value === cancelledIndex, 'Pi did not persist the cancellation cutoff');
+      } finally { await artifact.close(); }
+
+      const freshIndex = await expressToPi(item, 'this activity landed after the persisted cutoff @Bob');
+      assert.ok(freshIndex > cancelledIndex);
+      lock.release();
+      await lock.held();
+      await handlers.get('agent_settled')({});
+      await waitUntil(() => sent.length === 2, 'Pi did not deliver activity newer than the cancellation cutoff');
+      assert.match(sent[1].message.content, /landed after the persisted cutoff/);
+      assert.doesNotMatch(sent[1].message.content, /belongs to the aborted run/);
+      await piMessageEnd(handlers, sent[1].message.content);
+      await waitUntil(async () => await hasPresentedForOwner('pi-durable-cancel-cutoff', item.squarePath, 'Bob', freshIndex),
+        'Pi did not commit the post-cutoff activity');
+
+      // A second session_start clears every process-local suppression set, like a watcher restart.
+      await handlers.get('session_start')({}, context);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(sent.length, 2, 'the persisted cutoff must suppress cancelled work after local state resets');
+      assert.equal(await hasPresentedForOwner('pi-durable-cancel-cutoff', item.squarePath, 'Bob', cancelledIndex), false);
+    } finally {
+      await handlers.get('session_shutdown')({}, context);
+    }
+  });
+});
+
+test('a failed Pi cancellation fences only its native session and does not replay that session', async (t) => {
+  await withPiFixture('pi-failed-cancel-old-session', async (item) => {
+    const handlers = new Map();
+    const sent = [];
+    const pi = {
+      on(event, handler) { handlers.set(event, handler); },
+      sendMessage(message, options) { sent.push({ message, options }); return Promise.resolve(); },
+    };
+    let failCancellation = false, failedCancellation = false;
+    const exec = DatabaseSync.prototype.exec;
+    const artifactLocation = fs.realpathSync.native(item.squarePath);
+    t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
+      if (failCancellation && sql === 'BEGIN IMMEDIATE' && this.location() === artifactLocation) {
+        failCancellation = false;
+        failedCancellation = true;
+        throw new Error('injected cancellation write failure');
+      }
+      return exec.call(this, sql, ...args);
+    });
+    squarePiExtension(pi);
+    const oldId = item.sessionId;
+    const context = id => ({ sessionManager: { getSessionId: () => id }, cwd: '/tmp/no-public-square' });
+    await handlers.get('session_start')({}, context(oldId));
+    const run = new AbortController();
+    await piAgentStart(handlers, { mode: 'tui', signal: run.signal });
+    failCancellation = true;
+    run.abort();
+    await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+    await handlers.get('agent_settled')({});
+    assert.equal(failedCancellation, true, 'cancellation suppression must encounter the injected persistence failure');
+    assert.equal(sent.length, 0);
+
+    const newId = 'pi-new-session-after-old-failure';
+    const newBody = { channel: 'pi', session: newId };
+    const recipient = await Square.at({ path: item.squarePath, env: item.env, body: newBody, participant: 'NewBob' });
+    try { await recipient.join(); } finally { await recipient.close(); }
+    const author = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
+    let newIndex;
+    try { newIndex = Number((await (await author.participant()).express('new session remains live @NewBob', { mentions: ['NewBob'] })).activity.id.slice(4)); }
+    finally { await author.close(); }
+
+    await handlers.get('session_start')({}, context(newId));
+    await waitUntil(() => sent.length === 1, 'an old-session cancellation failure disabled the new Pi watcher');
+    assert.match(sent[0].message.content, /new session remains live/);
+    await piMessageEnd(handlers, sent[0].message.content);
+    await waitUntil(async () => await hasPresentedForOwner(newId, item.squarePath, 'NewBob', newIndex), 'the new session did not finish its notification');
+
+    const oldAuthor = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
+    let oldIndex;
+    try { oldIndex = Number((await (await oldAuthor.participant()).express('old failed session must not replay @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
+    finally { await oldAuthor.close(); }
+    await handlers.get('session_start')({}, context(oldId));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(sent.length, 1, 'the failed session must not restart its watcher or replay new pending work');
+    assert.equal(await hasPresentedForOwner(oldId, item.squarePath, 'Bob', oldIndex), false);
+
+    // A later successful suppression clears the old session's failure before its watcher restarts.
+    await handlers.get('session_start')({}, context(oldId));
+    const retry = new AbortController();
+    await piAgentStart(handlers, { mode: 'tui', signal: retry.signal });
+    retry.abort();
+    await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
+    await handlers.get('agent_settled')({});
+    const artifact = createArtifactPort(item.squarePath);
+    try {
+      assert.ok((await artifact.read(facts => facts.cancelledThrough('Bob', facts.seat('Bob').generation))).value >= oldIndex,
+        'the successful retry must persist the old session boundary');
+    } finally { await artifact.close(); }
+    const fresh = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
+    let freshIndex;
+    try { freshIndex = Number((await (await fresh.participant()).express('fresh after suppression recovery @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
+    finally { await fresh.close(); }
+    await waitUntil(() => sent.length === 2, 'a successful retry did not restore the old session watcher');
+    assert.match(sent[1].message.content, /fresh after suppression recovery/);
+    await piMessageEnd(handlers, sent[1].message.content);
+    await waitUntil(async () => await hasPresentedForOwner(oldId, item.squarePath, 'Bob', freshIndex), 'the recovered watcher did not commit new activity');
+    await handlers.get('session_shutdown')({}, context(oldId));
+  });
+});
+
+test('Pi cancellation covers the captured pending head, never revives it at settled, and allows later activity', async () => {
   await withPiFixture('pi-post-abort-steer-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -941,29 +1068,40 @@ test('Pi cancels notifications during TUI abort instead of deferring a wake', as
     squarePiExtension(pi);
     const context = { sessionManager: { getSessionId: () => 'pi-post-abort-steer-session' }, cwd: '/tmp/no-public-square' };
     await handlers.get('session_start')({}, context);
+    const lock = await holdBoundaryLock(item.sessionId);
     try {
       const abortedRun = new AbortController();
       await piAgentStart(handlers, { mode: 'tui', signal: abortedRun.signal });
       await piTurnStart(handlers);
-      abortedRun.abort();
-      const actIndex = await expressToPi(item, 'defer until the TUI abort settles @Bob');
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      // Land before cancellation; the real boundary lock prevents an earlier send.
+      // A say after abort is not necessarily inside the cancellation's captured head.
+      const actIndex = await expressToPi(item, 'pending at the cancellation boundary @Bob');
       assert.equal(sent.length, 0);
+      abortedRun.abort();
       await piTurnEnd(handlers, 'aborted', { mode: 'tui' });
       await handlers.get('agent_settled')({});
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      const artifact = createArtifactPort(item.squarePath);
+      try {
+        assert.ok((await artifact.read(facts => facts.cancelledThrough('Bob', facts.seat('Bob').generation))).value >= actIndex,
+          'completed cancellation must durably cover the old pending activity');
+      } finally { await artifact.close(); }
+      lock.release();
+      await lock.held();
       assert.equal(sent.length, 0);
-      assert.equal(await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', actIndex), false);
+      assert.equal(await hasPresentedForOwner(item.sessionId, item.squarePath, 'Bob', actIndex), false);
       const freshIndex = await expressToPi(item, 'fresh after cancellation @Bob');
       await waitUntil(() => sent.length === 1, 'Pi did not deliver fresh activity');
-      assert.doesNotMatch(sent[0].message.content, /defer until/);
+      assert.match(sent[0].message.content, /fresh after cancellation/);
+      assert.doesNotMatch(sent[0].message.content, /pending at the cancellation boundary/);
       await piMessageEnd(handlers, sent[0].message.content);
       await waitUntil(
-        async () => await hasPresentedForOwner('pi-post-abort-steer-session', item.squarePath, 'Bob', freshIndex),
+        async () => await hasPresentedForOwner(item.sessionId, item.squarePath, 'Bob', freshIndex),
         'Pi did not commit fresh activity',
       );
       assert.equal(sent.length, 1);
     } finally {
+      lock.release();
+      await lock.held();
       await handlers.get('session_shutdown')({}, context);
     }
   }, false);
@@ -1056,11 +1194,12 @@ test('Pi releases a settled landing acknowledgment from its watcher signal', asy
       };
       squarePiExtension(pi);
       const context = { sessionManager: { getSessionId: () => 'pi-settled-ack-session' }, cwd: '/tmp/no-public-square' };
+      const startedControllers = controllers.length;
       await handlers.get('session_start')({}, context);
       try {
         await expressToPi(item, 'release this ack @Bob');
         await waitUntil(() => sent.length === 1, 'Pi did not attempt the steer');
-        const watcherSignal = controllers[0].signal;
+        const watcherSignal = controllers[startedControllers].signal;
         const listenersBeforeLanding = getEventListeners(watcherSignal, 'abort').length;
         await piMessageEnd(handlers, sent[0].message.content);
         await waitUntil(
@@ -1129,9 +1268,9 @@ test('Pi defers a rejected native injection until the next Square change', async
       assert.equal(await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex), false);
       assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
 
-      const square = await Square.at({ path: item.squarePath });
+      const square = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
       try {
-        const alice = (await square.join('Alice')).participant;
+        const alice = await square.participant();
         await alice.listen('Bob');
       } finally {
         await square.close();

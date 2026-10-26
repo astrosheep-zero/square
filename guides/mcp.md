@@ -2,7 +2,7 @@
 
 Square provides a stdio MCP server through `square mcp-server`.
 
-Set `SQUARE_LOCATION` to the default `.square` artifact path and optionally `SQUARE_PARTICIPANT_NAME` to the default participant. Calls may override these with `location` and `as`; relative paths use the server's startup working directory. Request metadata supplies the live Codex (`threadId`) or OpenCode (`ai.opencode/sessionID`) identity when present, otherwise the startup environment is used. Participant names are not session identities.
+Set `SQUARE_LOCATION` to the default `.square` artifact path; calls may override it with `location`. Relative paths use the server's startup working directory. Join with an explicit `as` name. Later calls may omit `as` only when the artifact recognizes exactly one current name held by the call's exact Body (`channel`, `session`, optional `agent`); zero or multiple matches refuse and require explicit selection. An explicit name selects a voice but never grants custody. Request metadata supplies the live Codex (`threadId`) or OpenCode (`ai.opencode/sessionID`) coordinate when present; otherwise a reliable startup coordinate is required for participant writes. Read-only calls do not need a Body.
 
 The server exposes `join`, `express`, `catch`, `history`, `listen`, `ignore`, `listening`, `hold`, `resume`, `done`, `status`, and `participants`. `catch` consumes activities. `history` is read-only and accepts stable `act/<index>` cursors. Tool results include JSON `structuredContent` and a text representation of the same data. Square failures are returned as tool errors with a structured `{ error: { code, message, facts? } }` value.
 

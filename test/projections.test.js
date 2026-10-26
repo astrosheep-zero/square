@@ -3,7 +3,8 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSquareFile, createArtifactPort } from '../dist/artifact.js';
+import { createSquareFile } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { Square } from '../dist/square-api.js';
 import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, resolveParticipant, snapshot, queryStatus, streamProjection } from '../dist/views.js';
 

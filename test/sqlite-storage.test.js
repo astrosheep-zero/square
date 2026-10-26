@@ -19,6 +19,11 @@ async function fixture(t) {
   t.after(() => port.close());
   return { file, port };
 }
+async function join(port, participant, at) {
+  const body = { channel: 'test', session: participant.toLowerCase() };
+  const result = await port.transactAs({ kind: 'join', participant, body }, facts => facts.land({ kind: 'join', actor: participant, at }));
+  return (await port.read(facts => facts.seat(participant))).value;
+}
 function child(script, file) {
   const process = spawn(globalThis.process.execPath, ['--import', './test/sandbox-env.js', '--input-type=module', '-e', script, file], { cwd: root, env: { ...globalThis.process.env, NODE_NO_WARNINGS: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = '';
@@ -38,7 +43,8 @@ test('a blocked COMMIT retries the same callback/result and releases the event l
   t.after(() => reader.close());
   reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
   let calls = 0, finished = false;
-  const pending = port.transact(w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
+  const body = { channel: 'test', session: 'alice' };
+  const pending = port.transactAs({ kind: 'join', participant: 'Alice', body }, w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
   await until(() => calls === 1);
   await sleep(40);
   assert.equal(finished, false);
@@ -56,7 +62,8 @@ test('abort while COMMIT is busy rolls back all landing effects and preserves th
   reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
   const abort = new AbortController(), reason = new Error('stop commit');
   let calls = 0;
-  const pending = assert.rejects(port.transact(w => { calls++; w.land({ kind: 'join', actor: 'Alice', at: 0 }); }, abort.signal), e => e === reason);
+  const body = { channel: 'test', session: 'alice' };
+  const pending = assert.rejects(port.transactAs({ kind: 'join', participant: 'Alice', body }, w => { calls++; w.land({ kind: 'join', actor: 'Alice', at: 0 }); }, abort.signal), e => e === reason);
   await until(() => calls === 1);
   abort.abort(reason);
   await pending;
@@ -94,13 +101,15 @@ test('busy writer acquisition can be cancelled and a later writer still runs exa
   writer.exec('BEGIN IMMEDIATE');
   const abort = new AbortController(), reason = new Error('stop writer acquisition');
   let calls = 0;
+  const body = { channel: 'test', session: 'alice' };
   const change = w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); };
-  const cancelled = assert.rejects(port.transact(change, abort.signal), e => e === reason);
+  const authority = { kind: 'join', participant: 'Alice', body };
+  const cancelled = assert.rejects(port.transactAs(authority, change, abort.signal), e => e === reason);
   await sleep(40);
   abort.abort(reason);
   await cancelled;
   assert.equal(calls, 0);
-  const next = port.transact(change);
+  const next = port.transactAs(authority, change);
   await sleep(40);
   assert.equal(calls, 0);
   writer.exec('ROLLBACK');
@@ -111,28 +120,29 @@ test('busy writer acquisition can be cancelled and a later writer still runs exa
 
 test('two processes serialize unseen selection plus sparse receipt insertion without double consumption', async t => {
   const { file, port } = await fixture(t);
-  await port.transact(w => {
-    w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 });
-    w.land({ kind: 'say', actor: 'Alice', at: 2, body: 'one', mentions: ['Bob'] });
-  });
+  const alice = await join(port, 'Alice', 0), bob = await join(port, 'Bob', 1);
+  await port.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'one', mentions: ['Bob'] }));
+  const seededRevision = await port.revision();
   const script = `import {createArtifactPort} from './dist/artifact.js';
     const p=createArtifactPort(process.argv[1]);
-    const result=await p.transact(w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
+    const seat=(await p.read(facts=>facts.seat('Bob'))).value;
+    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
     console.log(JSON.stringify(result));await p.close();`;
   const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
   for (const o of outcomes) assert.equal(o.code, 0, o.err);
   const results = outcomes.map(o => JSON.parse(o.out));
   assert.deepEqual(results.flatMap(r => r.value), [2]);
   assert.deepEqual(results.map(r => r.changed).sort(), [false, true]);
-  assert.equal(await port.revision(), 2);
+  assert.equal(await port.revision(), seededRevision + 1);
 });
 
 test('process death before commit recovers authority and derived landing indices together', async t => {
   const { file, port } = await fixture(t);
-  await port.transact(w => { w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 }); });
+  const alice = await join(port, 'Alice', 0), bob = await join(port, 'Bob', 1);
   const before = await readSquareSnapshot(file);
   const script = `import {createArtifactPort} from './dist/artifact.js';
-    const p=createArtifactPort(process.argv[1]);await p.transact(w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
+    const p=createArtifactPort(process.argv[1]);const seat=(await p.read(facts=>facts.seat('Alice'))).value;
+    await p.transactAs({kind:'participant',seat},w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
   const running = child(script, file);
   t.after(() => { if (!running.process.killed) running.process.kill('SIGKILL'); });
   let ready = false; running.process.stdout.on('data', s => { if (s.includes('ready')) ready = true; });
@@ -145,16 +155,18 @@ test('process death before commit recovers authority and derived landing indices
 
 test('idle revision discovery has a positive control and never selects historical bodies', async t => {
   const { file, port } = await fixture(t);
-  await port.transact(w => {
-    for (let i = 0; i < 128; i++) w.land({ kind: 'say', actor: 'Alice', at: i, body: 'history '.repeat(128) });
+  const alice = await join(port, 'Alice', 0);
+  await port.transactAs({ kind: 'participant', seat: alice }, facts => {
+    for (let i = 0; i < 128; i++) facts.land({ kind: 'say', actor: 'Alice', at: i, body: 'history '.repeat(128) });
   });
+  const baseline = await port.revision();
   const queries = [], prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) { queries.push(sql); return prepare.call(this, sql, ...args); });
-  assert.equal(await port.changed(1, 80), false);
+  assert.equal(await port.changed(baseline, 80), false);
   assert.ok(queries.some(sql => /FROM square_meta/i.test(sql)), 'must actually observe authoritative revision');
   assert.equal(queries.some(sql => /payload_json|SELECT \* FROM activities/i.test(sql)), false);
   const writer = createArtifactPort(file);
   t.after(() => writer.close());
-  await writer.transact(w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
-  assert.equal(await port.changed(1, 1000), true);
+  await writer.transactAs({ kind: 'join', participant: 'Bob', body: { channel: 'test', session: 'bob' } }, w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
+  assert.equal(await port.changed(baseline, 1000), true);
 });

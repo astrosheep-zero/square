@@ -6,30 +6,55 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
-import { createHostLedgerPort, FileHostLedgerPort } from '../dist/host-ledger-file-adapter.js';
 import { observeSessionPending, sessionInbox } from '../dist/inbox.js';
+import { rememberSquarePath } from '../dist/square-index.js';
 
 async function fixture(t, leaseMs, hasPending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pending-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
-  const ledgerRoot = path.join(root, 'ledger');
-  fs.mkdirSync(ledgerRoot);
-  const ledger = createHostLedgerPort({ rootPath: ledgerRoot });
+  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
   const state = await prepareSquareBuild({ force: true, hardCap: null }, 'pending');
-  state.acts = [
-    { kind: 'join', actor: 'Alice', index: 0, at: 1 },
-    { kind: 'join', actor: 'Bob', index: 1, at: 2 },
-    { kind: 'say', actor: 'Alice', index: 2, at: 3, body: 'hello', mentions: ['Bob'] },
-  ];
-  if (!hasPending) state.acts.pop();
-  state.runtime.nextActIndex = state.acts.length;
-  if (leaseMs !== undefined) state.runtime.leases.Bob = { leaseId: 'catch', heartbeatAt: Date.now(), expiresAt: Date.now() + leaseMs, filter: { mention: 'Bob' } };
+  state.acts = [];
+  state.runtime.nextActIndex = 0;
   await writeSquareFile(file, state);
-  const observer = await observeSessionPending('one', { SQUARE_HOST_LEDGER_ROOT: ledgerRoot });
+  const artifact = createArtifactPort(file);
+  const aliceBody = { channel: 'pi', session: 'author' };
+  const bobBody = { channel: 'pi', session: 'one' };
+  let aliceSeat, bobSeat;
+  try {
+    aliceSeat = (await artifact.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, facts => {
+      facts.land({ kind: 'join', actor: 'Alice', at: 1 });
+      return facts.seat('Alice');
+    })).value;
+    bobSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bob', body: bobBody }, facts => {
+      facts.land({ kind: 'join', actor: 'Bob', at: 2 });
+      return facts.seat('Bob');
+    })).value;
+    if (hasPending) await artifact.transactAs({ kind: 'participant', seat: aliceSeat }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: 3, body: 'hello', mentions: ['Bob'] }));
+    if (leaseMs !== undefined) await artifact.transactAs({ kind: 'participant', seat: bobSeat }, facts =>
+      facts.putLease('Bob', { leaseId: 'catch', heartbeatAt: Date.now(), expiresAt: Date.now() + leaseMs, filter: { mention: 'Bob' } }, bobSeat.generation));
+  } finally { await artifact.close(); }
+  // Alice's join has published a different body. Bob's path becomes a candidate only when
+  // the host later publishes Bob's body into the disposable index.
+  await rememberSquarePath(file, aliceBody, env.SQUARE_INDEX);
+  const observer = await observeSessionPending(bobBody, env);
   t.after(() => observer.close());
-  const bind = (session = 'one') => ledger.ensurePresence({ location: file, participant: 'Bob', session, channel: 'pi', updatedAt: Date.now() });
-  return { file, ledger, ledgerRoot, observer, bind };
+  const bind = (session = 'one') => rememberSquarePath(file, { channel: 'pi', session }, env.SQUARE_INDEX);
+  return { file, root, env, observer, bind };
+}
+
+async function markPresentation(item, activity, outcome) {
+  const artifact = createArtifactPort(item.file);
+  try {
+    const { value: seat } = await artifact.read((facts) => facts.seat('Bob'));
+    const claim = await artifact.claimDelivery({ seat: { participant: seat.participant, body: seat.body, generation: seat.generation },
+      activity: `act/${activity}`, kind: 'presentation', at: Date.now(), leaseMs: 1000, claimToken: `presentation-${activity}` });
+    assert.equal(claim.status, 'acquired');
+    assert.equal(await artifact.completeDelivery({ seat: { participant: seat.participant, body: seat.body, generation: seat.generation },
+      activity: `act/${activity}`, claimToken: claim.claimToken, outcome, at: Date.now() }), true);
+  } finally { await artifact.close(); }
 }
 
 function armedWait(observer, options = {}, timeoutMs = 4_000) {
@@ -39,7 +64,7 @@ function armedWait(observer, options = {}, timeoutMs = 4_000) {
   return { ready, pending };
 }
 
-test('an initially unbound session notices a new binding without an artifact write', async (t) => {
+test('an initially undiscovered body notices index publication without an artifact write', async (t) => {
   const item = await fixture(t);
   const baseline = await readSquareRevision(item.file);
   const waiting = armedWait(item.observer);
@@ -58,43 +83,44 @@ test('catch lease expiry wakes notification eligibility without an artifact writ
   assert.equal(await readSquareRevision(item.file), baseline);
 });
 
-test('unrelated ledger changes reuse unchanged history while local activity still notifies', async (t) => {
+test('an unrelated index entry leaves projections cold while activity in a candidate wakes delivery', async (t) => {
   const item = await fixture(t, undefined, false);
   const cell = createArtifactPort(item.file);
   t.after(() => cell.close());
   await item.bind();
   const waiting = armedWait(item.observer, {}, 2_500);
   await waiting.ready;
-  let snapshots = 0;
-  let refreshes = 0;
-  const listPresence = FileHostLedgerPort.prototype.listPresence;
-  t.mock.method(FileHostLedgerPort.prototype, 'listPresence', function (input) {
-    if (input.session === 'one') refreshes++;
-    return listPresence.call(this, input);
-  });
+  let activitySnapshots = 0;
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/SELECT \* FROM activities/i.test(sql)) snapshots++;
-    return prepare.call(this, sql, ...args);
+    const statement = prepare.call(this, sql, ...args);
+    if (/SELECT \* FROM activities WHERE act_index=\?$/i.test(sql)) {
+      const get = statement.get;
+      t.mock.method(statement, 'get', function (index, ...values) {
+        // Binding reconciliation reads Bob's establishing join time, not activity content.
+        if (index !== 1) activitySnapshots++;
+        return get.call(this, index, ...values);
+      });
+    } else if (/SELECT \* FROM activities/i.test(sql)) activitySnapshots++;
+    return statement;
   });
-  const base = { location: path.join(item.ledgerRoot, 'unrelated.square'), participant: 'Other', session: 'unrelated', activity: 'act/0', kind: 'presentation' };
-  const claim = await item.ledger.claimEvidence({ ...base, leaseMs: 1_000 });
-  await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'presented' });
-  await item.ledger.ensurePresence({ ...base, channel: 'pi' });
+  const otherFile = path.join(item.root, 'unrelated.square');
+  fs.copyFileSync(item.file, otherFile);
+  await rememberSquarePath(otherFile, { channel: 'pi', session: 'unrelated' }, item.env.SQUARE_INDEX);
   assert.deepEqual(await waiting.pending, []);
-  assert.ok(refreshes > 0, 'the observer must refresh bindings after the ledger changes');
-  assert.equal(snapshots, 0);
+  assert.equal(activitySnapshots, 0, 'an unrelated body must not hydrate activity history');
+
   const changed = armedWait(item.observer);
   await changed.ready;
-  await cell.transact((facts) => facts.land({ kind: 'say', actor: 'Alice', at: 4, body: 'new activity', mentions: ['Bob'] }));
+  const alice = (await cell.read(facts => facts.seat('Alice'))).value;
+  await cell.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: 4, body: 'new activity', mentions: ['Bob'] }));
   assert.equal((await changed.pending)[0].notifications[0].body, 'new activity');
-  assert.ok(snapshots > 0, 'the hydration counter must detect the changed recipient projection');
+  assert.ok(activitySnapshots > 0, 'the changed artifact revision must hydrate its recipient projection');
 });
 
 test('an unreadable artifact cannot reuse stale pending and repair restores delivery', async (t) => {
   const item = await fixture(t);
   await item.bind();
-  assert.equal((await item.observer.wait(1_000))[0].notifications[0].actIndex, 2);
   const saved = fs.readFileSync(item.file);
   fs.writeFileSync(item.file, 'not a SQLite database');
   await sleep(30);
@@ -104,63 +130,67 @@ test('an unreadable artifact cannot reuse stale pending and repair restores deli
   assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
 });
 
-test('presentation-only evidence invalidates eligibility; failed evidence cannot spin deferred retries', async (t) => {
+test('artifact presentation evidence suppresses a clipped activity but fresh conversation remains eligible', async (t) => {
   const item = await fixture(t);
   await item.bind();
-  const base = { location: item.file, participant: 'Bob', session: 'one', activity: 'act/2', kind: 'presentation' };
-  let claim = await item.ledger.claimEvidence({ ...base, leaseMs: 1_000 });
-  await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'clipped' });
-  const waiting = armedWait(item.observer);
-  await waiting.ready;
-  claim = await item.ledger.claimEvidence({ ...base, leaseMs: 1_000 });
-  await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'failed' });
-  assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
-
-  const controller = new AbortController();
-  const retry = armedWait(item.observer, { skipImmediate: true, signal: controller.signal });
-  await retry.ready;
-  let resolved = false;
-  retry.pending.then(() => { resolved = true; });
-  claim = await item.ledger.claimEvidence({ ...base, leaseMs: 1_000 });
-  await item.ledger.appendEvidence({ ...base, claimToken: claim.claimToken, outcome: 'failed' });
-  await sleep(100);
-  assert.equal(resolved, false);
+  await markPresentation(item, 2, 'clipped');
+  assert.deepEqual(await item.observer.read(), []);
   const cell = createArtifactPort(item.file);
-  try { await cell.transact((facts) => facts.land({ kind: 'resume', at: Date.now() })); }
-  finally { await cell.close(); }
-  assert.equal((await retry.pending)[0].notifications[0].actIndex, 2);
+  t.after(() => cell.close());
+  const alice = (await cell.read(facts => facts.seat('Alice'))).value;
+  await cell.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'fresh after clipped presentation', mentions: ['Bob'] }));
+  assert.equal((await item.observer.read())[0].notifications[0].body, 'fresh after clipped presentation');
 });
 
-test('a stale binding does not rescan the ledger on missing-artifact reconciliation', async (t) => {
+test('failed delivery evidence cannot spin deferred retries; conversation change wakes them', async (t) => {
+  const item = await fixture(t);
+  await item.bind();
+  const cell = createArtifactPort(item.file);
+  t.after(() => cell.close());
+  const alice = (await cell.read(facts => facts.seat('Alice'))).value;
+  const waiting = armedWait(item.observer, { skipImmediate: true }, 2_000);
+  await waiting.ready;
+  let resolved = false;
+  waiting.pending.then(() => { resolved = true; });
+  await markPresentation(item, 2, 'failed');
+  await sleep(100);
+  assert.equal(resolved, false);
+  await cell.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new activity after failed delivery', mentions: ['Bob'] }));
+  const pending = await waiting.pending;
+  assert.deepEqual(pending[0].notifications.map((notification) => notification.body), ['hello', 'new activity after failed delivery']);
+});
+
+test('stale index candidates are not reread on missing-artifact reconciliation', async (t) => {
   const item = await fixture(t);
   await item.bind();
   const saved = fs.readFileSync(item.file);
   fs.unlinkSync(item.file);
-  let reads = 0;
+  let indexReads = 0;
   const readFile = fs.promises.readFile.bind(fs.promises);
   t.mock.method(fs.promises, 'readFile', (...args) => {
-    if (String(args[0]).startsWith(item.ledgerRoot)) reads++;
+    if (String(args[0]) === item.env.SQUARE_INDEX) indexReads++;
     return readFile(...args);
   });
   const waiting = armedWait(item.observer);
   await waiting.ready;
-  const baseline = reads;
+  const baseline = indexReads;
   await sleep(2_200);
-  assert.equal(reads, baseline);
+  assert.equal(indexReads, baseline);
   fs.writeFileSync(item.file, saved);
   assert.equal((await waiting.pending)[0].notifications[0].actIndex, 2);
 });
 
-test('an unreadable binding stays quiet across reconciliation and restores delivery on repair', async (t) => {
+test('an unreadable candidate stays quiet across reconciliation and repair restores delivery', async (t) => {
   const item = await fixture(t);
   const saved = fs.readFileSync(item.file);
   const cell = createArtifactPort(item.file);
-  try { await cell.transact((facts) => facts.markSeen('Bob', [2], Date.now())); }
+  const bob = (await cell.read(facts => facts.seat('Bob'))).value;
+  try { await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.markSeen('Bob', [2], Date.now())); }
   finally { await cell.close(); }
-  const corruptFile = path.join(path.dirname(item.file), 'CORRUPT.square');
+  const corruptFile = path.join(item.root, 'CORRUPT.square');
   fs.writeFileSync(corruptFile, 'not a SQLite artifact');
   await item.bind();
-  await item.ledger.ensurePresence({ location: corruptFile, participant: 'Bob', session: 'one', channel: 'pi', updatedAt: Date.now() });
+  await rememberSquarePath(corruptFile, { channel: 'pi', session: 'one' }, item.env.SQUARE_INDEX);
   await assert.rejects(readSquareRevision(corruptFile), { code: 'invalid_args' });
   let snapshotReads = 0;
   const prepare = DatabaseSync.prototype.prepare;
@@ -168,24 +198,16 @@ test('an unreadable binding stays quiet across reconciliation and restores deliv
     if (/SELECT \* FROM activities/i.test(sql)) snapshotReads++;
     return prepare.call(this, sql, ...args);
   });
-  let ledgerReads = 0;
-  const readFile = fs.promises.readFile.bind(fs.promises);
-  t.mock.method(fs.promises, 'readFile', (...args) => {
-    if (String(args[0]).startsWith(item.ledgerRoot)) ledgerReads++;
-    return readFile(...args);
-  });
   const waiting = armedWait(item.observer, {}, 8_000);
   await waiting.ready;
   snapshotReads = 0;
-  ledgerReads = 0;
   await sleep(4_200);
   assert.equal(snapshotReads, 0);
-  assert.equal(ledgerReads, 0);
   fs.writeFileSync(corruptFile, saved);
   const repaired = (await waiting.pending)[0];
   assert.equal(path.basename(repaired.squarePath), 'CORRUPT.square');
   assert.equal(repaired.notifications[0].actIndex, 2);
-  assert.ok(snapshotReads > 0, 'the body counter must detect the repaired recipient projection');
+  assert.ok(snapshotReads > 0, 'the repaired artifact must supply current recipient activity');
 });
 
 test('complete recipient discovery crosses 100 withheld candidates and expiry alone reconsiders the earlier batch', async (t) => {
@@ -194,15 +216,20 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   const item = await fixture(t, undefined, false);
   const cell = createArtifactPort(item.file);
   t.after(() => cell.close());
-  await cell.transact((facts) => {
+  const caraBody = { channel: 'test', session: 'cara' };
+  const cara = (await cell.transactAs({ kind: 'join', participant: 'Cara', body: caraBody }, facts => {
     facts.land({ kind: 'join', actor: 'Cara', at: now });
+    return facts.seat('Cara');
+  })).value;
+  const alice = (await cell.read(facts => facts.seat('Alice'))).value;
+  await cell.transactAs({ kind: 'participant', seat: alice }, facts => {
     for (let index = 0; index < 105; index++) facts.land({ kind: 'say', actor: 'Alice', at: now, body: `earlier ${index}`, mentions: ['Bob'] });
-    facts.land({ kind: 'say', actor: 'Cara', at: now, body: 'later eligible', mentions: ['Bob'] });
-    facts.putLease('Bob', { leaseId: 'alice-catch', heartbeatAt: now, expiresAt: now + 400, filter: { participants: ['Alice'] } });
   });
+  await cell.transactAs({ kind: 'participant', seat: cara }, facts => facts.land({ kind: 'say', actor: 'Cara', at: now, body: 'later eligible', mentions: ['Bob'] }));
+  const bob = (await cell.read(facts => facts.seat('Bob'))).value;
+  await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.putLease('Bob', { leaseId: 'alice-catch', heartbeatAt: now, expiresAt: now + 400, filter: { participants: ['Alice'] } }, bob.generation));
   await item.bind();
-  const env = { SQUARE_HOST_LEDGER_ROOT: item.ledgerRoot };
-  const complete = await sessionInbox('one', env);
+  const complete = await sessionInbox({ channel: 'pi', session: 'one' }, item.env);
   assert.equal(complete[0].notifications.length, 106, 'storage pages must not shrink the initial boundary key set');
   const eligible = await item.observer.wait(1000);
   assert.deepEqual(eligible[0].notifications.map((note) => note.body), ['later eligible']);
@@ -218,7 +245,7 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   assert.equal(await readSquareRevision(item.file), revision, 'expiry reconsideration is not a receipt or artifact write');
 });
 
-test('an unrepaired binding respects timeout and cancellation', async (t) => {
+test('an unrepaired candidate respects timeout and cancellation', async (t) => {
   const item = await fixture(t);
   await item.bind();
   fs.writeFileSync(item.file, 'not a SQLite artifact');
@@ -230,9 +257,52 @@ test('an unrepaired binding respects timeout and cancellation', async (t) => {
   assert.deepEqual(await waiting.pending, []);
 });
 
-test('one session cancellation cannot close a shared monitor or suppress another session', async (t) => {
+test('a takeover after empty binding selection cannot be hidden behind a newer revision baseline', async t => {
+  const item = await fixture(t, undefined, false);
+  const body = { channel: 'pi', session: 'two' };
+  await item.bind(body.session);
+  const observer = await observeSessionPending(body, item.env);
+  const writer = createArtifactPort(item.file);
+  t.after(async () => { observer.close(); await writer.close(); });
+  const { value: seats } = await writer.read(facts => ({ bob: facts.seat('Bob'), alice: facts.seat('Alice') }));
+  const transfer = async () => {
+    await writer.transactAs({ kind: 'takeover', participant: 'Bob', body, expectedGeneration: seats.bob.generation }, facts => {
+      facts.land({ kind: 'done', actor: 'Bob', at: 4 });
+      facts.land({ kind: 'join', actor: 'Bob', at: 5 });
+    });
+    await writer.transactAs({ kind: 'participant', seat: seats.alice }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: 6, body: 'arrived after empty binding', mentions: ['Bob'] }));
+  };
+  let transition;
+  const prepare = DatabaseSync.prototype.prepare, realpath = fs.promises.realpath;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
+    const statement = prepare.call(this, sql, ...args);
+    if (/SELECT s\.\* FROM seats/.test(sql)) {
+      const all = statement.all;
+      t.mock.method(statement, 'all', function (...values) {
+        const rows = all.apply(this, values);
+        if (transition === undefined && values[1] === JSON.stringify(body.session) && rows.length === 0)
+          transition = transfer();
+        return rows;
+      });
+    }
+    return statement;
+  });
+  t.mock.method(fs.promises, 'realpath', async (...args) => {
+    // Force the next artifact monitor/open to start after the concurrent commit.
+    if (transition !== undefined && String(args[0]) === item.file) await transition;
+    return realpath.apply(fs.promises, args);
+  });
+  const pending = await observer.wait(4_000);
+  assert.ok(transition, 'the empty authoritative binding read must have triggered the takeover');
+  await transition;
+  assert.deepEqual(pending.flatMap(member => member.notifications.map(note => note.body)), ['arrived after empty binding']);
+});
+
+test('cancellation leaves another observer alive and an index candidate cannot transfer custody', async (t) => {
   const item = await fixture(t);
-  const other = await observeSessionPending('two', { SQUARE_HOST_LEDGER_ROOT: item.ledgerRoot });
+  const otherBody = { channel: 'pi', session: 'two' };
+  const other = await observeSessionPending(otherBody, item.env);
   t.after(() => other.close());
   const cancelled = new AbortController();
   const first = armedWait(item.observer, { signal: cancelled.signal });
@@ -241,6 +311,21 @@ test('one session cancellation cannot close a shared monitor or suppress another
   cancelled.abort();
   assert.deepEqual(await first.pending, []);
   item.observer.close();
+
+  // A HOME candidate row only identifies a path; the artifact seat still belongs to session one.
   await item.bind('two');
-  assert.equal((await second.pending)[0].notifications[0].actIndex, 2);
+  assert.deepEqual(await other.read(), []);
+
+  const artifact = createArtifactPort(item.file);
+  try {
+    const prior = (await artifact.read((facts) => facts.seat('Bob'))).value;
+    await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: otherBody, expectedGeneration: prior.generation }, facts => {
+      facts.land({ kind: 'done', actor: 'Bob', at: Date.now() });
+      facts.land({ kind: 'join', actor: 'Bob', at: Date.now() });
+    });
+    const alice = (await artifact.read(facts => facts.seat('Alice'))).value;
+    await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new activity after explicit takeover', mentions: ['Bob'] }));
+  } finally { await artifact.close(); }
+  assert.equal((await second.pending)[0].notifications[0].body, 'new activity after explicit takeover');
 });

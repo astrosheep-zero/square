@@ -7,6 +7,8 @@ export interface FileLockOptions {
   retryMs: number;
   signal?: AbortSignal;
   createParent?: boolean;
+  /** Optional discovery may skip a busy lock; ordinary lock users still wait. */
+  skipIfBusy?: boolean;
 }
 
 export class FileLockError extends Error {
@@ -27,7 +29,9 @@ function isNotADatabase(error: unknown): boolean {
   return error instanceof Error && /not a database|file is not a database/i.test(error.message);
 }
 
-export async function withFileLock<T>(lockPath: string, options: FileLockOptions, fn: () => T | Promise<T>): Promise<T> {
+export function withFileLock<T>(lockPath: string, options: FileLockOptions & { skipIfBusy: true }, fn: () => T | Promise<T>): Promise<T | undefined>;
+export function withFileLock<T>(lockPath: string, options: FileLockOptions & { skipIfBusy?: false }, fn: () => T | Promise<T>): Promise<T>;
+export async function withFileLock<T>(lockPath: string, options: FileLockOptions, fn: () => T | Promise<T>): Promise<T | undefined> {
   if (options.createParent !== false) await fs.mkdir(path.dirname(lockPath), { recursive: true });
   while (true) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error('File lock acquisition aborted');
@@ -40,6 +44,7 @@ export async function withFileLock<T>(lockPath: string, options: FileLockOptions
     } catch (error) {
       try { database?.close(); } catch {}
       if (isBusy(error)) {
+        if (options.skipIfBusy) return undefined;
         await sleep(options.retryMs, undefined, { signal: options.signal });
         continue;
       }

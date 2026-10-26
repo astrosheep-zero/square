@@ -1,7 +1,3 @@
-import { createHash } from 'node:crypto';
-
-import { validateName } from './model.js';
-
 export function participantIdentity(name: string): string {
   return `@${name}`;
 }
@@ -63,33 +59,4 @@ export function firstHarnessSession(env: NodeJS.ProcessEnv = process.env): { rea
     if (sessionId) return { sessionId, channel: source.channel };
   }
   return undefined;
-}
-
-export function automaticParticipant(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv): string {
-  const configured = env.SQUARE_PARTICIPANT_NAME?.trim();
-  if (configured) {
-    validateName(configured);
-    return configured;
-  }
-  const digest = createHash('sha256').update(sessionId, 'utf8').digest('hex').slice(0, 12);
-  return `${provider}-${digest}`;
-}
-
-/** Compute the current harness participant without reading a Square or registry artifact. */
-export function squareAssignedParticipantName(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const configured = env.SQUARE_PARTICIPANT_NAME?.trim();
-  if (configured) {
-    validateName(configured);
-    return configured;
-  }
-  // Every native provider contributes its own name without deduping session ids first: equal ids
-  // in different providers are different coordinates and must stay ambiguous.
-  const names = new Set<string>();
-  for (const source of harnessSessionSources) {
-    if (source.provider === undefined) continue;
-    const sessionId = env[source.variable]?.trim();
-    if (!sessionId) continue;
-    names.add(automaticParticipant(source.provider, sessionId, env));
-  }
-  return names.size === 1 ? [...names][0] : undefined;
 }

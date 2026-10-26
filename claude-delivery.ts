@@ -1,125 +1,160 @@
 import { stat } from 'node:fs/promises';
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
-import { hostLedgerForEnv } from './registry.js';
-import type { EvidenceRecord, HostLedgerPort, PresenceRecord } from './host-ledger.js';
-import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
-import { projectPresentationEvidence, presentationSuppressesWake } from './square-projections.js';
-import { nativePendingPreview } from './inbox.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { createArtifactPort } from './artifact.js';
 import { presentPending } from './presentation-operations.js';
-import { type WakeRoute } from './model.js';
-import { canonicalPath } from './canonical-path.js';
+import { projectSessionCandidates, nativePendingPreview } from './inbox.js';
+import { sameBody, type WakeRoute } from './model.js';
 import { parseActivityId } from './square-core.js';
-import { DeliveryError, connect } from './packages/agent-delivery/src/index.js';
+import type { DeliveryEvidence, SeatRef, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
+import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map((match) => match[1]!); }
 export function nativePayload(token: string, preview: string): string { return `[square-inbox:${token}]\n${preview}\n[/square-inbox:${token}]`; }
 function nativeSupported(route: WakeRoute): boolean { return route.address.loaded === 'true' && !!route.address.endpoint; }
-
-/**
- * The shared entry owns platform policy, token resolution and frame shape; Square
- * owns the payload, the correlation and the evidence. A local write is never proof
- * of native admission.
- */
-async function writeClaudeWake(sessionId: string, endpoint: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
-  try {
-    const agent = await connect({ harness: 'claude', sessionId, endpoint, timeoutMs });
-    await agent.steer(payload, { signal });
-    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: 'Claude accepted the local write; native admission is unconfirmed.' };
-  } catch (error) {
-    if (error instanceof DeliveryError && !error.maybeDelivered) {
-      return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: error.message };
-    }
-    return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: error instanceof Error ? error.message : String(error) };
-  }
+function sameAddress(left: Readonly<Record<string, string>> | undefined, right: Readonly<Record<string, string>>): boolean {
+  if (left === undefined) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
+}
+function hashPayload(payload: string): string { return createHash('sha256').update(payload).digest('hex'); }
+function asSeatRef(seat: import('./model.js').Seat): SeatRef {
+  const { wakeAddress: _wakeAddress, ...ref } = seat;
+  return ref;
 }
 
-export function createClaudeWakeTransport(hostLedger: HostLedgerPort, env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
+interface NativePreview {
+  readonly payload: string;
+  readonly clipped: boolean;
+}
+
+function previewFacts(facts: import('./ports.js').SquareRead, request: WakeRequest): NativePreview | undefined {
+  const index = parseActivityId(request.activity);
+  if (index === undefined || request.route.kind !== 'claude-native' || request.route.address.endpoint === undefined) return undefined;
+  return nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId,
+    participant: request.participant, actIndex: index, address: { endpoint: request.route.address.endpoint }, now: Date.now() });
+}
+
+async function preview(artifact: SquareArtifactPort, request: WakeRequest): Promise<NativePreview | undefined> {
+  return (await artifact.read((facts) => previewFacts(facts, request))).value;
+}
+
+async function writeClaudeWake(sessionId: string, endpoint: string, messageId: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
+  const result = await writeClaudeNative({ sessionId, endpoint, messageId }, payload, { deadline: Date.now() + timeoutMs, signal });
+  if (result.outcome === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: result.message };
+  return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: result.outcome === 'written' ? 'Claude accepted the local write; native admission is unconfirmed.' : result.message };
+}
+
+export function createClaudeWakeTransport(env: NodeJS.ProcessEnv = process.env): WakeTransportPort {
   return {
     async probe(route) {
       if (!nativeSupported(route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox unavailable: a loaded interactive Square mod is required.' };
       try { return (await stat(route.address.endpoint!)).isSocket() || { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint is not a socket.' }; }
       catch { return { outcome: 'not-capable', diagnostic: 'Claude native inbox endpoint unavailable.' }; }
     },
-    attempt: (request, timeoutMs, beforeSend) => dispatchClaude(request, hostLedger, timeoutMs, beforeSend, env),
+    attempt: (request, timeoutMs, beforeSend) => dispatchClaude(request, timeoutMs, beforeSend, env),
   };
 }
 
-async function currentDelivery(row: EvidenceRecord, hostLedger: HostLedgerPort) {
-  if (row.nativeDelivery?.harness !== 'claude') return undefined;
-  const native = row.nativeDelivery;
-  const owner = (await hostLedger.listPresence({ location: row.location, participant: row.participant })).find((binding) => binding.session === row.session && binding.epoch === native.epoch);
-  const index = parseActivityId(row.activity);
-  if (!owner || index === undefined || !row.claimToken) return undefined;
-  const square = await openSquare(owner.location, { hostLedger });
-  try {
-    const { value: preview } = await square.artifact.read((facts) => nativePendingPreview(facts, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: owner.cancelledThrough, now: Date.now() }));
-    if (!preview || nativePayload(row.claimToken, preview.payload) !== native.payload) return undefined;
-    return { cancelledThrough: owner.cancelledThrough, clipped: preview.clipped };
-  } finally { await closeOpenSquare(square); }
-}
-
-/** Square owns rendering, correlation and evidence; socket transport owns none of them. */
-async function dispatchClaude(request: WakeRequest, hostLedger: HostLedgerPort, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
-  request = { ...request, location: await canonicalPath(request.location) };
+async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
+  void env;
   const signal = AbortSignal.timeout(timeoutMs);
-  if (!nativeSupported(request.route)) return { outcome: 'not-capable', diagnostic: 'Claude native inbox requires a loaded interactive Square mod.' };
-  return hostLedger.withClaimLock(async () => {
-    if (signal.aborted) return { outcome: 'not-capable', diagnostic: 'Native dispatch deadline elapsed before send.' };
-    if (!request.claimToken || !await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'unknown', signature: 'native_send_suppressed' };
-    const owner = (await hostLedger.listPresence({ location: request.location, participant: request.participant })).find((binding) => binding.session === request.route.sessionId && binding.epoch === request.route.epoch);
-    if (!owner) return { outcome: 'not-capable', diagnostic: 'Claude binding changed.' };
-    const square = await openSquare(request.location, { hostLedger });
-    let payload: string;
+  if (!nativeSupported(request.route) || request.artifact === undefined || request.claimToken === undefined)
+    return { outcome: 'not-capable', diagnostic: 'Claude native delivery needs a current artifact claim and loaded inbox.' };
+  if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
+    return { outcome: 'unknown', signature: 'native_send_suppressed' };
+  const prepared = await preview(request.artifact, request);
+  if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'Claude activity is no longer current.' };
+  const messageId = randomUUID();
+  const payload = nativePayload(request.claimToken, prepared.payload);
+  const correlation = { harness: 'claude' as const, token: request.claimToken, messageId, payloadHash: hashPayload(payload) };
+  if (!await request.artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }))
+    return { outcome: 'not-capable', diagnostic: 'Claude delivery claim is no longer current.' };
+  if (!await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'not-capable', diagnostic: 'Claude activity was consumed before native write.' };
+  const fresh = await preview(request.artifact, request);
+  if (fresh === undefined || nativePayload(request.claimToken, fresh.payload) !== payload)
+    return { outcome: 'not-capable', diagnostic: 'Claude activity changed before native write.' };
+  return writeClaudeWake(request.route.sessionId, request.route.address.endpoint!, messageId, payload, timeoutMs, signal);
+}
+
+interface NativeRow {
+  readonly artifact: SquareArtifactPort;
+  readonly evidence: DeliveryEvidence;
+  readonly request?: WakeRequest;
+  readonly payload?: string;
+}
+
+function currentPayload(facts: SquareRead, request: WakeRequest): string | undefined {
+  const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
+  if (seat === undefined || evidence === undefined || seat.generation !== evidence.generation
+    || seat.generation !== request.seat.generation || !sameBody(seat.body, request.seat.body)
+    || seat.body.channel !== 'claude-code' || seat.body.session !== request.route.sessionId
+    || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
+    || seat.wakeAddress?.kind !== 'claude-native' || !sameAddress(seat.wakeAddress.address, request.route.address)) return undefined;
+  const native = previewFacts(facts, request);
+  if (native === undefined) return undefined;
+  const payload = nativePayload(request.claimToken!, native.payload);
+  return evidence.correlation?.payloadHash === hashPayload(payload) ? payload : undefined;
+}
+
+async function rowsForSession(sessionId: string, env: NodeJS.ProcessEnv, tokens: readonly string[]): Promise<NativeRow[]> {
+  const rows: NativeRow[] = [];
+  const paths = new Set((await projectSessionCandidates({ sessionId, channel: 'claude-code', env })).map(candidate => candidate.location));
+  for (const location of paths) {
+    const artifact = createArtifactPort(location);
     try {
-      const index = parseActivityId(request.activity);
-      const preview = index === undefined ? undefined : (await square.artifact.read((facts) => nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId, participant: request.participant, actIndex: index, epoch: request.route.epoch, address: { endpoint: request.route.address.endpoint! }, cancelledThrough: owner.cancelledThrough, now: Date.now() }))).value;
-      if (!preview) return { outcome: 'not-capable', diagnostic: 'Catch or consumption owns this activity.' };
-      payload = nativePayload(request.claimToken, preview.payload);
-    } finally { await closeOpenSquare(square); }
-    if (!await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'not-capable', diagnostic: 'Native activity was consumed before send.' };
-    const native = { harness: 'claude' as const, payload, epoch: owner.epoch ?? 0, endpoint: request.route.address.endpoint! };
-    const row = { location: request.location, participant: request.participant, session: request.route.sessionId, activity: request.activity, kind: 'wake' as const, outcome: 'dispatching', routeKind: 'claude-native' as const, attemptN: request.attemptN, claimToken: request.claimToken, nativeDelivery: native };
-    if (!await currentDelivery(row, hostLedger) || !await hostLedger.prepareNativeWake(row)) return { outcome: 'not-capable', diagnostic: 'Native delivery is no longer current.' };
-    if (!await (beforeSend?.() ?? Promise.resolve(true)) || !await currentDelivery(row, hostLedger)) return { outcome: 'not-capable', diagnostic: 'Catch, cancellation or consumption won before native write.' };
-    return writeClaudeWake(row.session, native.endpoint, payload, timeoutMs, signal);
-  }, signal);
+      const found = await artifact.read((facts) => tokens.flatMap((token): NativeRow[] => {
+        const evidence = facts.deliveryByToken(token);
+        if (evidence?.kind !== 'wake' || evidence.correlation?.harness !== 'claude' || evidence.correlation.token !== token
+          || evidence.route?.kind !== 'claude-native' || evidence.route.address.sessionId !== sessionId) return [];
+        const row = { artifact, evidence };
+        const seat = facts.seat(evidence.participant), index = parseActivityId(evidence.activity);
+        const item = index === undefined ? undefined : facts.activity(index);
+        if (seat === undefined || item?.kind !== 'say') return [row];
+        const route: WakeRoute = { location, participant: seat.participant, sessionId, channel: 'claude-code',
+          ...evidence.route, updatedAt: evidence.at };
+        const request: WakeRequest = { location, participant: seat.participant, activity: evidence.activity,
+          actor: item.actor, seat: asSeatRef(seat), claimToken: token, attemptN: evidence.attemptN, route, artifact };
+        return [{ ...row, request, payload: currentPayload(facts, request) }];
+      }));
+      rows.push(...found.value);
+      if (found.value.length === 0) await artifact.close();
+    } catch { await artifact.close(); }
+  }
+  return rows;
 }
 
-/** Retired tokens veto a frame; only live correlations and bound memberships confer authority. */
+/** Recognize the whole frame first; one inactive token vetoes it before any evidence/receipt write. */
 export async function observeClaudeDelivery(sessionId: string, text: string, operation: 'guard' | 'admitted' | 'stored', env: NodeJS.ProcessEnv = process.env): Promise<{ recognized: boolean; current: boolean }> {
-  const ledger = hostLedgerForEnv(env);
-  return ledger.withClaimLock(async () => {
-    const tokens = nativeTokens(text);
-    const { deliveries: rows, retired } = await ledger.lookupNativeTokens({ harness: 'claude', session: sessionId, tokens });
-    // A stale token vetoes the entire frame, including a mixed current/stale frame,
-    // before admission, artifact reads or presentation can confer any authority.
-    if (retired.length) return { recognized: true, current: false };
-    let current = false;
+  const tokens = nativeTokens(text);
+  if (tokens.length === 0) return { recognized: false, current: false };
+  const rows = await rowsForSession(sessionId, env, [...new Set(tokens)]);
+  const recognized = rows.length > 0;
+  const frames = [...text.matchAll(/(?:^|\n)(\[square-inbox:([a-zA-Z0-9-]+)\]\n[\s\S]*?\n\[\/square-inbox:\2\])(?=\n|$)/g)];
+  try {
+    if (!recognized || rows.some(row => {
+      const matching = frames.filter(frame => frame[2] === row.evidence.claimToken);
+      return row.payload === undefined || matching.length !== tokens.filter(token => token === row.evidence.claimToken).length
+        || matching.some(frame => frame[1] !== row.payload);
+    })) return { recognized, current: false };
     for (const row of rows) {
-      if (row.nativeDelivery?.harness !== 'claude' || !['dispatching', 'unknown', 'accepted'].includes(row.outcome)) continue;
-      const native = row.nativeDelivery;
-      const pending = await currentDelivery(row, ledger).catch(() => undefined);
-      if (!pending || !text.includes(native.payload)) continue;
-      current = true;
-      if (operation === 'admitted') { if (text === native.payload) await ledger.confirmWakeAdmission({ ...row, claimToken: row.claimToken! }); }
-      if (operation === 'stored') {
-        await ledger.confirmWakeAdmission({ ...row, claimToken: row.claimToken! });
-        const prior = await projectPresentationEvidence({ hostLedger: ledger, location: row.location, participant: row.participant, sessionId, activity: row.activity });
-        if (presentationSuppressesWake(prior)) continue;
-        const square = await openSquare(row.location, { hostLedger: ledger, env });
-        try { await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId, activity: row.activity, sink: { present() {} }, markSeen: !pending.clipped, current: (facts) => {
-          const index = parseActivityId(row.activity);
-          if (index === undefined) return false;
-          const preview = nativePendingPreview(facts, { location: row.location, routeKind: 'claude-native', sessionId: row.session, participant: row.participant, actIndex: index, epoch: native.epoch, address: { endpoint: native.endpoint }, cancelledThrough: pending.cancelledThrough, now: Date.now() });
-          return preview !== undefined && nativePayload(row.claimToken!, preview.payload) === native.payload;
-        } }); }
-        finally { await closeOpenSquare(square); }
-      }
+      if (operation === 'guard') continue;
+      const request = row.request!, payload = row.payload!;
+      const admitted = await row.artifact.transactAs({ kind: 'participant', seat: request.seat }, facts =>
+        currentPayload(facts, request) === payload && facts.completeDelivery({ seat: request.seat,
+          activity: row.evidence.activity, claimToken: request.claimToken!, outcome: 'accepted', at: Date.now() })).catch(() => ({ value: false }));
+      if (!admitted.value) return { recognized, current: false };
+      if (operation === 'stored') await presentPending({ artifact: row.artifact, location: request.location,
+        participant: request.participant, activity: request.activity, seat: request.seat, sink: { present() {} },
+        current: facts => currentPayload(facts, request) === payload });
     }
-    return { recognized: rows.length > 0, current };
-  });
+    return { recognized, current: true };
+  } finally { await Promise.all([...new Set(rows.map(row => row.artifact))].map(artifact => artifact.close())); }
 }
 
-export type ClaudeBinding = Pick<PresenceRecord, 'location' | 'participant' | 'session' | 'epoch'>;
+export type ClaudeBinding = {
+  readonly location: string;
+  readonly participant: string;
+  readonly session: string;
+  readonly generation?: import('./square-core.js').ActivityId;
+};

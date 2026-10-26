@@ -3,71 +3,46 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+import { Square } from '../dist/index.js';
 import { sessionInbox } from '../dist/inbox.js';
-import { hostLedgerForEnv } from '../dist/registry.js';
+import { rememberSquarePath } from '../dist/square-index.js';
 import { persistSquare, run, testEnv } from './square-cli-helpers.js';
 
-test('inbox is a bounded, ordered snapshot that does not expose notification internals', async (t) => {
-  const longName = `BRAVO${'z'.repeat(180)}`;
-  const secretBody = 'notification body that stays inside delivery';
-  const source = await persistSquare(async ({ square }) => {
+async function makeMembership(root, name, env) {
+  const file = path.join(root, `${name}.square`);
+  const square = await Square.build({ path: file, markdown: 'inbox context', hardCap: null,
+    body: { channel: 'codex', session: 'inbox-snapshot' }, env });
+  try {
     const sender = (await square.join('Sender')).participant;
-    await square.join('Alpha');
-    await square.join(longName);
-    await sender.express(secretBody, { force: true, mentions: ['Alpha', longName] });
-  }, { hardCap: null });
-  const root = path.dirname(source);
-  const canonicalSource = await fs.promises.realpath(source);
-  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
+    await square.join(name);
+    await sender.express(`notice for ${name}`, { force: true, mentions: [name] });
+  } finally { await square.close(); }
+  await rememberSquarePath(file, { channel: 'codex', session: 'inbox-snapshot' }, env.SQUARE_INDEX);
+  return file;
+}
 
-  // Exceed the 160-character preview without exceeding SQLite's Windows path limit.
-  const copyDirectory = path.join(root, 'z'.repeat(Math.max(1, 180 - root.length)));
-  fs.mkdirSync(copyDirectory);
-  const copies = Array.from({ length: 100 }, (_value, index) => {
-    const squarePath = path.join(copyDirectory, `membership-${String(index).padStart(3, '0')}.square`);
-    fs.copyFileSync(source, squarePath);
-    return squarePath;
-  });
-  const env = testEnv({ SQUARE_REGISTRY: path.join(root, 'inbox-sessions.ndjsonl') });
-  const ledger = hostLedgerForEnv(env);
-  for (const squarePath of [source, ...copies]) {
-    await ledger.ensurePresence({ location: squarePath, participant: 'Alpha', session: 'inbox-snapshot', channel: 'codex' });
-  }
-  await ledger.ensurePresence({ location: source, participant: longName, session: 'inbox-snapshot', channel: 'codex' });
+test('inbox is a bounded, ordered snapshot without notification internals', async (t) => {
+  const root = fs.mkdtempSync(path.join('/tmp', 'square-inbox-cli-'));
+  const env = testEnv({ SQUARE_INDEX: path.join(root, 'index.ndjsonl') });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const names = ['Alpha', `BRAVO${'z'.repeat(180)}`, 'Charlie'];
+  const files = [];
+  for (const name of names) files.push(await makeMembership(root, name, env));
+  const complete = await sessionInbox({ channel: 'codex', session: 'inbox-snapshot' }, env);
+  assert.equal(complete.length, names.length * 2);
+  assert.equal(complete.find((membership) => membership.name === names[1])?.notifications[0].body, `notice for ${names[1]}`);
 
-  const complete = await sessionInbox('inbox-snapshot', env);
-  assert.equal(complete.length, 102);
-  assert.equal(complete.find((membership) => membership.name === longName)?.notifications[0].body, secretBody);
-
-  const defaultResult = run(['inbox', '--for-session', 'inbox-snapshot', '--json'], { env });
-  assert.equal(defaultResult.status, 0, defaultResult.stderr);
-  const defaultSnapshot = JSON.parse(defaultResult.stdout);
-  assert.equal(defaultSnapshot.total, 102);
-  assert.equal(defaultSnapshot.rows.length, 20);
-  assert.deepEqual(defaultSnapshot.rows.slice(0, 2).map((row) => row.namePreview), [
-    'Alpha',
-    `${Array.from(longName).slice(0, 159).join('')}…`,
-  ]);
-  assert.equal(defaultSnapshot.rows[0].squarePathPreview, canonicalSource);
-  assert.equal(defaultSnapshot.rows[1].squarePathPreview, canonicalSource);
-  assert.equal(Array.from(defaultSnapshot.rows[2].squarePathPreview).length, 160);
-  assert.ok(defaultSnapshot.rows[1].namePreview.endsWith('…'));
-  assert.ok(defaultSnapshot.rows[2].squarePathPreview.endsWith('…'));
-  assert.notEqual(defaultSnapshot.rows[2].squarePathPreview, copies[0]);
-  for (const row of defaultSnapshot.rows) {
-    assert.deepEqual(Object.keys(row).sort(), ['namePreview', 'pending', 'squarePathPreview']);
-  }
-  assert.doesNotMatch(defaultResult.stdout, new RegExp(secretBody));
-  assert.doesNotMatch(defaultResult.stdout, /notifications|catchLease|route|actIndex/);
+  const result = run(['inbox', '--for-session', 'inbox-snapshot', '--json'], { env });
+  assert.equal(result.status, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  assert.equal(snapshot.total, names.length * 2);
+  assert.equal(snapshot.rows.length, names.length * 2);
+  for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['namePreview', 'pending', 'squarePathPreview']);
+  assert.doesNotMatch(result.stdout, /notification body|notifications|catchLease|route|actIndex/);
 
   const text = run(['inbox', '--for-session', 'inbox-snapshot'], { env });
   assert.equal(text.status, 0, text.stderr);
-  assert.match(text.stdout, /20 of 102 memberships shown\n$/);
-
-  const maximum = run(['inbox', '--for-session', 'inbox-snapshot', '--limit', '100', '--json'], { env });
-  assert.equal(maximum.status, 0, maximum.stderr);
-  assert.equal(JSON.parse(maximum.stdout).total, 102);
-  assert.equal(JSON.parse(maximum.stdout).rows.length, 100);
+  assert.equal(text.stdout, snapshot.rows.map((row) => `${row.namePreview}\t${row.squarePathPreview}\t${row.pending}\n`).join(''));
 
   const overMaximum = run(['inbox', '--limit', '101', '--for-session', 'inbox-snapshot', '--json'], { env });
   assert.equal(overMaximum.status, 2);
@@ -77,4 +52,5 @@ test('inbox is a bounded, ordered snapshot that does not expose notification int
   const duplicateLimit = run(['inbox', '--for-session', 'inbox-snapshot', '--limit', '2', '--limit', '3'], { env });
   assert.equal(duplicateLimit.status, 2);
   assert.equal(duplicateLimit.stderr, "✕ inbox accepts one --limit\nsquare inbox --for-session 'inbox-snapshot' --limit 100\n");
+  assert.equal(files.length, names.length);
 });

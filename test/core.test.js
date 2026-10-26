@@ -32,6 +32,19 @@ function memorySquare(overrides = {}, clock = () => 0) {
   return { cell, square: { artifact: cell, clock, location: 'memory' } };
 }
 
+/** Seeded fixtures write through the same seats a real caller would hold. */
+async function establishSeat(cell, name, at) {
+  const body = { channel: 'test', session: name.toLowerCase() };
+  return (await cell.transactAs({ kind: 'join', participant: name, body }, facts => {
+    const joined = facts.land({ kind: 'join', actor: name, at });
+    return facts.seat(name) ?? { participant: name, body, generation: `act/${joined.index}` };
+  })).value;
+}
+
+function landSayTo(cell, seat, target, at, body) {
+  return cell.transactAs({ kind: 'participant', seat }, (facts) => facts.land({ kind: 'say', actor: seat.participant, at, body, mentions: [target] }));
+}
+
 test('participant lists share actual action and receipt times, including a fresh rejoin', async () => {
   const state = makeState({ acts: [
     { kind: 'join', actor: 'Reader', at: 1 },
@@ -107,8 +120,8 @@ test('unknown participant errors identify only the requested name', async () => 
   const unknown = 'Eve';
   const cases = [
     () => selectedHistory(square, { from: [unknown] }),
-    () => cell.transact((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
-    () => cell.transact((facts) => decideCatch(facts, unknown, {}, 2)),
+    () => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
+    () => cell.read((facts) => decideCatch(facts, unknown, {}, 2)),
   ];
 
   const expectedReasons = ['never_joined', 'not_standing', 'never_joined'];
@@ -207,9 +220,10 @@ test('host controls preserve the requesting actor and body', async () => {
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
   const cell = createArtifactPort(':memory:', makeState());
-  const square = { artifact: cell, clock: () => (now += 1), location: 'memory' };
+  const base = { artifact: cell, clock: () => (now += 1), location: 'memory', body: { channel: 'test', session: 'cursor' } };
   try {
-    await join(square, 'Alice');
+    const { seat } = await join(base, 'Alice');
+    const square = { ...base, participantSeat: seat };
     await express(square, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
     await done(square, 'Alice');
 
@@ -337,9 +351,11 @@ test('mention and listening caps reject without enumerating the roster', async (
 
 test('listener landings append only real edge changes', async () => {
   let now = 10;
-  const cell = createArtifactPort(':memory:', makeState({ acts: [{ kind: 'join', actor: 'Caller', at: 1 }] }));
-  const square = { artifact: cell, clock: () => ++now, location: 'memory' };
+  const cell = createArtifactPort(':memory:', makeState());
+  const base = { artifact: cell, clock: () => ++now, location: 'memory', body: { channel: 'test', session: 'listener' } };
   try {
+    const { seat } = await join(base, 'Caller');
+    const square = { ...base, participantSeat: seat };
     const first = await listen(square, 'Caller', 'aku/riko');
     const repeated = await listen(square, 'caller', 'AKU/RIKO');
     assert.equal(first.activity.kind, 'listen');
@@ -458,39 +474,34 @@ test('activity history grep searches ids, participant names, and bodies', async 
 });
 
 test('catch pages unseen directed activity and keeps the continuous cursor behind a gap', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 1 },
-    { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'join', actor: 'Cara', at: 3 },
-    ...Array.from({ length: 25 }, (_, index) => ({ kind: 'say', actor: index % 2 === 0 ? 'Bob' : 'Cara', at: index + 4, body: `message ${index} @Alice`, mentions: ['Alice'] })),
-  ];
-  const first = createArtifactPort(':memory:', makeState({ acts }));
+  const first = createArtifactPort(':memory:', makeState());
   try {
-    const page = (cell, options, at) => cell.transact((facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
-    const one = await page(first, { limit: 10 }, 100);
+    const alice = await establishSeat(first, 'Alice', 1);
+    const bob = await establishSeat(first, 'Bob', 2);
+    const cara = await establishSeat(first, 'Cara', 3);
+    for (let index = 0; index < 25; index += 1) await landSayTo(first, index % 2 === 0 ? bob : cara, 'Alice', index + 4, `message ${index} @Alice`);
+    const page = (options, at) => first.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
+    const one = await page({ limit: 10 }, 100);
     assert.deepEqual(one.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 3));
     assert.equal(one.remaining, 15);
-    const two = await page(first, { limit: 10 }, 101);
+    const two = await page({ limit: 10 }, 101);
     assert.deepEqual(two.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 13));
-    const three = await page(first, { limit: 10 }, 102);
+    const three = await page({ limit: 10 }, 102);
     assert.deepEqual(three.activities.map((item) => item.index), [23, 24, 25, 26, 27]);
   } finally {
     await first.close();
   }
 
-  const gap = createArtifactPort(':memory:', makeState({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'join', actor: 'Bob', at: 2 },
-      { kind: 'join', actor: 'Cara', at: 3 },
-      { kind: 'say', actor: 'Cara', at: 4, body: 'gap @Alice', mentions: ['Alice'] },
-      { kind: 'say', actor: 'Bob', at: 5, body: 'seen @Alice', mentions: ['Alice'] },
-    ],
-  }));
+  const gap = createArtifactPort(':memory:', makeState());
   try {
-    const bobOnly = (await gap.transact((facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 200))).value;
+    const alice = await establishSeat(gap, 'Alice', 1);
+    const bob = await establishSeat(gap, 'Bob', 2);
+    const cara = await establishSeat(gap, 'Cara', 3);
+    await landSayTo(gap, cara, 'Alice', 4, 'gap @Alice');
+    await landSayTo(gap, bob, 'Alice', 5, 'seen @Alice');
+    const bobOnly = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 200))).value;
     assert.deepEqual(bobOnly.activities.map((item) => item.index), [4]);
-    const repeat = (await gap.transact((facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 201))).value;
+    const repeat = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 201))).value;
     assert.deepEqual(repeat.activities, []);
   } finally {
     await gap.close();

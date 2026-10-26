@@ -1,11 +1,7 @@
-import { operationEnv } from '../../participant-identity.js';
-import { hostLedgerForEnv } from '../../registry.js';
+import { observeSquareIndex } from '../../square-index.js';
 import { canonicalPath } from '../../canonical-path.js';
-import { openSquare } from '../../open-square.js';
-import { closeOpenSquare } from '../../open-square.js';
-import { Square } from '../../square-api.js';
 import { connectNative, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
-import { observeOpenCodeContext, publishOpenCodeRoutes, receiveOpenCodePending, type OpenCodeContextMessage } from './delivery.js';
+import { cancelOpenCodeDeliveries, endOpenCodeSession, indexedOpenCodeSessions, observeOpenCodeContext, publishOpenCodeAddress, receiveOpenCodePending, type OpenCodeContextMessage } from './delivery.js';
 
 interface OpenCodePluginContext {
   readonly app: { readonly version: string };
@@ -24,7 +20,7 @@ export default {
   async setup(ctx: OpenCodePluginContext): Promise<() => Promise<void>> {
     if (ctx.app.version !== '2.0.20') return async () => {};
     const env = { ...process.env };
-    const ledger = hostLedgerForEnv(env);
+    const index = await observeSquareIndex(env);
     const lifetime = new AbortController();
     const receivers = new Map<string, Receiver>(); // Operational handles only; presence owns membership.
     const directory = await canonicalPath(ctx.location.directory);
@@ -53,18 +49,17 @@ export default {
       return target;
     };
     const reconcile = async (activeSession?: string) => {
-      const candidates = new Set((await ledger.listPresence({})).filter((binding) => binding.channel === 'opencode').map((binding) => binding.session));
+      const candidates = new Set(await indexedOpenCodeSessions(env));
       if (activeSession) candidates.add(activeSession);
       for (const sessionId of candidates) {
         if (lifetime.signal.aborted) return;
         const target = await validate(sessionId);
         if (!target) { stop(sessionId); continue; }
-        const scopedEnv = operationEnv('opencode', sessionId, env);
-        if (!await publishOpenCodeRoutes(sessionId, scopedEnv, lifetime.signal)) { stop(sessionId); continue; }
+        if (!await publishOpenCodeAddress(sessionId, env, lifetime.signal)) { stop(sessionId); continue; }
         if (receivers.get(sessionId)?.settled === false) continue;
         const abort = new AbortController();
         const signal = AbortSignal.any([lifetime.signal, abort.signal]);
-        const receiver: Receiver = { abort, settled: false, running: receiveOpenCodePending(target, scopedEnv, signal).catch(() => {}).finally(() => { receiver.settled = true; }) };
+        const receiver: Receiver = { abort, settled: false, running: receiveOpenCodePending(target, env, signal).catch(() => {}).finally(() => { receiver.settled = true; }) };
         receivers.set(sessionId, receiver);
       }
       for (const sessionId of receivers.keys()) if (!candidates.has(sessionId)) stop(sessionId);
@@ -73,23 +68,12 @@ export default {
       if (!receivers.has(sessionId)) return;
       // Stop synchronously; persist the cutoff before allowing reconciliation to start fresh work.
       stop(sessionId);
-      await ledger.withClaimLock(async () => {
-        for (const owner of (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode')) {
-          const square = await openSquare(owner.location, { hostLedger: ledger, env, signal: lifetime.signal });
-          try { await ledger.suppressPresence(owner, (await square.artifact.read((facts) => facts.header().nextActIndex - 1, lifetime.signal)).value); }
-          finally { await closeOpenSquare(square); }
-        }
-      }, lifetime.signal);
+      await cancelOpenCodeDeliveries(sessionId, env, lifetime.signal);
       await reconcile();
     };
     const end = async (sessionId: string) => {
       stop(sessionId);
-      const memberships = (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode');
-      for (const owner of memberships) {
-        const square = await Square.at({ path: owner.location, hostLedger: ledger, env: operationEnv('opencode', sessionId, env) });
-        try { await square.endOwnedSession(owner.participant, sessionId, owner.epoch); }
-        finally { await square.close(); }
-      }
+      await endOpenCodeSession(sessionId, env, lifetime.signal);
     };
 
     await ctx.session.hook('prompt', (event) => coordinate(() => reconcile(event.sessionID)));
@@ -97,16 +81,14 @@ export default {
       await coordinate(() => reconcile(event.sessionID));
       const receiver = receivers.get(event.sessionID);
       if (!receiver || lifetime.signal.aborted) return;
-      await observeOpenCodeContext(event.sessionID, event.messages, operationEnv('opencode', event.sessionID, env),
+      await observeOpenCodeContext(event.sessionID, event.messages, env,
         AbortSignal.any([lifetime.signal, receiver.abort.signal])).catch(() => {});
     });
-    const changes = await ledger.observeChanges();
-    changes.evidence.close(); // Manual joins activate an idle receiver; evidence already has a session observer.
     const presenceLoop = (async () => {
       while (!lifetime.signal.aborted) {
-        const baseline = await changes.presence.read(lifetime.signal);
+        const baseline = await index.read(lifetime.signal);
         await coordinate(() => reconcile());
-        await changes.presence.changed(baseline, Infinity, lifetime.signal);
+        await index.changed(baseline, Infinity, lifetime.signal);
       }
     })().catch(() => {});
     const eventLoop = (async () => {
@@ -124,7 +106,7 @@ export default {
     // Do not await any native prompt in setup: plugin activation itself is lazy.
     return async () => {
       lifetime.abort();
-      changes.presence.close();
+      index.close();
       const tasks = [presenceLoop, eventLoop, coordinating, ...[...receivers.keys()].map(stop)];
       let timer: ReturnType<typeof setTimeout> | undefined;
       try { await Promise.race([Promise.allSettled(tasks), new Promise<void>((resolve) => { timer = setTimeout(resolve, 3000); })]); }

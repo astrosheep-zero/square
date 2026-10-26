@@ -4,7 +4,7 @@ import test from 'node:test';
 import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
 import { Square } from '../dist/square-api.js';
 import { catchUp } from '../dist/square-actions.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { catchPresence, toPublicActivity } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
@@ -19,34 +19,47 @@ function instrumentCell(cell) {
   return {
     counters,
     artifact: {
+      ...cell,
       read: (select, signal) => { counters.reads += 1; return cell.read((facts) => select(wrap(facts)), signal); },
       transact: (change, signal) => { counters.transacts += 1; return cell.transact((facts) => change(wrap(facts)), signal); },
-      revision: (signal) => cell.revision(signal),
-      changed: (since, timeout, signal) => cell.changed(since, timeout, signal),
-      close: () => cell.close(),
+      transactAs: (authority, change, signal) => { counters.transacts += 1; return cell.transactAs(authority, (facts) => change(wrap(facts)), signal); },
     },
   };
 }
 
-function stateWithHistory(unrelatedSays, participants = 96) {
-  const acts = [{ kind: 'join', actor: 'Alice', at: 0 }];
-  for (let index = 0; index < participants; index++) acts.push({ kind: 'join', actor: `P${index}`, at: index + 1 });
-  for (let index = 0; index < unrelatedSays; index++) {
-    acts.push({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0`, mentions: ['P0'] });
-  }
-  return {
-    hardCap: null,
-    preamble: [],
-    warmup: ['test'],
-    acts: acts.map((act, index) => ({ ...act, index })),
-    runtime: { nextActIndex: acts.length, observations: {}, leases: {} },
-  };
+function bodyFor(name) { return { channel: 'test', session: name.toLowerCase() }; }
+
+async function establishSeat(cell, participant, at) {
+  const body = bodyFor(participant);
+  return (await cell.transactAs({ kind: 'join', participant, body }, (facts) => {
+    const joined = facts.land({ kind: 'join', actor: participant, at });
+    const seat = { participant, body, generation: `act/${joined.index}` };
+    facts.storeSeat(seat);
+    return seat;
+  })).value;
+}
+
+/** The caller's seat comes from its own join authority; the rest of the history is seeded raw. */
+async function stateWithHistory(unrelatedSays, participants = 96) {
+  const cell = createArtifactPort(':memory:', {
+    hardCap: null, preamble: [], warmup: ['test'], acts: [],
+    runtime: { nextActIndex: 0, observations: {}, leases: {} },
+  });
+  await cell.transact((facts) => facts.land({ kind: 'join', actor: 'Alice', at: 0 }));
+  const p0 = await establishSeat(cell, 'P0', 1);
+  await cell.transact((facts) => {
+    for (let index = 1; index < participants; index++) facts.land({ kind: 'join', actor: `P${index}`, at: index + 1 });
+    for (let index = 0; index < unrelatedSays; index++) {
+      facts.land({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0`, mentions: ['P0'] });
+    }
+  });
+  return { cell, p0 };
 }
 
 test('catch hydrates only its page while the remaining count is a bounded fact read', async () => {
-  const cell = createArtifactPort(':memory:', stateWithHistory(900));
+  const { cell, p0 } = await stateWithHistory(900);
   const { counters, artifact } = instrumentCell(cell);
-  const square = { artifact, clock: () => 2_000, location: 'memory' };
+  const square = { artifact, clock: () => 2_000, location: 'memory', body: p0.body, participantSeat: p0 };
   try {
     const caught = await catchUp(square, 'P0');
     assert.equal(caught.activities.length, 10);
@@ -65,10 +78,10 @@ test('catch hydrates only its page while the remaining count is a bounded fact r
 test('recipient hot reads do not hydrate unrelated history as the square grows', async () => {
   const measurements = [];
   for (const unrelated of [900, 1_800]) {
-    const cell = createArtifactPort(':memory:', stateWithHistory(unrelated));
+    const { cell, p0 } = await stateWithHistory(unrelated);
     const { counters, artifact } = instrumentCell(cell);
     try {
-      const caught = await catchUp({ artifact, clock: () => 2_000, location: 'memory' }, 'P0');
+      const caught = await catchUp({ artifact, clock: () => 2_000, location: 'memory', body: p0.body, participantSeat: p0 }, 'P0');
       measurements.push({
         delivered: caught.activities.length,
         remaining: caught.remaining,
@@ -88,18 +101,9 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
 });
 
 test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 0 },
-    { kind: 'join', actor: 'P0', at: 1 },
-    ...Array.from({ length: 900 }, (_value, index) => ({ kind: 'say', actor: 'Alice', at: index + 2, body: `dispatch ${index} @P0`, mentions: ['P0'] })),
-  ];
-  const cell = createArtifactPort(':memory:', {
-    hardCap: null, preamble: [], warmup: ['test'],
-    acts: acts.map((act, index) => ({ ...act, index })),
-    runtime: { nextActIndex: acts.length, observations: {}, leases: {} },
-  });
+  const { cell, p0 } = await stateWithHistory(900, 1);
   const { counters, artifact } = instrumentCell(cell);
-  const square = { artifact, clock: () => 100_000, location: 'memory' };
+  const square = { artifact, clock: () => 100_000, location: 'memory', body: p0.body, participantSeat: p0 };
   const measurements = () => structuredClone(counters);
   try {
     const caught = await catchUp(square, 'P0');
@@ -152,7 +156,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
 });
 
 test('catch fences selection and captures the page facts in its receipt transaction', async () => {
-  const resource = Square.inMemory({ markdown: 'test', hardCap: 5, clock: () => 100 });
+  const resource = Square.inMemory({ markdown: 'test', hardCap: 5, clock: () => 100, body: bodyFor('owner') });
   try {
     const alice = (await resource.join('Alice')).participant;
     await resource.join('Bob');
@@ -160,24 +164,29 @@ test('catch fences selection and captures the page facts in its receipt transact
     await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
     const square = resource.square;
     const cell = square.artifact;
-    await cell.transact((facts) => facts.putLease('Bob', { leaseId: 'replacement', heartbeatAt: 100, expiresAt: 100_000 }));
+    const bobSeat = (await cell.read(facts => facts.seat('Bob'))).value;
+    const aliceSeat = (await cell.read(facts => facts.seat('Alice'))).value;
+    const context = { ...square, participantSeat: bobSeat };
+    await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts =>
+      facts.putLease('Bob', { leaseId: 'replacement', heartbeatAt: 100, expiresAt: 100_000 }, bobSeat.generation));
     const revision = await cell.revision();
-    assert.equal(await catchUp(square, 'Bob', {}, undefined, 'old'), null);
+    assert.equal(await catchUp(context, 'Bob', {}, undefined, 'old'), null);
     assert.equal(await cell.revision(), revision, 'a replaced lease cannot insert a receipt');
     const artifact = {
       ...cell,
       read: () => { throw new Error('committed selection must not be looked up again'); },
-      async transact(change, signal) {
-        const result = await cell.transact(change, signal);
-        await cell.transact((facts) => {
-          facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 });
+      async transactAs(authority, change, signal) {
+        const result = await cell.transactAs(authority, change, signal);
+        await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts =>
+          facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 }));
+        await cell.transactAs({ kind: 'participant', seat: aliceSeat }, facts => {
           facts.land({ kind: 'say', actor: 'Alice', body: 'later for Bob', mentions: ['Bob'], at: 201 });
           facts.land({ kind: 'hold', actor: 'Alice', body: 'later hold', at: 202 });
         });
         return result;
       },
     };
-    const caught = await catchUp({ ...square, artifact }, 'Bob', { limit: 1 }, undefined, 'replacement');
+    const caught = await catchUp({ ...context, artifact }, 'Bob', { limit: 1 }, undefined, 'replacement');
     assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
     assert.deepEqual(caught, {
       hint: caught.hint, participant: 'Bob', activities: [{ kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], index: 2, at: 100 }],
@@ -194,7 +203,7 @@ test('catch fences selection and captures the page facts in its receipt transact
 });
 
 test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async () => {
-  const resource = Square.inMemory({ markdown: 'test', hardCap: 1, clock: () => 100 });
+  const resource = Square.inMemory({ markdown: 'test', hardCap: 1, clock: () => 100, body: bodyFor('p0') });
   try {
     await resource.join('Alice');
     const participant = (await resource.join('P0')).participant;

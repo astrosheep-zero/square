@@ -48,17 +48,31 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
   assert.equal((await readSquareSnapshot(file)).state.acts.at(-1).kind, 'say');
 });
 
-test('express after done announces the return; a standing participant sees none', async () => {
+test('a departed participant steps back in before speaking, and only the return announces itself', async () => {
   const file = await persistSquare(async ({ square }) => {
     await square.join('Alice');
     const bob = (await square.join('Bob')).participant;
     await bob.done();
   });
 
-  const returned = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
+  // A completed seat cannot speak for its old body: the draft is kept, nothing lands.
+  const refused = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
+  const refusal = refused.stdout + refused.stderr;
+  assert.equal(refused.status, 2, refusal);
+  assert.match(refusal, /Bob needs a current participant handle/);
+  assert.match(refusal, /draft kept/);
+  assert.match(refusal, /express --no-mention - </);
+  assert.equal((await readSquareSnapshot(file)).state.acts.at(-1).kind, 'done');
+
+  const returned = run(withName(file, 'Bob', ['join']));
   assert.equal(returned.status, 0, returned.stderr);
-  assert.match(returned.stdout, /● you stepped back into the square/);
-  assert.match(returned.stdout, /your words land/);
+  assert.match(returned.stdout, /● you stepped into the square/);
+  assert.match(returned.stdout, /@Bob stepped out of the square — done/);
+
+  const speaking = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
+  assert.equal(speaking.status, 0, speaking.stderr);
+  assert.match(speaking.stdout, /your words land/);
+  assert.doesNotMatch(speaking.stdout, /stepped (back )?in/);
 
   const standing = run(withName(file, 'Alice', ['express', '--no-mention', 'still here']));
   assert.equal(standing.status, 0, standing.stderr);

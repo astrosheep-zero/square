@@ -1,4 +1,4 @@
-import { type CommandContext, type CommandSpec, fail } from './context.js';
+import { type CommandContext, type CommandSpec, fail, squareInput } from './context.js';
 
 export const mcpServerCommand: CommandSpec<undefined, void> = {
   parse(argv) {
@@ -7,7 +7,7 @@ export const mcpServerCommand: CommandSpec<undefined, void> = {
   },
   async execute(_intent, context: CommandContext) {
     const { runSquareMcpStdio } = await import('../mcp.js');
-    await runSquareMcpStdio({ cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name });
+    await runSquareMcpStdio(squareInput(context));
   },
   present() {},
 };

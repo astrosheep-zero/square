@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { createArtifactPort } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { createSqliteDriver, initializeSqlite } from '../dist/square-sqlite.js';
 
 function state() {

@@ -50,7 +50,7 @@ test('public activities render directly with the same IDs, replies, bodies and p
     assert.equal(renderAmbientEvent(toPublicActivity(record), 'Bob', options), renderAmbientEvent(record, 'Bob', options));
   }
   const rendered = renderAmbientEvent(toPublicActivity(records[0]), 'Bob', options);
-  assert.match(rendered, /#4 · act\/9.*replies to act\/3/);
+  assert.match(rendered, /· act\/9.*replies to act\/3/);
   assert.match(rendered, /first line\n  second line/);
   const presence = { ...options, perception: 'presence' };
   assert.equal(renderAmbientEvent(toPublicActivity(records[0]), 'Cara', presence), renderAmbientEvent(records[0], 'Cara', presence));
@@ -74,7 +74,6 @@ test('blocked activity output bounds unread participant summaries', () => {
     squarePath: '/tmp/square',
     name: 'Alice',
     retryCommand: 'square express -',
-    forceCommand: 'square express --force -',
     activitySummaries: summaries,
   });
 
@@ -110,7 +109,7 @@ test('quiet graduates with the idle length and an empty catch never repeats its 
 test('the capped status counts what was spoken and the throttle names its lull', () => {
   assert.match(
     renderWatchStatus({ squarePath: '.square/PUBLIC.square', name: 'Alice', status: 'capped', ownActivityCount: 3, hardCap: 3 }),
-    /^✕ nothing left in you — 3\/3 spoken$/m
+    /^✕ you’ve reached your speaking cap — 3\/3 spoken$/m
   );
 
   const throttled = renderExpressNoWait({ squarePath: '.square/PUBLIC.square', name: 'Alice', reason: 'throttled', delayMs: 60_000, retryCommand: 'square express -' });

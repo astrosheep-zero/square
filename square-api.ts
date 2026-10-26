@@ -18,17 +18,15 @@ export const Square = {
     const captured = { ...input, cwd: input.cwd ?? process.cwd(), env: { ...(input.env ?? process.env) } };
     const location = squareLocation(captured);
     const selected = parseSquareLocation(location);
-    const backends = await backendConfiguration(captured);
     return selected.kind === 'local' ? SqliteSquare.at({ ...captured, path: location }, control)
-      : openStdioSquare(location, selected, captured, backends, undefined, control);
+      : openStdioSquare(location, selected, captured, await backendConfiguration(captured), undefined, control);
   },
   async build(input: SquareBuildInput, control?: OperationControl): Promise<Square> {
     const captured = { ...input, cwd: input.cwd ?? process.cwd(), env: { ...(input.env ?? process.env) } };
     const location = squareLocation(captured);
     const selected = parseSquareLocation(location);
-    const backends = await backendConfiguration(captured);
     return selected.kind === 'local' ? SqliteSquare.build({ ...captured, path: location }, control)
-      : openStdioSquare(location, selected, captured, backends, {
+      : openStdioSquare(location, selected, captured, await backendConfiguration(captured), {
         markdown: input.markdown, hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
         template: input.template, force: input.force,
       }, control);

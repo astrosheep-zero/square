@@ -19,6 +19,7 @@ test('generated release artifacts expose the current identity and supported host
   const claudeHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', 'hooks', 'hooks.json'), 'utf8'));
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
+  const paseoPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'paseo', 'paseo-plugin.json'), 'utf8'));
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');
   const claudeSkill = fs.readFileSync(path.join(root, 'plugins', 'claude', 'skills', 'square', 'SKILL.md'), 'utf8');
 
@@ -45,6 +46,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(packageJson.files.includes('plugins'), true);
   assert.equal(claudePlugin.version, packageJson.version);
   assert.equal(codexPlugin.version, packageJson.version);
+  assert.equal(paseoPlugin.requirements.paseo, '>=0.11.2');
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
   assert.deepEqual(claudeHooks, { modules: ['./register.js'] });
@@ -67,7 +69,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.doesNotMatch(fs.readFileSync(leaf, 'utf8'), /@opencode|square|\.square/);
   const entry = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'index.js');
   assert.equal(fs.existsSync(entry), true);
-  assert.match(fs.readFileSync(path.join(root, 'dist', 'claude-delivery.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
+  assert.match(fs.readFileSync(path.join(root, 'dist', 'claude-delivery.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/claude-native\.js/);
   assert.match(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
   // Paseo wakes steer through the shared entry; the CLI spawn is gone for good.
   assert.doesNotMatch(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /spawnSync|SQUARE_PASEO_BIN/);
@@ -128,7 +130,7 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.equal(packed.files.some((entry) => entry.path === 'dist/claude-native.js' || entry.path === 'dist/claude-hook.js'), false);
   await run('tar', ['-xzf', path.join(fixture, packed.filename), '-C', fixture]);
   const shipped = path.join(fixture, 'package');
-  assert.match(fs.readFileSync(path.join(shipped, 'dist/claude-delivery.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
+  assert.match(fs.readFileSync(path.join(shipped, 'dist/claude-delivery.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/claude-native\.js/);
   assert.equal(fs.readFileSync(path.join(shipped, leafPath), 'utf8'), fs.readFileSync(path.join(root, leafPath), 'utf8'));
   const endpoint = path.join(fixture, 'in.sock');
   const server = net.createServer((socket) => {

@@ -10,7 +10,7 @@ import { diagnoseSquareFile, readSquareSnapshot } from '../dist/artifact.js';
 test('unlisten removes only its listen edge, preserves landed audience, and keeps mentions and replies', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-unlisten-'));
   const location = path.join(root, 'PUBLIC.square');
-  const square = await Square.build({ path: location, markdown: 'Unlisten' });
+  const square = await Square.build({ path: location, markdown: 'Unlisten', body: { channel: 'test', session: 'unlisten' } });
   t.after(async () => { await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
   for (const name of ['Alice', 'Bob', 'Cara']) await square.join(name);
   const alice = await square.participant('Alice'), bob = await square.participant('Bob');

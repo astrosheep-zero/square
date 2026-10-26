@@ -31,14 +31,13 @@ test('new artifacts own only the closed current schema, preserve explicit import
   state.runtime.nextActIndex = 10;
   state.runtime.observations = { [weird]: { 'act/8': { state: 'seen', at: 0.25 } }, dormant: { 'act/1': { state: 'seen', at: -0.5 } } };
   state.runtime.leases = { DORMANT: { leaseId: '\ud800\u0000', heartbeatAt: 1.25, expiresAt: 2.75 } };
-  state.routes = [0, 1].map(() => ({ location: '', participant: weird, sessionId: '\ud800', channel: '', kind: 'paseo', address: { '\ud800': '\u0000' }, updatedAt: 3.5, epoch: { value: 4.25 }, other: ['extra', '\udfff'] }));
   assert.equal(await createSquareFile(file, state), true);
   assert.deepEqual((await readSquareSnapshot(file)).state, state);
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
     assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
-    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='square_snapshot'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='routes'").get().n, 0);
     assert.deepEqual(JSON.parse(db.prepare('SELECT payload_json FROM activities WHERE act_index=2').get().payload_json), { body: '\udfff\u0000' });
   } finally { db.close(); }
   assert.deepEqual(await diagnoseSquareFile(file), { problems: [], standingCount: 0 });
@@ -51,29 +50,30 @@ test('new artifacts own only the closed current schema, preserve explicit import
 
 test('memory and file callbacks are synchronous, atomic, ordered, detached and expire after completion', async t => {
   for (const port of await cells(t)) {
+    const body = { channel: 'test', session: 'alice' };
     let escaped;
-    const joined = await port.transact(facts => {
+    const joined = await port.transactAs({ kind: 'join', participant: 'Alice', body }, facts => {
       escaped = facts;
-      facts.land({ kind: 'join', actor: 'Alice', at: 1 });
-      return facts.participant('ALICE');
+      return facts.land({ kind: 'join', actor: 'Alice', at: 1 });
     });
+    const aliceSeat = (await port.read(facts => facts.seat('Alice'))).value;
     assert.equal(joined.version, 1);
     assert.equal(joined.changed, true);
-    assert.equal(joined.value.name, 'Alice');
+    assert.equal(joined.value.index, 0);
     assert.throws(() => escaped.header(), /expired/);
-    assert.throws(() => escaped.land({ kind: 'done', actor: 'Alice', at: 2 }), /expired/);
-    assert.throws(() => { joined.value.name = 'changed'; }, TypeError);
+    assert.throws(() => escaped.land({ kind: 'join', actor: 'Alice', at: 2 }), /expired/);
+    assert.throws(() => { joined.value.index = 9; }, TypeError);
     assert.equal((await port.read(r => r.participant('alice'))).value.name, 'Alice');
-    assert.equal((await port.transact(() => 'no-op')).changed, false);
+    assert.equal((await port.transactAs({ kind: 'participant', seat: aliceSeat }, () => 'no-op')).changed, false);
 
     const original = new Error('no such file: callback-owned failure');
-    await assert.rejects(port.transact(w => { w.land({ kind: 'done', actor: 'Alice', at: 2 }); throw original; }), e => e === original);
-    await assert.rejects(port.transact(async w => { w.land({ kind: 'done', actor: 'Alice', at: 2 }); throw new Error('async rejection'); }), /synchronous/);
-    await assert.rejects(port.transact(w => { w.land({ kind: 'done', actor: 'Alice', at: 2 }); try { w.markSeen('Alice', [100], 2); } catch {} }), /unassigned/);
+    await assert.rejects(port.transactAs({ kind: 'participant', seat: aliceSeat }, w => { w.land({ kind: 'done', actor: 'Alice', at: 2 }); throw original; }), e => e === original);
+    await assert.rejects(port.transactAs({ kind: 'participant', seat: aliceSeat }, async w => { w.land({ kind: 'done', actor: 'Alice', at: 2 }); throw new Error('async rejection'); }), /synchronous/);
+    await assert.rejects(port.transactAs({ kind: 'participant', seat: aliceSeat }, w => { w.markSeen('Alice', [100], 2); }), /unassigned/);
     assert.equal(await port.revision(), 1);
     assert.equal((await port.read(r => r.participant('Alice'))).value.joined, true);
     await port.read(() => { assert.throws(() => port.read(r => r.header()), /cannot nest/); });
-    const first = port.transact(w => w.land({ kind: 'done', actor: 'Alice', at: 3 }));
+    const first = port.transactAs({ kind: 'participant', seat: aliceSeat }, w => w.land({ kind: 'done', actor: 'Alice', at: 3 }));
     const next = port.read(r => r.participant('Alice'));
     await first;
     assert.equal((await next).value.done, true);
@@ -82,10 +82,13 @@ test('memory and file callbacks are synchronous, atomic, ordered, detached and e
 
 test('exact canonical receipts, immutable first timestamps and small-value no-op writes preserve revision', async t => {
   for (const port of await cells(t)) {
-    await port.transact(w => { w.land({ kind: 'join', actor: 'Alice', at: 0 }); w.land({ kind: 'join', actor: 'Bob', at: 1 }); });
+    const aliceBody = { channel: 'test', session: 'alice' }, bobBody = { channel: 'test', session: 'bob' };
+    await port.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, facts => facts.land({ kind: 'join', actor: 'Alice', at: 0 }));
+    await port.transactAs({ kind: 'join', participant: 'Bob', body: bobBody }, facts => facts.land({ kind: 'join', actor: 'Bob', at: 1 }));
+    const alice = (await port.read(facts => facts.seat('Alice'))).value;
     const l = { leaseId: 'one', heartbeatAt: 2, expiresAt: 3, filter: { participants: ['Bob'], mention: 'Alice' } };
-    await port.transact(w => { assert.equal(w.markSeen('ALICE', [0, 1], 1.5), 2); assert.equal(w.putLease('alice', l), true); });
-    const unchanged = await port.transact(w => {
+    await port.transactAs({ kind: 'participant', seat: alice }, w => { assert.equal(w.markSeen('ALICE', [0, 1], 1.5), 2); assert.equal(w.putLease('alice', l), true); });
+    const unchanged = await port.transactAs({ kind: 'participant', seat: alice }, w => {
       assert.equal(w.markSeen('alice', [0, 1], 100), 0);
       assert.equal(w.putLease('ALICE', { ...l, filter: { mention: 'Alice', participants: ['Bob'] } }), false);
       assert.equal(w.removeLease('Alice', 'wrong'), false);
@@ -94,7 +97,7 @@ test('exact canonical receipts, immutable first timestamps and small-value no-op
     assert.equal(unchanged.changed, false);
     assert.deepEqual(unchanged.value, { at: 1.5 });
     assert.equal((await port.read(r => r.receiptAssignments())).value[0].owner, 'Alice');
-    assert.equal((await port.transact(w => w.removeLease('Alice', 'one'))).value, true);
+    assert.equal((await port.transactAs({ kind: 'participant', seat: alice }, w => w.removeLease('Alice', 'one'))).value, true);
   }
 });
 
@@ -122,7 +125,7 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
   const missing = location(t), absent = createArtifactPort(missing);
   t.after(() => absent.close());
   let called = false;
-  await assert.rejects(absent.transact(() => { called = true; }), e => e.code === 'not_found');
+  await assert.rejects(absent.transactAs({ kind: 'join', participant: 'Alice', body: { channel: 'test', session: 'alice' } }, () => { called = true; }), e => e.code === 'not_found');
   assert.equal(called, false);
   assert.equal(fs.existsSync(missing), false);
 });
@@ -132,7 +135,9 @@ test('selected-row corruption is isolated from header reads, while doctor inspec
   await createSquareFile(file, empty());
   const port = createArtifactPort(file);
   t.after(() => port.close());
-  await port.transact(w => w.land({ kind: 'say', actor: 'Alice', at: 0, body: 'body' }));
+  const corruptState = { ...empty(), acts: [{ kind: 'join', actor: 'Alice', at: 0, index: 0 }] };
+  corruptState.runtime.nextActIndex = 1;
+  await writeSquareFile(file, corruptState);
   const db = new DatabaseSync(file);
   try { db.prepare('UPDATE activities SET payload_json=? WHERE act_index=0').run('{"body":123}'); }
   finally { db.close(); }
@@ -140,7 +145,8 @@ test('selected-row corruption is isolated from header reads, while doctor inspec
   await assert.rejects(port.read(r => r.activity(0)), /malformed/);
   assert.match((await diagnoseSquareFile(file)).unfixable, /malformed/);
   await writeSquareFile(file, empty());
-  await port.transact(w => w.land({ kind: 'join', actor: 'Alice', at: 1 }));
+  const aliceBody = { channel: 'test', session: 'alice' };
+  await port.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, w => w.land({ kind: 'join', actor: 'Alice', at: 1 }));
   const corrupt = new DatabaseSync(file);
   try { corrupt.exec('UPDATE participants SET say_count=3'); } finally { corrupt.close(); }
   assert.match((await diagnoseSquareFile(file)).unfixable, /participants.*inconsistent/);

@@ -1,59 +1,138 @@
-import type { EvidenceRecord, NativeDeliveryEvidence, PresenceRecord } from '../../host-ledger.js';
-import type { SquareRead, WakeTransportPort } from '../../ports.js';
-import { nameKey } from '../../model.js';
-import { nativePendingPreview, observeSessionPending, sessionInbox } from '../../inbox.js';
-import { hostLedgerForEnv } from '../../registry.js';
-import { openSquare } from '../../open-square.js';
-import { closeOpenSquare } from '../../open-square.js';
-import { presentationSuppressesWake, projectPresentationEvidence } from '../../square-projections.js';
-import { presentPending } from '../../presentation-operations.js';
+import { createHash } from 'node:crypto';
+import { createArtifactPort, observeSquareRevision } from '../../artifact.js';
+import { canonicalPath } from '../../canonical-path.js';
 import { deliverPending } from '../../delivery-operations.js';
+import { nativePendingPreview, projectPresentation } from '../../inbox.js';
+import { leaseOwnsNotification } from '../../delivery.js';
+import { sameBody, type InboxMembership, type Seat } from '../../model.js';
+import type { DeliveryEvidence, SeatRef, SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
 import { createWakeTransport } from '../../notifications.js';
-import { publishWakeRoute } from '../../routes.js';
 import { formatActivityId, parseActivityId } from '../../square-core.js';
+import { indexedSquareEntries, observeSquareIndex } from '../../square-index.js';
+import { freshWatchLease } from '../../runtime.js';
+import { presentPending } from '../../presentation-operations.js';
 import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
 
 const routeKind = 'opencode-server' as const;
-type NativeRow = EvidenceRecord & { claimToken: string; nativeDelivery: Extract<NativeDeliveryEvidence, { harness: 'opencode' }> };
+const bodyFor = (sessionId: string) => ({ channel: 'opencode', session: sessionId });
+const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
+type LocatedSeat = { readonly location: string; readonly seat: Seat };
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
-const key = (location: string, participant: string, index: number) => `${location}\0${nameKey(participant)}\0${index}`;
 
-/** The one native pending preview: the audience/catch/epoch fence before send and inside presentation. */
-function preview(facts: SquareRead, owner: PresenceRecord, index: number) {
-  return nativePendingPreview(facts, { location: owner.location, routeKind, sessionId: owner.session, participant: owner.participant, actIndex: index, epoch: owner.epoch, address: { sessionId: owner.session }, cancelledThrough: owner.cancelledThrough, now: Date.now() });
+function seatRef(seat: Seat): SeatRef {
+  const { wakeAddress: _wakeAddress, ...ref } = seat;
+  return ref;
 }
 
-function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, lifetime: AbortSignal): WakeTransportPort {
-  const ledger = hostLedgerForEnv(env);
+function preview(facts: SquareRead, location: string, seat: Seat, index: number) {
+  return nativePendingPreview(facts, {
+    location, routeKind, sessionId: seat.body.session, participant: seat.participant,
+    actIndex: index, address: { sessionId: seat.body.session }, now: Date.now(),
+  });
+}
+
+/** The host index supplies candidate paths only; each membership is resolved from its artifact seat. */
+async function candidatePaths(sessionId: string, env: NodeJS.ProcessEnv): Promise<string[]> {
+  return [...new Set((await indexedSquareEntries({ body: bodyFor(sessionId) }, env)).map((entry) => entry.location))];
+}
+
+async function seatsAt(paths: readonly string[], sessionId: string, signal?: AbortSignal): Promise<LocatedSeat[]> {
+  const result: LocatedSeat[] = [];
+  const body = bodyFor(sessionId);
+  for (const location of paths) {
+    signal?.throwIfAborted();
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      const { value: seats } = await artifact.read((facts) => facts.seatsForBody(body).filter((seat) => facts.participant(seat.participant)?.joined), signal);
+      result.push(...seats.map((seat) => ({ location, seat })));
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      // A stale or unreadable candidate cannot establish an OpenCode membership.
+    } finally { await artifact.close(); }
+  }
+  return result;
+}
+
+export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
+  return [...new Set((await indexedSquareEntries({ channel: 'opencode' }, env)).map((entry) => entry.body.session))];
+}
+
+export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<LocatedSeat[]> {
+  return seatsAt(await candidatePaths(sessionId, env), sessionId, signal);
+}
+
+function sameSeat(left: Seat | undefined, right: Seat): boolean {
+  return left !== undefined && left.generation === right.generation && sameBody(left.body, right.body);
+}
+
+function presentationIsTerminal(rows: readonly DeliveryEvidence[], now: number): boolean {
+  return rows.some((row) => row.kind === 'presentation' && (
+    row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
+    || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)
+  ));
+}
+
+function wakeIsTerminal(rows: readonly DeliveryEvidence[], now: number): boolean {
+  return rows.some((row) => row.kind === 'wake' && (
+    row.outcome === 'accepted' || row.outcome === 'unknown'
+    || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)
+  ));
+}
+
+async function openCodeInbox(location: string, seat: Seat, signal?: AbortSignal): Promise<InboxMembership | undefined> {
+  const artifact = createArtifactPort(location, undefined, signal);
+  try {
+    const { value } = await artifact.read((facts) => {
+      if (!sameSeat(facts.seat(seat.participant), seat)) return undefined;
+      const projection = projectPresentation(facts, {
+        location, participant: seat.participant, sessionId: seat.body.session, channel: 'opencode', updatedAt: 0,
+      });
+      if (!projection.joined || projection.binding.seat === undefined) return undefined;
+      const lease = freshWatchLease(facts, seat.participant, Date.now());
+      const notifications = projection.notifications.filter((notification) => {
+        if (lease !== undefined && leaseOwnsNotification(lease, { ...notification, recipient: seat.participant })) return false;
+        const evidence = facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex));
+        return !presentationIsTerminal(evidence, Date.now()) && !wakeIsTerminal(evidence, Date.now());
+      });
+      return notifications.length === 0 ? undefined : {
+        name: seat.participant, squarePath: location, notifications, seat,
+        ...(projection.catchLease === undefined ? {} : { catchLease: projection.catchLease }),
+      };
+    }, signal);
+    return value;
+  } finally { await artifact.close(); }
+}
+
+function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
   return {
-    probe: async (route) => !lifetime.aborted && route.kind === routeKind && route.sessionId === target.sessionId && route.address.sessionId === target.sessionId,
-    async attempt(request, timeoutMs, beforeSend) {
+    probe: async (route) => !lifetime.aborted && route.kind === routeKind
+      && route.sessionId === target.sessionId && route.address.sessionId === target.sessionId,
+    async attempt(request: WakeRequest, timeoutMs: number, beforeSend) {
+      const index = parseActivityId(request.activity);
+      const artifact = request.artifact;
+      if (artifact === undefined || request.claimToken === undefined || index === undefined
+        || request.seat.body.channel !== 'opencode' || request.seat.body.session !== target.sessionId
+        || request.route.kind !== routeKind || request.route.address.sessionId !== target.sessionId) {
+        return { outcome: 'not-capable', diagnostic: 'OpenCode attention has no matching artifact claim or session.' };
+      }
       const signal = AbortSignal.any([lifetime, AbortSignal.timeout(timeoutMs)]);
-      const deadline = Date.now() + timeoutMs;
-      // Start the native call under the ownership fence, but await it OUTSIDE: prompt may
-      // enter our context hook synchronously and that hook needs the same ownership lock.
-      const started = await ledger.withClaimLock(async () => {
-        if (signal.aborted || request.route.sessionId !== target.sessionId || !request.claimToken
-          || !await (beforeSend?.() ?? Promise.resolve(true))) return undefined;
-        const owner = (await ledger.listPresence({ location: request.location, participant: request.participant, session: target.sessionId }))
-          .find((binding) => binding.channel === 'opencode' && binding.epoch === request.route.epoch);
-        const index = parseActivityId(request.activity);
-        if (!owner || index === undefined) return undefined;
-        const square = await openSquare(owner.location, { hostLedger: ledger, env, signal });
-        try {
-          const { value: prepared } = await square.artifact.read((facts) => preview(facts, owner, index), signal);
-          if (!prepared) return undefined;
-          const row: NativeRow & { routeKind: typeof routeKind } = { location: owner.location, participant: owner.participant, session: target.sessionId,
-            activity: request.activity, kind: 'wake', outcome: 'dispatching', routeKind, attemptN: request.attemptN, claimToken: request.claimToken,
-            nativeDelivery: { harness: 'opencode', epoch: owner.epoch ?? 0, inputId: createNativeInputId(), payload: prepared.payload } };
-          if (!await ledger.prepareNativeWake(row) || !await (beforeSend?.() ?? Promise.resolve(true)) || signal.aborted
-            || (await square.artifact.read((facts) => preview(facts, owner, index)?.payload, signal)).value !== prepared.payload) return undefined;
-          return { sending: sendNativeText(target, prepared.payload, { inputId: row.nativeDelivery.inputId, delivery: 'steer',
-            timeoutMs: Math.max(1, deadline - Date.now()), signal }) };
-        } finally { await closeOpenSquare(square); }
-      }, signal);
-      if (!started) return { outcome: 'not-capable', diagnostic: 'OpenCode attention, binding or local delivery generation changed before send.' };
-      const result = await started.sending;
+      const started = Date.now();
+      if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
+        return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before send.' };
+      const { value: prepared } = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
+      if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
+      const inputId = createNativeInputId();
+      const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(prepared.payload) };
+      if (!await artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }, signal))
+        return { outcome: 'not-capable', diagnostic: 'OpenCode delivery claim is no longer current.' };
+      if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
+        return { outcome: 'not-capable', diagnostic: 'OpenCode attention was consumed before send.' };
+      const fresh = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
+      if (fresh.value === undefined || payloadHash(fresh.value.payload) !== correlation.payloadHash)
+        return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before native send.' };
+      const result = await sendNativeText(target, prepared.payload, {
+        inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
+      });
       if (result.state === 'accepted') return { outcome: 'accepted' };
       if (result.state === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: result.code };
       return { outcome: 'unknown', signature: result.code };
@@ -61,89 +140,133 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, env: NodeJS.
   };
 }
 
-/** Only the matching prepared primary context authorizes presentation, never admission. */
+function textMessage(message: OpenCodeContextMessage): string | undefined {
+  if (message.role !== 'user' || message.id === undefined || !message.content.every((part) => part.type === 'text' && typeof part.text === 'string')) return undefined;
+  return message.content.map((part) => part.text!).join('');
+}
+
+/** The exact prepared native message can authorize artifact-backed presentation once. */
 export async function observeOpenCodeContext(sessionId: string, messages: readonly OpenCodeContextMessage[], env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  const ledger = hostLedgerForEnv(env);
-  await ledger.withClaimLock(async () => {
+  const observed = new Map(messages.flatMap((message) => {
+    const text = textMessage(message);
+    return text === undefined ? [] : [[message.id!, payloadHash(text)] as const];
+  }));
+  if (observed.size === 0 || signal.aborted) return;
+  for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
     if (signal.aborted) return;
-    const rows = (await ledger.listEvidence({ kind: 'wake', session: sessionId })).filter((row): row is NativeRow =>
-      row.nativeDelivery?.harness === 'opencode' && !!row.claimToken && ['dispatching', 'unknown', 'accepted'].includes(row.outcome));
-    for (const row of rows) {
-      if (signal.aborted || !messages.some((message) => message.id === row.nativeDelivery.inputId && message.role === 'user'
-        && message.content.every((part) => part.type === 'text' && typeof part.text === 'string')
-        && message.content.map((part) => part.text).join('') === row.nativeDelivery.payload)) continue;
-      const owner = (await ledger.listPresence({ location: row.location, participant: row.participant, session: sessionId }))
-        .find((binding) => binding.channel === 'opencode' && binding.epoch === row.nativeDelivery.epoch);
-      const index = parseActivityId(row.activity);
-      if (!owner || index === undefined) continue;
-      const square = await openSquare(row.location, { hostLedger: ledger, env, signal });
-      try {
-        const { value: prepared } = await square.artifact.read((facts) => preview(facts, owner, index), signal);
-        if (!prepared || prepared.payload !== row.nativeDelivery.payload) continue;
-        const prior = await projectPresentationEvidence({ hostLedger: ledger, location: row.location, participant: row.participant, sessionId, activity: row.activity });
-        if (presentationSuppressesWake(prior)) continue;
-        await presentPending({ artifact: square.artifact, hostLedger: ledger, location: row.location, participant: row.participant, session: sessionId,
-          activity: row.activity, sink: { present() {} }, markSeen: !prepared.clipped, signal,
-          current: (facts) => !signal.aborted && preview(facts, owner, index)?.payload === row.nativeDelivery.payload });
-      } finally { await closeOpenSquare(square); }
-    }
-  }, signal);
-}
-
-/** One existing observer and the existing dispatch owner; no second queue or evidence store. */
-export async function receiveOpenCodePending(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  const ledger = hostLedgerForEnv(env);
-  const observer = await observeSessionPending(target.sessionId, env);
-  const excluded = new Set<string>();
-  const refreshExclusions = async () => {
-    excluded.clear();
-    const owners = await ledger.listPresence({ session: target.sessionId });
-    for (const row of await ledger.listEvidence({ kind: 'wake', session: target.sessionId })) {
-      const index = parseActivityId(row.activity);
-      const current = owners.some((owner) => owner.location === row.location && nameKey(owner.participant) === nameKey(row.participant) && owner.epoch === row.nativeDelivery?.epoch);
-      if (index !== undefined && (['accepted', 'unknown'].includes(row.outcome) || row.outcome === 'dispatching' && current && row.nativeDelivery?.harness === 'opencode')) excluded.add(key(row.location, row.participant, index));
-    }
-    for (const membership of await sessionInbox(target.sessionId, env, signal)) {
-      const owner = owners.find((binding) => binding.location === membership.squarePath && nameKey(binding.participant) === nameKey(membership.name));
-      for (const note of membership.notifications) if (note.actIndex <= (owner?.cancelledThrough ?? -1)) excluded.add(key(membership.squarePath, membership.name, note.actIndex));
-    }
-  };
-  const transport = createWakeTransport([], ledger, Date.now, { [routeKind]: createOpenCodeWakeTransport(target, env, signal) });
-  try {
-    await refreshExclusions();
-    let pending = await observer.wait(Infinity, { signal, excludeKeys: excluded });
-    while (!signal.aborted && pending.length > 0) {
-      let armed!: (value: boolean) => void;
-      const ready = new Promise<boolean>((resolve) => { armed = resolve; });
-      // Capture the next state edge BEFORE dispatch. Evidence failures alone do not retry.
-      const next = observer.wait(Infinity, { signal, excludeKeys: excluded, skipImmediate: true, onChangeArmed: armed })
-        .catch(() => { armed(false); return []; });
-      if (!await ready || signal.aborted) break;
-      for (const membership of pending) {
-        const square = await openSquare(membership.squarePath, { hostLedger: ledger, env, signal });
-        try {
-          for (const note of membership.notifications) {
-            if (signal.aborted || excluded.has(key(membership.squarePath, membership.name, note.actIndex))) continue;
-            await deliverPending({ artifact: square.artifact, hostLedger: ledger, transport, location: square.location, activity: formatActivityId(note.actIndex), now: Date.now() });
-          }
-        } finally { await closeOpenSquare(square); }
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      const { value: matches } = await artifact.read((facts) => {
+        if (!sameSeat(facts.seat(seat.participant), seat)) return [];
+        return facts.deliveryEvidence(seat.participant, seat.generation).flatMap((evidence) => {
+          const token = evidence.correlation?.harness === 'opencode' ? evidence.correlation.token : undefined;
+          const hash = token === undefined ? undefined : observed.get(token);
+          const index = parseActivityId(evidence.activity);
+          if (token === undefined || hash === undefined || evidence.claimToken === undefined || index === undefined
+            || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
+            || evidence.correlation?.payloadHash !== hash) return [];
+          const prepared = preview(facts, location, seat, index);
+          if (prepared === undefined || payloadHash(prepared.payload) !== hash
+            || presentationIsTerminal(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), Date.now())) return [];
+          return [{ evidence, index, hash, clipped: prepared.clipped }];
+        });
+      }, signal);
+      for (const { evidence, index, hash, clipped } of matches) {
+        if (signal.aborted || evidence.claimToken === undefined) return;
+        await presentPending({ artifact, location, participant: seat.participant,
+          activity: formatActivityId(index), seat: seatRef(seat), sink: { present() {} }, markSeen: !clipped, signal,
+          current: (facts) => {
+            const current = facts.seat(seat.participant);
+            const prepared = current === undefined || !sameSeat(current, seat) ? undefined : preview(facts, location, seat, index);
+            const correlation = facts.deliveryByToken(evidence.claimToken!);
+            return prepared !== undefined && payloadHash(prepared.payload) === hash
+              && correlation?.correlation?.harness === 'opencode'
+              && correlation.correlation.token !== undefined
+              && correlation.correlation.payloadHash === hash;
+          },
+        });
       }
-      await refreshExclusions();
-      pending = await next;
-    }
-  } finally { observer.close(); }
+    } finally { await artifact.close(); }
+  }
 }
 
-export async function publishOpenCodeRoutes(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<boolean> {
-  const ledger = hostLedgerForEnv(env);
-  return ledger.withClaimLock(async () => {
-    const owners = (await ledger.listPresence({ session: sessionId })).filter((binding) => binding.channel === 'opencode');
-    for (const owner of owners) {
-      const square = await openSquare(owner.location, { hostLedger: ledger, env, signal });
-      try { await publishWakeRoute(square.artifact, { location: owner.location, participant: owner.participant, sessionId, channel: 'opencode',
-        kind: routeKind, address: { sessionId }, epoch: owner.epoch }, { requireCurrentSession: true }); }
-      finally { await closeOpenSquare(square); }
+/** The native receiver owns no claims outside the artifact; HOME is used only for discovery. */
+export async function receiveOpenCodePending(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  const index = await observeSquareIndex(env);
+  const observers = new Map<string, Awaited<ReturnType<typeof observeSquareRevision>>>();
+  try {
+    while (!signal.aborted) {
+      const presenceVersion = await index.read(signal);
+      const paths = await candidatePaths(target.sessionId, env);
+      const pathSet = new Set(paths);
+      for (const [location, observer] of observers) {
+        if (pathSet.has(location)) continue;
+        observer.close();
+        observers.delete(location);
+      }
+      for (const location of paths) if (!observers.has(location)) observers.set(location, await observeSquareRevision(location));
+      const baselines = new Map<string, number | null>();
+      for (const [location, observer] of observers) baselines.set(location, await observer.read(signal));
+      const seats = await seatsAt(paths, target.sessionId, signal);
+      for (const { location, seat } of seats) {
+        if (signal.aborted) return;
+        const membership = await openCodeInbox(location, seat, signal);
+        if (membership === undefined) continue;
+        const artifact = createArtifactPort(location, undefined, signal);
+        try {
+          const transport = createWakeTransport([], Date.now, { [routeKind]: createOpenCodeWakeTransport(target, signal) });
+          for (const note of membership.notifications) {
+            if (signal.aborted) return;
+            await deliverPending({ artifact, transport, location, activity: formatActivityId(note.actIndex), now: Date.now() });
+          }
+        } finally { await artifact.close(); }
+      }
+      const cancelled = new AbortController();
+      const waitSignal = AbortSignal.any([signal, cancelled.signal]);
+      const waits = [index.changed(presenceVersion, Infinity, waitSignal), ...[...observers].flatMap(([location, observer]) => {
+        const baseline = baselines.get(location);
+        return baseline === undefined ? [] : [observer.changed(baseline, Infinity, waitSignal)];
+      })];
+      try { await Promise.race(waits); }
+      finally { cancelled.abort(); await Promise.allSettled(waits); }
     }
-    return owners.length > 0;
-  }, signal);
+  } finally {
+    index.close();
+    for (const observer of observers.values()) observer.close();
+  }
+}
+
+/** Publish the native address into current artifact seats; the legacy route projection is not read. */
+export async function publishOpenCodeAddress(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<boolean> {
+  const seats = await discoverOpenCodeSeats(sessionId, env, signal);
+  for (const { location, seat } of seats) {
+    if (signal.aborted) return false;
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      await artifact.transactAs({ kind: 'participant', seat: seatRef(seat) }, (facts) =>
+        facts.updateWakeAddress(seatRef(seat), { kind: routeKind, address: { sessionId } }));
+    } finally { await artifact.close(); }
+  }
+  return seats.length > 0;
+}
+
+export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
+    if (signal.aborted) return;
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      const { value: through } = await artifact.read((facts) => facts.header().lastActIndex, signal);
+      if (through >= 0) await artifact.cancelDeliveries(seatRef(seat), through, signal);
+    } finally { await artifact.close(); }
+  }
+}
+
+export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
+    if (signal.aborted) return;
+    const { Square } = await import('../../square-api.js');
+    const square = await Square.at({ path: location, env, body: seat.body, participant: seat.participant });
+    try { await square.endOwnedSession(seat.participant, sessionId, seat.generation, seat.body); }
+    finally { await square.close(); }
+  }
 }

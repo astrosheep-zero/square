@@ -44,7 +44,7 @@ export function streamSquare(squarePath: string, options: StreamOptions = {}, co
               let projection;
               try {
                 baseline = await observer.read(signal);
-                const square = await openSquare(squarePath, { ...openOptions, env: openOptions.env ?? {}, signal }, iterationControl);
+                const square = await openSquare(squarePath, { clock: openOptions.clock, signal }, iterationControl);
                 try {
                   projection = initial === undefined
                     ? await streamProjection(square, cursor, options.recipient, iterationControl)

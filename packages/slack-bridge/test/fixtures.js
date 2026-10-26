@@ -1,6 +1,6 @@
 import './sandbox-env.js'
 import { mkdtemp } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Square } from '@astrosheep/square'
 import { sandbox } from './sandbox-env.js'
 
@@ -22,8 +22,8 @@ export async function buildSquare(name = 'square') {
   return path
 }
 
-export async function opened(t, path) {
-  const square = await Square.at({ path })
+export async function opened(t, path, settings = settingsFor({ square: path })) {
+  const square = await Square.at({ path, body: bridgeBody(settings) })
   t.after(() => square.close())
   return square
 }
@@ -36,6 +36,10 @@ export function settingsFor({ square, state, personas = {} }) {
     bridge: { appToken: 'xapp-bridge-token', botToken: BRIDGE_TOKEN },
     personas: new Map(Object.entries(personas)),
   }
+}
+
+export function bridgeBody(settings) {
+  return { channel: 'slack-bridge', session: resolve(settings.state), agent: settings.channel }
 }
 
 /** A fake Slack carrying the bridge bot and, when configured, the faye persona bot. */

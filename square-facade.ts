@@ -1,9 +1,10 @@
 import type { SquareBackends } from './square-backend.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { StoredAct } from './model.js';
-import type { HostLedgerPort, WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
+import type { Body, StoredAct, WakeAddress } from './model.js';
+import type { WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
+export type { Body, WakeAddress } from './model.js';
 /** Indexed archive event, including read and historical actorless lifecycle records. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -142,9 +143,11 @@ export interface SquareSnapshot {
 
 export interface OpenOptions {
   readonly clock?: () => number;
-  readonly hostLedger?: HostLedgerPort;
   readonly wakeTransport?: WakeTransportPort;
-  readonly env?: NodeJS.ProcessEnv;
+  /** Explicit execution coordinate resolved by an adapter. */
+  readonly body?: Body;
+  /** Optional wake address attached to this body. */
+  readonly wakeAddress?: WakeAddress;
 }
 export interface SquareLocation {
   readonly path?: string;
@@ -178,6 +181,8 @@ export interface JoinResult {
 }
 /** Optional fence for owner-scoped lifecycle actions. */
 export interface OwnershipFenceOptions {
+  readonly expectedGeneration?: ActivityId;
+  /** Retained only while host adapters finish moving to generation fences. */
   readonly expectedEpoch?: number;
 }
 export interface Participant {
@@ -335,7 +340,6 @@ export interface ExpressObservation extends SquareObservation, ExpressionObserva
   readonly pendingPublic: readonly ArchiveRecord[];
   readonly sayNumbers: Readonly<Record<number, number>>;
   readonly perceptions: Readonly<Record<number, Perception>>;
-  readonly reentry?: Activity;
 }
 export interface CatchObservation extends SquareObservation, ExpressionObservation {
   readonly participant: string;

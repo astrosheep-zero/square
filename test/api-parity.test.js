@@ -14,14 +14,14 @@ import { readSquareSnapshot } from '../dist/artifact.js';
 async function fixture(t, label) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `square-parity-${label}-`));
   const squarePath = path.join(cwd, 'SQUARE.square');
-  const env = { ...process.env, SQUARE_REGISTRY: path.join(cwd, 'registry.ndjsonl'),
-    SQUARE_HOST_LEDGER_ROOT: path.join(cwd, 'ledger'), SQUARE_NOW_MS: '1000',
-    CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '',
+  const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), SQUARE_NOW_MS: '1000',
+    CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: `${label}-session`, OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '',
     SQUARE_PARTICIPANT_NAME: undefined, SQUARE_DISABLE_PASEO_WAKE: '1', NO_COLOR: '1' };
   delete env.FORCE_COLOR;
-  const square = await Square.build({ path: squarePath, markdown: 'parity context', env });
+  const body = { channel: 'codex', session: `${label}-session` };
+  const square = await Square.build({ path: squarePath, markdown: 'parity context', env, body });
   t.after(async () => { await square.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
-  return { cwd, path: squarePath, env, square };
+  return { cwd, path: squarePath, env, body, square };
 }
 async function mcp(t, options) {
   const server = createSquareMcpServer(options);
@@ -32,7 +32,8 @@ async function mcp(t, options) {
   return async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
-    assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+    // MCP shows people the same text the CLI prints; facts live in structuredContent.
+    assert.equal(typeof result.content[0].text, 'string');
     return result.structuredContent;
   };
 }
@@ -144,15 +145,22 @@ test('all history callers default to ten; only explicit null reads the full arch
   assert.deepEqual((await readSquareSnapshot(options.path)).state, before);
 });
 
-test('departed express reenters exactly once and never-joined express is unsent for SDK and MCP', async (t) => {
+test('a stale participant handle cannot speak after departure; rejoining establishes a fresh seat for SDK and MCP', async (t) => {
   const direct = await fixture(t, 'reentry-sdk'), json = await fixture(t, 'reentry-mcp'), call = await mcp(t, json);
-  const { participant: alice } = await direct.square.join('Alice');
-  await alice.done();
+  const { participant: departedAlice } = await direct.square.join('Alice');
+  await departedAlice.done();
+  const staleAuthority = (error) => error.code === 'already_joined';
+  await assert.rejects(departedAlice.express('stale handle'), staleAuthority);
+  const rejoined = await direct.square.join('Alice');
+  assert.equal(rejoined.activity.id, 'act/2');
+  await assert.rejects(departedAlice.express('old generation after rejoin'), staleAuthority);
+  const alice = rejoined.participant;
   await call('join', { as: 'Alice' });
   await call('done', { as: 'Alice' });
+  await call('join', { as: 'Alice' });
   const { observation, delivery, ...expressed } = await alice.express('back', { force: true, observe: true });
-  assert.equal(observation.reentry.kind, 'join');
-  assert.equal(observation.reentry.id, 'act/2');
+  assert.equal(expressed.activity.id, 'act/3');
+  assert.equal(observation.reentry, undefined);
   assert.deepEqual(await call('express', { as: 'Alice', body: 'back', force: true }), expressed);
   const never = await direct.square.participant('Never');
   await assert.rejects(never.express('unsent'), (error) => {
@@ -193,7 +201,7 @@ function measureArtifact(t, squarePath) {
   };
 }
 
-test('optional observations add only requested reads; MCP never pays for a terminal feed', async (t) => {
+test('optional observations add only requested reads; rendering transports pay for the feed they show', async (t) => {
   const options = await fixture(t, 'observations'), { square } = options;
   const { participant: alice } = await square.join('Alice'), { participant: bob } = await square.join('Bob');
   await bob.express('for Alice', { force: true, mentions: ['Alice'] });
@@ -204,13 +212,13 @@ test('optional observations add only requested reads; MCP never pays for a termi
   const { participant, observation, ...receipt } = fullJoin.value;
   assert.deepEqual(dataJoin.value, { ...receipt, participant: participant.name });
   assert.equal(plainJoin.value.observation, undefined);
-  assert.equal(dataJoin.hydrated, 0);
+  assert.ok(dataJoin.hydrated > 0, 'join text hydrates the recent-activity feed it prints');
   assert.ok(fullJoin.hydrated > 0);
   assert.equal(fullJoin.reads - plainJoin.reads, 1);
   const dataExpress = await measure(() => call('express', { as: 'Alice', body: 'data', force: true }));
   const plainExpress = await measure(() => alice.express('plain', { force: true }));
   const fullExpress = await measure(() => alice.express('presented', { force: true, observe: true }));
-  assert.equal(dataExpress.hydrated, 0);
+  assert.ok(dataExpress.hydrated > 0, 'express text hydrates the pending feed it prints');
   assert.equal(plainExpress.value.observation, undefined);
   assert.equal(fullExpress.reads - plainExpress.reads, 1);
   assert.deepEqual(fullExpress.value.observation.pendingPublic.map((act) => act.body), ['for Alice']);

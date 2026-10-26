@@ -4,28 +4,39 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { writeSquareFile } from '../dist/artifact.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { createWakeTransport } from '../dist/notifications.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 
 const clock = () => 1_700_000_000_000;
-const hostLedger = { listPresence: async () => [] };
-
-// Every wake route previews the stored activity, so the transport needs a real square.
 let root;
 let squarePath;
+let artifact;
+let fayeSeat;
 before(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-wake-contract-'));
   squarePath = path.join(root, 'square.square');
-  const acts = [
-    { kind: 'join', actor: 'Bev', at: 1, index: 0 },
-    { kind: 'join', actor: 'Faye', at: 2, index: 1 },
-    { kind: 'say', actor: 'Bev', at: 3, body: 'answer me @Faye', mentions: ['Faye'], index: 2 },
-  ];
-  await writeSquareFile(squarePath, { hardCap: null, preamble: [], warmup: ['test'], acts,
-    runtime: { ...emptyRuntimeState(acts.length), nextActIndex: acts.length } });
+  fs.writeFileSync(squarePath, 'wake test location');
+  artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: ['test'], acts: [], runtime: emptyRuntimeState() });
+  const bevBody = { channel: 'test', session: 'bev' };
+  const fayeBody = { channel: 'test', session: 'faye' };
+  const bevSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bev', body: bevBody }, facts => {
+    facts.land({ kind: 'join', actor: 'Bev', at: 1 });
+    return facts.seat('Bev');
+  })).value;
+  fayeSeat = (await artifact.transactAs({ kind: 'join', participant: 'Faye', body: fayeBody,
+    wakeAddress: { kind: 'paseo', address: { endpoint: 'endpoint' } } }, facts => {
+    facts.land({ kind: 'join', actor: 'Faye', at: 2 });
+    return facts.seat('Faye');
+  })).value;
+  await artifact.transactAs({ kind: 'participant', seat: bevSeat }, facts => {
+    facts.land({ kind: 'say', actor: 'Bev', at: 3, body: 'answer me @Faye', mentions: ['Faye'] });
+  });
 });
-after(() => { if (root !== undefined) fs.rmSync(root, { recursive: true, force: true }); });
+after(async () => {
+  await artifact?.close();
+  if (root !== undefined) fs.rmSync(root, { recursive: true, force: true });
+});
 
 function request(kind) {
   return {
@@ -33,6 +44,8 @@ function request(kind) {
     participant: 'Faye',
     activity: 'act/2',
     actor: 'Bev',
+    seat: fayeSeat,
+    artifact,
     route: {
       location: squarePath,
       participant: 'Faye',
@@ -61,13 +74,12 @@ test('injected native transport receives the full request without an awareness p
       return { outcome: 'unknown' };
     },
   };
-  const transport = createWakeTransport([], hostLedger, clock, { 'claude-native': native });
+  const transport = createWakeTransport([], clock, { 'claude-native': native });
   assert.equal(await transport.probe(nativeRequest.route), true);
   assert.deepEqual(await transport.attempt(nativeRequest, 100, beforeSend), { outcome: 'unknown' });
 });
 
 test('supplied final gate alone owns transport revalidation without another artifact or ledger observation', async () => {
-  const unreadableLedger = new Proxy({}, { get() { throw new Error('transport must not read the ledger with a supplied gate'); } });
   let gates = 0;
   const gate = async () => { gates += 1; return true; };
   const gated = adapter('paseo', {
@@ -78,23 +90,23 @@ test('supplied final gate alone owns transport revalidation without another arti
       return { outcome: 'accepted' };
     },
   });
-  assert.deepEqual(await createWakeTransport([gated], unreadableLedger, clock).attempt(request('paseo'), 100, gate), { outcome: 'accepted' });
+  assert.deepEqual(await createWakeTransport([gated], clock).attempt(request('paseo'), 100, gate), { outcome: 'accepted' });
   assert.equal(gates, 1);
 });
 
 test('standalone native dispatch receives the same fresh projection gate', async () => {
   let gated = false;
   const native = { async attempt(_request, _timeout, finalGate) {
-    assert.equal(await finalGate(), false); // unavailable artifact is never permission to send
+    assert.equal(await finalGate(), false); // a route that no longer matches the captured seat cannot send
     gated = true;
     return { outcome: 'unknown' };
   } };
-  await createWakeTransport([], hostLedger, clock, { 'claude-native': native }).attempt(request('claude-native'), 100);
+  await createWakeTransport([], clock, { 'claude-native': native }).attempt(request('claude-native'), 100);
   assert.equal(gated, true);
 });
 
 test('wake transport reports not-capable when no adapter owns the route kind', async () => {
-  const transport = createWakeTransport([], hostLedger, clock, {});
+  const transport = createWakeTransport([], clock);
   assert.deepEqual(await transport.probe(request('codex-queue').route), { outcome: 'not-capable', diagnostic: 'no adapter for codex-queue' });
   assert.deepEqual(await transport.attempt(request('codex-queue'), 100), { outcome: 'not-capable', diagnostic: 'no adapter for codex-queue' });
 });
@@ -102,14 +114,14 @@ test('wake transport reports not-capable when no adapter owns the route kind', a
 test('wake transport probe uses the adapter probe when present and assumes capable otherwise', async () => {
   const probed = [];
   const withProbe = adapter('paseo', { async probe(address) { probed.push(address); return false; } });
-  assert.equal(await createWakeTransport([withProbe], hostLedger, clock, {}).probe(request('paseo').route), false);
+  assert.equal(await createWakeTransport([withProbe], clock).probe(request('paseo').route), false);
   assert.deepEqual(probed, [{ endpoint: 'endpoint' }]);
-  assert.equal(await createWakeTransport([adapter('codex-queue')], hostLedger, clock, {}).probe(request('codex-queue').route), true);
+  assert.equal(await createWakeTransport([adapter('codex-queue')], clock).probe(request('codex-queue').route), true);
 });
 
 test('wake transport reports a probe failure as not-capable with its diagnostic', async () => {
   const failing = adapter('paseo', { async probe() { throw new Error('daemon down'); } });
-  assert.deepEqual(await createWakeTransport([failing], hostLedger, clock, {}).probe(request('paseo').route), { outcome: 'not-capable', diagnostic: 'daemon down' });
+  assert.deepEqual(await createWakeTransport([failing], clock).probe(request('paseo').route), { outcome: 'not-capable', diagnostic: 'daemon down' });
 });
 
 test('a gate-rejected send without a verified revalidation stays unknown', async () => {
@@ -118,7 +130,7 @@ test('a gate-rejected send without a verified revalidation stays unknown', async
       return (await beforeSend()) ? { outcome: 'accepted' } : { outcome: 'gate-rejected' };
     },
   });
-  const transport = createWakeTransport([gated], hostLedger, clock, {});
+  const transport = createWakeTransport([gated], clock);
   assert.deepEqual(await transport.attempt(request('paseo'), 100, async () => false), { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' });
 });
 
@@ -126,13 +138,13 @@ test('an unavailable failure passes retainRoute and routeStale through to the tr
   const retained = adapter('paseo', {
     async dispatch() { return { outcome: 'failed', unavailable: true, signature: 'agent_not_idle', message: 'not idle', retainRoute: true }; },
   });
-  assert.deepEqual(await createWakeTransport([retained], hostLedger, clock, {}).attempt(request('paseo'), 100), {
+  assert.deepEqual(await createWakeTransport([retained], clock).attempt(request('paseo'), 100), {
     outcome: 'failed', unavailable: true, signature: 'agent_not_idle', message: 'not idle', retainRoute: true,
   });
   const stale = adapter('paseo', {
     async dispatch() { return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'no agent id', routeStale: true }; },
   });
-  assert.deepEqual(await createWakeTransport([stale], hostLedger, clock, {}).attempt(request('paseo'), 100), {
+  assert.deepEqual(await createWakeTransport([stale], clock).attempt(request('paseo'), 100), {
     outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'no agent id', routeStale: true,
   });
 });

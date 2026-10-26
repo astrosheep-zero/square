@@ -4,18 +4,33 @@ import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { catchUp } from '../dist/square-actions.js';
 
-function fixture(t, extra = [], hardCap = null) {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 0 },
-    { kind: 'join', actor: 'Bob', at: 1 },
-    ...extra,
-  ].map((activity, index) => ({ ...activity, index }));
+const bodyFor = (name) => ({ channel: 'test', session: name.toLowerCase() });
+
+async function establishSeat(cell, participant, at) {
+  const body = bodyFor(participant);
+  await cell.transactAs({ kind: 'join', participant, body }, facts => facts.land({ kind: 'join', actor: participant, at }));
+  return (await cell.read(facts => facts.seat(participant))).value;
+}
+
+async function fixture(t, extra = [], hardCap = null) {
   const cell = createArtifactPort(':memory:', {
-    hardCap, preamble: [], warmup: ['test'], acts,
-    runtime: { nextActIndex: acts.length, observations: {}, leases: {} },
+    hardCap, preamble: [], warmup: ['test'], acts: [],
+    runtime: { nextActIndex: 0, observations: {}, leases: {} },
   });
   t.after(() => cell.close());
-  return { cell, square: { artifact: cell, clock: () => 100, location: 'memory' } };
+  const seats = new Map();
+  for (const activity of [{ kind: 'join', actor: 'Alice', at: 0 }, { kind: 'join', actor: 'Bob', at: 1 }, ...extra]) {
+    if (activity.kind === 'join') seats.set(activity.actor, await establishSeat(cell, activity.actor, activity.at));
+    else {
+      const seat = seats.get(activity.actor);
+      await cell.transactAs({ kind: 'participant', seat }, facts => facts.land(activity));
+    }
+  }
+  const bobSeat = seats.get('Bob');
+  return {
+    cell, seats, bobSeat,
+    square: { artifact: cell, clock: () => 100, location: 'memory', body: bobSeat.body, participantSeat: bobSeat },
+  };
 }
 
 function withoutBodies(facts) {
@@ -29,7 +44,7 @@ function withoutBodies(facts) {
 function noWriter() { assert.fail('empty catch must not acquire the artifact writer'); }
 
 test('an empty filtered catch returns its full snapshot without bodies, a writer, or receipts', async (t) => {
-  const { cell, square } = fixture(t, [
+  const { cell, square } = await fixture(t, [
     { kind: 'join', actor: 'Cara', at: 2 },
     { kind: 'say', actor: 'Cara', at: 3, body: 'still pending', mentions: ['Bob'] },
     { kind: 'say', actor: 'Bob', at: 4, body: 'own activity' },
@@ -41,7 +56,7 @@ test('an empty filtered catch returns its full snapshot without bodies, a writer
   const artifact = {
     ...cell,
     read: (select, signal) => { reads++; return cell.read((facts) => select(withoutBodies(facts)), signal); },
-    transact: noWriter,
+    transactAs: noWriter,
   };
   assert.deepEqual(await catchUp({ ...square, artifact }, 'bOB', { from: ['Alice'], mention: true, limit: 1 }), {
     participant: 'Bob', activities: [], consumedThrough: 'act/2', remaining: 0,
@@ -55,27 +70,26 @@ test('an empty filtered catch returns its full snapshot without bodies, a writer
 });
 
 test('a nonempty probe records nothing and the writer reselects, hydrates once, and observes its own snapshot', async (t) => {
-  const { cell, square } = fixture(t, [
+  const { cell, square, seats, bobSeat } = await fixture(t, [
     { kind: 'say', actor: 'Alice', at: 2, body: 'claimed elsewhere', mentions: ['Bob'] },
-  ]);
-  const hydrated = [];
+  ]);  const hydrated = [];
   let writes = 0;
   const artifact = {
     ...cell,
     async read(select, signal) {
       const result = await cell.read((facts) => select(withoutBodies(facts)), signal);
       assert.equal((await cell.read((facts) => facts.receipt('Bob', 2))).value, undefined, 'probe cannot consume its candidate');
-      await cell.transact((facts) => {
-        facts.markSeen('Bob', [2], 50);
+      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.markSeen('Bob', [2], 50));
+      await cell.transactAs({ kind: 'participant', seat: seats.get('Alice') }, facts => {
         facts.land({ kind: 'say', actor: 'Alice', at: 51, body: 'selected by writer', mentions: ['Bob'] });
         facts.land({ kind: 'say', actor: 'Alice', at: 52, body: 'remaining', mentions: ['Bob'] });
         facts.land({ kind: 'hold', actor: 'Alice', at: 53, body: 'later hold' });
       });
       return result;
     },
-    transact(change, signal) {
+    transactAs(authority, change, signal) {
       writes++;
-      return cell.transact((facts) => change({
+      return cell.transactAs(authority, (facts) => change({
         ...facts,
         activities(indexes) { hydrated.push([...indexes]); return facts.activities(indexes); },
       }), signal);
@@ -94,14 +108,14 @@ test('a nonempty probe records nothing and the writer reselects, hydrates once, 
 });
 
 test('exact-ID and leased catches retain their receipt transaction and never use the empty probe', async (t) => {
-  const { cell, square } = fixture(t, [
+  const { cell, square, bobSeat } = await fixture(t, [
     { kind: 'say', actor: 'Alice', at: 2, body: 'exact', mentions: ['Bob'] },
   ]);
   const marked = [];
   const artifact = {
     ...cell,
     read() { assert.fail('ID and leased catches must not probe'); },
-    transact: (change, signal) => cell.transact((facts) => change({
+    transactAs: (authority, change, signal) => cell.transactAs(authority, (facts) => change({
       ...facts,
       markSeen(name, indexes, at) { marked.push([...indexes]); return facts.markSeen(name, indexes, at); },
     }), signal),
@@ -109,17 +123,20 @@ test('exact-ID and leased catches retain their receipt transaction and never use
   const context = { ...square, artifact };
   const first = await catchUp(context, 'Bob', { id: 'act/2' });
   assert.deepEqual(await catchUp(context, 'Bob', { id: 'act/2' }), first);
-  await cell.transact((facts) => facts.putLease('Bob', { leaseId: 'current', heartbeatAt: 100, expiresAt: 1000 }));
+  await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.putLease('Bob', { leaseId: 'current', heartbeatAt: 100, expiresAt: 1000 }, bobSeat.generation));
   assert.equal(await catchUp(context, 'Bob', {}, undefined, 'replaced'), null);
   assert.deepEqual((await catchUp(context, 'Bob', {}, undefined, 'current')).activities, []);
   assert.deepEqual(marked, [[2], [2], []]);
 });
 
-test('empty catch still validates names, page limits, and finite time without acquiring a writer', async (t) => {
-  const { cell, square } = fixture(t);
-  const context = { ...square, artifact: { ...cell, transact: noWriter } };
+test('empty catch fences on the caller seat and still validates names, page limits, and time', async (t) => {
+  const { cell, square } = await fixture(t);
+  const context = { ...square, artifact: { ...cell, transactAs: noWriter } };
+  await assert.rejects(catchUp({ ...context, participantSeat: undefined }, 'Bob'), { code: 'already_joined' });
+  await assert.rejects(catchUp(context, 'Missing'), { code: 'already_joined' });
   await assert.rejects(catchUp(context, 'bad name'), { code: 'invalid_name' });
-  await assert.rejects(catchUp(context, 'Missing'), (error) => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
+  await assert.rejects(catchUp(context, 'Bob', { from: ['Missing'] }),
+    (error) => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
   for (const limit of [0, 101, 1.5]) await assert.rejects(catchUp(context, 'Bob', { limit }), { code: 'invalid_args' });
   for (const at of [NaN, Infinity, '100']) {
     await assert.rejects(catchUp({ ...context, clock: () => at }, 'Bob'), { code: 'invalid_args' });
@@ -128,7 +145,7 @@ test('empty catch still validates names, page limits, and finite time without ac
 });
 
 test('catch propagates cancellation through probe and writer but keeps a committed receipt result', async (t) => {
-  const { cell, square } = fixture(t, [
+  const { cell, square } = await fixture(t, [
     { kind: 'say', actor: 'Alice', at: 2, body: 'pending', mentions: ['Bob'] },
   ]);
   const controller = new AbortController();
@@ -141,20 +158,20 @@ test('catch propagates cancellation through probe and writer but keeps a committ
       controller.abort(reason);
       return result;
     },
-    transact(change, signal) {
+    transactAs(authority, change, signal) {
       assert.equal(signal, controller.signal);
-      return cell.transact(change, signal);
+      return cell.transactAs(authority, change, signal);
     },
   };
   await assert.rejects(catchUp({ ...square, artifact }, 'Bob', {}, { signal: controller.signal }), (error) => error === reason);
   assert.equal((await cell.read((facts) => facts.receipt('Bob', 2))).value, undefined);
-  await assert.rejects(catchUp({ ...square, artifact: { ...cell, read: noWriter, transact: noWriter } }, 'Bob', {}, { signal: controller.signal }), (error) => error === reason);
+  await assert.rejects(catchUp({ ...square, artifact: { ...cell, read: noWriter, transactAs: noWriter } }, 'Bob', {}, { signal: controller.signal }), (error) => error === reason);
 
   const late = new AbortController();
   const committed = await catchUp({ ...square, artifact: {
     ...cell,
-    async transact(change, signal) {
-      const result = await cell.transact(change, signal);
+    async transactAs(authority, change, signal) {
+      const result = await cell.transactAs(authority, change, signal);
       late.abort(new Error('response cancelled after commit'));
       return result;
     },
@@ -163,25 +180,12 @@ test('catch propagates cancellation through probe and writer but keeps a committ
   assert.deepEqual((await cell.read((facts) => facts.receipt('Bob', 2))).value, { at: 100 });
 });
 
-test('empty catch checks ownership first and still publishes identity after its snapshot completes', async (t) => {
-  const { cell, square } = fixture(t);
+test('empty catch fences on its current seat before probing and keeps a completed snapshot', async (t) => {
+  const { cell, seats, bobSeat } = await fixture(t);
   const controller = new AbortController();
   const order = [];
-  let ownerSession = 'other';
   const context = {
-    ...square, location: '/tmp/square-empty-catch-read.square', env: { PI_SESSION_ID: 'empty-catch' },
-    hostLedger: {
-      async listPresence() {
-        order.push('presence');
-        return [{ location: context.location, participant: 'Bob', session: ownerSession, channel: 'pi', updatedAt: 0, epoch: 1 }];
-      },
-      async ensurePresence(record) {
-        order.push('published');
-        assert.equal(record.participant, 'Bob');
-        assert.equal(record.session, 'empty-catch');
-        return { status: 'ensured' };
-      },
-    },
+    location: 'memory', clock: () => 100, body: bobSeat.body, participantSeat: bobSeat,
     artifact: {
       ...cell,
       async read(select, signal) {
@@ -191,14 +195,13 @@ test('empty catch checks ownership first and still publishes identity after its 
         controller.abort(new Error('late snapshot cancellation'));
         return result;
       },
-      transact: noWriter,
+      transactAs: noWriter,
     },
   };
-  await assert.rejects(catchUp(context, 'Bob'), { code: 'already_joined' });
-  assert.deepEqual(order, ['presence']);
-  ownerSession = 'empty-catch';
-  order.length = 0;
+  await assert.rejects(catchUp({ ...context, participantSeat: undefined }, 'Bob'), { code: 'already_joined' });
+  await assert.rejects(catchUp({ ...context, participantSeat: seats.get('Alice') }, 'Bob'), { code: 'already_joined' });
+  assert.deepEqual(order, []);
   assert.deepEqual((await catchUp(context, 'bOB', {}, { signal: controller.signal })).activities, []);
-  assert.deepEqual(order, ['presence', 'read', 'presence', 'published']);
+  assert.deepEqual(order, ['read']);
   assert.equal(controller.signal.aborted, true);
 });

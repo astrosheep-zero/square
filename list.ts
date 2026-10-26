@@ -19,7 +19,7 @@ async function readSquareListItem(filePath: string, root: string, options: OpenO
   try {
     control?.signal?.throwIfAborted();
     const stat = await fs.promises.stat(filePath);
-    const square = await openSquare(filePath, { ...options, env: options.env ?? {}, signal: control?.signal }, control);
+    const square = await openSquare(filePath, { clock: options.clock, signal: control?.signal }, control);
     const projection = await listPresentation(square, control).finally(() => closeOpenSquare(square));
     return {
       path: path.relative(root, filePath) || path.basename(filePath),

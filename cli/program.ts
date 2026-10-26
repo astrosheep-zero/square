@@ -1,10 +1,8 @@
 import { helpRequest } from '../help.js';
 import { isSquareError } from '../model.js';
 import type { OperationError } from '../square-facade.js';
-import {
-  commandPrefix, formatRefusal, refusalText, joinRecoveryCommand, participantIdentity,
-  participantsRecoveryCommand, takeoverRecoveryLines,
-} from '../presentation.js';
+import { formatRefusal } from '../presentation.js';
+import { renderFailureLines } from '../operation-presentation.js';
 import { type CommandContext, withSquare, defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 
@@ -15,27 +13,9 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   const recovery = error.facts?.reason === 'migration_required' || context === undefined || squarePath === undefined ? undefined
     : await withSquare({ ...context, name: detail?.participant ?? context.name }, (square) => square.recovery(detail?.participant ?? context.name)).catch(() => undefined);
   const name = detail?.participant ?? recovery?.participant ?? context?.name;
-  const existing = [refusalText(error)];
-  if (error.facts?.reason === 'migration_required') {
-    if (error.facts.ledgerRoot !== undefined) existing.push('square ledger migrate', 'square ledger verify');
-    else if (squarePath !== undefined) existing.push(`${commandPrefix(squarePath)} migrate`);
-  } else if (squarePath !== undefined && name !== undefined && error.code === 'already_joined') {
-    existing.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
-      `  · ${participantIdentity(name)} already stands here — another session holds the name`);
-    existing.push(...takeoverRecoveryLines(squarePath, name));
-  } else if (squarePath !== undefined && error.facts?.reason === 'never_joined') {
-    existing.push(detail?.subject !== 'filter' && name !== undefined
-      ? joinRecoveryCommand(squarePath, name) : participantsRecoveryCommand(squarePath));
-  } else if (squarePath !== undefined && error.facts?.reason === 'not_standing') {
-    existing.push(participantsRecoveryCommand(squarePath));
-  } else if (squarePath !== undefined && error.facts?.reason === 'not_addressed' && typeof error.facts.activityId === 'string') {
-    existing.push(error.facts.activityExists === true
-      ? `${commandPrefix(squarePath)} history --at ${error.facts.activityId} -C 2`
-      : `${commandPrefix(squarePath)} history --limit 10`);
-  }
-  if (error.facts?.reason === 'invalid_done_body') existing.push('square done --help');
-  if (squarePath === undefined) process.stderr.write(`${existing.join('\n')}\n`);
-  else process.stderr.write(formatRefusal(squarePath, existing, {
+  const lines = renderFailureLines(error, { squarePath, name });
+  if (squarePath === undefined) process.stderr.write(`${lines.join('\n')}\n`);
+  else process.stderr.write(formatRefusal(squarePath, lines, {
     participantCount: recovery?.standingCount, held: recovery?.held,
   }));
   process.exit(error.code === 'not_found' ? 1 : 2);

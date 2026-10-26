@@ -1,4 +1,4 @@
-export type SquareInboxBinding = { location: string; participant: string; session: string; epoch?: number };
+export type SquareInboxBinding = { location: string; participant: string; session: string; generation?: `act/${number}` };
 export type SquareInboxCoordinate = { sessionId: string; cwd: string; version: string; endpoint?: string };
 export type SquareInboxCancellation = { at: number; bindings?: SquareInboxBinding[] };
 export type SquareInboxState = { coordinate: SquareInboxCoordinate; bindings?: SquareInboxBinding[] };

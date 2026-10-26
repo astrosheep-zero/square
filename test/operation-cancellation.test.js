@@ -1,59 +1,74 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
-import { Square } from "../dist/index.js";
-import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from "../dist/artifact.js";
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { Square } from '../dist/index.js';
+import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from '../dist/artifact.js';
 
-function aborted() {
+function aborted(message = 'cancelled') {
   const controller = new AbortController();
-  controller.abort(new Error("cancelled"));
+  controller.abort(new Error(message));
   return controller;
 }
 
-test("pre-aborted lifecycle operations do not mutate the artifact", async () => {
-  const square = Square.inMemory({ markdown: "context" });
+const body = (session) => ({ channel: 'test', session });
+
+async function tempDirectory(prefix) {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  return { fs, path, root };
+}
+
+test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
+  const square = Square.inMemory({ markdown: 'context', body: body('memory') });
   const before = await square.snapshot();
-  await assert.rejects(() => square.join("Alice", {}, { signal: aborted().signal }), /cancelled/);
-  await assert.rejects(() => square.implicitJoin("Bob", { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.join('Alice', {}, { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.implicitJoin('Bob', { signal: aborted().signal }), /cancelled/);
   assert.equal((await square.snapshot()).actCount, before.actCount);
   await square.close();
 });
 
-test("request resource opens abort under an exclusive lock without deferred mutation", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-application-cancel-"));
-  const location = path.join(root, "SQUARE.square");
-  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
-  const square = await Square.build({ path: location, markdown: "context", env });
-  const writer = (await square.join("Writer")).participant;
-  await square.join("Reader");
-  await writer.express("unread", { force: true, mentions: ["Reader"] });
-  await square.close();
+test('request operations abort under an exclusive artifact lock without a deferred mutation', async () => {
+  const { fs, path, root } = await tempDirectory('square-request-cancel-');
+  const location = path.join(root, 'SQUARE.square');
+  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
+  const writerBody = body('writer');
+  const readerBody = body('reader');
+  const built = await Square.build({ path: location, markdown: 'context', env, body: writerBody, participant: 'Writer' });
+  const writer = (await built.join()).participant;
+  await built.close();
+  const readerSquare = await Square.at({ path: location, env, body: readerBody, participant: 'Reader' });
+  await readerSquare.join();
+  await readerSquare.close();
+  const writerSquare = await Square.at({ path: location, env, body: writerBody, participant: 'Writer' });
+  await (await writerSquare.participant()).express('unread', { force: true, mentions: ['Reader'] });
+  await writerSquare.close();
+
   const before = await readSquareSnapshot(location);
   const database = new DatabaseSync(location);
-  database.exec("BEGIN EXCLUSIVE");
+  database.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
-  const pending = ['Reader', 'Writer', 'Newcomer'].map(async (participant) => {
-    const opened = await Square.at({ cwd: root, env, path: location }, { signal: controller.signal });
-    try {
-      if (participant === 'Newcomer') await opened.join(participant, {}, { signal: controller.signal });
-      else if (participant === 'Reader') await (await opened.participant(participant)).catch({}, { signal: controller.signal });
-      else await (await opened.participant(participant)).express('cancelled', { force: true, mentions: ['Reader'] }, { signal: controller.signal });
-    } finally { await opened.close(); }
+  const requests = [
+    ['Reader', readerBody, async square => (await square.participant()).catch({}, { signal: controller.signal })],
+    ['Writer', writerBody, async square => (await square.participant()).express('cancelled', { force: true }, { signal: controller.signal })],
+    ['Newcomer', body('newcomer'), async square => square.join()],
+  ];
+  const pending = requests.map(async ([participant, coordinate, operate]) => {
+    const square = await Square.at({ cwd: root, env, path: location, body: coordinate, participant }, { signal: controller.signal });
+    try { await operate(square); } finally { await square.close(); }
   });
-  const abort = setTimeout(() => controller.abort(new Error("cancelled")), 50);
+  const abort = setTimeout(() => controller.abort(new Error('cancelled')), 50);
   let deadline;
   try {
     await Promise.race([
-      Promise.all(pending.map((operation) => assert.rejects(operation, /cancelled/))),
-      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("cancellation waited for the artifact lock")), 1000); }),
+      Promise.all(pending.map(operation => assert.rejects(operation, /cancelled/))),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('cancellation waited for the artifact lock')), 1000); }),
     ]);
   } finally {
     clearTimeout(abort);
     clearTimeout(deadline);
-    database.exec("ROLLBACK");
+    database.exec('ROLLBACK');
     database.close();
     await Promise.allSettled(pending);
     try { assert.deepEqual(await readSquareSnapshot(location), before); }
@@ -61,54 +76,47 @@ test("request resource opens abort under an exclusive lock without deferred muta
   }
 });
 
-test("cancelled force-build leaves no rebuild behind after the artifact lock is released", async (t) => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-build-cancel-"));
+test('cancelled force-build leaves no replacement after the artifact lock is released', async t => {
+  const { fs, path, root } = await tempDirectory('square-build-cancel-');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const location = path.join(root, "SQUARE.square");
-  const env = { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, "ledger") };
-  const built = await Square.build({ cwd: root, env, path: location, markdown: 'original', hardCap: 7 });
+  const location = path.join(root, 'SQUARE.square');
+  const built = await Square.build({ cwd: root, path: location, markdown: 'original', hardCap: 7, body: body('builder') });
   await built.close();
   const before = await readSquareSnapshot(location);
   const lock = new DatabaseSync(location);
-  lock.exec("BEGIN EXCLUSIVE");
+  lock.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
-  const pending = Square.build({ path: location, env, markdown: "must not replace original", hardCap: 2, force: true }, { signal: controller.signal });
-  const abort = setTimeout(() => controller.abort(new Error("force-build cancelled")), 50);
+  const pending = Square.build({ path: location, markdown: 'must not replace original', hardCap: 2, force: true, body: body('builder') }, { signal: controller.signal });
+  const abort = setTimeout(() => controller.abort(new Error('force-build cancelled')), 50);
   let deadline;
   try {
     await Promise.race([
       assert.rejects(pending, /force-build cancelled/),
-      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("force-build ignored cancellation while locked")), 1000); }),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('force-build ignored cancellation while locked')), 1000); }),
     ]);
   } finally {
     clearTimeout(abort);
     clearTimeout(deadline);
-    lock.exec("ROLLBACK");
+    lock.exec('ROLLBACK');
     lock.close();
     await Promise.allSettled([pending]);
   }
   assert.deepEqual(await readSquareSnapshot(location), before);
-  assert.deepEqual((await fs.readdir(root)).filter((name) => name.endsWith(".tmp")), []);
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.endsWith('.tmp')), []);
 });
 
-test("a newly published build keeps its result when cancellation follows the link", async (t) => {
-  const fs = (await import("node:fs")).default;
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "square-build-committed-"));
+test('a published build keeps its result when cancellation follows publication', async t => {
+  const fs = (await import('node:fs')).default;
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'square-build-committed-'));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
-  const location = path.join(root, "SQUARE.square");
+  const location = path.join(root, 'SQUARE.square');
   const controller = new AbortController();
   const link = fs.promises.link;
-  fs.promises.link = async (...args) => {
-    await link(...args);
-    controller.abort(new Error("late response cancellation"));
-  };
+  fs.promises.link = async (...args) => { await link(...args); controller.abort(new Error('late response cancellation')); };
   try {
-    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
+    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3, body: body('builder') }, { signal: controller.signal });
     assert.equal(result.location, location);
     assert.equal((await result.status()).hardCap, 3);
     await result.close();
@@ -117,222 +125,107 @@ test("a newly published build keeps its result when cancellation follows the lin
   assert.equal((await readSquareSnapshot(location)).state.hardCap, 3);
 });
 
-test("idle catch aborts without consuming activity added later", async () => {
-  const square = Square.inMemory({ markdown: "context" });
-  const alice = (await square.join("Alice")).participant;
-  const bob = (await square.join("Bob")).participant;
+test('idle catch aborts without consuming activity added later', async () => {
+  const square = Square.inMemory({ markdown: 'context', body: body('memory') });
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
   await bob.catch();
   const controller = new AbortController();
   const waiting = bob.catch({ idle: 60_000 }, { signal: controller.signal });
-  await new Promise((resolve) => setImmediate(resolve));
-  controller.abort(new Error("cancelled"));
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort(new Error('cancelled'));
   await assert.rejects(waiting, /cancelled/);
-  const activity = await alice.express("after cancellation", { force: true, mentions: ["Bob"] });
+  const activity = await alice.express('after cancellation', { force: true, mentions: ['Bob'] });
   const caught = await bob.catch();
   assert.equal(caught.activities[0].id, activity.activity.id);
   await square.close();
 });
 
-test("memory change wait removes abort listeners on normal settlement", async () => {
-  const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, "context"));
+test('memory change wait removes abort listeners on normal settlement', async () => {
+  const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, 'context'));
+  const body = { channel: 'test', session: 'watcher' };
+  await cell.transactAs({ kind: 'join', participant: 'Watcher', body }, facts => facts.land({ kind: 'join', actor: 'Watcher', at: 0 }));
+  const seat = (await cell.read(facts => facts.seat('Watcher'))).value;
+  const baseline = await cell.revision();
   const controller = new AbortController();
-  const waiting = cell.changed(0, 60_000, controller.signal);
-  await cell.transact((facts) => facts.putLease("Watcher", { leaseId: "lease", heartbeatAt: 1, expiresAt: 60_000 }));
+  const waiting = cell.changed(baseline, 60_000, controller.signal);
+  await cell.transactAs({ kind: 'participant', seat }, facts => facts.putLease('Watcher', { leaseId: 'lease', heartbeatAt: 1, expiresAt: 60_000 }));
   assert.equal(await waiting, true);
-  controller.abort(new Error("late cancellation"));
+  controller.abort(new Error('late cancellation'));
   await cell.close();
 });
 
-test("abort inside a transition before commit rolls back the whole change", async () => {
-  const initial = prepareSquareBuild({ force: false, hardCap: null }, "context");
-  const cell = createArtifactPort(':memory:', initial);
+test('abort inside a transition before commit rolls back the whole change', async () => {
+  const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, 'context'));
   const controller = new AbortController();
-  await assert.rejects(
-    () => cell.transact((facts) => {
-      facts.land({ kind: "join", actor: "Alice", at: 1 });
-      controller.abort(new Error("response discarded"));
-    }, controller.signal),
-    /response discarded/,
-  );
-  const header = (await cell.read((facts) => facts.header())).value;
+  const authority = { kind: 'join', participant: 'Alice', body: body('alice') };
+  await assert.rejects(() => cell.transactAs(authority, facts => {
+    facts.land({ kind: 'join', actor: 'Alice', at: 1 });
+    controller.abort(new Error('response discarded'));
+  }, controller.signal), /response discarded/);
+  const header = (await cell.read(facts => facts.header())).value;
   assert.equal(header.revision, 0);
   assert.equal(header.lastActIndex, -1);
   assert.equal(header.nextActIndex, 0);
   await cell.close();
 });
 
-
-test("real host-ledger claim lock abort prevents queued ownership", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-claim-cancel-"));
-  const lock = path.join(root, "presence-claim.lock");
-  const port = new FileHostLedgerPort({ rootPath: root });
-  const input = { location: path.join(root, "SQUARE.square"), participant: "Queued", session: "session-queued", channel: "codex", updatedAt: Date.now() };
-  const controller = new AbortController();
-  const database = new DatabaseSync(lock);
-  database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS __square_file_lock (id INTEGER PRIMARY KEY CHECK (id = 1));");
-  const claim = port.claimPresence(input, controller.signal);
-  await new Promise((resolve) => setImmediate(resolve));
-  controller.abort(new Error("cancelled"));
-  const result = await claim;
-  assert.equal(result.status, "degraded");
-  database.exec("ROLLBACK");
-  database.close();
-  assert.deepEqual(await port.listPresence({ location: input.location }), []);
-  await fs.rm(root, { recursive: true, force: true });
-});
-
-test("post-commit express preserves its result after response cancellation", async () => {
-  const { buildMemorySquare } = await import("../dist/open-square.js");
-  const { join, express } = await import("../dist/square-actions.js");
-  const open = buildMemorySquare({ markdown: "context" });
-  const joined = await join(open, "Writer");
+test('post-commit express preserves its result after response cancellation', async () => {
+  const { buildMemorySquare } = await import('../dist/open-square.js');
+  const { join, express } = await import('../dist/square-actions.js');
+  const open = buildMemorySquare({ markdown: 'context', body: body('memory') });
+  const joined = await join(open, 'Writer');
+  const writerContext = { ...open, participantSeat: joined.seat };
   const controller = new AbortController();
   const artifact = open.artifact;
-  const wrapped = { ...open, artifact: { ...artifact, transact: async (fn, signal) => { const result = await artifact.transact(fn, signal); controller.abort(new Error("response discarded")); return result; } } };
-  const result = await express(wrapped, joined.name, "committed", { force: true }, { signal: controller.signal });
-  assert.equal(result.activity.body, "committed");
-  const latest = (await artifact.read((facts) => facts.activityHeads({}, { edge: "newest", limit: 1 }))).value.items[0];
-  assert.equal((await artifact.read((facts) => facts.activity(latest.index))).value.body, "committed");
-  await open.artifact.close();
+  const wrapped = { ...writerContext, artifact: { ...artifact, transactAs: async (authority, fn, signal) => {
+    const result = await artifact.transactAs(authority, fn, signal);
+    controller.abort(new Error('response discarded'));
+    return result;
+  } } };
+  const result = await express(wrapped, joined.name, 'committed', { force: true }, { signal: controller.signal });
+  assert.equal(result.activity.body, 'committed');
+  const latest = (await artifact.read(facts => facts.activityHeads({}, { edge: 'newest', limit: 1 }))).value.items[0];
+  assert.equal((await artifact.read(facts => facts.activity(latest.index))).value.body, 'committed');
+  await artifact.close();
 });
 
-
-test("post-commit catch preserves its result after response cancellation", async () => {
-  const square = Square.inMemory({ markdown: "context" });
-  const alice = (await square.join("Alice")).participant;
-  const bob = (await square.join("Bob")).participant;
-  await bob.catch();
-  await alice.express("committed catch", { force: true, mentions: ["Bob"] });
-  const controller = new AbortController();
-  const original = square;
-  const catchResult = await bob.catch(undefined, { signal: controller.signal });
-  controller.abort(new Error("response discarded"));
-  assert.equal(catchResult.activities[0].body, "committed catch");
-  assert.deepEqual((await bob.catch()).activities, []);
-  await original.close();
-});
-
-
-test("owned claim cleanup never removes rightful ownership", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const { claimSessionParticipant, releaseSessionParticipantClaim } = await import("../dist/registry.js");
-  const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-owned-claim-"));
-  const env = { ...process.env, CODEX_THREAD_ID: "owned-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_ROOT: root };
-  const location = path.join(root, "SQUARE.square");
-  const ledger = new FileHostLedgerPort({ rootPath: root });
-  const first = await claimSessionParticipant(location, "Owner", ledger, env);
-  const second = await claimSessionParticipant(location, "Owner", ledger, env);
-  await releaseSessionParticipantClaim(ledger, second);
-  const rows = await ledger.listPresence({ location, participant: "Owner" });
-  assert.equal(rows.length, 1);
-  assert.equal(first?.status, "acquired");
-  assert.equal(second?.status, "owned");
-  await fs.rm(root, { recursive: true, force: true });
-});
-
-test("post-commit catch preserves its result before return cancellation", async () => {
-  const { buildMemorySquare } = await import("../dist/open-square.js");
-  const { join, express, catchUp } = await import("../dist/square-actions.js");
-  const open = buildMemorySquare({ markdown: "context" });
-  const alice = await join(open, "Alice");
-  const bob = await join(open, "Bob");
-  await catchUp(open, bob.name);
-  await express(open, alice.name, "boundary catch", { force: true, mentions: ["Bob"] });
+test('post-commit catch preserves its receipt and result before return cancellation', async () => {
+  const { buildMemorySquare } = await import('../dist/open-square.js');
+  const { join, express, catchUp } = await import('../dist/square-actions.js');
+  const open = buildMemorySquare({ markdown: 'context', body: body('memory') });
+  const alice = await join(open, 'Alice');
+  const bob = await join(open, 'Bob');
+  const aliceContext = { ...open, participantSeat: alice.seat };
+  const bobContext = { ...open, participantSeat: bob.seat };
+  await catchUp(bobContext, bob.name);
+  await express(aliceContext, alice.name, 'boundary catch', { force: true, mentions: ['Bob'] });
   const controller = new AbortController();
   const artifact = open.artifact;
-  const wrapped = { ...open, artifact: { ...artifact, transact: async (fn, signal) => { const result = await artifact.transact(fn, signal); controller.abort(new Error("response discarded")); return result; } } };
+  const wrapped = { ...bobContext, artifact: { ...artifact, transactAs: async (authority, fn, signal) => {
+    const result = await artifact.transactAs(authority, fn, signal);
+    controller.abort(new Error('response discarded'));
+    return result;
+  } } };
   const result = await catchUp(wrapped, bob.name, {}, { signal: controller.signal });
-  assert.equal(result.activities[0].body, "boundary catch");
-  assert.deepEqual((await catchUp(open, bob.name)).activities, []);
-  await open.artifact.close();
+  assert.equal(result.activities[0].body, 'boundary catch');
+  assert.deepEqual((await catchUp(bobContext, bob.name)).activities, []);
+  await artifact.close();
 });
 
-
-test("same-session concurrent joins retain one rightful owner", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-concurrent-join-"));
-  const env = { ...process.env, CODEX_THREAD_ID: "same-session", SQUARE_REGISTRY: path.join(root, "registry.ndjsonl"), SQUARE_HOST_LEDGER_ROOT: root };
-  const square = await Square.build({ path: path.join(root, "SQUARE.square"), markdown: "context", env });
-  await Promise.all([square.join("Same"), square.join("Same")]);
-  const rows = await square.recognize(env);
-  assert.ok(rows);
-  assert.equal((await square.history()).activities.filter((activity) => activity.kind === "join").length, 1);
-  await square.close();
-  await fs.rm(root, { recursive: true, force: true });
-});
-
-
-test("conditional claim removal preserves a refreshed row", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "square-conditional-remove-"));
-  const port = new FileHostLedgerPort({ rootPath: root });
-  const location = path.join(root, "SQUARE.square");
-  const original = { location, participant: "Owner", session: "session", channel: "codex", updatedAt: Date.now(), epoch: 1 };
-  const refreshed = { ...original, updatedAt: original.updatedAt + 1, epoch: 2 };
-  await port.ensurePresence(original);
-  assert.equal(await port.removePresenceIfUnchanged(original), true);
-  await port.ensurePresence(refreshed);
-  assert.equal(await port.removePresenceIfUnchanged(original), false);
-  assert.deepEqual((await port.listPresence({ location, participant: "Owner" }))[0].updatedAt, refreshed.updatedAt);
-  assert.equal(await port.removePresenceIfUnchanged(refreshed), true);
-  await fs.rm(root, { recursive: true, force: true });
-});
-
-test("presence claim holds its SQLite write transaction across the snapshot so a concurrent ensure survives", async (t) => {
-  const fsp = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const { FileHostLedgerPort } = await import("../dist/host-ledger-file-adapter.js");
-  const { LEDGER_FILENAME } = await import("../dist/host-ledger-sqlite.js");
-  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "square-claim-lost-update-")));
-  t.after(() => fsp.rm(root, { recursive: true, force: true }));
-  const port = new FileHostLedgerPort({ rootPath: root });
-  const location = path.join(root, "SQUARE.square");
-  const ledgerFile = path.join(root, LEDGER_FILENAME);
-  const now = Date.now();
-  assert.equal((await port.ensurePresence({ location: path.join(root, "OTHER.square"), participant: "Seed", session: "seed-session", channel: "codex", updatedAt: now })).status, "ensured");
-
-  const contender = new DatabaseSync(ledgerFile);
-  t.after(() => contender.close());
-  let concurrent;
-  let captured = false;
-  const prepare = DatabaseSync.prototype.prepare;
-  t.mock.method(DatabaseSync.prototype, "prepare", function (sql, ...args) {
-    const statement = prepare.call(this, sql, ...args);
-    if (this.location() !== ledgerFile || captured || !/SELECT seq,row_json FROM host_presence\b/.test(sql)) return statement;
-    const all = statement.all;
-    t.mock.method(statement, "all", function (...params) {
-      const snapshot = all.apply(this, params);
-      captured = true;
-      // SQLite callbacks cannot pause asynchronously. Probe the actual lock with
-      // another connection exactly after the authoritative snapshot was read.
-      try {
-        assert.throws(() => contender.exec("BEGIN IMMEDIATE"), /database is locked|database is busy|SQLITE_BUSY/i);
-      } finally {
-        // Also release an incorrectly acquired lock if the assertion fails.
-        try { contender.exec("ROLLBACK"); } catch { /* no transaction when correctly excluded */ }
-      }
-      concurrent = port.ensurePresence({ location, participant: "Concurrent", session: "other-session", channel: "codex", updatedAt: now });
-      return snapshot;
-    });
-    return statement;
-  });
-  const claimed = await port.claimPresence({ location, participant: "Claimant", session: "claim-session", channel: "codex", updatedAt: now });
-  assert.equal(captured, true, "claimPresence must read the indexed presence snapshot");
-  assert.equal(claimed.status, "acquired", claimed.error?.stack);
-  assert.equal((await concurrent).status, "ensured");
-  const rows = await port.listPresence({ location });
-  assert.deepEqual(rows.map((row) => row.participant).sort(), ["Claimant", "Concurrent"]);
+test('concurrent joins from one body establish one artifact seat and one join activity', async t => {
+  const { fs, path, root } = await tempDirectory('square-concurrent-join-');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const location = path.join(root, 'SQUARE.square');
+  const coordinate = body('same-session');
+  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
+  const square = await Square.build({ path: location, markdown: 'context', env, body: coordinate, participant: 'Same' });
+  const peer = await Square.at({ path: location, env, body: coordinate, participant: 'Same' });
+  try {
+    await Promise.all([square.join(), peer.join()]);
+    assert.equal((await square.history()).activities.filter(activity => activity.kind === 'join').length, 1);
+    const artifact = createArtifactPort(location);
+    try { assert.deepEqual((await artifact.read(facts => facts.seatsForBody(coordinate))).value.map(seat => seat.participant), ['Same']); }
+    finally { await artifact.close(); }
+  } finally { await Promise.all([square.close(), peer.close()]); }
 });

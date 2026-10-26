@@ -3,15 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSquareError } from '../model.js';
 import { type Square, formatActivityId, parseActivityId } from '../square-api.js';
-import type { ActivityId, OperationError, OperationControl, ExpressResult, ExpressOptions } from '../square-facade.js';
+import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
 import {
   formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
-  renderActivityUncertain, renderExpressNoWait, renderExpressWaiting, renderPendingFeed,
-  joinRecoveryCommand, participantIdentity, participantsRecoveryCommand,
+  renderActivityUncertain, renderExpressNoWait, renderExpressWaiting,
+  joinRecoveryCommand, participantsRecoveryCommand,
   participantCommandPrefix, commandPrefix, quoteShell, takeoverRecoveryLines, withPathOutput,
 } from '../presentation.js';
+import { renderExpression } from '../operation-presentation.js';
 import { formatDuration } from '../time.js';
-import { style } from '../tty-style.js';
+
+export { renderExpression } from '../operation-presentation.js';
 
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> { readonly reply?: string; }
 
@@ -43,36 +45,6 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
   return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${replyArgument(opts.reply)} -`;
 }
 
-function isGestureOnly(body: string): boolean {
-  return /\*[^*]*\*/.test(body) && body.replace(/\*[^*]*\*/g, '').trim() === '';
-}
-
-export function renderExpression(squarePath: string, data: ExpressResult): string {
-  const projection = data.observation!;
-  const name = projection.participant;
-  const pendingSpeaker = projection.pendingPublic[0]?.actor;
-  const pendingLead = pendingSpeaker === undefined ? ''
-    : `▲ while you spoke, ${participantIdentity(pendingSpeaker)} said something behind you\n\n`;
-  const pending = projection.pendingPublic.length === 0 ? ''
-    : `\n\n${pendingLead}${renderPendingFeed(projection.pendingPublic, projection.sayNumbers, projection.perceptions, name)}`;
-  const ownCount = projection.ownActivityCount;
-  const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
-  const activity = data.activity;
-  const confirmation = activity.reach === 'bell'
-    ? `● you ring the bell — everyone turns · ${activity.id}${style('dim', capCount)}`
-    : `● ${activity.mentions.length > 0
-      ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
-      : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
-  const replyNotice = data.replyAuthorNotHere === undefined ? ''
-    : `\n○ ${participantIdentity(data.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
-  const unmatchedNotice = data.unmatchedMentions?.length
-    ? `\n  · ${data.unmatchedMentions.map((token) => `@${token} isn't standing here`).join('; ')} — ${activity.mentions.length === 0 && activity.reply === undefined ? 'activity landed bare' : 'left as literal text'}` : '';
-  return withPathOutput(projection.location ?? squarePath,
-    (projection.reentry === undefined ? '' : '● you stepped back into the square\n')
-      + confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + replyNotice + unmatchedNotice + pending,
-    { participantCount: projection.standingCount, held: projection.held });
-}
-
 /** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
 export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string, opts: ActivityOptions): Promise<void> {
   let square: Square | undefined;
@@ -100,7 +72,8 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     });
     landedId = outcome.activity.id;
     name = outcome.observation!.participant;
-    process.stdout.write(renderExpression(squarePath, outcome));
+    const rendered = renderExpression(squarePath, outcome);
+    if (rendered !== undefined) process.stdout.write(rendered);
   } catch (error) {
     const detail = (error as OperationError | undefined)?.operation;
     name = detail?.participant ?? name ?? 'participant';
@@ -124,7 +97,6 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     if (isSquareError(error)) {
       if (error.code === 'behind' && fresh?.activitySummaries !== undefined) {
         process.stdout.write(renderActivityBlocked({ ...output, retryCommand,
-          forceCommand: activityRetryCommand(squarePath, name, opts, true),
           activitySummaries: fresh.activitySummaries.map((summary) => ({ ...summary, previews: [...summary.previews] })),
         }));
         exitCode(1); return;

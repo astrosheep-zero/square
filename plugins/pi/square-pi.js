@@ -3,12 +3,12 @@ import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
 import { Square } from '../../dist/square-api.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure } from '../../dist/square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
 import { endSessionMemberships } from '../../dist/session-lifecycle.js';
-import { sessionInbox, observeSessionPending } from '../../dist/inbox.js';
+import { projectSessionBindings, observeSessionPending } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { formatActivityId } from '../../dist/square-core.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
@@ -152,19 +152,21 @@ export default function squarePiExtension(pi) {
       namespace: { name: 'square', description: 'Participate in a shared public square.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
         try {
+          const sessionId = ctx.sessionManager.getSessionId();
           const square = await Square.at({
             cwd: ctx.cwd,
-            env: operationEnv('pi', ctx.sessionManager.getSessionId(), process.env),
+            env: operationEnv('pi', sessionId, process.env),
+            body: { channel: 'pi', session: sessionId },
             path: args.location,
             participant: args.as,
           }, { signal });
           let data;
-          try { data = await tool.run(square, args, { signal }); }
+          try { data = await tool.run(square, args, { signal, observe: true }); }
           finally { await square.close(); }
-          return { content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+          return { content: [{ type: 'text', text: tool.render(data, args) ?? '' }], details: data, structuredContent: data };
         } catch (error) {
           const data = { error: squareToolFailure(error, signal) };
-          return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], details: data, structuredContent: data };
+          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(data.error, { location: args.location ?? process.env.SQUARE_LOCATION, participant: args.as }) }], details: data, structuredContent: data };
         }
       },
     });
@@ -188,10 +190,14 @@ export default function squarePiExtension(pi) {
   let currentRunSignal;
   let detachRunAbort;
   let cancelledRun = false;
+  let pendingCancellations = new Map();
+  const cancellationFailures = new Set();
 
   const cancelRunDelivery = () => {
+    if (cancelledRun) return;
     cancelledRun = true;
     for (const key of observedPending) handledPending.add(key);
+    persistSessionCancellation(sessionId);
     generation += 1;
     stopWatcher();
     failAcks(new Error('Pi notification delivery cancelled'));
@@ -245,6 +251,41 @@ export default function squarePiExtension(pi) {
   // Pi owns PI_SESSION_ID and several SDK sessions may coexist in one process.
   const sessionEnv = (id) => ({ ...process.env, ...(id === undefined ? {} : { PI_SESSION_ID: id }) });
 
+  const persistSessionCancellation = (id) => {
+    if (id === undefined) return Promise.resolve();
+    const previous = pendingCancellations.get(id) ?? Promise.resolve();
+    let operation;
+    operation = previous.then(async () => {
+      const body = { channel: 'pi', session: id };
+      const env = sessionEnv(id);
+      const bindings = await projectSessionBindings({ body, env });
+      for (const binding of bindings) {
+        if (binding.seat === undefined) continue;
+        const square = await Square.at({ path: binding.location, env, body, participant: binding.participant });
+        try { await square.cancelDeliveries(binding.participant, binding.seat.generation); }
+        finally { await square.close(); }
+      }
+    }).then(() => {
+      cancellationFailures.delete(id);
+    }, () => {
+      cancellationFailures.add(id);
+    }).finally(() => {
+      if (pendingCancellations.get(id) === operation) pendingCancellations.delete(id);
+    });
+    pendingCancellations.set(id, operation);
+    return operation;
+  };
+
+  const waitForSessionCancellation = async (id) => {
+    if (id === undefined) return true;
+    while (true) {
+      const pending = pendingCancellations.get(id);
+      if (pending !== undefined) await pending;
+      if (pendingCancellations.get(id) !== pending) continue;
+      return !cancellationFailures.has(id);
+    }
+  };
+
   // Aborting releases native landing waits; retain cleanup until the observer
   // has closed, including when cancellation precedes a lifecycle hook.
   const stopWatcher = () => {
@@ -267,7 +308,7 @@ export default function squarePiExtension(pi) {
   const wake = async (token, signal) => {
     const boundSessionId = sessionId;
     const env = sessionEnv(boundSessionId);
-    const observer = await observeSessionPending(boundSessionId, env);
+    const observer = await observeSessionPending({ channel: 'pi', session: boundSessionId }, env);
     try {
       if (signal.aborted || token !== generation) return;
       const armDeferredRetry = () => {
@@ -321,7 +362,7 @@ export default function squarePiExtension(pi) {
         let keepDeferred = false;
         try {
           await presentPendingAtBoundary(
-            boundSessionId,
+            { channel: 'pi', session: boundSessionId },
             async (content) => {
               if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
               // One card for the human: a compact heading, expandable to the full body.
@@ -384,7 +425,8 @@ export default function squarePiExtension(pi) {
     sessionId = ctx.sessionManager.getSessionId();
     const token = generation;
     await stopped;
-    if (token !== generation) return;
+    await waitForSessionCancellation(sessionId);
+    if (token !== generation || cancellationFailures.has(sessionId)) return;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
     watcher = wake(token, signal).catch(() => undefined);
@@ -438,13 +480,9 @@ export default function squarePiExtension(pi) {
     currentRunSignal = undefined;
     if (!cancelledRun || sessionId === undefined) return;
     const token = generation;
-    // Cancel the entire pending batch, including entries not yet sent to Pi.
-    // This is local suppression, never evidence that the model saw the activity.
     await stopWatcher();
-    if (token !== generation || sessionId === undefined) return;
-    const cancelled = await sessionInbox(sessionId, sessionEnv(sessionId));
-    if (token !== generation || sessionId === undefined) return;
-    for (const key of inboxKeys(cancelled)) handledPending.add(key);
+    await waitForSessionCancellation(sessionId);
+    if (token !== generation || sessionId === undefined || cancellationFailures.has(sessionId)) return;
     cancelledRun = false;
     watcherAbort = new AbortController();
     watcher = wake(token, watcherAbort.signal).catch(() => undefined);
@@ -464,6 +502,7 @@ export default function squarePiExtension(pi) {
     activeTurn = undefined;
     currentRunSignal = undefined;
     await stopped;
+    await waitForSessionCancellation(endedId);
     if (endedId) await endSessionMemberships('pi', endedId, endedEnv).catch(() => undefined);
   });
 }

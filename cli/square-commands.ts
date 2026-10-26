@@ -1,15 +1,17 @@
-import { type BuildOptions, type HardCap, type RoomChangeAct, formatHardCap } from '../model.js';
+import { type BuildOptions, type HardCap, formatHardCap } from '../model.js';
 import type { Reach } from '../square-facade.js';
 import {
   commandPrefix,
   participantCommandPrefix,
-  participantIdentity,
-  renderRoomChangeText,
-  renderAmbientEvent,
   withPathOutput,
 } from '../presentation.js';
-import { Square, formatActivityId } from '../square-api.js';
-import { style } from '../tty-style.js';
+import {
+  renderJoinResult,
+  renderLifecycleResult,
+  renderListenerChange,
+  renderListeningResult,
+} from '../operation-presentation.js';
+import { Square } from '../square-api.js';
 import { executeExpression } from './express-presentation.js';
 import {
   type CommandContext, type CommandSpec, squareInput, withSquare, fail, parseBoundedLimit,
@@ -106,33 +108,7 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
   },
   async execute(intent, context) {
     const data = await withSquare(context, (square) => square.join(context.name, { takeover: intent.kick, last: intent.lastN, observe: true }));
-    const after = data.observation!;
-    const entry = after.entry;
-    const name = data.participant.name;
-    const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
-      now: after.now, preview: 200,
-      actNumber: event.kind === 'say' ? entry!.sayNumbers[event.index] : undefined,
-      perception: entry!.perceptions[event.index],
-    })).filter(Boolean).join('\n\n');
-    const fallback = after.automaticDeliveryAvailable ? [] : [
-      '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
-      '  the square has no way to call you — keep this catch open and stay within earshot',
-    ];
-    const entryLine = data.kind === 'joined' ? '● you stepped into the square'
-      : data.kind === 'reconnected' ? '● you are already in the square'
-        : `✓ you banished the original ${participantIdentity(name)} — the name is yours`;
-    const isRejoin = data.kind !== 'joined';
-    const entryScene = isRejoin || entry === undefined ? '' : entry.joinedBefore
-      ? '*the flagstones are where you left them. so is your shadow.*' : entry.scene;
-    return withPathOutput(after.location, [
-      entryLine, '',
-      "· carved into the fountain's edge: every word here lands on a real ear — speak when someone needs it.",
-      ...(entryScene === '' ? [] : ['', entryScene]),
-      ...(isRejoin || !entry?.joinContext ? [] : ['', style('dim', 'context'), entry.joinContext]),
-      ...(after.enrichmentUnavailable ? ['  · joined; recent activity and context are unavailable right now'] : []),
-      ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
-      ...fallback,
-    ].join('\n'), { participantCount: after.standingCount, held: after.held });
+    return renderJoinResult(data)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -190,20 +166,9 @@ function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<Li
   return {
     parse(argv, context) { return parseListener(argv, context, true); },
     async execute(intent, context) {
+      const squarePath = requireSquarePath(context);
       const data = await withSquare(context, async (square) => (await square.participant(context.name))[verb](intent.target!, { observe: true }));
-      const projection = data.observation!;
-      const actor = participantIdentity(projection.participant);
-      const target = participantIdentity(projection.target);
-      const action = data.activity !== null
-        ? verb === 'listen' ? `${actor} turns an ear toward ${target}`
-          : verb === 'ignore' ? `${actor} turns away from ${target}`
-            : `${actor} stops listening to ${target}`
-        : verb === 'listen' ? `${actor} already turns an ear toward ${target}`
-          : verb === 'ignore' ? `${actor} is not turned toward ${target}`
-            : `${actor} is not listening to ${target}`;
-      return withPathOutput(projection.location, `${data.activity === null ? '○' : '·'} ${action}`, {
-        participantCount: projection.standingCount, held: projection.held,
-      });
+      return renderListenerChange(squarePath, verb, data)!;
     },
     present: (result) => process.stdout.write(result),
   };
@@ -214,12 +179,9 @@ export const unlistenCommand = listenerCommand('unlisten');
 export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(_intent, context) {
+    const squarePath = requireSquarePath(context);
     const data = await withSquare(context, async (square) => (await square.participant(context.name)).listening({ observe: true }));
-    const projection = data.observation!;
-    const body = data.listening.length === 0
-      ? `○ ${participantIdentity(projection.participant!)} is not turned toward anyone`
-      : ['listening', ...data.listening.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
-    return withPathOutput(projection.location, body, { participantCount: projection.standingCount, held: projection.held });
+    return renderListeningResult(squarePath, data)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -232,11 +194,9 @@ export const doneCommand: CommandSpec<BodyIntent, string> = {
   async execute(intent, context) {
     const body = intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY)
       ? await readStdin() : intent.body;
+    const squarePath = requireSquarePath(context);
     const data = await withSquare(context, async (square) => (await square.participant(context.name)).done(body, { observe: true }));
-    const projection = data.observation!;
-    return withPathOutput(projection.location, `○ you stepped out — your footsteps fade · ${data.activity.id}`, {
-      participantCount: projection.standingCount, held: projection.held,
-    });
+    return renderLifecycleResult(squarePath, 'done', data)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -248,11 +208,9 @@ export const holdCommand: CommandSpec<BodyIntent, string> = {
   },
   async execute(intent, context) {
     const body = (await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim();
+    const squarePath = requireSquarePath(context);
     const result = await withSquare(context, async (square) => (await square.participant(context.name)).hold(body, { observe: true }));
-    const projection = result.observation!;
-    return withPathOutput(projection.location,
-      `· ${renderRoomChangeText(projection.activity as RoomChangeAct)} · ${formatActivityId(projection.activity.index)} · just now`,
-      { participantCount: projection.standingCount, held: projection.held });
+    return renderLifecycleResult(squarePath, 'hold', result)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -263,11 +221,9 @@ export const resumeCommand: CommandSpec<Record<string, never>, string> = {
     return {};
   },
   async execute(_intent, context) {
+    const squarePath = requireSquarePath(context);
     const result = await withSquare(context, async (square) => (await square.participant(context.name)).resume({ observe: true }));
-    const projection = result.observation!;
-    return withPathOutput(projection.location,
-      `✓ ${renderRoomChangeText(projection.activity as RoomChangeAct)} · ${formatActivityId(projection.activity.index)} · just now`,
-      { participantCount: projection.standingCount, held: projection.held });
+    return renderLifecycleResult(squarePath, 'resume', result)!;
   },
   present: (result) => process.stdout.write(result),
 };

@@ -132,7 +132,7 @@ console.log(JSON.stringify({ keys: Object.keys(agent), receipt: await agent.stee
   assert.deepEqual(claude.keys, ['harness', 'sessionId', 'steer'])
   assert.equal(claude.receipt.proof, 'written')
   for (let i = 0; i < 200 && frames.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.deepEqual(frames, [{ msgV: 1, msg_id: claude.receipt.id, type: 'user', session_id: 'external-claude',
+  assert.deepEqual(frames, [{ msgV: 1, msg_id: claude.receipt.id, uuid: claude.receipt.id, type: 'user', session_id: 'external-claude',
     message: { role: 'user', content: 'packed 字' }, priority: 'next' }])
 
   // Core types must remain suitable for later leaf adapters without SDK dependencies.

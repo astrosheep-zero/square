@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { pendingNotifications, leaseOwnsNotification } from '../dist/delivery.js';
 import { perceiveActivity } from '../dist/perception-projection.js';
 import { decideCatch } from '../dist/catch-decisions.js';
-import { pendingAtBoundary } from '../dist/square-projections.js';
+import { pendingAtBoundary } from '../dist/inbox.js';
 import { previewAttentionBody, renderAttentionPreview, renderSquareReminder } from '../dist/attention-presentation.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { readCursor } from '../dist/runtime.js';

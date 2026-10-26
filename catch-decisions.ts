@@ -53,7 +53,8 @@ export function selectCatchPage(facts: SquareRead, requestedName: string, option
 } {
   const participant = resolveKnownName(facts, requestedName);
   const limit = catchLimit(options.limit);
-  const filter: DirectedFilter = { unseenOnly: true, ...(options.from === undefined ? {} : { senders: options.from }), ...(options.mention === true ? { attentionOnly: true } : {}) };
+  const senders = options.from?.map((name) => resolveKnownName(facts, name));
+  const filter: DirectedFilter = { unseenOnly: true, ...(senders === undefined ? {} : { senders }), ...(options.mention === true ? { attentionOnly: true } : {}) };
   return { participant, indexes: facts.directed(participant, filter, { edge: 'oldest', limit }).items.map((item) => item.index), filter };
 }
 

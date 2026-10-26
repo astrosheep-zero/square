@@ -1,25 +1,9 @@
-import type { Act, HardCap, InboxNotification, StoredAct, WakeRoute, WakeRouteKind, WatchLease } from './model.js';
-export type {
-  ClaimResult,
-  EvidenceClaim,
-  EvidenceRelease,
-  EvidenceLookup,
-  EvidenceRecord,
-  NativeTokenLookup,
-  NativeTokenResult,
-  HostLedgerPort,
-  PresenceKey,
-  PresenceLookup,
-  PresenceRecord,
-  PresenceClaimResult,
-  PresenceChannel,
-  PresenceResult,
-} from './host-ledger.js';
-import type { HostLedgerPort } from './host-ledger.js';
+import type { Act, ActivityId, Body, HardCap, InboxNotification, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
 
 export type ActivityIndex = number;
 export interface SquareHeader {
   readonly revision: number;
+  readonly deliveryRevision: number;
   readonly nextActIndex: number;
   readonly lastActIndex: number;
   readonly hardCap: HardCap;
@@ -87,19 +71,65 @@ export interface LandedRecipient { readonly recipient: string; readonly route: D
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
-export interface RouteFact {
-  readonly location: string;
+export type SeatRef = Omit<Seat, 'wakeAddress'>;
+export type ArtifactWriteAuthority =
+  | { readonly kind: 'participant'; readonly seat: SeatRef }
+  | { readonly kind: 'join'; readonly participant: string; readonly body: Body; readonly wakeAddress?: WakeAddress }
+  | { readonly kind: 'takeover'; readonly participant: string; readonly body: Body; readonly expectedGeneration: ActivityId; readonly wakeAddress?: WakeAddress };
+export interface DeliveryEvidence {
   readonly participant: string;
-  readonly sessionId: string;
-  readonly channel: string;
-  readonly kind: WakeRouteKind;
-  readonly address: Readonly<Record<string, string>>;
-  readonly updatedAt: number;
-  readonly epoch?: JsonValue;
-  readonly extra: Readonly<Record<string, JsonValue>>;
+  readonly generation: ActivityId;
+  readonly activity: ActivityId;
+  readonly kind: 'wake' | 'presentation';
+  readonly outcome: 'dispatching' | 'accepted' | 'failed' | 'unknown' | 'released' | 'presented' | 'clipped';
+  readonly attemptN: number;
+  readonly at: number;
+  readonly expiresAt?: number;
+  readonly claimToken?: string;
+  readonly route?: WakeAddress;
+  readonly signature?: string;
+  readonly message?: string;
+  readonly diagnostic?: import('./model.js').JsonValue;
+  readonly correlation?: { readonly harness: 'claude' | 'opencode' | 'pi'; readonly token?: string; readonly messageId?: string; readonly payloadHash?: string };
+  readonly nativeObservations?: readonly { readonly eventId: string; readonly messageId: string; readonly state: 'held' | 'released' | 'dropped'; readonly reason?: string; readonly observedAt: number }[];
+}
+export interface DeliveryClaimInput {
+  readonly seat: SeatRef;
+  readonly activity: ActivityId;
+  readonly kind: 'wake' | 'presentation';
+  readonly route?: WakeAddress;
+  readonly at: number;
+  readonly leaseMs: number;
+  readonly claimToken: string;
+}
+export type DeliveryClaimResult =
+  | { readonly status: 'acquired'; readonly claimToken: string; readonly attemptN: number }
+  | { readonly status: 'busy' | 'terminal' | 'stale'; readonly evidence?: DeliveryEvidence };
+export interface DeliveryPreparation {
+  readonly seat: SeatRef;
+  readonly claimToken: string;
+  readonly correlation: NonNullable<DeliveryEvidence['correlation']>;
+}
+export interface DeliveryCompletion {
+  readonly seat: SeatRef;
+  readonly activity: ActivityId;
+  readonly claimToken: string;
+  readonly outcome: Exclude<DeliveryEvidence['outcome'], 'dispatching'>;
+  readonly at: number;
+  readonly signature?: string;
+  readonly message?: string;
+  readonly diagnostic?: import('./model.js').JsonValue;
+  readonly correlation?: DeliveryEvidence['correlation'];
 }
 /** Domain facts exist only during a synchronous artifact callback. Values are detached. */
 export interface SquareRead {
+  seat(requestedName: string): Seat | undefined;
+  seatsForBody(body: Body): readonly Seat[];
+  /** Latest completed coordinates only; never participant write authority. */
+  completedSeatsForBody(body: Body): readonly Seat[];
+  deliveryEvidence(participant: string, generation: ActivityId, activity?: ActivityId): readonly DeliveryEvidence[];
+  deliveryByToken(claimToken: string): DeliveryEvidence | undefined;
+  cancelledThrough(participant: string, generation: ActivityId): number | undefined;
   header(): SquareHeader;
   participant(requestedName: string): ParticipantFact | undefined;
   participantCounts(): ParticipantCounts;
@@ -126,22 +156,34 @@ export interface SquareRead {
   receiptFacts(requestedName: string, afterIndex: number): ReceiptFacts;
   receiptAssignments(): readonly ReceiptAssignment[];
   lease(requestedName: string): WatchLease | undefined;
-  routes(): readonly RouteFact[];
 }
 export interface SquareWrite extends SquareRead {
   land(activity: Act & { readonly at: number }): StoredAct;
+  updateWakeAddress(seat: SeatRef, wakeAddress?: WakeAddress): boolean;
+  cancelThrough(seat: SeatRef, through: ActivityIndex): boolean;
+  claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult;
+  prepareDelivery(input: DeliveryPreparation): boolean;
+  completeDelivery(input: DeliveryCompletion): boolean;
+  observeNativeDelivery(input: { readonly seat: SeatRef; readonly claimToken: string; readonly observation: NonNullable<DeliveryEvidence['nativeObservations']>[number] }): boolean;
   markSeen(requestedName: string, indexes: readonly ActivityIndex[], at: number): number;
-  putLease(requestedName: string, lease: WatchLease): boolean;
-  removeLease(requestedName: string, expectedLeaseId: string): boolean;
-  replaceRoutes(routes: readonly RouteFact[]): boolean;
+  putLease(requestedName: string, lease: WatchLease, generation?: ActivityId): boolean;
+  removeLease(requestedName: string, expectedLeaseId: string, generation?: ActivityId): boolean;
 }
 export interface SquareReadResult<R> { readonly value: R; readonly version: number }
 export interface SquareCommitResult<R> extends SquareReadResult<R> { readonly changed: boolean }
 /** Atomic artifact access; no framing, SQL or lazy transaction capability escapes. */
 export interface SquareArtifactPort {
   read<R>(select: (facts: SquareRead) => R, signal?: AbortSignal): Promise<SquareReadResult<R>>;
-  transact<R>(change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
+  /** Participant/domain writes must carry an explicit authority; no body-less mutation path exists. */
+  transactAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
   revision(signal?: AbortSignal): Promise<number>;
+  deliveryRevision(signal?: AbortSignal): Promise<number>;
+  deliveryChanged(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  claimDelivery(input: DeliveryClaimInput, signal?: AbortSignal): Promise<DeliveryClaimResult>;
+  prepareDelivery(input: DeliveryPreparation, signal?: AbortSignal): Promise<boolean>;
+  completeDelivery(input: DeliveryCompletion, signal?: AbortSignal): Promise<boolean>;
+  /** Persist suppression through a fixed index, or atomically capture the current artifact head. */
+  cancelDeliveries(seat: SeatRef, through?: ActivityIndex, signal?: AbortSignal): Promise<boolean>;
   changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -169,10 +211,12 @@ export interface WakeRequest {
   readonly participant: string;
   readonly activity: string;
   readonly actor: string;
-  /** Wake attempt token, also the opaque native correlation. */
+  readonly seat: SeatRef;
   readonly claimToken?: string;
   readonly attemptN?: number;
   readonly route: WakeRoute;
+  /** Artifact context for native adapters that must persist correlation before I/O. */
+  readonly artifact?: SquareArtifactPort;
 }
 
 /** Executor-neutral presentation capability; intentionally separate from wake transport. */
@@ -187,8 +231,9 @@ export interface SessionBindingProjection {
   readonly location: string;
   readonly participant: string;
   readonly sessionId: string;
-  readonly channel: import('./host-ledger.js').PresenceChannel;
+  readonly channel: string;
   readonly updatedAt: number;
+  readonly seat?: SeatRef;
 }
 
 /** Pending boundary presentation projected for one bound session. */
@@ -225,7 +270,6 @@ export interface DeliveryResult {
 
 export interface DeliverPendingInput {
   readonly artifact: SquareArtifactPort;
-  readonly hostLedger: HostLedgerPort;
   readonly transport: WakeTransportPort;
   readonly location: string;
   readonly timeoutMs?: number;
@@ -244,8 +288,9 @@ export interface PresentPendingInput {
   readonly participant: string;
   readonly activity: string | number;
   readonly sink: PresentationSinkPort;
-  readonly hostLedger?: HostLedgerPort;
-  readonly session?: string;
+  /** Captured artifact seat; used to fence both presentation and consumption. */
+  readonly seat?: SeatRef;
+  readonly generation?: ActivityId;
   readonly now?: number;
   readonly timeoutMs?: number;
   /** One hook deadline propagated into artifact reads/transitions so busy retries stay bounded. */

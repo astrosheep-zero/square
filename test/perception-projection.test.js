@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { decideCatch } from '../dist/catch-decisions.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { directedTo, perceiveActivity } from '../dist/perception-projection.js';
 import { readCursor } from '../dist/runtime.js';

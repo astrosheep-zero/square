@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { SqliteSquare } from './sqlite-square.js';
-import { SquareError } from './model.js';
+import { SquareError, validateBody } from './model.js';
 import { canonicalPath } from './canonical-path.js';
 import { STDIO_PROTOCOL_VERSION, STDIO_MAX_FRAME_BYTES, encodeError, identityVariables } from './square-stdio.js';
 import { parseSquareLocation } from './square-location.js';
@@ -62,7 +62,8 @@ export async function runSquareStdioServer(root: string): Promise<void> {
           if (value !== undefined && typeof value !== 'string') throw new SquareError('invalid_args', 'Invalid operation identity');
           env[key] = value ?? '';
         }
-        const input = { path: target, env, participant: params.participant };
+        const input = { path: target, env, body: params.body, participant: params.participant };
+        if (params.body !== undefined) validateBody(params.body);
         square = params.build === undefined ? await SqliteSquare.at(input, control, false)
           : await SqliteSquare.build({ ...params.build as SquareBuildInput, ...input }, control, false);
         location = parsed.uri;

@@ -10,25 +10,44 @@ import { Square } from '../dist/index.js';
 export const ROOT = path.resolve(import.meta.dirname, '..');
 export const CLI = path.join(ROOT, 'dist', 'square.js');
 export const TEST_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-state-'));
-export const TEST_REGISTRY = path.join(TEST_STATE, 'sessions.ndjsonl');
 
 test.after(() => fs.rmSync(TEST_STATE, { recursive: true, force: true }));
 
 let envSeq = 0;
 
-export function testEnv(overrides = {}) {
+const harnessCoordinates = [
+  'CLAUDE_CODE_SESSION_ID',
+  'CODEX_THREAD_ID',
+  'OPENCODE_SESSION_ID',
+  'PI_SESSION_ID',
+  'PASEO_AGENT_ID',
+];
+
+function cliEnvOverrides(args, overrides = {}) {
+  const squareIndex = args.findIndex((value) => value === '--location');
+  const squarePath = squareIndex >= 0 ? args[squareIndex + 1] : undefined;
+  const hasCoordinate = harnessCoordinates.some((variable) => Object.hasOwn(overrides, variable));
+  return {
+    ...(squarePath === undefined ? {} : hasCoordinate
+      ? Object.hasOwn(overrides, 'CODEX_THREAD_ID') ? {} : { CODEX_THREAD_ID: '' }
+      : { CODEX_THREAD_ID: path.resolve(squarePath) }),
+    ...overrides,
+  };
+}
+
+export function testEnv(overrides = {}, squarePath) {
   const id = `${process.pid}-${envSeq += 1}`;
+  const square = squarePath === undefined ? undefined : path.resolve(squarePath);
   const env = {
     ...process.env,
     NODE_NO_WARNINGS: '1',
     CLAUDE_CODE_SESSION_ID: '',
     CLAUDE_CODE_CHILD_SESSION: '',
-    CODEX_THREAD_ID: '',
+    CODEX_THREAD_ID: 'test-cli-session',
     OPENCODE_SESSION_ID: '',
     PI_SESSION_ID: '',
     PASEO_AGENT_ID: '',
-    SQUARE_REGISTRY: path.join(TEST_STATE, `sessions-${id}.ndjsonl`),
-    SQUARE_ROUTES: path.join(TEST_STATE, `routes-${id}.ndjsonl`),
+    SQUARE_INDEX: square === undefined ? path.join(TEST_STATE, `index-${id}.ndjsonl`) : `${square}.index.ndjsonl`,
     SQUARE_CODEX_BOUNDARIES: path.join(TEST_STATE, `codex-boundaries-${id}.json`),
     SQUARE_WATCH_POLL_MS: '1',
     SQUARE_WATCH_QUIET_MS: '2',
@@ -38,25 +57,30 @@ export function testEnv(overrides = {}) {
     SQUARE_DISABLE_PASEO_WAKE: '1',
     ...overrides,
   };
+  delete env.SQUARE_HOST_LEDGER_ROOT;
   delete env.FORCE_COLOR;
   env.NO_COLOR = '1';
   return env;
 }
 
 export function run(args, opts = {}) {
+  const squareIndex = args.findIndex((value) => value === '--location');
+  const squarePath = squareIndex >= 0 ? args[squareIndex + 1] : undefined;
   return spawnSync(process.execPath, [CLI, ...args], {
     cwd: opts.cwd ?? ROOT,
     input: opts.input,
     encoding: 'utf8',
-    env: testEnv(opts.env),
+    env: testEnv(cliEnvOverrides(args, opts.env), squarePath),
   });
 }
 
 export function runAsync(args, opts = {}) {
   return new Promise((resolve) => {
+    const squareIndex = args.findIndex((value) => value === '--location');
+    const squarePath = squareIndex >= 0 ? args[squareIndex + 1] : undefined;
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: opts.cwd ?? ROOT,
-      env: testEnv(opts.env),
+      env: testEnv(cliEnvOverrides(args, opts.env), squarePath),
     });
     let stdout = '';
     let stderr = '';
@@ -119,6 +143,8 @@ export async function persistSquare(fill, options = {}) {
     hardCap: 'hardCap' in options ? options.hardCap : 3,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
     clock: options.manualClock ? time.now : time.tick,
+    body: options.body ?? { channel: 'codex', session: path.resolve(file) },
+    env: testEnv({ CODEX_THREAD_ID: path.resolve(file) }, file),
   });
   try {
     await fill({ square, time, file });

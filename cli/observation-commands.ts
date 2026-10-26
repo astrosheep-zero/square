@@ -2,19 +2,22 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { runClaudeMod } from '../claude-mod.js';
 import { runCodexHookAsync } from '../codex-hook.js';
-import { isSquareError, sameName } from '../model.js';
-import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, HistoryObservation, StreamStart } from '../square-facade.js';
+import { isSquareError } from '../model.js';
+import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
 import {
   commandPrefix,
   participantIdentity,
-  renderGrepActivitiesView,
-  renderEventCli,
-  renderAmbientEventFacts,
-  renderPresenceAnchor,
   truncateChars,
   withPathOutput,
   quoteShell,
 } from '../presentation.js';
+import {
+  PARTICIPANTS_DEFAULT_LIMIT,
+  PARTICIPANTS_MAX_LIMIT,
+  renderHistoryResult,
+  renderParticipantsResult,
+  renderStatusResult,
+} from '../operation-presentation.js';
 import { style } from '../tty-style.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { discover, inbox, formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
@@ -34,9 +37,6 @@ import {
   requireValue,
   usage,
 } from './context.js';
-const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
-const PARTICIPANTS_DEFAULT_LIMIT = 20;
-const PARTICIPANTS_MAX_LIMIT = 100;
 const INBOX_DEFAULT_LIMIT = 20;
 const INBOX_MAX_LIMIT = 100;
 const INBOX_DISPLAY_CHARS = 160;
@@ -392,36 +392,6 @@ function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRec
   });
 }
 
-function renderHistoryProjection(
-  projection: HistoryObservation,
-  visible: HistoryObservation['visibleActivities'],
-  noTruncate: boolean,
-  squarePath: string,
-): string {
-  const shown = visible;
-  const preview = noTruncate || shown.length <= 1 ? undefined : 200;
-  const chunks: string[] = [];
-  // Presence anchors collect into one closing line instead of interrupting the page.
-  const anchored: string[] = [];
-  for (const activity of shown) {
-    const options = {
-      preview,
-      actNumber: activity.kind === 'say' ? projection.sayNumbers[activity.index] : undefined,
-    };
-    const rendered = renderEventCli(activity, options);
-    if (rendered !== '') chunks.push(rendered);
-    for (const participant of projection.presenceAnchors[activity.index] ?? []) {
-      if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
-    }
-  }
-  if (chunks.length === 0) return 'latest\n  ○ no public activity in this view';
-  if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && activity.body.length > preview)) {
-    chunks.push(`${commandPrefix(squarePath)} history --no-truncate`);
-  }
-  if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
-  return chunks.join('\n\n');
-}
-
 export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
   async execute(options, context) {
@@ -439,13 +409,11 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
     if (options.format !== undefined && options.format.length > 0) {
       return events.map((item) => renderFields(projection.sayNumbers, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
     }
-    const pattern = options.query.grep ?? options.query.fixed;
-    const output = pattern === undefined || pattern === ''
-      ? renderHistoryProjection(projection, projection.visibleActivities, options.noTruncate, squarePath)
-      : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, options.noTruncate, squarePath, pattern, options.query.fixed !== undefined, () => 'full');
-    const next = projection.continuation;
-    const continuation = next === undefined ? '' : `\n\n${historyContinuationCommand(options, squarePath, [`--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
-    return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
+    return renderHistoryResult(squarePath, outcome, {
+      query: options.query,
+      noTruncate: options.noTruncate,
+      continuationArgs: options.continuationArgs,
+    })!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -476,26 +444,7 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
     const data = await withSquare(context, (square) => square.participants({ observe: true }));
-    const projection = data.observation!;
-    const now = projection.now;
-    const participants = data.participants;
-    const lines = participants.slice(0, intent.limit).map((participant) => {
-      const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && projection.classificationByName[participant.name] === 'here' ? '●' : '○';
-      const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
-      const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-      return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
-    });
-    const tail = participants.length <= intent.limit
-      ? []
-      : [
-          style('dim', `  ○ ${lines.length} of ${participants.length} participants shown`),
-          ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
-            `${participantsLimitCommand(squarePath, participants.length)}`,
-          ] : []),
-        ];
-    return withPathOutput(squarePath, ['participants', ...lines, ...tail].join('\n'), {
-      participantCount: projection.standingCount,
-    });
+    return renderParticipantsResult(squarePath, data, intent.limit)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -505,84 +454,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
     const result = await withSquare(context, (square) => square.status({ viewer: context.name, observe: true }));
-    const presentation = result.observation!;
-    const participantsByName = new Map(result.participants.map((participant) => [participant.name, participant]));
-    const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
-    const lingering = presentation.lingeringCount;
-    const people: string[] = [];
-    if (result.activeCount === 0) {
-      people.push('  ○ nobody in the square');
-    } else {
-      if (orderedHere.length === 0) people.push('  ○ nobody here right now');
-      people.push(...orderedHere.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map((participant) => {
-        const glyph = participant.presence === 'watching'
-          ? '◎'
-          : participant.activityCount > 0 ? '●' : '○';
-        const summary = participant.presence === 'watching'
-          ? 'is nearby · catching'
-          : participant.activityCount > 0
-            ? `is nearby · ${formatRelativeTime(participant.lastActiveAt ?? result.now, result.now)}`
-            : `is nearby · quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, result.now)}`;
-        const showAttention = presentation.attentionNames.includes(participant.name);
-        const attention = !showAttention
-          ? ''
-          : participant.pendingMentionCount > 0
-            ? `${participant.pendingMentionCount} ${participant.pendingMentionCount === 1 ? 'mention' : 'mentions'} waiting`
-            : participant.unreadActivityCount > 0
-              ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
-              : 'caught up';
-        return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
-      }));
-      const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
-      if (orderedHere.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
-        people.push(`  ○ … ${orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more here`);
-      }
-      if (lingering > 0) people.push(`  ○ … ${lingering} lingering`);
-      if (unshown > 0) {
-        people.push(`${presentation.knownParticipantCount <= PARTICIPANTS_MAX_LIMIT
-          ? participantsLimitCommand(squarePath, presentation.knownParticipantCount)
-          : `${commandPrefix(squarePath)} participants`}`);
-      }
-    }
-    const cap = result.hardCap === null ? 'unlimited' : `${result.hardCap} each`;
-    const holdTime = result.hold?.at === undefined ? 'just now' : formatRelativeTime(result.hold.at, result.now);
-    const hold = result.hold !== null
-      ? `· ${result.hold.by === undefined ? 'someone' : participantIdentity(result.hold.by)} raised a hand${result.hold.reason ? ` — ${result.hold.reason}` : ''}${style('dim', ` · ${holdTime}`)}`
-      : undefined;
-    const visible = result.latestActivity === undefined
-      ? { text: '', bodyClipped: false }
-      : renderAmbientEventFacts(result.latestActivity, presentation.viewer, {
-          now: result.now,
-          preview: 200,
-          actNumber: presentation.latestActNumber,
-          perception: presentation.latestPerception,
-        });
-    const latest = visible.text === ''
-      ? [result.latestActivity === undefined
-        ? '  ○ no public activity yet'
-        : '  · the latest words were meant for other ears']
-      : [`  ${visible.text.replace(/\n/g, '\n  ')}`];
-    // Presence events after the latest public act: otherwise the roster can say someone is
-    // here while the latest line shows them leaving, with nothing to reconcile the two.
-    for (const { activity, rejoined } of presentation.joins) {
-      latest.push(style('dim', `  → ${participantIdentity(activity.actor!)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, result.now)}`));
-    }
-    if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
-    if (visible.bodyClipped && result.latestActivity !== undefined) {
-      latest.push(`${commandPrefix(squarePath)} history --at ${result.latestActivity.id} -C 2 --no-truncate`);
-    }
-    const counts = [
-      `${orderedHere.length} here`,
-      ...(lingering > 0 ? [`${lingering} lingering`] : []),
-      `${result.doneCount} done`,
-      `cap ${cap}`,
-      `throttle ${result.throttlePerMinute === undefined ? 'none' : `${result.throttlePerMinute}/min`}`,
-    ].join(' · ');
-    const output = [
-      style('dim', counts),
-      ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
-    ].join('\n');
-    return withPathOutput(squarePath, output, { participantCount: presentation.standingCount, held: presentation.held });
+    return renderStatusResult(squarePath, result)!;
   },
   present: (result) => process.stdout.write(result),
 };

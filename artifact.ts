@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { observeFileVersion } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
 import { InternalSquareError, SquareError, type BuildOptions } from './model.js';
-import type { SquareArtifactPort, SquareRead, SquareWrite } from './ports.js';
+import type { SquareArtifactPort, SquareRead, SquareWrite, ArtifactWriteAuthority, DeliveryClaimInput, DeliveryClaimResult } from './ports.js';
 import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
 import { APPLICATION_ID, CURRENT_USER_VERSION, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader, emptyRuntimeState, type SquareState } from './square-sqlite.js';
 
@@ -42,7 +42,7 @@ export function prepareSquareBuild(options: Omit<BuildOptions, 'force'>, snippet
         hardCap: options.hardCap ?? null,
         ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
         preamble: normalizedLines(snippet), warmup: normalizedLines(guides.join('\n\n')),
-        acts: [], routes: [], runtime: emptyRuntimeState(),
+        acts: [], runtime: emptyRuntimeState(),
     };
 }
 /** File build owns publication and CLI conflict semantics, not host resources. */
@@ -111,9 +111,10 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
-    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'routes', 'participantCounts',
+    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForBody', 'completedSeatsForBody',
+    'deliveryEvidence', 'deliveryByToken', 'cancelledThrough',
 ];
-const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'replaceRoutes'];
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery'];
 /** One connection, ordered operations, guarded synchronous transaction capabilities. */
 export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
     let database: DatabaseSync | undefined;
@@ -164,7 +165,7 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
         tail = result.then(() => undefined, () => undefined);
         return result;
     }
-    async function transaction<R>(callback: (facts: SquareRead | SquareWrite) => R, write: boolean, signal: AbortSignal) {
+    async function transaction<R>(callback: (facts: SquareRead | SquareWrite) => R, write: boolean, signal: AbortSignal, authority?: ArtifactWriteAuthority) {
         const db = await connection(signal);
         return inSqliteTransaction(db, write, () => validate(db), (header) => {
             const driver = createSqliteDriver(db), version = header.revision;
@@ -188,12 +189,14 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
             }
             const reads = Object.fromEntries(readMethods.map(name => [name, guard(driver[name] as (...args: never[]) => unknown)])) as unknown as SquareRead;
             const writes = Object.fromEntries(writeMethods.map(name => [name, guard(driver[name] as (...args: never[]) => unknown)])) as unknown as LandingWriter;
-            const facts = write ? wrapSquareWrite(reads, writes) : reads;
+            const gate = write ? wrapSquareWrite(reads, writes, authority!) : undefined;
+            const facts = gate?.facts ?? reads;
             let value: R;
             inCallback = true;
             try {
                 value = callback(facts);
                 synchronous(value);
+                if (!failed) gate?.complete();
             }
             finally {
                 inCallback = false;
@@ -202,13 +205,14 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
             if (failed)
                 throw failure;
             const changed = write && driver.changed;
-            if (changed) {
+            const deliveryChanged = write && driver.deliveryChanged;
+            if (changed || deliveryChanged) {
                 if (version === Number.MAX_SAFE_INTEGER)
                     throw invalidArtifact('revision cannot advance beyond the safe integer limit.');
-                db.prepare('UPDATE square_meta SET revision=? WHERE id=1').run(version + 1);
+                db.prepare('UPDATE square_meta SET revision=revision+?, delivery_revision=delivery_revision+? WHERE id=1').run(Number(changed), Number(deliveryChanged));
             }
             return {
-                value, version: version + Number(changed), changed
+                value, version: version + Number(changed), changed, deliveryChanged
             };
         }, signal);
     }
@@ -221,8 +225,38 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
             const { value, version } = await transaction(select, false, s);
             return { value, version };
         }, signal),
-        transact: (change, signal) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s), signal),
+        transactAs: (authority, change, signal) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s, authority), signal),
         revision,
+        async deliveryRevision(signal) {
+            return queue(async (s) => {
+                const db = await connection(s);
+                return inSqliteTransaction(db, false, () => validate(db), (header) => header.deliveryRevision, s);
+            }, signal);
+        },
+        async deliveryChanged(since, timeout, signal) {
+            const s = combined(signal), deadline = Date.now() + Math.max(0, timeout);
+            do {
+                if (await this.deliveryRevision(s) > since) return true;
+                if (Date.now() >= deadline) return false;
+                await sleep(Math.min(25, deadline - Date.now()), undefined, { signal: s });
+            } while (!closed);
+            return false;
+        },
+        async claimDelivery(input, signal) {
+            return (await this.transactAs({ kind: 'participant', seat: input.seat }, (facts) => (facts as SquareWrite & { claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult }).claimDelivery(input), signal)).value;
+        },
+        async prepareDelivery(input, signal) {
+            return (await this.transactAs({ kind: 'participant', seat: input.seat }, facts => facts.prepareDelivery(input), signal)).value;
+        },
+        async completeDelivery(input, signal) {
+            return (await this.transactAs({ kind: 'participant', seat: input.seat }, facts => facts.completeDelivery(input), signal)).value;
+        },
+        async cancelDeliveries(seat, through, signal) {
+            return (await this.transactAs({ kind: 'participant', seat }, facts => {
+                const boundary = through ?? facts.header().lastActIndex;
+                return boundary < 0 ? false : facts.cancelThrough(seat, boundary);
+            }, signal)).value;
+        },
         async changed(since, timeout, signal) {
             if (inCallback)
                 throw new TypeError('Square artifact operations cannot nest inside a callback.');
@@ -339,7 +373,7 @@ export async function writeSquareFile(location: string, state: SquareState, sign
             const revision = createSqliteDriver(db).header().revision;
             if (revision === Number.MAX_SAFE_INTEGER)
                 throw invalidArtifact('revision cannot advance beyond the safe integer limit.');
-            for (const table of ['landed_audience', 'attention', 'participants', 'routes', 'catch_leases', 'receipts', 'activities', 'square_meta'])
+            for (const table of ['landed_audience', 'attention', 'participants', 'delivery_cancellations', 'delivery_evidence', 'seats', 'catch_leases', 'receipts', 'activities', 'square_meta'])
                 db.exec(`DROP TABLE ${table}`);
             initializeSqlite(db, state, revision + 1);
         }, signal);
@@ -376,6 +410,21 @@ export function observeSquareRevision(location: string): Promise<import('./file-
             abort(signal);
             if (error instanceof InternalSquareError && error.code === 'not_found')
                 return null;
+            throw error;
+        }
+    });
+}
+export function readSquareDeliveryRevision(location: string, signal?: AbortSignal): Promise<number> {
+    return inspectFile(location, db => createSqliteDriver(db).header().deliveryRevision, signal);
+}
+export function observeSquareDeliveryRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+    return observeFileVersion(location, 'square-delivery-revision', async (file, signal) => {
+        try {
+            return await readSquareDeliveryRevision(file, signal);
+        }
+        catch (error) {
+            abort(signal);
+            if (error instanceof InternalSquareError && error.code === 'not_found') return null;
             throw error;
         }
     });

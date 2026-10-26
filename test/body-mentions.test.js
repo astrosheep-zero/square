@@ -168,7 +168,7 @@ test('body @names share the mention limit with --mention', async () => {
 });
 
 test('express through the library stores derived mention metadata', async () => {
-  const square = Square.inMemory({ markdown: 'context' });
+  const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'body-mentions' } });
   try {
     const alice = (await square.join('Alice')).participant;
     const bob = (await square.join('Bob')).participant;

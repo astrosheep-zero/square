@@ -12,7 +12,7 @@ function rejectsDoneBody(error) {
 }
 
 test('done rejects supplied bodies without changing participation or history', async () => {
-  const square = Square.inMemory({ markdown: 'context' });
+  const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'done-bodies' } });
   try {
     const alice = (await square.join('Alice')).participant;
     await square.join('Bob');
@@ -50,16 +50,17 @@ test('done remains bodyless after reaching the cap and while a hand is raised', 
 test('participant done rejects bodies before joining or rejoining', async () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const square = await Square.at({ path: file, env: { ...process.env } });
+  const square = await Square.at({ path: file, env: { ...process.env }, body: { channel: 'test', session: 'done-before-join' } });
   const app = await square.participant('Alice');
   for (const body of ['a message', ' \n', null, false]) {
     await assert.rejects(() => app.done(body), rejectsDoneBody);
     assert.deepEqual((await readSquareSnapshot(file)).state.acts, []);
   }
   await square.join('Alice');
-  await app.done();
+  const joined = await square.participant('Alice');
+  await joined.done();
   const before = (await readSquareSnapshot(file)).state.acts;
-  await assert.rejects(() => app.done('another message'), rejectsDoneBody);
+  await assert.rejects(() => joined.done('another message'), rejectsDoneBody);
   assert.deepEqual((await readSquareSnapshot(file)).state.acts, before);
   await square.close();
 });

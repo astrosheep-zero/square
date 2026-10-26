@@ -3,7 +3,8 @@ import os from 'node:os';
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 import { Square, squareClock } from '../square-api.js';
-import type { OperationControl } from '../square-facade.js';
+import { harnessSessionSources } from '../participant-identity.js';
+import type { Body, OperationControl } from '../square-facade.js';
 
 export interface CommandContext {
   cwd: string;
@@ -163,7 +164,26 @@ export function defaultContext(command: string, squarePath?: string, name?: stri
 }
 
 export function squareInput(context: CommandContext) {
-  return { cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name };
+  const { body, wakeAddress } = commandIdentity(context.env);
+  return { cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name,
+    ...(body === undefined ? {} : { body }), ...(wakeAddress === undefined ? {} : { wakeAddress }) };
+}
+
+function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: import('../model.js').WakeAddress } {
+  const coordinates = harnessSessionSources.flatMap(({ variable, channel, provider }) => {
+    const session = env[variable]?.trim();
+    return session === undefined || session === '' ? [] : [{ channel, session, native: provider !== undefined }];
+  });
+  const native = coordinates.filter((coordinate) => coordinate.native);
+  if (native.length > 1) throw new Error('Multiple harness execution coordinates are present; select one explicit body.');
+  const paseo = coordinates.find((coordinate) => coordinate.channel === 'paseo');
+  // A child marker without a reliable agent id must never inherit the parent or Paseo identity.
+  if (env.CLAUDE_CODE_CHILD_SESSION === '1') return {};
+  const selected = native[0] ?? paseo;
+  if (selected === undefined) return {};
+  const body: Body = { channel: selected.channel, session: selected.session };
+  const wakeAddress = paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
+  return { body, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }
 
 /** Adapter lifetime only; each callback uses the actual public resource API. */

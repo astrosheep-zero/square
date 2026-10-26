@@ -22,6 +22,7 @@ process.env.CLAUDE_CODE_CHILD_SESSION = '';
 process.env.CODEX_THREAD_ID = '';
 process.env.OPENCODE_SESSION_ID = '';
 process.env.PASEO_AGENT_ID = '';
-process.env.SQUARE_REGISTRY = path.join(state, 'sessions.ndjsonl');
+// The index is disposable test discovery state; artifact seats and evidence are authoritative.
+process.env.SQUARE_INDEX = path.join(state, 'index.ndjsonl');
 
 process.on('exit', () => fs.rmSync(state, { recursive: true, force: true }));

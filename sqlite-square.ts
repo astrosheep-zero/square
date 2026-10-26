@@ -1,22 +1,20 @@
 import { squareLocation, localSquareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { SquareError, isSquareError, nameKey, validateName, type WatchOptions } from './model.js';
+import { SquareError, isSquareError, nameKey, validateName, type Seat, type WatchOptions } from './model.js';
 import { resolveKnownName, validateDoneBody } from './decisions.js';
 import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
 import { expressHint } from './hints.js';
-import { assertLiveOwner } from './participant-host.js';
-import type { WakeTransportPort } from './ports.js';
+import { requireSeat } from './seats.js';
 import { buildMemorySquare, openSquare, closeOpenSquare, type OpenSquare } from './open-square.js';
-import { catchUp, done, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, unlisten, resume, retireEndedSessionRoutes, type ExpressCommittedResult } from './square-actions.js';
+import { catchUp, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, unlisten, resume, done, type ExpressCommittedResult, type OperationContext } from './square-actions.js';
 import { recoveryObservation, currentParticipant, entryPresentation, resolveParticipant, snapshot, queryStatus,
   queryParticipants, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ,
   HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
-import { hasAutomaticDeliveryIdentity, hostLedgerForEnv, localParticipantName, localSessionIdentities, presenceEpoch, readParticipantOwner } from './registry.js';
-import { projectSessionBindings } from './square-projections.js';
-import { sessionIdsFromEnvironment } from './participant-identity.js';
+import { projectSessionBindings } from './inbox.js';
+import { squareIndexPath } from './square-index.js';
 import { createDefaultWakeTransport } from './notifications.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createSquare, diagnoseSquareFile } from './artifact.js';
@@ -50,12 +48,10 @@ export function squareClock(env: NodeJS.ProcessEnv, clock?: () => number): () =>
     return clock;
   if (env.SQUARE_NOW_MS === undefined)
     return Date.now;
-  return () => {
-    const value = Number.parseInt(env.SQUARE_NOW_MS!, 10);
-    if (!Number.isFinite(value))
-      throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
-    return value;
-  };
+  const value = Number.parseInt(env.SQUARE_NOW_MS, 10);
+  if (!Number.isFinite(value))
+    throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
+  return () => value;
 }
 
 function failure(error: unknown, detail: OperationFailureDetail): Error {
@@ -64,16 +60,9 @@ function failure(error: unknown, detail: OperationFailureDetail): Error {
   return normalized;
 }
 
-function defaultTransport(square: OpenSquare): () => Promise<WakeTransportPort | undefined> {
-  let transport: Promise<WakeTransportPort | undefined> | undefined;
-  return () => transport ??= square.wakeTransport !== undefined ? Promise.resolve(square.wakeTransport)
-    : square.automaticDelivery === false || square.location === 'memory' || square.hostLedger === undefined ? Promise.resolve(undefined)
-      : createDefaultWakeTransport(square.hostLedger, square.clock, square.env).catch(() => undefined);
-}
-
 function observedContext(square: OpenSquare, standingCount: number, held: boolean, participant?: string, now = square.clock()): SquareObservation {
   return { location: square.location, standingCount, held, now,
-    ...(participant === undefined ? {} : { participant }), automaticDeliveryAvailable: square.automaticDelivery !== false && hasAutomaticDeliveryIdentity(square.env) };
+    ...(participant === undefined ? {} : { participant }), automaticDeliveryAvailable: square.automaticDelivery !== false && square.body !== undefined };
 }
 
 async function contextObservation(square: OpenSquare, participant?: string, control?: OperationControl): Promise<SquareObservation> {
@@ -81,30 +70,25 @@ async function contextObservation(square: OpenSquare, participant?: string, cont
   return observedContext(square, observation.standingCount, observation.held, participant);
 }
 
-async function prepareExpression(square: OpenSquare, requested: string, control?: OperationControl) {
-  try {
-    checkControl(control);
-    const result = await join(square, requested, control, { requireKnown: true });
-    return { participant: result.name, activity: result.activity };
-  }
-  catch (error) {
-    throw failure(error, { operation: 'express', subject: 'caller', participant: requested, expressEffect: 'unsent' });
-  }
+async function prepareExpression(square: OperationContext, requested: string, control?: OperationControl) {
+  checkControl(control);
+  const participant = (await square.artifact.read(facts => ({ name: resolveKnownName(facts, requested) }), control?.signal)).value.name;
+  const seat = requireSeat(square, participant);
+  return { participant, seat };
 }
 
 /** One retry/commit owner for every participant, regardless of transport. */
-async function landExpression(square: OpenSquare, name: string, body: string, options: ExpressOptions, transport: () => Promise<WakeTransportPort | undefined>, control?: OperationControl): Promise<ExpressCommittedResult & {
+async function landExpression(square: OperationContext, name: string, body: string, options: ExpressOptions, control?: OperationControl): Promise<ExpressCommittedResult & {
   readonly waited: boolean;
 }> {
   let effect: 'unsent' | 'unknown' = 'unsent';
   let waited = false, heldWaitedMs = 0;
   try {
-    const wakeTransport = await transport();
     while (true) {
       checkControl(control);
       try {
         effect = 'unknown';
-        return { ...await express({ ...square, wakeTransport }, name, body, options, control), waited };
+        return { ...await express(square, name, body, options, control), waited };
       }
       catch (error) {
         if (isSquareError(error) && error.facts?.activityUnsent === true)
@@ -145,7 +129,7 @@ interface CatchCompletion {
 }
 
 /** Leases, quiet waiting and receipt selection share one lifecycle. */
-async function catchOwned(square: OpenSquare, requested: string, options: CatchOptions = {}, control?: OperationControl): Promise<CatchCompletion> {
+async function catchOwned(square: OperationContext, requested: string, options: CatchOptions = {}, control?: OperationControl): Promise<CatchCompletion> {
   let name = requested, subject: 'caller' | 'filter' = 'caller';
   let leaseId: string | undefined;
   let waitStarted = false, replaced = false;
@@ -157,7 +141,9 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchO
     }, square.clock()))).value;
     const terminal = stop === 'empty-now' || stop === undefined ? selected.terminalStatus ?? stop : stop;
     if (leaseId !== undefined) {
-      await releaseWatchLease(square, name, leaseId).catch(() => undefined);
+      const seat = requireSeat(square, name);
+      const lease = leaseId;
+      await square.artifact.transactAs({ kind: 'participant', seat }, facts => facts.removeLease(name, lease, seat.generation)).catch(() => undefined);
       leaseId = undefined;
     }
     return { selection: selected, stop: terminal, waitStarted, replaced };
@@ -165,6 +151,8 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchO
   const empty = (stop: CatchStopStatus) => complete(undefined, stop);
   try {
     checkControl(control);
+    name = (await square.artifact.read(facts => ({ name: resolveKnownName(facts, requested) }), control?.signal)).value.name;
+    requireSeat(square, name);
     if (!Number.isFinite(idle) || idle < 0)
       throw new SquareError('invalid_args', 'Catch idle duration must be a non-negative number');
     if (options.id !== undefined && ['idle', 'from', 'mention', 'limit', 'replace'].some((key) => Object.hasOwn(options, key)))
@@ -183,8 +171,7 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchO
       const data = await catchUp(square, name, selection, control);
       return await complete(data, data.activities.length === 0 ? 'empty-now' : undefined);
     }
-    if (!await assertLiveOwner(square, name))
-      throw new SquareError('already_joined', `${name} already stands here — another session holds the name`);
+    requireSeat(square, name);
     const watch: WatchOptions = {
       ...(from === undefined ? {} : { participants: [...from] }), ...(options.mention ? { mention: name } : {}),
       ...(options.replace === undefined ? {} : { replace: options.replace }),
@@ -231,31 +218,34 @@ async function catchOwned(square: OpenSquare, requested: string, options: CatchO
   }
   finally {
     // An aborted request still releases its own lease, never its replacement's.
-    if (leaseId !== undefined)
-      await releaseWatchLease(square, name, leaseId).catch(() => undefined);
+    if (leaseId !== undefined) {
+      const seat = requireSeat(square, name);
+      await square.artifact.transactAs({ kind: 'participant', seat }, facts => facts.removeLease(name, leaseId!, seat.generation)).catch(() => undefined);
+    }
   }
 }
 
 class ParticipantHandle implements Participant {
-  constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly square: OpenSquare, private readonly transport: () => Promise<WakeTransportPort | undefined>) { }
+  constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly square: OpenSquare, private readonly seat?: Seat) { }
+  private context() { return { ...this.square, participantSeat: this.seat }; }
   async express(body: string, options: ExpressOptions = {}, control?: OperationControl): Promise<ExpressResult> {
-    const entry = await prepareExpression(this.square, this.name, control);
-    const name = entry.participant;
+    let name = this.name;
     let result: (ExpressCommittedResult & {
       readonly waited: boolean;
     }) | undefined;
     try {
+      const { participant: preparedName } = await prepareExpression(this.context(), this.name, control);
+      name = preparedName;
       const feed = !options.observe ? undefined : (await this.square.artifact.read((facts) => {
         const pendingPublic = directedSuffix(facts, name);
         return { pendingPublic, sayNumbers: facts.sayOrdinals(pendingPublic.map((item) => item.index)),
           perceptions: Object.fromEntries(pendingPublic.map((item) => [item.index, 'full' as const])) };
       }, control?.signal)).value;
-      result = await landExpression(this.square, name, body, options, this.transport, control);
+      result = await landExpression(this.context(), name, body, options, control);
       const { observation: committed, ...data } = result;
       const hint = expressHint(committed.ownActivityCount);
       return { ...data, ...(hint === undefined ? {} : { hint }), ...(feed === undefined ? {} : { observation: {
             ...observedContext(this.square, committed.standingCount, committed.held, name, committed.now), ...committed, ...feed, participant: name,
-            ...(entry.activity === null ? {} : { reentry: entry.activity }),
           } }) };
     }
     catch (error) {
@@ -266,8 +256,8 @@ class ParticipantHandle implements Participant {
     }
   }
   private async listener(verb: 'listen' | 'ignore' | 'unlisten', target: string, options: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult> {
-    const name = (await resolveParticipant(this.square, this.name, control)).name;
-    const { observation: committed, ...result } = await (verb === 'listen' ? listen : verb === 'ignore' ? ignore : unlisten)(this.square, name, target, control);
+    const name = (await resolveParticipant(this.context(), this.name, control)).name;
+    const { observation: committed, ...result } = await (verb === 'listen' ? listen : verb === 'ignore' ? ignore : unlisten)(this.context(), name, target, control);
     return { ...result, ...(!options.observe ? {} : { observation: {
           ...observedContext(this.square, committed.standingCount, committed.held, name, committed.now),
           participant: name, requestedTarget: target, target: result.activity?.target ?? target,
@@ -282,7 +272,7 @@ class ParticipantHandle implements Participant {
       ...(!options.observe ? {} : { observation: await contextObservation(this.square, name, control) }) };
   }
   async catch(options: CatchOptions = {}, control?: OperationControl): Promise<CatchResult> {
-    const result = await catchOwned(this.square, this.name, options, control), view = result.selection, stop = result.stop;
+    const result = await catchOwned(this.context(), this.name, options, control), view = result.selection, stop = result.stop;
     const presence = !options.observe ? undefined : await catchPresence(this.square, control).catch(() => undefined);
     const status = stop === 'already-active' || stop === 'replaced' || stop === 'capped' || stop === 'quorum' ? stop : undefined;
     return { activities: view.activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' as const })),
@@ -297,13 +287,10 @@ class ParticipantHandle implements Participant {
   private async lifecycle(verb: 'done' | 'hold' | 'resume', body: string | undefined, options: ObservationOptions, control?: OperationControl): Promise<LifecycleResult> {
     if (verb === 'done')
       validateDoneBody(body);
-    const identity = localSessionIdentities(this.square.env ?? {})[0];
-    const owner = verb !== 'done' || identity === undefined || this.square.hostLedger === undefined ? undefined
-      : await readParticipantOwner(this.square.location, this.name, this.square.hostLedger);
-    const fenced = identity !== undefined && owner?.session === identity.sessionId && presenceEpoch(owner) > 0;
-    const name = fenced ? this.name : (await join(this.square, this.name, control)).name;
-    const result = verb === 'done' ? await done(this.square, name, body ?? '', fenced ? { expectedEpoch: presenceEpoch(owner) } : {}, control)
-      : verb === 'hold' ? await hold(this.square, name, body, control) : await resume(this.square, name, control);
+    const context = this.context();
+    const name = (await resolveParticipant(context, this.name, control)).name;
+    const result = verb === 'done' ? await done(context, name, body ?? '', {}, control)
+      : verb === 'hold' ? await hold(context, name, body, control) : await resume(context, name, control);
     const { observation: committed, ...receipt } = result;
     return { ...receipt, ...(!options.observe ? {} : { observation: {
           ...observedContext(this.square, committed.standingCount, committed.held, name, committed.now), ...committed,
@@ -316,11 +303,15 @@ class ParticipantHandle implements Participant {
 
 /** One concrete square resource. Request handles may borrow a server-owned connection. */
 export class SqliteSquare {
-  private readonly transport: () => Promise<WakeTransportPort | undefined>;
-  private constructor(readonly location: string, private readonly square: OpenSquare, private readonly defaultParticipant?: string) { this.transport = defaultTransport(square); }
+  private constructor(readonly location: string, private readonly square: OpenSquare, private readonly defaultParticipant?: string) { }
   static async at(input: SquareAtInput, control?: OperationControl, automaticDelivery = true): Promise<SqliteSquare> {
     const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
-    return new SqliteSquare(location, await openSquare(location, { ...input, env, automaticDelivery, clock: squareClock(env, input.clock), artifact: input.resources?.artifact(location) }, control), input.participant);
+    const clock = squareClock(env, input.clock);
+    const wakeTransport = input.wakeTransport ?? (automaticDelivery
+      ? await createDefaultWakeTransport(clock, env).catch(() => undefined) : undefined);
+    return new SqliteSquare(location, await openSquare(location, { clock, wakeTransport, automaticDelivery,
+      indexPath: squareIndexPath(env), body: input.body, wakeAddress: input.wakeAddress,
+      signal: control?.signal, artifact: input.resources?.artifact(location) }, control), input.participant);
   }
   static async build(input: SquareBuildInput, control?: OperationControl, automaticDelivery = true): Promise<SqliteSquare> {
     checkControl(control);
@@ -332,18 +323,22 @@ export class SqliteSquare {
   }
   static inMemory(input: Omit<SquareBuildInput, 'path' | 'resources'>): SqliteSquare {
     const env = { ...(input.env ?? process.env) };
-    return new SqliteSquare('memory', buildMemorySquare({ ...input, env, clock: squareClock(env, input.clock) }), input.participant);
+    const { env: _env, ...options } = input;
+    return new SqliteSquare('memory', buildMemorySquare({ ...options, clock: squareClock(env, input.clock) }), input.participant);
   }
-  private handle(name: string): Participant { return new ParticipantHandle(name, this, this.square, this.transport); }
+  private handle(name: string, seat?: Seat): Participant { return new ParticipantHandle(name, this, this.square, seat); }
   async participant(requested?: string): Promise<Participant> {
-    const selected = requested ?? this.defaultParticipant ?? this.square.env?.SQUARE_PARTICIPANT_NAME;
-    if (requested !== undefined || this.defaultParticipant !== undefined || selected?.trim()) {
+    const selected = requested ?? this.defaultParticipant;
+    if (requested !== undefined || this.defaultParticipant !== undefined) {
       validateName(selected!);
-      return this.handle(selected!);
+      const seat = this.square.body === undefined ? undefined : (await this.square.artifact.read(facts => facts.seat(selected!))).value;
+      return this.handle(selected!, seat);
     }
-    const discovered = this.square.hostLedger === undefined ? undefined : await localParticipantName(this.location, this.square.hostLedger, this.square.env);
-    if (discovered !== undefined)
-      return this.handle(discovered);
+    if (this.square.body !== undefined) {
+      const names = (await this.square.artifact.read((facts) => facts.seatsForBody(this.square.body!))).value;
+      if (names.length === 1) return this.handle(names[0].participant, names[0]);
+      if (names.length > 1) throw new SquareError('invalid_args', 'Square needs an explicit participant name: this body holds multiple names');
+    }
     throw new SquareError('invalid_args', 'Square needs one unambiguous participant name');
   }
   async join(requested?: string, options: JoinOptions = {}, control?: OperationControl): Promise<JoinResult> {
@@ -354,28 +349,27 @@ export class SqliteSquare {
       const last = options.last ?? HISTORY_DEFAULT_LIMIT;
       if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT)
         throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
-      let committed: {
-        standingCount: number;
-        held: boolean;
-        now: number;
-      };
+      let seat: Seat;
+      let committed: { readonly standingCount: number; readonly held: boolean; readonly now: number };
       let result: Omit<JoinResult, 'participant'> & {
         participant: string;
       };
       if (options.takeover && await currentParticipant(this.square, name, control) !== undefined) {
         const taken = await takeover(this.square, name, control);
         result = { participant: taken.name, activity: taken.activities.at(-1) ?? null, kind: 'taken-over', participantCount: taken.participantCount };
+        seat = taken.seat;
         committed = taken.observation;
       }
       else {
         const joined = await join(this.square, name, control);
         result = { participant: joined.name, activity: joined.activity, kind: joined.reconnected ? 'reconnected' : 'joined', participantCount: joined.participantCount };
+        seat = joined.seat;
         committed = joined.observation;
       }
       const entry = !options.observe ? undefined : await entryPresentation(this.square, result.participant, last, control).catch(() => undefined);
-      return { ...result, participant: this.handle(result.participant), ...(!options.observe ? {} : {
+      return { ...result, participant: this.handle(result.participant, seat), ...(!options.observe ? {} : {
           observation: {
-            ...observedContext(this.square, committed.standingCount, committed.held, result.participant, committed.now),
+          ...observedContext(this.square, committed.standingCount, committed.held, result.participant, committed.now),
             ...(entry === undefined ? { enrichmentUnavailable: true as const } : { entry }),
           },
         }) };
@@ -390,7 +384,7 @@ export class SqliteSquare {
     readonly participant?: Participant;
   }> {
     const result = await implicitJoin(this.square, name, control);
-    return { state: result.state, ...(result.state === 'done' ? {} : { participant: this.handle(result.name) }) };
+    return { state: result.state, ...(result.state === 'done' ? {} : { participant: this.handle(result.name, result.seat) }) };
   }
   snapshot(control?: OperationControl) { return snapshot(this.square, control); }
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
@@ -428,12 +422,12 @@ export class SqliteSquare {
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
     const viewer = !options.observe ? '' : options.viewer ?? (await this.participant().catch(() => undefined))?.name ?? '';
     return (await this.square.artifact.read((facts) => queryStatus(facts, {
-      location: this.location, now: this.square.clock(), automaticDeliveryAvailable: this.square.automaticDelivery !== false && hasAutomaticDeliveryIdentity(this.square.env),
+      location: this.location, now: this.square.clock(), automaticDeliveryAvailable: this.square.automaticDelivery !== false && this.square.body !== undefined,
     }, viewer, options.observe === true), control?.signal)).value;
   }
   async participants(options: ObservationOptions = {}, control?: OperationControl): Promise<ParticipantsResult> {
     return (await this.square.artifact.read((facts) => queryParticipants(facts, {
-      location: this.location, now: this.square.clock(), automaticDeliveryAvailable: this.square.automaticDelivery !== false && hasAutomaticDeliveryIdentity(this.square.env),
+      location: this.location, now: this.square.clock(), automaticDeliveryAvailable: this.square.automaticDelivery !== false && this.square.body !== undefined,
     }, options.observe === true), control?.signal)).value;
   }
   async recovery(requested?: string, control?: OperationControl): Promise<RecoveryResult> {
@@ -442,42 +436,47 @@ export class SqliteSquare {
     return facts ?? await contextObservation(this.square, name, control);
   }
   stream(options: StreamOptions, control?: OperationControl) { return streamSquare(this.location, options, control, this.square); }
-  async recognize(env: NodeJS.ProcessEnv): Promise<Participant | null> {
-    if (this.square.hostLedger === undefined)
-      return null;
-    const candidates = (await Promise.all(sessionIdsFromEnvironment(env).map((sessionId) => projectSessionBindings({ hostLedger: this.square.hostLedger!, location: this.location, sessionId })))).flat();
-    if (candidates.length !== 1)
-      return null;
-    const name = await currentParticipant(this.square, candidates[0].participant);
-    return name === undefined ? null : this.handle(name);
+  async recognize(): Promise<readonly Participant[]> {
+    if (this.square.body === undefined) return [];
+    const candidates = (await this.square.artifact.read((facts) => facts.seatsForBody(this.square.body!))).value;
+    return candidates.map(seat => this.handle(seat.participant, seat));
   }
   close(): Promise<void> { return closeOpenSquare(this.square); }
-  endOwnedSession(name: string, sessionId: string, expectedEpoch?: number) { return endOwnedSession(this.square, name, sessionId, expectedEpoch); }
-  retireEndedSessionRoutes(sessionId: string): Promise<void> { return retireEndedSessionRoutes(this.square, sessionId); }
+  async cancelDeliveries(name: string, expectedGeneration: import('./square-core.js').ActivityId): Promise<boolean> {
+    const body = this.square.body;
+    if (body === undefined) return false;
+    const seat = (await this.square.artifact.read((facts) => facts.seat(name))).value;
+    if (seat === undefined || seat.generation !== expectedGeneration
+      || seat.body.channel !== body.channel || seat.body.session !== body.session || seat.body.agent !== body.agent) return false;
+    return this.square.artifact.cancelDeliveries({ participant: seat.participant, body: seat.body, generation: seat.generation });
+  }
+  endOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: import('./model.js').Body) { return endOwnedSession(this.square, name, sessionId, expectedGeneration, body); }
 }
 
 export function diagnoseSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return diagnoseSquareFile(localSquareLocation(input)); }
-export function migrateSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return migrateSquareFile(localSquareLocation(input), control?.signal); }
+export function migrateSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); const env = input.env ?? process.env; return migrateSquareFile(localSquareLocation(input), control?.signal, env); }
 export function discover(input: SquareAtInput, options: DiscoveryOptions = {}, control?: OperationControl) {
   if (input.path !== undefined || (input.env ?? process.env).SQUARE_LOCATION) localSquareLocation(input);
   const env = { ...(input.env ?? process.env) };
-  return discoverSquares(input.cwd ?? process.cwd(), options, control, { ...input, env, clock: squareClock(env, input.clock) });
+  return discoverSquares(input.cwd ?? process.cwd(), options, control, { clock: squareClock(env, input.clock) });
 }
-export async function inbox(input: SquareAtInput, sessionId: string, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
+export async function inbox(input: SquareAtInput, identity: string | import('./model.js').Body, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
   checkControl(control);
-  const env = { ...(input.env ?? process.env) }, hostLedger = input.hostLedger ?? hostLedgerForEnv(env), limit = options.limit ?? 20;
+  const env = { ...(input.env ?? process.env) }, limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new SquareError('invalid_args', 'Inbox limit must be between 1 and 100');
+  const query = typeof identity === 'string' ? { sessionId: identity, env } : { body: identity, env };
   const rows: {
     name: string;
     squarePath: string;
     pending: number;
   }[] = [];
-  for (const binding of await projectSessionBindings({ hostLedger, sessionId })) {
+  for (const binding of await projectSessionBindings(query)) {
     checkControl(control);
     let square: OpenSquare | undefined;
     try {
-      square = await openSquare(binding.location, { ...input, env, hostLedger, clock: squareClock(env, input.clock) }, control);
+      square = await openSquare(binding.location, { clock: squareClock(env, input.clock),
+        body: binding.seat?.body, signal: control?.signal }, control);
       const row = (await square.artifact.read((facts) => {
         const participant = facts.participant(binding.participant);
         return !participant?.joined ? undefined : { name: participant.name, squarePath: binding.location,

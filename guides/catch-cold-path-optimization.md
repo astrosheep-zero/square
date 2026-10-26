@@ -9,7 +9,7 @@ The comparison is against `90752ba`, the current production implementation plus 
 ## Two changes
 
 - `model.ts`: try the existing Unicode text-name grammar before the full RGI emoji grammar. It accepts letters, numbers, marks excluding variation selectors, hyphens, underscores, and nonempty slash-separated segments. It is an exact subset of the original grammar; the original full matcher remains the fallback. `NAME_GRAPHEME_SOURCE`, also used by mention scanning, retains its original value.
-- `participant-host.ts`: before discovering installed adapters, use the existing route resolver to check whether any candidate exists. No host ledger or no possible candidate means no route, without importing adapters that cannot be used. Real candidates still pass through the real capability check. Paseo precedence, Codex fallback, harness identity, and publication failure isolation remain unchanged.
+- `participant-host.ts`: before discovering installed adapters, use the existing route resolver to check whether any candidate exists. No host ledger or no possible candidate means no route, without importing adapters that cannot be used. Real candidates still pass through the real capability check. These measurements predate the [native-first route policy](claude-native.md#native-first-routing-and-policy-holds); the optimization itself did not change route priority, harness identity, or publication failure isolation.
 
 CPU sampling of the baseline pointed to cold name validation inside reader transactions and optional adapter module loading during catch. The changes remove that work rather than prewarm it or move it outside measurement. The sampling and this combined experiment do not establish each change's individual contribution.
 

@@ -16,7 +16,7 @@ test('delivery evidence writers and health labels stay inside their owning modul
     if (name === 'delivery-health.ts') continue;
     for (const label of labels) assert.equal(source.includes(label), false, `${label} leaked into ${name}`);
   }
-  for (const name of ['notifications.ts', 'routes.ts', 'wake-attempts.ts']) {
+  for (const name of ['notifications.ts']) {
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, name), 'utf8'), /delivery-health/);
   }
 

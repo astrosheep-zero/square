@@ -1,22 +1,19 @@
-import { hostLedgerRoot } from './host-ledger-root.js';
 import path from 'node:path';
 import fs from 'node:fs';
+
+import { indexedSquareEntries } from './square-index.js';
 
 import {
   type WakeAdapter,
 } from './delivery.js';
 import { SquareError } from './model.js';
 import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
-import type { OpenSquare } from './open-square.js';
-import { deliverPending, sweepPending } from './delivery-operations.js';
-import { projectWakeEvidence, type WakeCurrentness } from './wake-eligibility.js';
+import { openSquare, closeOpenSquare } from './open-square.js';
+import { deliverPending, sweepPending, wakeRequestCurrentness } from './delivery-operations.js';
 import { pendingHead } from './delivery.js';
 import { parseActivityId } from './square-core.js';
 import { canonicalPath } from './canonical-path.js';
 import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
 
 export type { PlannedNotification } from './delivery.js';
 
@@ -54,7 +51,6 @@ export async function defaultWakeAdapters(env: NodeJS.ProcessEnv = process.env):
 }
 
 export async function createDefaultWakeTransport(
-  hostLedger: import('./host-ledger.js').HostLedgerPort,
   clock: () => number,
   env: NodeJS.ProcessEnv = process.env,
   suppliedAdapters?: readonly WakeAdapter[],
@@ -63,36 +59,21 @@ export async function createDefaultWakeTransport(
   const { createClaudeWakeTransport } = await import('./claude-delivery.js');
   return createWakeTransport(
     suppliedAdapters === undefined && env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,
-    hostLedger,
     clock,
-    { 'claude-native': createClaudeWakeTransport(hostLedger, env) },
+    { 'claude-native': createClaudeWakeTransport(env) },
   );
 }
 
-async function observeWakeRequest(request: WakeRequest, hostLedger: import('./host-ledger.js').HostLedgerPort, now: number): Promise<WakeCurrentness & { readonly observationAvailable: boolean }> {
-  let square: OpenSquare | undefined;
+async function observeWakeRequest(request: WakeRequest, now: number): Promise<{ readonly current: boolean; readonly observationAvailable: boolean }> {
   try {
-    const location = await canonicalPath(request.location);
-    square = await openSquare(location, { hostLedger });
-    const { value: facts } = await square.artifact.read((facts) => {
-      const index = parseActivityId(request.activity);
-      const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
-      return { routes: facts.routes(), pending: head === undefined ? [] : [head] };
-    });
-    const eligibility = await projectWakeEvidence({ ...facts, hostLedger, location, now });
-    return { ...eligibility.currentness({ ...request, location }), observationAvailable: true };
-  } catch {
-    return { current: false, activityPending: false, sessionBound: false, routePublished: false,
-      selectedOwner: false, cancelled: false, presented: false, observationAvailable: false };
-  } finally {
-    if (square !== undefined) await closeOpenSquare(square);
-  }
+    if (request.artifact === undefined) return { current: false, observationAvailable: false };
+    return { current: (await wakeRequestCurrentness(request.artifact, request, now)).current, observationAvailable: true };
+  } catch { return { current: false, observationAvailable: false }; }
 }
 
 
 export function createWakeTransport(
   adapters: readonly WakeAdapter[],
-  hostLedger: import('./host-ledger.js').HostLedgerPort,
   clock: () => number,
   nativePorts: Readonly<Partial<Record<import('./model.js').WakeRouteKind, WakeTransportPort>>> = {},
 ): WakeTransportPort {
@@ -111,7 +92,7 @@ export function createWakeTransport(
     attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
       let revalidation: Awaited<ReturnType<typeof observeWakeRequest>> | undefined;
       const finalGate = beforeSend ?? (async () => {
-        revalidation = await observeWakeRequest(request, hostLedger, clock());
+        revalidation = await observeWakeRequest(request, clock());
         return revalidation.current;
       });
       const native = nativePorts[request.route.kind];
@@ -120,21 +101,18 @@ export function createWakeTransport(
       if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
       try {
         const location = await canonicalPath(request.location);
-        const square = await openSquare(location, { hostLedger }).catch(() => undefined);
-        if (square === undefined) return { outcome: 'not-capable', diagnostic: `Square is unavailable at ${location}` };
+        if (request.artifact === undefined) return { outcome: 'not-capable', diagnostic: 'Artifact context is missing.' };
         let payload: string | undefined;
-        try {
-          const index = parseActivityId(request.activity);
-          payload = (await square.artifact.read((facts) => {
-            const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
-            const item = index === undefined ? undefined : facts.activity(index);
-            if (!head || item?.kind !== 'say') return undefined;
-            return renderSquareReminder([renderAttentionPreview({
-              squarePath: location, recipient: request.participant, actIndex: item.index,
-              actor: item.actor, route: head.route, body: item.body,
-            })]);
-          })).value;
-        } finally { await closeOpenSquare(square); }
+        const index = parseActivityId(request.activity);
+        payload = (await request.artifact.read((facts) => {
+          const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
+          const item = index === undefined ? undefined : facts.activity(index);
+          if (!head || item?.kind !== 'say') return undefined;
+          return renderSquareReminder([renderAttentionPreview({
+            squarePath: location, recipient: request.participant, actIndex: item.index,
+            actor: item.actor, route: head.route, body: item.body,
+          })]);
+        })).value;
         if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
         const result = await adapter.dispatch(request.route.address, payload, finalGate, timeoutMs, request);
         if (result.outcome !== 'gate-rejected') return result;
@@ -160,15 +138,11 @@ export function createWakeTransport(
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const ledgerRoot = hostLedgerRoot(env);
-  const hostLedger = createHostLedgerPort({
-    rootPath: ledgerRoot,
-  });
-  const square = await openSquare(squarePath, { clock: now, hostLedger, env });
+  const square = await openSquare(squarePath, { clock: now });
   try {
-    const transport = await createDefaultWakeTransport(hostLedger, now, env, opts.adapters);
+    const transport = await createDefaultWakeTransport(now, env, opts.adapters);
     try {
-      return await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
+      return await deliverPending({ artifact: square.artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch {
       return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
     }
@@ -187,10 +161,7 @@ export async function sweepPrivilegedPending(
 ): Promise<void> {
   const remainingMs = () => Math.max(0, deadline - Date.now());
   if (remainingMs() === 0 || signal?.aborted) return;
-  const root = hostLedgerRoot(env);
-  const hostLedger = createHostLedgerPort({ rootPath: root });
-  let indexed: readonly import('./host-ledger.js').PresenceRecord[] = [];
-  try { indexed = await hostLedger.listPresence({ now: Date.now() }); } catch { /* capability is best effort */ }
+  const indexed = await indexedSquareEntries({}, env).catch(() => []);
   const paths = new Set(indexed.map((binding) => binding.location));
   try {
     for (const entry of await fs.promises.readdir(path.join(cwd, '.square'))) {
@@ -198,22 +169,22 @@ export async function sweepPrivilegedPending(
     }
   } catch { /* no local square directory */ }
   if (remainingMs() === 0 || signal?.aborted) return;
-  const transport = await createDefaultWakeTransport(hostLedger, Date.now, env, suppliedAdapters);
+  const transport = await createDefaultWakeTransport(Date.now, env, suppliedAdapters);
   for (const squarePath of paths) {
     if (remainingMs() === 0 || signal?.aborted) break;
     try {
-      const square = await openSquare(squarePath, { hostLedger, env, signal });
+      const square = await openSquare(squarePath, { signal });
       try {
         if (remainingMs() === 0 || signal?.aborted) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
-        const selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
+        const selected = await sweepPending({ artifact: square.artifact, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
         for (const actIndex of selected) {
           const remaining = remainingMs();
           if (remaining === 0 || signal?.aborted) break;
           const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
           const timeoutMs = Math.max(1, Math.min(Number.isFinite(configured) && configured > 0 ? configured : 5000, remaining));
-          await deliverPending({ artifact: square.artifact, hostLedger, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
+          await deliverPending({ artifact: square.artifact, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
         }
       } finally { await closeOpenSquare(square); }
     } catch { /* stale index entries are ignored by the hook */ }
@@ -235,11 +206,10 @@ export async function sweepPendingNotifications(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const hostLedger = createHostLedgerPort({ rootPath: hostLedgerRoot(env) });
-  const square = await openSquare(squarePath, { clock: () => now, hostLedger, env });
+  const square = await openSquare(squarePath, { clock: () => now });
   let selected: number[];
   try {
-    selected = await sweepPending({ artifact: square.artifact, hostLedger, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
+    selected = await sweepPending({ artifact: square.artifact, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
   } finally {
     await closeOpenSquare(square);
   }

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { Square } from '@astrosheep/square';
 import type { Activity, ActivityId, Participant, StreamRecord } from '@astrosheep/square';
 import type { BridgeSettings } from './config.js';
@@ -9,7 +10,7 @@ import { slackText, squareBody } from './text.js';
 export interface BridgeOptions {
   readonly settings: BridgeSettings;
   readonly port: SlackPort;
-  /** A caller-owned square; when omitted the bridge opens and closes its own. */
+  /** A caller-owned square must be opened with the bridge-derived body coordinate. */
   readonly square?: Square;
   readonly log?: (line: string) => void;
   readonly pollIntervalMs?: number;
@@ -18,6 +19,12 @@ export interface BridgeOptions {
 const PAGE = 100;
 const STOP_GRACE_MS = 2000;
 const HANDLED_SUBTYPES = new Set(['thread_broadcast', 'file_share']);
+const BODY_CHANNEL = 'slack-bridge';
+
+/** Stable custody identity from the bridge's existing state path and Slack channel. */
+function bridgeBody(settings: BridgeSettings) {
+  return { channel: BODY_CHANNEL, session: resolve(settings.state), agent: settings.channel };
+}
 
 /**
  * One configured Slack channel and one local square, mirrored in both
@@ -34,7 +41,6 @@ export class Bridge {
   private readonly state: BridgeState;
   private readonly directory: Directory;
   private readonly wake = createWake();
-  private readonly handles = new Map<string, Participant>();
   private inbound: Promise<void> = Promise.resolve();
   private reading?: AsyncIterator<StreamRecord>;
   private outbound?: Promise<void>;
@@ -60,7 +66,7 @@ export class Bridge {
     const directory = await Directory.build({
       settings: options.settings, port: options.port, state: store.state, save: () => store.save(),
     });
-    const square = options.square ?? await Square.at({ path: options.settings.square });
+    const square = options.square ?? await Square.at({ path: options.settings.square, body: bridgeBody(options.settings) });
     if (loaded.fresh) {
       // A first start begins at the current end of the archive; old history is not replayed.
       store.state.cursor = (await square.history({ limit: 1, order: 'desc' })).activities[0]?.id ?? null;
@@ -146,11 +152,7 @@ export class Bridge {
   }
 
   private async participantFor(name: string): Promise<Participant> {
-    const known = this.handles.get(name);
-    if (known !== undefined) return known;
-    const joined = await this.square.join(name);
-    this.handles.set(name, joined.participant);
-    return joined.participant;
+    return (await this.square.join(name)).participant;
   }
 
   private async mirror(activity: Activity): Promise<void> {

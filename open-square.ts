@@ -1,19 +1,19 @@
 import path from 'node:path';
 import { createArtifactPort, createSquare, prepareSquareBuild } from './artifact.js';
-import { InternalSquareError, SquareError } from './model.js';
-import { hostLedgerRoot } from './host-ledger-root.js';
-import { createHostLedgerPort } from './host-ledger-file-adapter.js';
-import type { HostLedgerPort, SquareArtifactPort, SquareResourceOwner, WakeTransportPort } from './ports.js';
+import { InternalSquareError, SquareError, type Body, type WakeAddress } from './model.js';
+import { rememberSquarePath } from './square-index.js';
+import type { SquareArtifactPort, SquareResourceOwner, WakeTransportPort } from './ports.js';
 import type { OperationControl } from './square-facade.js';
 
-/** Host-bound resource: artifact, captured environment, clock, ledger and transport. */
+/** Artifact resource with concrete entry-resolved delivery and discovery dependencies. */
 export interface OpenSquare {
   readonly artifact: SquareArtifactPort;
   readonly clock: () => number;
   readonly location: string;
-  readonly hostLedger?: HostLedgerPort;
   readonly wakeTransport?: WakeTransportPort;
-  readonly env?: NodeJS.ProcessEnv;
+  readonly indexPath?: string;
+  readonly body?: Body;
+  readonly wakeAddress?: WakeAddress;
   /** False when a long-lived owner lent the connection; closing this view leaves it open. */
   readonly ownsArtifact: boolean;
   readonly automaticDelivery?: boolean;
@@ -23,14 +23,15 @@ export interface SquareBuildOptions {
   hardCap?: number | null;
   throttlePerMinute?: number;
   clock?: () => number;
-  hostLedger?: HostLedgerPort;
   wakeTransport?: WakeTransportPort;
-  env?: NodeJS.ProcessEnv;
+  indexPath?: string;
+  body?: Body;
+  wakeAddress?: WakeAddress;
   /** One caller deadline propagated into artifact busy retries. */
   signal?: AbortSignal;
 }
 
-export interface SquareOpenOptions extends Pick<SquareBuildOptions, 'clock' | 'hostLedger' | 'wakeTransport' | 'env' | 'signal'> {
+export interface SquareOpenOptions extends Pick<SquareBuildOptions, 'clock' | 'wakeTransport' | 'indexPath' | 'body' | 'wakeAddress' | 'signal'> {
   /** A caller-owned connection to reuse; this view never closes it. */
   readonly artifact?: SquareArtifactPort;
   readonly automaticDelivery?: boolean;
@@ -41,18 +42,23 @@ export async function openSquare(
   options: SquareOpenOptions = {},
   control?: OperationControl,
 ): Promise<OpenSquare> {
-  const env = { ...(options.env ?? process.env) };
   const borrowed = options.artifact;
   // A borrowed connection was opened by its owner without a request signal; this
   // request may only abort its own read, never the shared connection's lifetime.
   const artifact = borrowed ?? createArtifactPort(squarePath, undefined, options.signal);
   try {
     await artifact.read(facts => facts.header(), control?.signal);
-    return {
-      artifact, automaticDelivery: options.automaticDelivery, clock: options.clock ?? Date.now, location: squarePath, env, ownsArtifact: borrowed === undefined,
-      hostLedger: options.hostLedger ?? createHostLedgerPort({ rootPath: hostLedgerRoot(env) }),
-      wakeTransport: options.wakeTransport,
+    const opened: OpenSquare = {
+      artifact, automaticDelivery: options.automaticDelivery, clock: options.clock ?? Date.now, location: squarePath,
+      wakeTransport: options.wakeTransport, indexPath: options.indexPath, ownsArtifact: borrowed === undefined,
+      ...(options.body === undefined ? {} : { body: options.body }),
+      ...(options.wakeAddress === undefined ? {} : { wakeAddress: options.wakeAddress }),
     };
+    if (options.body !== undefined && options.indexPath !== undefined && squarePath !== 'memory') {
+      // Finish optional discovery before returning so no index lock outlives this open.
+      await rememberSquarePath(squarePath, options.body, options.indexPath).catch(() => undefined);
+    }
+    return opened;
   } catch (error) {
     if (borrowed === undefined) await artifact.close();
     if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -75,8 +81,9 @@ export async function buildSquare(squarePath: string, options: SquareBuildOption
 export function buildMemorySquare(options: SquareBuildOptions): OpenSquare {
   return {
     artifact: createArtifactPort(':memory:', prepareSquareBuild(options, options.markdown)),
-    clock: options.clock ?? Date.now, location: 'memory',
-    hostLedger: options.hostLedger, wakeTransport: options.wakeTransport,
+    clock: options.clock ?? Date.now, location: 'memory', wakeTransport: options.wakeTransport,
+    ...(options.body === undefined ? {} : { body: options.body }),
+    ...(options.wakeAddress === undefined ? {} : { wakeAddress: options.wakeAddress }),
     ownsArtifact: true,
   };
 }

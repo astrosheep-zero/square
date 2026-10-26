@@ -9,7 +9,8 @@ import { beginClaudeMcpCall, endClaudeMcpCall, readClaudeMcpCall } from '../dist
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-claude-context-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const env = { SQUARE_HOST_LEDGER_ROOT: root, CLAUDE_CODE_SESSION_ID: 'startup-parent' };
+  const index = path.join(root, 'index.ndjsonl');
+  const env = { SQUARE_INDEX: index, CLAUDE_CODE_SESSION_ID: 'startup-parent' };
   const directory = path.join(root, 'claude-mcp-calls');
   const file = id => path.join(directory, `${createHash('sha256').update(id).digest('hex')}.json`);
   return { env, directory, file };

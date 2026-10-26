@@ -18,7 +18,8 @@ import { decideCatch } from '../dist/catch-decisions.js';
 import { formatActivityId, parseActivityId } from '../dist/model.js';
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
 import { SCHEMA_SQL } from '../dist/square-sqlite.js';
-import { createArtifactPort, createSquareFile, writeSquareFile } from '../dist/artifact.js';
+import { createArtifactPort as createRealArtifactPort, createSquareFile, writeSquareFile } from '../dist/artifact.js';
+import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { snapshot } from '../dist/views.js';
 import * as legacy from './fixtures/legacy-square-core.js';
 
@@ -314,7 +315,7 @@ test('a file-backed v2 artifact agrees with memory and with the frozen replay', 
   assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), true);
   assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), false, 'create is race-safe');
 
-  const file = createArtifactPort(location);
+  const file = createRealArtifactPort(location);
   const memory = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
   try {
     const fromFile = await maintainedIndices(file, GAPPED_ACTS);
@@ -326,7 +327,7 @@ test('a file-backed v2 artifact agrees with memory and with the frozen replay', 
   }
 
   await writeSquareFile(location, fixtureState(stored(SEQUENTIAL_SOURCE)));
-  const replaced = createArtifactPort(location);
+  const replaced = createRealArtifactPort(location);
   try {
     const fromFile = await maintainedIndices(replaced, stored(SEQUENTIAL_SOURCE));
     assert.equal(fromFile.header.lastActIndex, SEQUENTIAL_SOURCE.length - 1);

@@ -9,7 +9,7 @@ import type { Participant, OperationControl, OperationFailureDetail, SquareAtInp
 
 export const STDIO_PROTOCOL_VERSION = 1;
 export const STDIO_MAX_FRAME_BYTES = 8 * 1024 * 1024;
-export const identityVariables = [...harnessSessionSources.flatMap(source => [source.variable, ...(source.childVariable ? [source.childVariable] : [])]), 'SQUARE_PARTICIPANT_NAME'];
+export const identityVariables = [...harnessSessionSources.flatMap(source => [source.variable, ...(source.childVariable ? [source.childVariable] : [])])];
 export function wireIdentity(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(identityVariables.map(key => [key, env[key] ?? '']));
 }
@@ -169,13 +169,13 @@ class StdioSquare implements SquareBackend {
   implicitJoin(): ReturnType<SquareBackend['implicitJoin']> { unsupported('host implicit join'); }
   doneOwnedSession(): ReturnType<SquareBackend['doneOwnedSession']> { unsupported('host session cleanup'); }
   endOwnedSession(): ReturnType<SquareBackend['endOwnedSession']> { unsupported('host session cleanup'); }
-  retireEndedSessionRoutes(): ReturnType<SquareBackend['retireEndedSessionRoutes']> { unsupported('host wake routes'); }
+  cancelDeliveries(): ReturnType<SquareBackend['cancelDeliveries']> { unsupported('host delivery cancellation'); }
   close() { return this.connection.close(); }
 }
 
 export async function openStdioSquare(location: string, selected: Extract<ParsedSquareLocation, { kind: 'stdio' }>, input: SquareAtInput,
   backends: SquareBackends, build?: Pick<SquareBuildInput, 'markdown' | 'hardCap' | 'throttlePerMinute' | 'template' | 'force'>, control?: OperationControl): Promise<SquareBackend> {
-  if (input.clock || input.hostLedger || input.wakeTransport) unsupported('client clock, hostLedger or wakeTransport injection');
+  if (input.clock || input.wakeTransport) unsupported('client clock or wakeTransport injection');
   if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Operation cancelled');
   const backend = Object.hasOwn(backends, selected.backend) ? backends[selected.backend] : undefined;
   if (!backend) throw new SquareError('invalid_args', `Backend ${selected.backend} is not configured; set backends or SQUARE_BACKENDS_CONFIG`);
@@ -184,7 +184,7 @@ export async function openStdioSquare(location: string, selected: Extract<Parsed
   const connection = new Connection(command, backend.args ?? [], path.resolve(cwd, backend.cwd ?? '.'), { ...(input.env ?? process.env), ...backend.env });
   try {
     const result = await connection.request('square/open', { version: STDIO_PROTOCOL_VERSION, key: selected.key, location,
-      identity: wireIdentity(input.env ?? process.env), participant: input.participant, build }, control);
+      identity: wireIdentity(input.env ?? process.env), body: input.body, participant: input.participant, build }, control);
     if (result.version !== STDIO_PROTOCOL_VERSION || typeof result.handle !== 'string') throw new SquareError('unavailable', 'Backend protocol version mismatch');
     return new StdioSquare(location, connection, result.handle);
   } catch (error) { await connection.close(); throw error; }

@@ -1,19 +1,15 @@
-import { hostLedgerRoot } from './host-ledger-root.js';
+import { squareIndexPath } from './square-index.js';
 import { createHash } from 'node:crypto';
-import os from 'node:os';
-import path from 'node:path';
 
 import { withFileLock } from './file-lock.js';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
-import { hostLedgerForEnv } from './registry.js';
-import { sessionInbox } from './inbox.js';
-import type { InboxMembership } from './model.js';
+import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary } from './inbox.js';
+import type { Body, InboxMembership } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
-import { projectBoundaryEligibility } from './square-projections.js';
-export { pendingAtBoundary } from './square-projections.js';
+export { pendingAtBoundary };
 
 const CONTEXT_MAX = 1200;
 const presentationLocks = new Map<string, Promise<void>>();
@@ -93,16 +89,15 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
 }
 
 async function presentPendingAtBoundaryUnlocked<T>(
-  sessionId: string,
+  identity: Body,
   present: (context: string) => T | Promise<T>,
-  lookup: (sessionId: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<T | undefined> {
-  const inbox = await lookup(sessionId, env, signal);
+  const inbox = await lookup(identity, env, signal);
   if (signal?.aborted) return undefined;
-  const hostLedger = hostLedgerForEnv(env);
-  const pending = await projectBoundaryEligibility({ hostLedger, sessionId, inbox });
+  const pending = await projectBoundaryEligibility(inbox);
   if (pending.length === 0 || signal?.aborted) return undefined;
   const delivered = renderBoundary(pending);
   if (delivered.context === '') return undefined;
@@ -112,12 +107,12 @@ async function presentPendingAtBoundaryUnlocked<T>(
   for (const entry of delivered.complete) {
     let square: OpenSquare | undefined;
     try {
-      try { square = await openSquare(entry.membership.squarePath, { env, signal }); } catch { continue; }
+      try { square = await openSquare(entry.membership.squarePath, { signal }); } catch { continue; }
       for (const index of entry.actIndexes) {
         const key = `${entry.membership.squarePath}\u0000${entry.membership.name.toLocaleLowerCase()}\u0000${index}`;
         const prior = presentationLocks.get(key);
         if (prior !== undefined) { await awaitWithSignal(prior, signal); if (signal?.aborted) return undefined; if (!rendered) return undefined; continue; }
-        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, hostLedger: square.hostLedger, session: sessionId, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
+        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
           if (!outcome.presented) {
@@ -145,14 +140,14 @@ async function presentPendingAtBoundaryUnlocked<T>(
  * claim and seen CAS. A source that cannot verify its reuse must read the inbox again.
  */
 export async function presentPendingAtBoundary<T>(
-  sessionId: string,
+  identity: Body,
   present: (context: string) => T | Promise<T>,
-  lookup: (sessionId: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {
-  const ledgerRoot = hostLedgerRoot(env);
-  const ownerKey = createHash('sha256').update(sessionId).digest('hex');
-  return withFileLock(path.join(ledgerRoot, `presentation-boundary-${ownerKey}.lock`), { retryMs: 10, signal }, () =>
-    presentPendingAtBoundaryUnlocked(sessionId, present, lookup, env, signal));
+  const indexPath = squareIndexPath(env);
+  const ownerKey = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+  return withFileLock(`${indexPath}.boundary-${ownerKey}.lock`, { retryMs: 10, signal }, () =>
+    presentPendingAtBoundaryUnlocked(identity, present, lookup, env, signal));
 }

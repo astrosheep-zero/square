@@ -30,12 +30,18 @@ async function closeSquare(square) {
   await square.close();
 }
 
+function defaultBody() { return { channel: 'test', session: 'square-behavior' }; }
+function memorySquare(input) { return Square.inMemory({ ...input, body: input.body ?? defaultBody() }); }
+function buildSquare(input) { return Square.build({ ...input, body: input.body ?? defaultBody() }); }
+
+
 test('build persists a square that reopens through the facade', async () => {
   const squarePath = tempSquarePath();
   const square = await Square.build({
     path: squarePath,
     markdown: '## Topic\n\nTesting v2',
     hardCap: 3,
+    body: defaultBody(),
   });
   const snapshot = await square.snapshot();
   assert.equal(snapshot.hardCap, 3);
@@ -49,7 +55,7 @@ test('build persists a square that reopens through the facade', async () => {
   assert.equal(persisted.hardCap, 3);
   assert.deepEqual(persisted.acts, []);
 
-  const reopened = await Square.at({ path: squarePath });
+  const reopened = await Square.at({ path: squarePath, body: defaultBody() });
   assert.equal((await reopened.snapshot()).hardCap, 3);
   assert.deepEqual(((await reopened.history({ limit: null })).activities).map((activity) => activity.id), []);
   await closeSquare(reopened);
@@ -67,7 +73,7 @@ test('build defaults to an unlimited cap and rejects a non-positive hardCap', as
 });
 
 test('joining an unknown participant records one join activity and derives the roster', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   assert.equal(alice.name, 'Alice');
   const snapshot = await square.snapshot();
@@ -79,7 +85,7 @@ test('joining an unknown participant records one join activity and derives the r
 });
 
 test('rejoin does not append a second join activity', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   await square.join('Alice');
   await square.join('Alice');
   assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => activity.kind), ['join']);
@@ -88,7 +94,7 @@ test('rejoin does not append a second join activity', async () => {
 
 test('hold and resume persist the requesting actor and never a system actor', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.tick });
+  const square = memorySquare({ markdown: 'context', clock: time.tick });
   const host = (await square.join('Host')).participant;
   const held = await host.hold('pause');
   assert.equal(held.activity.kind, 'hold');
@@ -104,7 +110,7 @@ test('hold and resume persist the requesting actor and never a system actor', as
 });
 
 test('any self activity advances the actor cursor', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/0');
   await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
@@ -115,7 +121,7 @@ test('any self activity advances the actor cursor', async () => {
 });
 
 test('catch mention returns only matching says and omits peer room changes', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
@@ -129,7 +135,7 @@ test('catch mention returns only matching says and omits peer room changes', asy
 });
 
 test('catch from a named peer keeps that peer\'s directed says only', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   const cara = (await square.join('Cara')).participant;
@@ -146,7 +152,7 @@ test('catch from a named peer keeps that peer\'s directed says only', async () =
 });
 
 test('catch after a rejoin excludes departure and return presence', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await alice.catch();
@@ -161,7 +167,7 @@ test('catch after a rejoin excludes departure and return presence', async () => 
 });
 
 test('unfiltered catch excludes peer room changes', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   await square.join('Bob');
   await square.join('Cara');
@@ -174,7 +180,7 @@ test('unfiltered catch excludes peer room changes', async () => {
 });
 
 test('catch still delivers an unreceipted mention behind a self-advanced cursor', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
@@ -188,7 +194,7 @@ test('catch still delivers an unreceipted mention behind a self-advanced cursor'
 
 test('catch and express gating share directed-say attention', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
+  const square = memorySquare({ markdown: 'context', clock: time.now });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await bob.express('direct @Alice', { force: true, mentions: ['Alice'] });
@@ -203,7 +209,7 @@ test('catch and express gating share directed-say attention', async () => {
 });
 
 test('a listener receives a bare say through catch without presence obligations', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await bob.listen('Alice');
@@ -214,7 +220,7 @@ test('a listener receives a bare say through catch without presence obligations'
 });
 
 test('history from a named participant keeps that participant\'s activities', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   await square.join('Alice');
   await square.join('Bob');
   const cara = (await square.join('Cara')).participant;
@@ -235,7 +241,7 @@ test('history from a named participant keeps that participant\'s activities', as
 });
 
 test('catch is directed while history is the full archive', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   const cara = (await square.join('Cara')).participant;
@@ -257,7 +263,7 @@ test('catch is directed while history is the full archive', async () => {
 });
 
 test('history remains read-only until catch writes a delivery receipt', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
@@ -273,7 +279,7 @@ test('history remains read-only until catch writes a delivery receipt', async ()
 });
 
 test('history grep searches ids, participant names, and bodies and honors limit order', async () => {
-  const square = Square.inMemory({ markdown: 'context', hardCap: null, clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', hardCap: null, clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await alice.express('first inventory @Bob', { force: true, mentions: ['Bob'] });
@@ -300,7 +306,7 @@ test('history grep searches ids, participant names, and bodies and honors limit 
 
 test('an unread directed body is not leaked when express is blocked', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
+  const square = memorySquare({ markdown: 'context', clock: time.now });
   time.set(1000);
   const alice = (await square.join('Alice')).participant;
   time.set(2000);
@@ -316,7 +322,7 @@ test('an unread directed body is not leaked when express is blocked', async () =
 
 test('a bell remains directed while catch filters still apply', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
+  const square = memorySquare({ markdown: 'context', clock: time.now });
   time.set(1000);
   const alice = (await square.join('Alice')).participant;
   time.set(2000);
@@ -341,7 +347,7 @@ test('a bell remains directed while catch filters still apply', async () => {
 test('stored say omits mention reach while bell persists explicitly', async () => {
   const squarePath = tempSquarePath();
   const time = tickingClock();
-  const square = await Square.build({ path: squarePath, markdown: 'context', clock: time.tick });
+  const square = await buildSquare({ path: squarePath, markdown: 'context', clock: time.tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await alice.express('mention @Bob', { force: true, mentions: ['Bob'] });
@@ -354,7 +360,7 @@ test('stored say omits mention reach while bell persists explicitly', async () =
 });
 
 test('express reply preserves one causal activity reference', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   const question = await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
@@ -368,7 +374,7 @@ test('express reply preserves one causal activity reference', async () => {
 });
 
 test('a reply to an author who left lands and reports the author is not here', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   const question = await bob.express('question', { force: true, noMention: true });
@@ -390,7 +396,7 @@ test('a reply to an author who left lands and reports the author is not here', a
 });
 
 test('snapshot counts only people still in the square and tracks done participants', async () => {
-  const square = Square.inMemory({ markdown: 'context', hardCap: 100, clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', hardCap: 100, clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   for (let index = 0; index < 12; index += 1) {
@@ -408,7 +414,7 @@ test('snapshot counts only people still in the square and tracks done participan
 });
 
 test('leaving stays in history without sending a message to catch', async () => {
-  const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
+  const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
   const bob = (await square.join('Bob')).participant;
   await bob.hold('pause');
@@ -433,7 +439,7 @@ test('leaving stays in history without sending a message to catch', async () => 
 
 test('hold, unread room changes, and an unread join gate express independently', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
+  const square = memorySquare({ markdown: 'context', clock: time.now });
   time.set(1000);
   const alice = (await square.join('Alice')).participant;
   time.set(2000);
@@ -450,7 +456,7 @@ test('hold, unread room changes, and an unread join gate express independently',
   time.set(220000);
   await assert.doesNotReject(() => alice.express('after resume @Bob', { mentions: ['Bob'] }));
 
-  const open = Square.inMemory({ markdown: 'context', clock: time.now });
+  const open = memorySquare({ markdown: 'context', clock: time.now });
   time.set(1000);
   const welcomeAlice = (await open.join('Alice')).participant;
   time.set(2000);
@@ -463,7 +469,7 @@ test('hold, unread room changes, and an unread join gate express independently',
 });
 
 test('held, throttled, and capped expressions keep their coded errors', async () => {
-  const heldSquare = Square.inMemory({ markdown: 'context', hardCap: 10, clock: tickingClock().tick });
+  const heldSquare = memorySquare({ markdown: 'context', hardCap: 10, clock: tickingClock().tick });
   const heldAlice = (await heldSquare.join('Alice')).participant;
   const host = (await heldSquare.join('Host')).participant;
   await host.hold('pause');
@@ -473,7 +479,7 @@ test('held, throttled, and capped expressions keep their coded errors', async ()
   );
   await closeSquare(heldSquare);
 
-  const throttleSquare = Square.inMemory({
+  const throttleSquare = memorySquare({
     markdown: 'context',
     hardCap: 10,
     throttlePerMinute: 1,
@@ -487,7 +493,7 @@ test('held, throttled, and capped expressions keep their coded errors', async ()
   );
   await closeSquare(throttleSquare);
 
-  const capSquare = Square.inMemory({ markdown: 'context', hardCap: 1, clock: tickingClock().tick });
+  const capSquare = memorySquare({ markdown: 'context', hardCap: 1, clock: tickingClock().tick });
   const capAlice = (await capSquare.join('Alice')).participant;
   await capAlice.express('first @Alice', { force: true, mentions: ['Alice'] });
   await assert.rejects(
