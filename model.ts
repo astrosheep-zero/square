@@ -159,13 +159,15 @@ export interface InboxNotification {
   body: string;
 }
 
-export interface InboxMembership {
-  name: string;
-  squarePath: string;
-  notifications: InboxNotification[];
-  catchLease?: WatchLease;
-  /** Current artifact seat verified when the membership was read. */
-  seat?: Seat;
+export interface LocatedSeat {
+  readonly location: string;
+  readonly seat: Seat;
+  readonly joinedAt: number;
+}
+
+export interface PendingMembership extends LocatedSeat {
+  readonly notifications: InboxNotification[];
+  readonly catchLease?: WatchLease;
 }
 
 export interface WatchOptions {

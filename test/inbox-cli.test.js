@@ -30,7 +30,7 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   for (const name of names) files.push(await makeMembership(root, name, env));
   const complete = await sessionInbox({ channel: 'codex', session: 'inbox-snapshot' }, env);
   assert.equal(complete.length, names.length * 2);
-  assert.equal(complete.find((membership) => membership.name === names[1])?.notifications[0].body, `notice for ${names[1]}`);
+  assert.equal(complete.find((membership) => membership.seat.participant === names[1])?.notifications[0].body, `notice for ${names[1]}`);
 
   const result = run(['inbox', '--for-session', 'inbox-snapshot', '--json'], { env });
   assert.equal(result.status, 0, result.stderr);

@@ -1,5 +1,5 @@
-import { type Body, type InboxMembership, sameBody } from './model.js';
-import type { PresentationProjection, SessionBindingProjection, SquareRead } from './ports.js';
+import { type Body, type LocatedSeat, type PendingMembership, type Seat, sameBody } from './model.js';
+import type { SquareRead } from './ports.js';
 import { createArtifactPort, observeSquareDeliveryRevision, observeSquareRevision } from './artifact.js';
 import { indexedSquareEntries, observeSquareIndex } from './square-index.js';
 import { type VersionObserver } from './file-changes.js';
@@ -18,24 +18,24 @@ export interface PendingWaitOptions {
   onChangeArmed?: (armed: boolean) => void;
 }
 
-function notificationKey(membership: InboxMembership, actIndex: number): string {
-  return membership.squarePath + '\0' + membership.name.toLocaleLowerCase() + '\0' + actIndex;
+export function pendingKey(membership: LocatedSeat, actIndex: number): string {
+  return membership.location + '\0' + membership.seat.participant.toLocaleLowerCase() + '\0' + actIndex;
 }
 
-export function pendingAtBoundary(inbox: readonly InboxMembership[]): InboxMembership[] {
+export function pendingAtBoundary(inbox: readonly PendingMembership[]): PendingMembership[] {
   return inbox.map((membership) => {
     const lease = membership.catchLease;
     if (lease === undefined) return membership;
     return { ...membership, notifications: membership.notifications.filter(
-      (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.name }),
+      (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.seat.participant }),
     ) };
   }).filter((membership) => membership.notifications.length > 0);
 }
 
-function eligibleNotifications(facts: SquareRead, membership: InboxMembership) {
-  const seat = facts.seat(membership.name);
-  if (seat === undefined || membership.seat !== undefined
-    && (seat.generation !== membership.seat.generation || !sameBody(seat.body, membership.seat.body))) return [];
+function eligibleNotifications(facts: SquareRead, membership: PendingMembership) {
+  const seat = facts.seat(membership.seat.participant);
+  if (seat === undefined || seat.generation !== membership.seat.generation
+    || !sameBody(seat.body, membership.seat.body)) return [];
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
   return membership.notifications.filter(notification =>
     (cancelledThrough === undefined || notification.actIndex > cancelledThrough)
@@ -44,14 +44,14 @@ function eligibleNotifications(facts: SquareRead, membership: InboxMembership) {
 }
 
 /** Revalidate a supplied batch immediately before the boundary's independent claim/send checks. */
-export async function projectBoundaryEligibility(inbox: readonly InboxMembership[]): Promise<InboxMembership[]> {
-  const grouped = new Map<string, InboxMembership[]>();
+export async function projectBoundaryEligibility(inbox: readonly PendingMembership[]): Promise<PendingMembership[]> {
+  const grouped = new Map<string, PendingMembership[]>();
   for (const membership of pendingAtBoundary(inbox)) {
-    const entries = grouped.get(membership.squarePath) ?? [];
+    const entries = grouped.get(membership.location) ?? [];
     entries.push(membership);
-    grouped.set(membership.squarePath, entries);
+    grouped.set(membership.location, entries);
   }
-  const pending: InboxMembership[] = [];
+  const pending: PendingMembership[] = [];
   for (const [location, memberships] of grouped) {
     const artifact = createArtifactPort(location);
     try {
@@ -73,14 +73,7 @@ export interface SessionBindingCandidate {
 }
 
 /** HOME is a candidate path index; current seats and delivery evidence live in the artifact. */
-export async function projectSessionCandidates(input: {
-  readonly body?: Body;
-  readonly sessionId?: string;
-  readonly channel?: string;
-  readonly agent?: string;
-  readonly location?: string;
-  readonly env?: NodeJS.ProcessEnv;
-}): Promise<readonly SessionBindingCandidate[]> {
+export async function projectSessionCandidates(input: SessionSeatQuery): Promise<readonly SessionBindingCandidate[]> {
   const location = input.location === undefined ? undefined : await canonicalPath(input.location);
   const entries = await indexedSquareEntries({ body: input.body, session: input.sessionId, channel: input.channel, agent: input.agent }, input.env ?? process.env);
   const candidates = new Map<string, SessionBindingCandidate>();
@@ -92,27 +85,76 @@ export async function projectSessionCandidates(input: {
   return [...candidates.values()];
 }
 
-interface ArtifactInbox {
-  readonly bindings: SessionBindingProjection[];
-  readonly inbox: InboxMembership[];
-}
-interface CachedInbox {
-  readonly coordinate: string;
-  readonly version: number;
-  readonly value: ArtifactInbox;
+export interface SessionSeatQuery {
+  readonly body?: Body;
+  readonly sessionId?: string;
+  readonly channel?: string;
+  readonly agent?: string;
+  readonly location?: string;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
-/** One authoritative read per canonical artifact, even when discovery names several bodies. */
-async function projectCandidates(candidates: readonly SessionBindingCandidate[], pending = false,
-  cache?: Map<string, CachedInbox>, signal?: AbortSignal): Promise<ArtifactInbox[]> {
+function groupCandidates(candidates: readonly SessionBindingCandidate[]): Map<string, Body[]> {
   const grouped = new Map<string, Body[]>();
   for (const { location, body } of candidates) {
     const bodies = grouped.get(location) ?? [];
     bodies.push(body);
     grouped.set(location, bodies);
   }
-  const projections: ArtifactInbox[] = [];
-  for (const [location, bodies] of grouped) {
+  return grouped;
+}
+
+function locatedSeats(facts: SquareRead, location: string, seats: readonly Seat[]): LocatedSeat[] {
+  return seats.flatMap(seat => {
+    const index = parseActivityId(seat.generation);
+    const joined = index === undefined ? undefined : facts.activity(index);
+    return joined?.kind !== 'join' ? [] : [{ location, seat, joinedAt: joined.at }];
+  });
+}
+
+/** Lifecycle reads resolve seats and join times, never pending activity bodies. */
+export async function projectSessionSeats(input: SessionSeatQuery, signal?: AbortSignal): Promise<LocatedSeat[]> {
+  const seats: LocatedSeat[] = [];
+  for (const [location, bodies] of groupCandidates(await projectSessionCandidates(input))) {
+    signal?.throwIfAborted();
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      seats.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body))), signal)).value);
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+    } finally { await artifact.close(); }
+  }
+  return seats;
+}
+
+/** Public count boundary: one coherent read per artifact, without pending body hydration. */
+export async function sessionInboxCounts(input: SessionSeatQuery, signal?: AbortSignal): Promise<import('./square-facade.js').InboxMembershipSummary[]> {
+  const rows: import('./square-facade.js').InboxMembershipSummary[] = [];
+  for (const [location, bodies] of groupCandidates(await projectSessionCandidates(input))) {
+    signal?.throwIfAborted();
+    const artifact = createArtifactPort(location, undefined, signal);
+    try {
+      rows.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body))).map(({ seat }) => ({
+        name: seat.participant, squarePath: location, pending: facts.directedCount(seat.participant, { unseenOnly: true }),
+      })), signal)).value);
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+    } finally { await artifact.close(); }
+  }
+  return rows;
+}
+
+interface CachedInbox {
+  readonly coordinate: string;
+  readonly version: number;
+  readonly value: PendingMembership[];
+}
+
+/** One authoritative read per canonical artifact, even when discovery names several bodies. */
+async function projectPending(candidates: readonly SessionBindingCandidate[],
+  cache?: Map<string, CachedInbox>, signal?: AbortSignal): Promise<PendingMembership[]> {
+  const pending: PendingMembership[] = [];
+  for (const [location, bodies] of groupCandidates(candidates)) {
     signal?.throwIfAborted();
     const artifact = createArtifactPort(location, undefined, signal);
     try {
@@ -122,64 +164,29 @@ async function projectCandidates(candidates: readonly SessionBindingCandidate[],
         const header = facts.header();
         let cached = cache?.get(location);
         if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
-          const bindings = seats.flatMap(seat => {
-            const index = parseActivityId(seat.generation);
-            const joined = index === undefined ? undefined : facts.activity(index);
-            return joined?.kind !== 'join' ? [] : [{ location, participant: seat.participant,
-              sessionId: seat.body.session, channel: seat.body.channel, updatedAt: joined.at, seat: {
-                participant: seat.participant, body: seat.body, generation: seat.generation,
-              } }];
-          });
-          cached = { coordinate, version: header.revision,
-            value: { bindings, inbox: pending ? inboxProjection(facts, bindings) : [] } };
+          cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => ({
+            ...membership, notifications: pendingNotifications(facts, membership.seat.participant).map(({ item, route }) => ({
+              actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route,
+            })),
+          })) };
         }
         // Cache conversation content, never leases or delivery eligibility: evidence can change
         // without a conversation revision and must not force body hydration or self-wake retries.
-        return { cached, projection: { ...cached.value, inbox: cached.value.inbox.map(membership => {
-          const catchLease = freshWatchLease(facts, membership.name);
+        return { cached, pending: cached.value.map(membership => {
+          const catchLease = freshWatchLease(facts, membership.seat.participant);
           return { ...membership, notifications: eligibleNotifications(facts, membership),
             ...(catchLease === undefined ? {} : { catchLease }) };
-        }) } };
+        }) };
       }, signal);
       cache?.set(location, current.cached);
-      projections.push(current.projection);
+      pending.push(...current.pending);
     } catch (error) {
       cache?.delete(location);
       if (signal?.aborted) throw signal.reason ?? error;
       // Unreadable candidates remain watch targets, but never authorize cached content.
     } finally { await artifact.close(); }
   }
-  return projections;
-}
-
-/** Verify discovery candidates against the current artifact seats before exposing bindings. */
-export async function projectArtifactBindings(candidates: readonly SessionBindingCandidate[]): Promise<readonly SessionBindingProjection[]> {
-  return (await projectCandidates(candidates)).flatMap(projection => projection.bindings);
-}
-
-export async function projectSessionBindings(input: {
-  readonly body?: Body;
-  readonly sessionId?: string;
-  readonly channel?: string;
-  readonly agent?: string;
-  readonly location?: string;
-  readonly env?: NodeJS.ProcessEnv;
-}): Promise<readonly SessionBindingProjection[]> {
-  return projectArtifactBindings(await projectSessionCandidates(input));
-}
-export function projectPresentation(facts: SquareRead, requested: SessionBindingProjection, now = Date.now()): PresentationProjection {
-  const participant = facts.participant(requested.participant);
-  const seat = facts.seat(requested.participant);
-  const requestedBody = requested.seat?.body ?? { channel: requested.channel, session: requested.sessionId };
-  if (!participant?.joined || seat === undefined || !sameBody(seat.body, requestedBody)) return { binding: requested, joined: false, notifications: [] };
-  const binding = { ...requested, participant: participant.name, seat: {
-    participant: seat.participant, body: seat.body, generation: seat.generation,
-  } };
-  const notifications = pendingNotifications(facts, participant.name).map(({ item, route }) => ({
-    actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route,
-  }));
-  const catchLease = freshWatchLease(facts, participant.name, now);
-  return { binding, joined: true, notifications, ...(catchLease === undefined ? {} : { catchLease }) };
+  return pending;
 }
 
 export interface NativePendingPreview {
@@ -215,21 +222,13 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
     actor: item.actor, route: head.route, body: item.body })]), clipped: attentionBodyIsClipped(item.body) };
 }
 
-function inboxProjection(facts: SquareRead, bindings: readonly SessionBindingProjection[]): InboxMembership[] {
-  return bindings.map(binding => {
-    const projection = projectPresentation(facts, binding);
-    return { name: binding.participant, squarePath: binding.location, seat: projection.binding.seat,
-      notifications: [...projection.notifications] };
-  });
-}
-
 export interface SessionIdentityQuery { readonly channel: string; readonly session: string; readonly allAgents?: true; }
 export type SessionIdentity = Body | SessionIdentityQuery;
 
-export async function sessionInbox(identity: SessionIdentity, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<InboxMembership[]> {
+export async function sessionInbox(identity: SessionIdentity, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<PendingMembership[]> {
   const query = 'allAgents' in identity ? { channel: identity.channel, sessionId: identity.session, env }
     : { body: identity, env };
-  return (await projectCandidates(await projectSessionCandidates(query), true, undefined, signal)).flatMap(projection => projection.inbox);
+  return projectPending(await projectSessionCandidates(query), undefined, signal);
 }
 
 interface CapturedChange<T = unknown> {
@@ -260,8 +259,8 @@ async function capture<T>(observer: VersionObserver<T>, kind: CapturedChange['ki
 
 export interface SessionPendingObserver {
   /** Read committed revisions before reusing content; filesystem hints are only for waiting. */
-  read(options?: Pick<PendingWaitOptions, 'signal' | 'excludeKeys'>): Promise<InboxMembership[]>;
-  wait(timeoutMs: number, options?: PendingWaitOptions): Promise<InboxMembership[]>;
+  read(options?: Pick<PendingWaitOptions, 'signal' | 'excludeKeys'>): Promise<PendingMembership[]>;
+  wait(timeoutMs: number, options?: PendingWaitOptions): Promise<PendingMembership[]>;
   close(): void;
 }
 
@@ -278,18 +277,18 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
   const cache = new Map<string, CachedInbox>();
   const lifetime = new AbortController();
   async function currentInbox(candidates: readonly SessionBindingCandidate[], signal: AbortSignal) {
-    const inbox = (await projectCandidates(candidates, true, cache, signal)).flatMap(projection => projection.inbox);
+    const inbox = await projectPending(candidates, cache, signal);
     const now = Date.now();
-    return inbox.map((membership): InboxMembership => {
+    return inbox.map((membership): PendingMembership => {
       const { catchLease, ...rest } = membership;
       return catchLease !== undefined && catchLease.expiresAt > now && now - catchLease.heartbeatAt <= WATCH_STALE_MS
         ? membership : rest;
     });
   }
-  function eligibleInbox(inbox: InboxMembership[], excludeKeys?: ReadonlySet<string>) {
+  function eligibleInbox(inbox: PendingMembership[], excludeKeys?: ReadonlySet<string>) {
     const eligible = pendingAtBoundary(inbox);
     return excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
-      const notifications = membership.notifications.filter((notification) => !excludeKeys.has(notificationKey(membership, notification.actIndex)));
+      const notifications = membership.notifications.filter((notification) => !excludeKeys.has(pendingKey(membership, notification.actIndex)));
       return notifications.length === 0 ? [] : [{ ...membership, notifications }];
     });
   }
@@ -345,7 +344,7 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
           }
           const inbox = await currentInbox(candidates, signal);
           const pending = eligibleInbox(inbox, options.excludeKeys);
-          const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => notificationKey(membership, note.actIndex))).sort());
+          const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => pendingKey(membership, note.actIndex))).sort());
           if (previousEligible !== undefined && previousEligible !== eligibleKeys) canReturn = true;
           previousEligible = eligibleKeys;
           if (signal.aborted) return [];

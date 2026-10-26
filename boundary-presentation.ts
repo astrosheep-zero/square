@@ -5,8 +5,8 @@ import { withFileLock } from './file-lock.js';
 import { openSquare } from './open-square.js';
 import { closeOpenSquare } from './open-square.js';
 import { presentPending } from './presentation-operations.js';
-import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary } from './inbox.js';
-import type { Body, InboxMembership } from './model.js';
+import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
+import type { Body, PendingMembership } from './model.js';
 import type { OpenSquare } from './open-square.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 export { pendingAtBoundary };
@@ -32,12 +32,12 @@ async function awaitWithSignal(promise: Promise<void>, signal?: AbortSignal): Pr
   }
 }
 
-export function renderPendingAtBoundary(inbox: InboxMembership[]): string {
+export function renderPendingAtBoundary(inbox: PendingMembership[]): string {
   return renderBoundary(inbox).context;
 }
 
 interface CompleteBoundaryMembership {
-  membership: InboxMembership;
+  membership: PendingMembership;
   actIndexes: number[];
   markSeen: boolean;
 }
@@ -47,7 +47,7 @@ interface BoundaryRender {
   complete: CompleteBoundaryMembership[];
 }
 
-function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
+function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
@@ -60,9 +60,9 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
     const { membership, notification } = entry;
     const block = [
       renderAttentionPreview({
-        squarePath: membership.squarePath,
+        squarePath: membership.location,
         actIndex: notification.actIndex,
-        recipient: membership.name,
+        recipient: membership.seat.participant,
         actor: notification.actor,
         route: notification.route,
         body: notification.body,
@@ -91,7 +91,7 @@ function renderBoundary(inbox: InboxMembership[]): BoundaryRender {
 async function presentPendingAtBoundaryUnlocked<T>(
   identity: Body,
   present: (context: string) => T | Promise<T>,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<T | undefined> {
@@ -107,12 +107,12 @@ async function presentPendingAtBoundaryUnlocked<T>(
   for (const entry of delivered.complete) {
     let square: OpenSquare | undefined;
     try {
-      try { square = await openSquare(entry.membership.squarePath, { signal }); } catch { continue; }
+      try { square = await openSquare(entry.membership.location, { signal }); } catch { continue; }
       for (const index of entry.actIndexes) {
-        const key = `${entry.membership.squarePath}\u0000${entry.membership.name.toLocaleLowerCase()}\u0000${index}`;
+        const key = pendingKey(entry.membership, index);
         const prior = presentationLocks.get(key);
         if (prior !== undefined) { await awaitWithSignal(prior, signal); if (signal?.aborted) return undefined; if (!rendered) return undefined; continue; }
-        const work = presentPending({ artifact: square.artifact, location: entry.membership.squarePath, participant: entry.membership.name, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
+        const work = presentPending({ artifact: square.artifact, location: entry.membership.location, participant: entry.membership.seat.participant, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
           if (!outcome.presented) {
@@ -142,7 +142,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
 export async function presentPendingAtBoundary<T>(
   identity: Body,
   present: (context: string) => T | Promise<T>,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {

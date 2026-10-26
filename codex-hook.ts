@@ -1,6 +1,6 @@
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
-import type { Body, InboxMembership } from './model.js';
+import type { Body, PendingMembership } from './model.js';
 import { endSessionMemberships } from './session-lifecycle.js';
 import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
@@ -33,7 +33,7 @@ function hookBudgetMs(env: NodeJS.ProcessEnv): number {
 
 export async function codexHookResponse(
   input: CodexHookInput,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<InboxMembership[]> | InboxMembership[] = sessionInbox,
+  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   deliveryAdapters?: WakeAdapter[],
   trace: HookTrace = defaultTrace,

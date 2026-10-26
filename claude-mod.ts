@@ -8,7 +8,13 @@ import { processActNotificationsOnce } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { asSeatRef } from './seats.js';
-import { projectSessionBindings, projectSessionCandidates } from './inbox.js';
+import { projectSessionSeats, projectSessionCandidates } from './inbox.js';
+import { sameBody, type LocatedSeat } from './model.js';
+
+/** Persisted hook state keeps its wire coordinate; internal consumers keep the located seat. */
+function claudeBinding({ location, seat }: LocatedSeat): ClaudeBinding {
+  return { location, participant: seat.participant, session: seat.body.session, generation: seat.generation };
+}
 
 export interface ClaudeCoordinate { readonly sessionId: string; readonly cwd: string; readonly version: string; readonly endpoint?: string }
 interface ClaudeBridgeInput extends ClaudeCoordinate {
@@ -45,19 +51,15 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   const signal = AbortSignal.timeout(2500);
   const body = { channel: 'claude-code', session: input.sessionId, ...(input.agentId === undefined ? {} : { agent: input.agentId }) };
   const supported = process.platform === 'darwin' && typeof input.endpoint === 'string' && input.endpoint.startsWith('/');
-  const sessionBindings = async () => (await projectSessionBindings({ body, env }))
-    .filter((row) => row.seat !== undefined)
-    .map((row) => ({ row, binding: {
-      location: row.location, participant: row.participant, session: row.sessionId, generation: row.seat!.generation,
-    } }));
+  const sessionSeats = () => projectSessionSeats({ body, env }, signal);
   if (input.operation === 'end') {
     const retired: ClaudeBinding[] = [];
     const captured = [...input.bindings ?? []];
     // Discover committed late joins at the pinned end boundary, never later owners.
-    if (input.endedAt !== undefined) for (const { row, binding } of await sessionBindings()) {
-      if (row.updatedAt > input.endedAt || captured.some((item) => item.location === binding.location
-        && item.participant === binding.participant && item.generation === binding.generation)) continue;
-      captured.push(binding);
+    if (input.endedAt !== undefined) for (const member of await sessionSeats()) {
+      if (member.joinedAt > input.endedAt || captured.some((item) => item.location === member.location
+        && item.participant === member.seat.participant && item.generation === member.seat.generation)) continue;
+      captured.push(claudeBinding(member));
     }
     for (const binding of captured) {
       if (binding.session !== input.sessionId) continue;
@@ -96,22 +98,23 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     }
   }
   if (input.operation === 'start' || input.operation === 'reconcile' || input.operation === 'cancel' || input.cancelAt !== undefined) {
-    for (const { row, binding } of await sessionBindings()) {
+    for (const member of await sessionSeats()) {
       if (signal.aborted) break;
+      const { location, seat: capturedSeat, joinedAt } = member;
       const matches = (item: ClaudeBinding | undefined) => item !== undefined
-        && item.location === binding.location && item.participant === binding.participant && item.session === input.sessionId
-        && (item.generation === undefined || item.generation === binding.generation);
+        && item.location === location && item.participant === capturedSeat.participant && item.session === capturedSeat.body.session
+        && (item.generation === undefined || item.generation === capturedSeat.generation);
       const expected = input.bindings?.find(matches);
       const cancelled = input.cancelledBindings?.find(matches) ?? (input.operation === 'cancel' ? expected : undefined);
       const lateCancelledJoin = input.operation === 'cancel' && input.cancelAt !== undefined
-        && row.updatedAt <= input.cancelAt && expected === undefined;
-      if (lateCancelledJoin && !cancelledBindings.some(matches)) cancelledBindings.push(binding);
+        && joinedAt <= input.cancelAt && expected === undefined;
+      if (lateCancelledJoin && !cancelledBindings.some(matches)) cancelledBindings.push(claudeBinding(member));
       if (input.operation !== 'start' && input.operation !== 'reconcile' && !lateCancelledJoin && expected === undefined) continue;
-      const square = await openSquare(binding.location, { body, signal });
+      const square = await openSquare(location, { body, signal });
       try {
-        const { value: currentSeat } = await square.artifact.read((facts) => facts.seat(binding.participant), signal);
-        if (currentSeat === undefined || currentSeat.generation !== binding.generation
-          || currentSeat.body.session !== input.sessionId || currentSeat.body.channel !== 'claude-code') continue;
+        const { value: currentSeat } = await square.artifact.read((facts) => facts.seat(capturedSeat.participant), signal);
+        if (currentSeat === undefined || currentSeat.generation !== capturedSeat.generation
+          || !sameBody(currentSeat.body, capturedSeat.body)) continue;
         const seat = asSeatRef(currentSeat);
         const existing = currentSeat.wakeAddress?.kind === 'claude-native' ? currentSeat.wakeAddress : undefined;
         const cutoff = input.cancelAt !== undefined && (cancelled !== undefined || lateCancelledJoin) ? input.cancelAt : undefined;
@@ -132,7 +135,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
           if (existing !== undefined) await square.artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, undefined), signal);
           continue;
         }
-        if (existing === undefined || existing.address.endpoint !== input.endpoint) recovery.add(binding.location);
+        if (existing === undefined || existing.address.endpoint !== input.endpoint) recovery.add(location);
         await square.artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, {
           kind: 'claude-native', address: { sessionId: input.sessionId, endpoint: input.endpoint!, version: input.version, platform: 'darwin', loaded: 'true' },
         }), signal);
@@ -140,18 +143,18 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     }
   }
   if (input.operation === 'start' || input.operation === 'reconcile' || input.operation === 'cancel') {
-    const bindings = (await sessionBindings()).map(({ binding }) => binding);
+    const members = await sessionSeats();
     // One startup recovery pass for known unsent work. Unknown/admitted sends never replay.
-    if (supported && input.operation !== 'cancel') for (const binding of bindings) {
+    if (supported && input.operation !== 'cancel') for (const { location } of members) {
       if (signal.aborted) break;
-      if (input.operation !== 'start' && !recovery.has(binding.location)) continue;
-      const square = await openSquare(binding.location, { body, signal });
+      if (input.operation !== 'start' && !recovery.has(location)) continue;
+      const square = await openSquare(location, { body, signal });
       let indices: number[];
-      try { indices = await sweepPending({ artifact: square.artifact, location: binding.location, now: Date.now(), graceMs: 0, limit: 8 }); }
+      try { indices = await sweepPending({ artifact: square.artifact, location, now: Date.now(), graceMs: 0, limit: 8 }); }
       finally { await closeOpenSquare(square); }
-      for (const index of indices) { if (signal.aborted) break; await processActNotificationsOnce(binding.location, index, { env: { ...env, SQUARE_NOTIFY_DELIVERY_WAIT_MS: '200' } }); }
+      for (const index of indices) { if (signal.aborted) break; await processActNotificationsOnce(location, index, { env: { ...env, SQUARE_NOTIFY_DELIVERY_WAIT_MS: '200' } }); }
     }
-    return `${JSON.stringify({ available: supported, diagnostic: supported ? undefined : 'Native inbox unavailable: requires macOS Claude with an interactive loaded mod and its real endpoint.', bindings, cancelledBindings })}\n`;
+    return `${JSON.stringify({ available: supported, diagnostic: supported ? undefined : 'Native inbox unavailable: requires macOS Claude with an interactive loaded mod and its real endpoint.', bindings: members.map(claudeBinding), cancelledBindings })}\n`;
   }
   if (!['guard', 'admitted', 'stored'].includes(input.operation) || typeof input.text !== 'string') throw new Error('Unknown Claude bridge operation.');
   return `${JSON.stringify(await observeClaudeDelivery(input.sessionId, input.text, input.operation as 'guard' | 'admitted' | 'stored', env))}\n`;

@@ -1,4 +1,4 @@
-import type { Act, ActivityId, Body, HardCap, InboxNotification, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
+import type { Act, ActivityId, Body, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
 
 export type ActivityIndex = number;
 export interface SquareHeader {
@@ -221,25 +221,6 @@ export interface WakeRequest {
 /** Executor-neutral presentation capability; intentionally separate from wake transport. */
 export interface PresentationSinkPort {
   present(activity: StoredAct): void | Promise<void>;
-}
-
-/** Stable projection of a host binding; storage rows never cross this boundary. */
-export interface SessionBindingProjection {
-  readonly cancelledThrough?: number;
-  readonly location: string;
-  readonly participant: string;
-  readonly sessionId: string;
-  readonly channel: string;
-  readonly updatedAt: number;
-  readonly seat?: SeatRef;
-}
-
-/** Pending boundary presentation projected for one bound session. */
-export interface PresentationProjection {
-  readonly binding: SessionBindingProjection;
-  readonly joined: boolean;
-  readonly notifications: readonly InboxNotification[];
-  readonly catchLease?: WatchLease;
 }
 
 /** Read-only presentation evidence projection for diagnostics and migration callers. */

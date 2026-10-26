@@ -10,10 +10,15 @@ import { createArtifactPort } from '../dist/artifact.js';
 import { observeClaudeDelivery, nativePayload } from '../dist/claude-delivery.js';
 import { migrateSquareFile } from '../dist/square-migration.js';
 import { rememberSquarePath } from '../dist/square-index.js';
-import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { renderAttentionPreview, renderSquareReminder } from '../dist/attention-presentation.js';
 import { writeLegacyLedger } from './fixtures/legacy-host-ledger.js';
 
 const CLAUDE_ENDPOINT = '/tmp/legacy-claude.sock';
+
+// Historical wire bytes are not current memberships; render their legacy coordinates directly.
+function legacyPreview(location, recipient, notification) {
+  return renderSquareReminder([renderAttentionPreview({ squarePath: fs.realpathSync.native(location), recipient, ...notification })]);
+}
 
 function presenceRecord(location, participant, session, channel, updatedAt) {
   return { v: 1, location: fs.realpathSync.native(location), participant, session, channel, updatedAt };
@@ -99,8 +104,8 @@ test('format-3 conversion imports evidence as current Claude correlation and ret
   const token = 'legacy-claude-token';
   const messageId = 'legacy-native-message';
   const { location, env, presence } = fixture(t);
-  const preview = renderPendingAtBoundary([{ name: 'Bob', squarePath: fs.realpathSync.native(location),
-    notifications: [{ actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' }] }]);
+  const preview = legacyPreview(location, 'Bob',
+    { actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' });
   const legacy = nativeRecord(location, token, messageId, preview);
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence);
 
@@ -227,8 +232,8 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   const token = 'retired-claude-token';
   const messageId = 'retired-native-message';
   const { location, env, presence } = fixture(t, { doneNative: true });
-  const preview = renderPendingAtBoundary([{ name: 'Dana', squarePath: fs.realpathSync.native(location),
-    notifications: [{ actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' }] }]);
+  const preview = legacyPreview(location, 'Dana',
+    { actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' });
   const legacy = nativeRecord(location, token, messageId, preview, {
     participant: 'Dana', session: 'dana-session', activity: 'act/9', at: 1017,
     signature: 'legacy-signature', message: 'legacy message', diagnostic: { reason: 'legacy' }, legacyNote: 'drop me',
@@ -282,8 +287,8 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
 
 test('format-3 migration refuses a done native correlation outside the verified generation', async (t) => {
   const { location, env, presence } = fixture(t, { doneNative: true });
-  const preview = renderPendingAtBoundary([{ name: 'Dana', squarePath: fs.realpathSync.native(location),
-    notifications: [{ actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' }] }]);
+  const preview = legacyPreview(location, 'Dana',
+    { actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' });
   const legacy = nativeRecord(location, 'retired-claude-token', 'retired-native-message', preview, {
     participant: 'Dana', session: 'dana-session', activity: 'act/6', at: 1014,
   });
@@ -295,8 +300,8 @@ test('format-3 migration refuses a done native correlation outside the verified 
 
 test('format-3 migration refuses native evidence for an unknown participant', async (t) => {
   const { location, env, presence } = fixture(t);
-  const preview = renderPendingAtBoundary([{ name: 'Bob', squarePath: fs.realpathSync.native(location),
-    notifications: [{ actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' }] }]);
+  const preview = legacyPreview(location, 'Bob',
+    { actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' });
   const legacy = nativeRecord(location, 'ghost-token', 'ghost-message', preview, {
     participant: 'Ghost', session: 'ghost-session', activity: 'act/6', at: 1016,
   });
@@ -311,8 +316,8 @@ test('format-3 migration refuses a done native correlation without a verified jo
   const database = new DatabaseSync(location);
   try { database.prepare("UPDATE participants SET last_join_index=9 WHERE name_key_json='\"dana\"'").run(); }
   finally { database.close(); }
-  const preview = renderPendingAtBoundary([{ name: 'Dana', squarePath: fs.realpathSync.native(location),
-    notifications: [{ actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' }] }]);
+  const preview = legacyPreview(location, 'Dana',
+    { actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' });
   const legacy = nativeRecord(location, 'retired-claude-token', 'retired-native-message', preview, {
     participant: 'Dana', session: 'dana-session', activity: 'act/9', at: 1017,
   });

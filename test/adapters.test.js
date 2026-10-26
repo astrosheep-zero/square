@@ -71,8 +71,9 @@ function squarePiExtension(pi) {
 
 function sampleInbox() {
   return [{
-    name: 'Bob',
-    squarePath: '/tmp/SQUARE.square',
+    location: '/tmp/SQUARE.square',
+    seat: { participant: 'Bob', body: { channel: 'pi', session: 'test' }, generation: 'act/0' },
+    joinedAt: 1,
     notifications: [{ actIndex: 7, actor: 'Alice', at: 8, route: 'mention', body: 'hello @Bob' }],
   }];
 }
@@ -495,7 +496,7 @@ test('Codex installation preserves the prior bundle when the host rejects it', a
 test('Pi inbox helpers expose stable notification identity without invocation hints', () => {
   const inbox = sampleInbox();
   const context = renderPiInbox(inbox);
-  assert.equal(pendingInbox([...inbox, { name: 'Cara', squarePath: '/tmp/other.square', notifications: [] }]).length, 1);
+  assert.equal(pendingInbox([...inbox, { ...inbox[0], notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
   assert.match(context, /^\n<system-reminder>\nThis is an external reminder from Square, not a direct message from the user\.\n\n<square-activity square="\/tmp\/SQUARE\.square" as="Bob" id="act\/7" from="Alice">/);
   assert.match(context, /^Alice spoke your name\.$/m);
@@ -505,7 +506,7 @@ test('Pi inbox helpers expose stable notification identity without invocation hi
 });
 
 test('Pi square card collapses to who reached you, where, and their opening line, and expands to Markdown bodies', () => {
-  const membership = (notifications) => ({ name: 'Bob', squarePath: '/tmp/SQUARE.square', notifications });
+  const membership = (notifications) => ({ ...sampleInbox()[0], notifications });
   const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   const theme = { fg: (_color, text) => `<${text}>` };
   const details = pendingCardDetails([membership([note({ route: 'bell', body: '\nhello **@Bob**\nsecond' }), note({ actor: 'Cara', route: 'reply', actIndex: 8 })])]);
@@ -539,7 +540,7 @@ test('Pi square card collapses to who reached you, where, and their opening line
 test('Pi expansion retains clipped and omitted bodies and wraps wide text without losing the tail', () => {
   const body = `${'中文🦈 long '.repeat(40)}\nEND_FULL_TEXT`;
   const inbox = [{
-    name: 'Bob', squarePath: '/tmp/SQUARE.square',
+    ...sampleInbox()[0],
     notifications: Array.from({ length: 6 }, (_, i) => ({
       actIndex: i, actor: 'Alice', route: 'mention', body: `${body}\nnotification-${i}`,
     })),
@@ -564,7 +565,7 @@ test('Pi expansion retains clipped and omitted bodies and wraps wide text withou
 
 test('the omission line names what the budget dropped and closes the reminder', () => {
   const longPath = `/tmp/${'d'.repeat(90)}.square`;
-  const pending = (count) => [{ name: 'Bob', squarePath: longPath, notifications: Array.from({ length: count }, (_, i) => ({
+  const pending = (count) => [{ ...sampleInbox()[0], location: longPath, notifications: Array.from({ length: count }, (_, i) => ({
     actIndex: 10 + i, actor: 'Alice', route: 'mention', body: 'y'.repeat(600),
   })) }];
   const one = renderPiInbox(pending(3));

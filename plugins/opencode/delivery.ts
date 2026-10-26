@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createArtifactPort } from '../../artifact.js';
 import { deliverPending } from '../../delivery-operations.js';
-import { nativePendingPreview, observeSessionPending } from '../../inbox.js';
+import { nativePendingPreview, observeSessionPending, projectSessionSeats } from '../../inbox.js';
 import { automaticWakeEligible, presentationBlocksWake } from '../../delivery.js';
 import { sameBody, type Seat } from '../../model.js';
 import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
@@ -14,7 +14,6 @@ import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from 
 const routeKind = 'opencode-server' as const;
 const bodyFor = (sessionId: string) => ({ channel: 'opencode', session: sessionId });
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
-type LocatedSeat = { readonly location: string; readonly seat: Seat };
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
 
 function preview(facts: SquareRead, location: string, seat: Seat, index: number) {
@@ -24,34 +23,12 @@ function preview(facts: SquareRead, location: string, seat: Seat, index: number)
   });
 }
 
-/** The host index supplies candidate paths only; each membership is resolved from its artifact seat. */
-async function candidatePaths(sessionId: string, env: NodeJS.ProcessEnv): Promise<string[]> {
-  return [...new Set((await indexedSquareEntries({ body: bodyFor(sessionId) }, env)).map((entry) => entry.location))];
-}
-
-async function seatsAt(paths: readonly string[], sessionId: string, signal?: AbortSignal): Promise<LocatedSeat[]> {
-  const result: LocatedSeat[] = [];
-  const body = bodyFor(sessionId);
-  for (const location of paths) {
-    signal?.throwIfAborted();
-    const artifact = createArtifactPort(location, undefined, signal);
-    try {
-      const { value: seats } = await artifact.read((facts) => facts.seatsForBody(body).filter((seat) => facts.participant(seat.participant)?.joined), signal);
-      result.push(...seats.map((seat) => ({ location, seat })));
-    } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
-      // A stale or unreadable candidate cannot establish an OpenCode membership.
-    } finally { await artifact.close(); }
-  }
-  return result;
-}
-
 export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   return [...new Set((await indexedSquareEntries({ channel: 'opencode' }, env)).map((entry) => entry.body.session))];
 }
 
-export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<LocatedSeat[]> {
-  return seatsAt(await candidatePaths(sessionId, env), sessionId, signal);
+export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+  return projectSessionSeats({ body: bodyFor(sessionId), env }, signal);
 }
 
 function sameSeat(left: Seat | undefined, right: Seat): boolean {
@@ -158,10 +135,8 @@ export async function receiveOpenCodePending(target: OpenCodeNativeSession, env:
       });
       if (!await armed) { await waiting; break; }
       for (const membership of await observer.read({ signal })) {
-        const seat = membership.seat;
+        const { location, seat } = membership;
         if (signal.aborted) return;
-        if (seat === undefined) continue;
-        const location = membership.squarePath;
         const artifact = createArtifactPort(location, undefined, signal);
         try {
           const { value: notifications } = await artifact.read((facts) => {

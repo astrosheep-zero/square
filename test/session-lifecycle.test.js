@@ -11,7 +11,7 @@ import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { rememberSquarePath } from '../dist/square-index.js';
-import { projectSessionBindings } from '../dist/inbox.js';
+import { projectSessionSeats } from '../dist/inbox.js';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 
 async function fixture(t) {
@@ -231,20 +231,20 @@ test('binding time is the establishing join and fences late same-body joins at p
   await join('Before', 1000);
   await join('After', 2000);
   await join('Before', 2500); // reconnect is not a new generation or a new binding time
-  const bindings = await projectSessionBindings({ body, env: f.env });
-  assert.deepEqual(bindings.map(row => [row.participant, row.updatedAt]), [['After', 2000], ['Before', 1000]]);
+  const bindings = await projectSessionSeats({ body, env: f.env });
+  assert.deepEqual(bindings.map(row => [row.seat.participant, row.joinedAt]), [['After', 2000], ['Before', 1000]]);
   const cancelled = await bridge({ operation: 'cancel', bindings: [], cancelAt: 1500 });
   assert.deepEqual(cancelled.cancelledBindings.map(row => row.participant), ['Before']);
-  const before = bindings.find(row => row.participant === 'Before').seat;
-  const after = bindings.find(row => row.participant === 'After').seat;
+  const before = bindings.find(row => row.seat.participant === 'Before').seat;
+  const after = bindings.find(row => row.seat.participant === 'After').seat;
   assert.deepEqual(await artifactFacts(f.squarePath, facts => [
     facts.cancelledThrough('Before', before.generation), facts.cancelledThrough('After', after.generation),
   ]), [0, undefined]);
   const ended = await bridge({ operation: 'end', bindings: [], endedAt: 1500 });
   assert.deepEqual(ended.retired.map(row => row.participant), ['Before']);
   await join('Before', 3000);
-  const current = await projectSessionBindings({ body, env: f.env });
-  assert.equal(current.find(row => row.participant === 'Before').updatedAt, 3000);
+  const current = await projectSessionSeats({ body, env: f.env });
+  assert.equal(current.find(row => row.seat.participant === 'Before').joinedAt, 3000);
   await bridge({ operation: 'cancel', bindings: cancelled.cancelledBindings,
     cancelledBindings: cancelled.cancelledBindings, cancelAt: 1500 });
   assert.deepEqual((await bridge({ operation: 'end', bindings: ended.retired, endedAt: 1500 })).retired, []);

@@ -127,8 +127,8 @@ async function seen(f, index = 2, participant = 'Bob') { return seenIn(f.squareP
 
 async function pendingPayload(f, request) {
   const inbox = await sessionInbox(request.seat.body, f.env);
-  const membership = inbox.find(item => canonicalPathSync(item.squarePath) === canonicalPathSync(request.location)
-    && item.name === request.participant);
+  const membership = inbox.find(item => canonicalPathSync(item.location) === canonicalPathSync(request.location)
+    && item.seat.participant === request.participant);
   const notification = membership?.notifications.find(note => note.actIndex === Number(request.activity.slice(4)));
   if (membership === undefined || notification === undefined) return undefined;
   return renderPendingAtBoundary([{ ...membership, notifications: [notification] }]);

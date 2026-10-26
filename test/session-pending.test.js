@@ -6,7 +6,9 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareRevision } from '../dist/artifact.js';
-import { observeSessionPending, projectSessionBindings, sessionInbox } from '../dist/inbox.js';
+import { observeSessionPending, projectSessionSeats, sessionInbox, pendingKey, projectBoundaryEligibility } from '../dist/inbox.js';
+import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { inbox as publicInbox } from '../dist/square-api.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 
 async function fixture(t, leaseMs, hasPending = true) {
@@ -84,7 +86,7 @@ test('several exact bodies on one canonical artifact share one coherent projecti
 
   // Count connections AND transactions, not notification hydration alone: the old path
   // hydrated each recipient once while still reopening the same artifact in several stages.
-  let connections = new Set(), transactions = 0, selecting = new Set();
+  let connections = new Set(), transactions = 0, selecting = new Set(), sayHydrations = 0;
   const prepare = DatabaseSync.prototype.prepare, exec = DatabaseSync.prototype.exec;
   t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
     if (/^BEGIN\b/.test(sql)) { transactions++; connections.add(this); }
@@ -92,19 +94,29 @@ test('several exact bodies on one canonical artifact share one coherent projecti
   });
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
     if (/SELECT s\.\* FROM seats/.test(sql)) selecting.add(this);
+    if (sql.includes('act_index IN (SELECT value FROM json_each')) sayHydrations++;
     return prepare.call(this, sql, ...args);
   });
-  const reset = () => { connections = new Set(); selecting = new Set(); transactions = 0; };
+  const reset = () => { connections = new Set(); selecting = new Set(); transactions = 0; sayHydrations = 0; };
   const query = { channel: 'pi', session: 'one', allAgents: true };
   const inbox = await sessionInbox(query, item.env);
-  assert.deepEqual(inbox.map(member => member.name), ['Bob', 'Cara', 'Dana']);
+  assert.deepEqual(inbox.map(member => member.seat.participant), ['Bob', 'Cara', 'Dana']);
   assert.deepEqual(inbox.map(member => member.seat.body.agent), [undefined, 'child-a', 'child-b']);
   assert.ok(inbox.every(member => member.notifications.at(-1).body === 'all exact bodies'));
   assert.equal(connections.size, 1);
   assert.equal(transactions, 1);
   reset();
-  assert.equal((await projectSessionBindings({ channel: 'pi', sessionId: 'one', env: item.env })).length, 3);
-  assert.equal(transactions, 1, 'binding-only consumers use the same grouped projection path');
+  assert.equal((await projectSessionSeats({ channel: 'pi', sessionId: 'one', env: item.env })).length, 3);
+  assert.equal(transactions, 1, 'lifecycle consumers resolve all located seats in one transaction');
+  assert.equal(sayHydrations, 0, 'lifecycle does not load pending say bodies');
+  reset();
+  const summary = await publicInbox({ env: item.env }, 'one', { limit: 2 });
+  assert.equal(transactions, 1, 'count-only public inbox does not reopen per seat');
+  assert.equal(sayHydrations, 0, 'public counts do not load pending say bodies');
+  assert.deepEqual(summary, { rows: [
+    { name: 'Bob', squarePath: fs.realpathSync(item.file), pending: 2 },
+    { name: 'Cara', squarePath: fs.realpathSync(item.file), pending: 1 },
+  ], total: 3 });
   reset();
   const observer = await observeSessionPending(query, item.env);
   t.after(() => observer.close());
@@ -117,6 +129,44 @@ test('several exact bodies on one canonical artifact share one coherent projecti
   reset();
   assert.equal((await observer.read()).length, 3);
   assert.equal(transactions, 1, 'cache currentness and seat generations are checked in one current transaction');
+});
+
+test('boundary batch rendering excludes cancelled and replaced seats before any member presents', async t => {
+  const item = await fixture(t);
+  await item.bind();
+  const writer = createArtifactPort(item.file);
+  t.after(() => writer.close());
+  const body = { channel: 'pi', session: 'one' };
+  for (const participant of ['Cara', 'Dana']) await writer.transactAs({ kind: 'join', participant, body }, facts =>
+    facts.land({ kind: 'join', actor: participant, at: 4 }));
+  const alice = (await writer.read(facts => facts.seat('Alice'))).value;
+  const landed = await writer.transactAs({ kind: 'participant', seat: alice }, facts =>
+    facts.land({ kind: 'say', actor: 'Alice', at: 5, body: 'shared batch', mentions: ['Bob', 'Cara', 'Dana'] }));
+  const batch = await sessionInbox(body, item.env);
+  assert.deepEqual(batch.map(member => member.seat.participant), ['Bob', 'Cara', 'Dana']);
+  assert.ok(batch.every(member => member.joinedAt > 0 && member.seat.generation));
+  const bob = batch[0];
+  assert.deepEqual(await projectBoundaryEligibility([{ ...bob, seat: { ...bob.seat,
+    body: { ...body, agent: 'not-this-body' } } }]), [], 'same generation never substitutes for exact Body');
+  await writer.cancelDeliveries(batch[1].seat);
+  await writer.transactAs({ kind: 'takeover', participant: 'Dana', body, expectedGeneration: batch[2].seat.generation }, facts => {
+    facts.land({ kind: 'done', actor: 'Dana', at: 6 });
+    facts.land({ kind: 'join', actor: 'Dana', at: 7 });
+  });
+  let renders = 0;
+  const output = await presentPendingAtBoundary(body, context => { renders++; return context; }, () => batch, item.env);
+  assert.equal(renders, 1);
+  assert.match(output, /as="Bob"/);
+  assert.doesNotMatch(output, /as="Cara"|as="Dana"/);
+  const state = (await writer.read(facts => ({
+    bob: facts.receipt('Bob', landed.value.index), cara: facts.receipt('Cara', landed.value.index),
+    dana: facts.receipt('Dana', landed.value.index),
+    oldDanaEvidence: facts.deliveryEvidence('Dana', batch[2].seat.generation),
+  }))).value;
+  assert.ok(state.bob);
+  assert.equal(state.cara, undefined);
+  assert.equal(state.dana, undefined);
+  assert.deepEqual(state.oldDanaEvidence, []);
 });
 
 test('delivery-only cancellation invalidates cached eligibility without delayed filesystem hints', async t => {
@@ -331,7 +381,7 @@ test('an unreadable candidate stays quiet across reconciliation and repair resto
   assert.equal(snapshotReads, 0);
   fs.writeFileSync(corruptFile, saved);
   const repaired = (await waiting.pending)[0];
-  assert.equal(path.basename(repaired.squarePath), 'CORRUPT.square');
+  assert.equal(path.basename(repaired.location), 'CORRUPT.square');
   assert.equal(repaired.notifications[0].actIndex, 2);
   assert.ok(snapshotReads > 0, 'the repaired artifact must supply current recipient activity');
 });
@@ -361,7 +411,7 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   assert.deepEqual(eligible[0].notifications.map((note) => note.body), ['later eligible']);
   const revision = await readSquareRevision(item.file);
   const later = eligible[0].notifications[0].actIndex;
-  const excluded = new Set([`${eligible[0].squarePath}\0${eligible[0].name.toLocaleLowerCase()}\0${later}`]);
+  const excluded = new Set([pendingKey(eligible[0], later)]);
   const waiting = armedWait(item.observer, { excludeKeys: excluded, skipImmediate: true });
   await waiting.ready;
   now += 401;

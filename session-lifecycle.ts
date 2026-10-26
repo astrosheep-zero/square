@@ -1,7 +1,7 @@
 import { Square } from './square-api.js';
 import type { Body } from './model.js';
 import type { AutomaticProvider } from './participant-identity.js';
-import { projectSessionBindings } from './inbox.js';
+import { projectSessionSeats } from './inbox.js';
 
 function bodyFor(provider: AutomaticProvider, sessionId: string): Body {
   return { channel: provider === 'claude' ? 'claude-code' : provider, session: sessionId };
@@ -10,11 +10,11 @@ function bodyFor(provider: AutomaticProvider, sessionId: string): Body {
 /** Retire only seats held by this exact body, discovered through the rebuildable index. */
 export async function endSessionMemberships(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const body = bodyFor(provider, sessionId);
-  const bindings = await projectSessionBindings({ body, env });
-  for (const binding of bindings) {
-    const square = await Square.at({ path: binding.location, env, body, participant: binding.participant });
+  const seats = await projectSessionSeats({ body, env });
+  for (const { location, seat } of seats) {
+    const square = await Square.at({ path: location, env, body, participant: seat.participant });
     try {
-      await square.endOwnedSession(binding.participant, sessionId, binding.seat?.generation, body);
+      await square.endOwnedSession(seat.participant, sessionId, seat.generation, body);
     } finally { await square.close(); }
   }
 }

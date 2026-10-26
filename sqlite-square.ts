@@ -13,7 +13,7 @@ import { catchUp, endOwnedSession, express, hold, ignore, implicitJoin, join, ta
 import { recoveryObservation, currentParticipant, entryPresentation, resolveParticipant, snapshot, queryStatus,
   queryParticipants, catchPresence, toPublicActivity, publicActivities, selectHistory, NON_READ,
   HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
-import { projectSessionBindings } from './inbox.js';
+import { sessionInboxCounts } from './inbox.js';
 import { squareIndexPath } from './square-index.js';
 import { createDefaultWakeTransport } from './notifications.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
@@ -465,34 +465,8 @@ export async function inbox(input: SquareAtInput, identity: string | import('./m
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new SquareError('invalid_args', 'Inbox limit must be between 1 and 100');
   const query = typeof identity === 'string' ? { sessionId: identity, env } : { body: identity, env };
-  const rows: {
-    name: string;
-    squarePath: string;
-    pending: number;
-  }[] = [];
-  for (const binding of await projectSessionBindings(query)) {
-    checkControl(control);
-    let square: OpenSquare | undefined;
-    try {
-      square = await openSquare(binding.location, { clock: squareClock(env, input.clock),
-        body: binding.seat?.body, signal: control?.signal }, control);
-      const row = (await square.artifact.read((facts) => {
-        const participant = facts.participant(binding.participant);
-        return !participant?.joined ? undefined : { name: participant.name, squarePath: binding.location,
-          pending: facts.directedCount(participant.name, { unseenOnly: true }) };
-      }, control?.signal)).value;
-      if (row !== undefined)
-        rows.push(row);
-    }
-    catch (error) {
-      if (control?.signal?.aborted)
-        throw error;
-    }
-    finally {
-      if (square !== undefined)
-        await closeOpenSquare(square);
-    }
-  }
+  const rows = await sessionInboxCounts(query, control?.signal);
+  checkControl(control);
   const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
   rows.sort((a, b) => compare(a.squarePath, b.squarePath) || compare(nameKey(a.name), nameKey(b.name)) || compare(a.name, b.name));
   return { rows: rows.slice(0, limit), total: rows.length };

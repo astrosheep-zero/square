@@ -8,7 +8,7 @@ import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFa
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
 import { endSessionMemberships } from '../../dist/session-lifecycle.js';
-import { projectSessionBindings, observeSessionPending } from '../../dist/inbox.js';
+import { projectSessionSeats, observeSessionPending, pendingKey } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { formatActivityId } from '../../dist/square-core.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
@@ -26,7 +26,7 @@ export function pendingInbox(inbox) {
 
 export function inboxKeys(inbox) {
   return pendingInbox(inbox).flatMap((item) => item.notifications.map((note) =>
-    `${item.squarePath}\u0000${item.name.toLocaleLowerCase()}\u0000${note.actIndex}`
+    pendingKey(item, note.actIndex)
   ));
 }
 
@@ -41,9 +41,9 @@ function framePiMessage(content) {
 /** Renderer-only card facts for Pi and Paseo; Pi never sends `details` to the model. */
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
-    square: path.basename(membership.squarePath, '.square'),
+    square: path.basename(membership.location, '.square'),
     actor: note.actor,
-    recipient: membership.name,
+    recipient: membership.seat.participant,
     route: note.route,
     act: formatActivityId(note.actIndex),
     preview: previewAttentionBody(note.body),
@@ -52,9 +52,9 @@ export function pendingCardDetails(pending) {
   })));
   if (items.length === 0) return undefined;
   const fullText = pending.flatMap((membership) => membership.notifications.map((note) => renderAttentionFull({
-    squarePath: membership.squarePath,
+    squarePath: membership.location,
     actIndex: note.actIndex,
-    recipient: membership.name,
+    recipient: membership.seat.participant,
     ...note,
   }))).join('\n\n');
   return { items, fullText };
@@ -258,11 +258,10 @@ export default function squarePiExtension(pi) {
     operation = previous.then(async () => {
       const body = { channel: 'pi', session: id };
       const env = sessionEnv(id);
-      const bindings = await projectSessionBindings({ body, env });
-      for (const binding of bindings) {
-        if (binding.seat === undefined) continue;
-        const square = await Square.at({ path: binding.location, env, body, participant: binding.participant });
-        try { await square.cancelDeliveries(binding.participant, binding.seat.generation); }
+      const seats = await projectSessionSeats({ body, env });
+      for (const { location, seat } of seats) {
+        const square = await Square.at({ path: location, env, body, participant: seat.participant });
+        try { await square.cancelDeliveries(seat.participant, seat.generation); }
         finally { await square.close(); }
       }
     }).then(() => {
