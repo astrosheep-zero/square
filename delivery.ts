@@ -1,5 +1,7 @@
-import type { DirectedNotificationRoute, StoredAct, WatchLease, WakeRouteKind } from './model.js';
-import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeOutcome } from './ports.js';
+import type { DirectedNotificationRoute, StoredAct, WatchLease } from './model.js';
+import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeRequest } from './ports.js';
+import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
+import { parseActivityId } from './square-core.js';
 import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
@@ -9,18 +11,16 @@ export interface PlannedNotification {
   recipient: string;
   route: DirectedNotificationRoute;
 }
-/** gate-rejected means the supplied beforeSend returned false and nothing was sent. */
-export type WakeAdapterResult = Exclude<WakeOutcome, { outcome: 'not-capable' }> | { outcome: 'gate-rejected' };
-/** One attempt's stable coordinates; retries reuse its dedup key. */
-export interface WakeDispatchContext {
-  readonly location: string;
-  readonly participant: string;
-  readonly activity: string;
-  readonly attemptN?: number;
-}
-export interface WakeAdapter {
-  readonly kind: WakeRouteKind;
-  dispatch(address: Readonly<Record<string, string>>, payload: string, beforeSend: () => Promise<boolean>, timeoutMs?: number, context?: WakeDispatchContext): Promise<WakeAdapterResult>;
+/** Exact stored activity projection for transports that send an awareness reminder. */
+export function wakePreview(facts: SquareRead, request: WakeRequest): string | undefined {
+  const index = parseActivityId(request.activity);
+  const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
+  const item = index === undefined ? undefined : facts.activity(index);
+  if (head === undefined || item?.kind !== 'say') return undefined;
+  return renderSquareReminder([renderAttentionPreview({
+    squarePath: request.location, recipient: request.participant, actIndex: item.index,
+    actor: item.actor, route: head.route, body: item.body,
+  })]);
 }
 export interface RoutedNotification {
   actor: string;

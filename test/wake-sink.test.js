@@ -8,7 +8,9 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { WebSocketServer } from 'ws';
 
-import { PaseoAdapter } from '../dist/paseo-delivery.js';
+import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
+import { createArtifactPort } from '../dist/artifact.js';
+import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 import { sendPaseoWake } from '../dist/wake-sink.js';
 
@@ -104,23 +106,30 @@ test('a Square Paseo wake steers with one stable id per attempt', async (t) => {
   await environment(t);
   const { state, endpoint } = await daemon(t, { onSend: accepted });
   process.env.PASEO_HOST = endpoint;
-  const adapter = new PaseoAdapter({
+  const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: emptyRuntimeState() });
+  t.after(() => artifact.close());
+  const join = async (name) => (await artifact.transactAs({ kind: 'join', participant: name,
+    body: { channel: 'test', session: name } }, facts => {
+    facts.land({ kind: 'join', actor: name, at: 1 });
+    return facts.seat(name);
+  })).value;
+  const bev = await join('Bev');
+  const seat = await join('Faye');
+  await artifact.transactAs({ kind: 'participant', seat: bev }, facts =>
+    facts.land({ kind: 'say', actor: 'Bev', at: 2, body: 'stored preview', mentions: ['Faye'] }));
+  const transport = new PaseoWakeTransport({
     discover: () => ({ agents: [{ id: 'agent-one', name: 'Faye', status: 'idle' }] }),
     waitForBoundary: async () => true,
   });
-  const dispatch = (context) => adapter.dispatch(
-    { agentId: 'agent-one' },
-    attempt.prompt,
-    async () => true,
-    5000,
-    context
-  );
+  const dispatch = (context) => transport.attempt({ ...context, activity: 'act/2', seat, artifact,
+    route: { kind: 'paseo', address: { agentId: 'agent-one' } } }, 5000, async () => true);
 
   assert.deepEqual(await dispatch(coordinates), { outcome: 'accepted' });
   assert.deepEqual(await dispatch(coordinates), { outcome: 'accepted' });
   assert.equal(state.sends.length, 2);
   assert.equal(state.sends.every((message) => message.activeTurnBehavior === 'steer'), true);
-  assert.equal(state.sends[0].text, attempt.prompt);
+  assert.match(state.sends[0].text, /stored preview/);
+  assert.match(state.sends[0].text, /Bev spoke your name\./);
   assert.match(state.sends[0].messageId, /^square-[0-9a-f]{32}$/);
   assert.equal(state.sends[0].messageId, state.sends[1].messageId);
 

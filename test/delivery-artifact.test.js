@@ -3,10 +3,13 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Square } from '../dist/square-api.js';
+import { Square, squareClock } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { presentPending } from '../dist/presentation-operations.js';
+import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
+import { createDefaultWakeTransport } from '../dist/notifications.js';
+import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 
 const empty = () => ({ hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
 
@@ -151,6 +154,86 @@ test('a catch receipt committed before the final send gate suppresses the wake a
   }))).value;
   assert.ok(state.seen);
   assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome]), [['wake', 'released']]);
+});
+
+test('Paseo asynchronous readiness precedes the final gate; consumed attention releases the claim with zero sends', async t => {
+  const { artifact, bob, activity } = await fixture();
+  t.after(() => artifact.close());
+  let ready = false, sends = 0;
+  const transport = new PaseoWakeTransport({
+    discover: () => ({ agents: [{ id: 'bob', status: 'idle' }] }),
+    waitForBoundary: async () => {
+      await artifact.transactAs({ kind: 'participant', seat: bob }, facts => facts.markSeen('Bob', [2], 4));
+      ready = true;
+      return true;
+    },
+    sendWake: async () => { sends += 1; },
+  });
+  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
+  assert.equal(ready, true);
+  assert.equal(sends, 0);
+  assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  const rows = (await artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, activity))).value;
+  assert.deepEqual(rows.map(row => [row.kind, row.outcome, row.signature]), [['wake', 'released', 'pre_send_revalidation_failed']]);
+});
+
+test('frozen semantic clock cannot freeze Paseo readiness elapsed budget or allow a late send', async t => {
+  const { artifact, bob, activity } = await fixture();
+  t.after(() => artifact.close());
+  const env = { SQUARE_NOW_MS: '100' };
+  const semanticClock = squareClock(env);
+  let wallNow = 1000, sends = 0, readiness = 0;
+  t.mock.method(Date, 'now', () => wallNow);
+  const paseo = new PaseoWakeTransport({
+    discover: () => ({ agents: [{ id: 'bob', status: 'idle' }] }),
+    waitForBoundary: async (_agent, remaining) => {
+      readiness += 1;
+      assert.equal(remaining, 321);
+      await Promise.resolve();
+      wallNow += 321;
+      assert.equal(semanticClock(), 100);
+      return true;
+    },
+    sendWake: async () => { sends += 1; },
+  });
+  const transport = await createDefaultWakeTransport(env, { paseo });
+  const result = await transport.attempt({ artifact, location: '/tmp/one.square', participant: 'Bob', seat: bob, activity,
+    route: { kind: 'paseo', address: { agentId: 'bob' } } }, 321, async () => true);
+  assert.equal(readiness, 1);
+  assert.equal(sends, 0);
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.signature, 'dispatch_budget_exhausted');
+});
+
+test('real Paseo outcomes retain distinct accepted, pre-accept failure and uncertain-send evidence without consuming', async t => {
+  for (const expected of ['accepted', 'failed', 'unknown']) await t.test(expected, async t => {
+    const { artifact, bob, activity } = await fixture();
+    t.after(() => artifact.close());
+    let ready = false, sends = 0;
+    const transport = new PaseoWakeTransport({
+      discover: () => ({ agents: [{ id: 'bob', status: 'idle' }] }),
+      waitForBoundary: async () => { await Promise.resolve(); ready = true; return true; },
+      sendWake: async (request) => {
+        assert.equal(ready, true);
+        assert.equal(request.participant, 'Bob');
+        assert.equal(request.activity, activity);
+        assert.equal(request.attemptN, 0);
+        assert.match(request.prompt, /one artifact-owned notice/);
+        sends += 1;
+        if (expected !== 'accepted') throw new DeliveryError('unavailable', expected === 'unknown');
+      },
+    });
+    const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
+    assert.equal(result[expected], 1);
+    assert.equal(result.attempted, 1);
+    const state = (await artifact.read(facts => ({ seen: facts.receipt('Bob', 2), evidence: facts.deliveryEvidence('Bob', bob.generation, activity) }))).value;
+    assert.equal(state.seen, undefined, 'wake acceptance is not presentation');
+    assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome]), [['wake', expected]]);
+    if (expected !== 'failed') {
+      assert.equal((await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 5, transport })).attempted, 0);
+      assert.equal(sends, 1, 'accepted and unknown sends are never safe replay');
+    }
+  });
 });
 
 test('delivery evidence retains claim leases, token scoping and terminal transition conditions', async t => {

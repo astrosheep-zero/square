@@ -48,10 +48,6 @@ async function currentness(artifact: SquareArtifactPort, request: WakeRequest, n
   return value;
 }
 
-export async function wakeRequestCurrentness(artifact: SquareArtifactPort, request: WakeRequest, now = Date.now()): Promise<Currentness> {
-  return currentness(artifact, request, now);
-}
-
 async function attemptWakeWithin(
   transport: WakeTransportPort,
   request: WakeRequest,

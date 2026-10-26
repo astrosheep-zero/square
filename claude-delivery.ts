@@ -53,12 +53,12 @@ export function createClaudeWakeTransport(env: NodeJS.ProcessEnv = process.env):
   };
 }
 
-async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSend?: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
+async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>, env: NodeJS.ProcessEnv = process.env): Promise<WakeOutcome> {
   void env;
   const signal = AbortSignal.timeout(timeoutMs);
   if (!nativeSupported(request.route) || request.artifact === undefined || request.claimToken === undefined)
     return { outcome: 'not-capable', diagnostic: 'Claude native delivery needs a current artifact claim and loaded inbox.' };
-  if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
+  if (signal.aborted || !await beforeSend())
     return { outcome: 'unknown', signature: 'native_send_suppressed' };
   const prepared = await preview(request.artifact, request);
   if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'Claude activity is no longer current.' };
@@ -67,10 +67,10 @@ async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSen
   const correlation = { harness: 'claude' as const, token: request.claimToken, messageId, payloadHash: hashPayload(payload) };
   if (!await request.artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }))
     return { outcome: 'not-capable', diagnostic: 'Claude delivery claim is no longer current.' };
-  if (!await (beforeSend?.() ?? Promise.resolve(true))) return { outcome: 'not-capable', diagnostic: 'Claude activity was consumed before native write.' };
   const fresh = await preview(request.artifact, request);
   if (fresh === undefined || nativePayload(request.claimToken, fresh.payload) !== payload)
     return { outcome: 'not-capable', diagnostic: 'Claude activity changed before native write.' };
+  if (signal.aborted || !await beforeSend()) return { outcome: 'not-capable', diagnostic: 'Claude activity was consumed before native write.' };
   return writeClaudeWake(request.route.sessionId, request.route.address.endpoint!, messageId, payload, timeoutMs, signal);
 }
 

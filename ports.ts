@@ -198,11 +198,11 @@ export interface SquareResourceOwner {
   close(): Promise<void>;
 }
 
-/** Capability-neutral wake transport. Unused by this Contract's activity operations. */
+/** Sole wake executor protocol; implementations own only transport readiness and sending. */
 export interface WakeTransportPort {
   /** Capability check that performs no external wake and writes no evidence. */
   probe?(route: WakeRoute): Promise<boolean | { readonly outcome: 'not-capable'; readonly diagnostic?: string }>;
-  attempt(request: WakeRequest, timeoutMs: number, beforeSend?: () => Promise<boolean>): Promise<WakeOutcome>;
+  attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome>;
 }
 
 export interface WakeRequest {

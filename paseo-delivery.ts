@@ -1,8 +1,5 @@
-import {
-  type WakeAdapter,
-  type WakeAdapterResult,
-  type WakeDispatchContext,
-} from './delivery.js';
+import type { WakeRequest, WakeOutcome, WakeTransportPort } from './ports.js';
+import { wakePreview } from './delivery.js';
 import { DeliveryError } from './packages/agent-delivery/src/index.js';
 import { resolvePaseoDaemon } from './packages/agent-delivery/src/paseo-native.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
@@ -28,27 +25,20 @@ function diagnostic(
   };
 }
 
-export interface PaseoAdapterOptions {
+export interface PaseoWakeTransportOptions {
   discover?: typeof discoverPaseoAgents;
   waitForBoundary?: typeof waitForPaseoWakeBoundary;
   sendWake?: typeof sendPaseoWake;
 }
 
-export class PaseoAdapter implements WakeAdapter {
-  readonly kind = 'paseo' as const;
+export class PaseoWakeTransport implements WakeTransportPort {
+  constructor(private readonly opts: PaseoWakeTransportOptions = {}) {}
 
-  constructor(private readonly opts: PaseoAdapterOptions = {}) {}
-
-  async dispatch(
-    address: Readonly<Record<string, string>>,
-    payload: string,
-    beforeSend: () => Promise<boolean>,
-    timeoutMs = 5000,
-    context?: WakeDispatchContext,
-  ): Promise<WakeAdapterResult> {
+  async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
+    const address = request.route.address;
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(0, deadline - Date.now());
-    const budgetUnavailable = (): WakeAdapterResult => ({
+    const budgetUnavailable = (): WakeOutcome => ({
       outcome: 'failed',
       unavailable: true,
       signature: 'dispatch_budget_exhausted',
@@ -67,6 +57,9 @@ export class PaseoAdapter implements WakeAdapter {
       };
     }
 
+    const payload = request.artifact === undefined ? undefined
+      : (await request.artifact.read((facts) => wakePreview(facts, request))).value;
+    if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
     let remaining = remainingMs();
     if (remaining === 0) return budgetUnavailable();
     const discovery = (this.opts.discover ?? discoverPaseoAgents)(remaining);
@@ -108,7 +101,7 @@ export class PaseoAdapter implements WakeAdapter {
         retainRoute: true,
       };
     }
-    if (!(await beforeSend())) return { outcome: 'gate-rejected' };
+    if (!(await beforeSend())) return { outcome: 'not-capable' };
     remaining = remainingMs();
     if (remaining === 0) return budgetUnavailable();
 
@@ -116,10 +109,10 @@ export class PaseoAdapter implements WakeAdapter {
       await (this.opts.sendWake ?? sendPaseoWake)({
         agentId,
         prompt: payload,
-        location: context?.location ?? '',
-        participant: context?.participant ?? '',
-        activity: context?.activity ?? '',
-        ...(context?.attemptN === undefined ? {} : { attemptN: context.attemptN }),
+        location: request.location,
+        participant: request.participant,
+        activity: request.activity,
+        ...(request.attemptN === undefined ? {} : { attemptN: request.attemptN }),
       }, { timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {

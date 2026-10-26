@@ -308,7 +308,7 @@ export class SqliteSquare {
     const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
     const clock = squareClock(env, input.clock);
     const wakeTransport = input.wakeTransport ?? (automaticDelivery
-      ? await createDefaultWakeTransport(clock, env).catch(() => undefined) : undefined);
+      ? await createDefaultWakeTransport(env).catch(() => undefined) : undefined);
     return new SqliteSquare(location, await openSquare(location, { clock, wakeTransport, automaticDelivery,
       indexPath: squareIndexPath(env), body: input.body, wakeAddress: input.wakeAddress,
       signal: control?.signal, artifact: input.resources?.artifact(location) }, control), input.participant);

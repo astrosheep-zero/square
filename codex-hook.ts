@@ -4,7 +4,7 @@ import type { Body, PendingMembership } from './model.js';
 import { endSessionMemberships } from './session-lifecycle.js';
 import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
-import type { WakeAdapter } from './delivery.js';
+import type { WakeTransports } from './notifications.js';
 
 export interface CodexHookInput {
   session_id?: unknown;
@@ -35,7 +35,7 @@ export async function codexHookResponse(
   input: CodexHookInput,
   lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
-  deliveryAdapters?: WakeAdapter[],
+  deliveryTransports?: WakeTransports,
   trace: HookTrace = defaultTrace,
 ): Promise<object | undefined> {
   if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
@@ -57,7 +57,7 @@ export async function codexHookResponse(
   await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env, signal);
   stage('boundary-record');
   if (hookEventName === 'Stop') {
-    await sweepPrivilegedPending(cwd, env, deliveryAdapters, sweepDeadline, signal).catch(() => undefined);
+    await sweepPrivilegedPending(cwd, env, deliveryTransports, sweepDeadline, signal).catch(() => undefined);
     stage('sweep', signal.aborted ? 'aborted=true' : '');
     return undefined;
   }
@@ -75,7 +75,7 @@ export async function codexHookResponse(
     stage('presentation', `error=${error instanceof Error ? error.name : String(error)}`);
     response = undefined;
   }
-  await sweepPrivilegedPending(cwd, env, deliveryAdapters, sweepDeadline, signal).catch(() => undefined);
+  await sweepPrivilegedPending(cwd, env, deliveryTransports, sweepDeadline, signal).catch(() => undefined);
   stage('sweep', signal.aborted ? 'aborted=true' : '');
   return response;
 }

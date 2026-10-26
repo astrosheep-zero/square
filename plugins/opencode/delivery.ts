@@ -49,7 +49,7 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
       }
       const signal = AbortSignal.any([lifetime, AbortSignal.timeout(timeoutMs)]);
       const started = Date.now();
-      if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
+      if (signal.aborted || !await beforeSend())
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before send.' };
       const { value: prepared } = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
       if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
@@ -57,11 +57,11 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
       const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(prepared.payload) };
       if (!await artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }, signal))
         return { outcome: 'not-capable', diagnostic: 'OpenCode delivery claim is no longer current.' };
-      if (signal.aborted || !await (beforeSend?.() ?? Promise.resolve(true)))
-        return { outcome: 'not-capable', diagnostic: 'OpenCode attention was consumed before send.' };
       const fresh = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
       if (fresh.value === undefined || payloadHash(fresh.value.payload) !== correlation.payloadHash)
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before native send.' };
+      if (signal.aborted || !await beforeSend())
+        return { outcome: 'not-capable', diagnostic: 'OpenCode attention was consumed before send.' };
       const result = await sendNativeText(target, prepared.payload, {
         inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
       });

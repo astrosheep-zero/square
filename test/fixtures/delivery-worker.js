@@ -7,10 +7,9 @@ if (!squarePath || !/^\d+$/.test(actIndexText ?? '') || !mode || !callLog) {
   throw new Error('delivery-worker requires squarePath, actIndex, mode, and callLog');
 }
 
-const adapter = {
-  kind: 'paseo',
-  async dispatch(_route, _request, beforeSend) {
-    if (!(await beforeSend())) return { outcome: 'gate-rejected' };
+const transport = {
+  async attempt(_request, _timeout, beforeSend) {
+    if (!(await beforeSend())) return { outcome: 'not-capable' };
     fs.appendFileSync(callLog, `${process.pid}\n`);
     if (mode === 'hold-after-send') {
       process.stdout.write('sent\n');
@@ -23,5 +22,5 @@ const adapter = {
 
 await processActNotificationsOnce(squarePath, Number(actIndexText), {
   env: process.env,
-  adapters: [adapter],
+  transports: { paseo: transport },
 });

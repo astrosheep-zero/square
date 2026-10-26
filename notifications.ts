@@ -3,17 +3,10 @@ import fs from 'node:fs';
 
 import { indexedSquareEntries } from './square-index.js';
 
-import {
-  type WakeAdapter,
-} from './delivery.js';
-import { SquareError } from './model.js';
-import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
+import { SquareError, type WakeRouteKind } from './model.js';
 import { openSquare, closeOpenSquare } from './open-square.js';
-import { deliverPending, sweepPending, wakeRequestCurrentness } from './delivery-operations.js';
-import { pendingHead } from './delivery.js';
-import { parseActivityId } from './square-core.js';
-import { canonicalPath } from './canonical-path.js';
-import type { WakeTransportPort, WakeOutcome, WakeRequest } from './ports.js';
+import { deliverPending, sweepPending } from './delivery-operations.js';
+import type { WakeTransportPort } from './ports.js';
 
 export type { PlannedNotification } from './delivery.js';
 
@@ -27,111 +20,48 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
   return value;
 }
 
+export type WakeTransports = Readonly<Partial<Record<WakeRouteKind, WakeTransportPort>>>;
+
 interface ProcessNotificationOptions {
-  adapters?: WakeAdapter[];
+  transports?: WakeTransports;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
 }
 
-export async function defaultWakeAdapters(env: NodeJS.ProcessEnv = process.env): Promise<WakeAdapter[]> {
-  const adapters: WakeAdapter[] = [];
-  try {
-    const { CodexQueueAdapter } = await import('./codex-queue.js');
-    adapters.push(new CodexQueueAdapter({ env }));
-  } catch {
-    // Codex is unavailable only when this build omits its local adapter.
-  }
-  try {
-    const { PaseoAdapter } = await import('./paseo-delivery.js');
-    adapters.push(new PaseoAdapter());
-  } catch {
-    // Paseo is an optional integration; a core-only install simply has no Paseo adapter.
-  }
-  return adapters;
-}
-
+/** Concrete transports use wall time; semantic state time belongs to Square operations. */
 export async function createDefaultWakeTransport(
-  clock: () => number,
   env: NodeJS.ProcessEnv = process.env,
-  suppliedAdapters?: readonly WakeAdapter[],
+  suppliedTransports?: WakeTransports,
 ): Promise<WakeTransportPort> {
-  const adapters = suppliedAdapters ?? await defaultWakeAdapters(env);
-  const { createClaudeWakeTransport } = await import('./claude-delivery.js');
-  return createWakeTransport(
-    suppliedAdapters === undefined && env.SQUARE_DISABLE_PASEO_WAKE === '1' ? adapters.filter((adapter) => adapter.kind !== 'paseo') : adapters,
-    clock,
-    { 'claude-native': createClaudeWakeTransport(env) },
-  );
-}
-
-async function observeWakeRequest(request: WakeRequest, now: number): Promise<{ readonly current: boolean; readonly observationAvailable: boolean }> {
+  if (suppliedTransports !== undefined) return createWakeTransport(suppliedTransports);
+  const transports: Partial<Record<WakeRouteKind, WakeTransportPort>> = {};
   try {
-    if (request.artifact === undefined) return { current: false, observationAvailable: false };
-    return { current: (await wakeRequestCurrentness(request.artifact, request, now)).current, observationAvailable: true };
-  } catch { return { current: false, observationAvailable: false }; }
+    const { CodexQueueTransport } = await import('./codex-queue.js');
+    transports['codex-queue'] = new CodexQueueTransport({ env });
+  } catch { /* core-only builds may omit Codex */ }
+  if (env.SQUARE_DISABLE_PASEO_WAKE !== '1') {
+    try {
+      const { PaseoWakeTransport } = await import('./paseo-delivery.js');
+      transports.paseo = new PaseoWakeTransport();
+    } catch { /* Paseo is optional */ }
+  }
+  const { createClaudeWakeTransport } = await import('./claude-delivery.js');
+  transports['claude-native'] = createClaudeWakeTransport(env);
+  return createWakeTransport(transports);
 }
 
-
-export function createWakeTransport(
-  adapters: readonly WakeAdapter[],
-  clock: () => number,
-  nativePorts: Readonly<Partial<Record<import('./model.js').WakeRouteKind, WakeTransportPort>>> = {},
-): WakeTransportPort {
+/** Route selection only: all implementations receive the same request and final gate. */
+export function createWakeTransport(transports: WakeTransports): WakeTransportPort {
+  const missing = (kind: WakeRouteKind) => ({ outcome: 'not-capable' as const, diagnostic: `no transport for ${kind}` });
   return {
-    probe: async (route) => {
-      const native = nativePorts[route.kind];
-      if (native !== undefined) return native.probe?.(route) ?? true;
-      const adapter = adapters.find((candidate) => candidate.kind === route.kind);
-      if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${route.kind}` };
-      const probe = (adapter as WakeAdapter & { probe?: (address: Readonly<Record<string, string>>) => Promise<boolean> }).probe;
-      if (probe === undefined) return true;
-      try { return await probe.call(adapter, route.address); } catch (error) {
-        return { outcome: 'not-capable', diagnostic: error instanceof Error ? error.message : String(error) };
-      }
+    async probe(route) {
+      const transport = transports[route.kind];
+      if (transport === undefined) return missing(route.kind);
+      try { return await transport.probe?.(route) ?? true; }
+      catch (error) { return { outcome: 'not-capable', diagnostic: error instanceof Error ? error.message : String(error) }; }
     },
-    attempt: async (request, timeoutMs, beforeSend): Promise<WakeOutcome> => {
-      let revalidation: Awaited<ReturnType<typeof observeWakeRequest>> | undefined;
-      const finalGate = beforeSend ?? (async () => {
-        revalidation = await observeWakeRequest(request, clock());
-        return revalidation.current;
-      });
-      const native = nativePorts[request.route.kind];
-      if (native !== undefined) return native.attempt(request, timeoutMs, finalGate);
-      const adapter = adapters.find((candidate) => candidate.kind === request.route.kind);
-      if (adapter === undefined) return { outcome: 'not-capable', diagnostic: `no adapter for ${request.route.kind}` };
-      try {
-        const location = await canonicalPath(request.location);
-        if (request.artifact === undefined) return { outcome: 'not-capable', diagnostic: 'Artifact context is missing.' };
-        let payload: string | undefined;
-        const index = parseActivityId(request.activity);
-        payload = (await request.artifact.read((facts) => {
-          const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
-          const item = index === undefined ? undefined : facts.activity(index);
-          if (!head || item?.kind !== 'say') return undefined;
-          return renderSquareReminder([renderAttentionPreview({
-            squarePath: location, recipient: request.participant, actIndex: item.index,
-            actor: item.actor, route: head.route, body: item.body,
-          })]);
-        })).value;
-        if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
-        const result = await adapter.dispatch(request.route.address, payload, finalGate, timeoutMs, request);
-        if (result.outcome !== 'gate-rejected') return result;
-        if (revalidation !== undefined && !revalidation.current) {
-          return {
-            outcome: 'failed',
-            signature: 'pre_send_revalidation_failed',
-            message: revalidation.observationAvailable
-              ? 'Wake was not sent because current attention, session binding, or route no longer matches.'
-              : 'Wake was not sent because current Square delivery state could not be verified.',
-            diagnostic: revalidation,
-            unavailable: true,
-          };
-        }
-        return { outcome: 'unknown', diagnostic: 'wake dispatch cancelled' };
-      } catch (error) {
-        return { outcome: 'unknown', diagnostic: error instanceof Error ? error.message : String(error) };
-      }
-    },
+    attempt: (request, timeoutMs, beforeSend) => transports[request.route.kind]?.attempt(request, timeoutMs, beforeSend)
+      ?? Promise.resolve(missing(request.route.kind)),
   };
 }
 
@@ -140,7 +70,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
   const now = opts.now ?? Date.now;
   const square = await openSquare(squarePath, { clock: now });
   try {
-    const transport = await createDefaultWakeTransport(now, env, opts.adapters);
+    const transport = await createDefaultWakeTransport(env, opts.transports);
     try {
       return await deliverPending({ artifact: square.artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch {
@@ -155,7 +85,7 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
 export async function sweepPrivilegedPending(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
-  suppliedAdapters?: WakeAdapter[],
+  suppliedTransports?: WakeTransports,
   deadline = Date.now() + PRIVILEGED_HOOK_BUDGET_MS,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -169,7 +99,7 @@ export async function sweepPrivilegedPending(
     }
   } catch { /* no local square directory */ }
   if (remainingMs() === 0 || signal?.aborted) return;
-  const transport = await createDefaultWakeTransport(Date.now, env, suppliedAdapters);
+  const transport = await createDefaultWakeTransport(env, suppliedTransports);
   for (const squarePath of paths) {
     if (remainingMs() === 0 || signal?.aborted) break;
     try {

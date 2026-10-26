@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 
 import { codexQueueEligible } from './codex-boundary-state.js';
-import type { WakeAdapter, WakeAdapterResult } from './delivery.js';
+import type { WakeRequest, WakeOutcome, WakeTransportPort } from './ports.js';
+import { wakePreview } from './delivery.js';
 import { type WakeRoute } from './model.js';
 
 export interface CodexQueueRequest {
@@ -46,25 +47,18 @@ export function sendCodexQueue(
   throw new CodexQueueSendError(messageText, classifyFailure(messageText));
 }
 
-export interface CodexQueueAdapterOptions {
+export interface CodexQueueTransportOptions {
   env?: NodeJS.ProcessEnv;
   sendQueue?: typeof sendCodexQueue;
 }
 
-export class CodexQueueAdapter implements WakeAdapter {
-  readonly kind = 'codex-queue' as const;
+export class CodexQueueTransport implements WakeTransportPort {
+  constructor(private readonly opts: CodexQueueTransportOptions = {}) {}
 
-  constructor(private readonly opts: CodexQueueAdapterOptions = {}) {}
-
-  async dispatch(
-    address: Readonly<Record<string, string>>,
-    payload: string,
-    beforeSend: () => Promise<boolean>,
-    timeoutMs = 5000,
-  ): Promise<WakeAdapterResult> {
+  async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
     const deadline = Date.now() + timeoutMs;
     const remainingMs = () => Math.max(0, deadline - Date.now());
-    const threadId = address.threadId?.trim();
+    const threadId = request.route.address.threadId?.trim();
     if (!threadId) {
       return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
     }
@@ -78,7 +72,10 @@ export class CodexQueueAdapter implements WakeAdapter {
         retainRoute: true,
       };
     }
-    if (!(await beforeSend())) return { outcome: 'gate-rejected' };
+    const payload = request.artifact === undefined ? undefined
+      : (await request.artifact.read((facts) => wakePreview(facts, request))).value;
+    if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
+    if (!(await beforeSend())) return { outcome: 'not-capable' };
     if (!await codexQueueEligible(threadId, env)) {
       return {
         outcome: 'failed',
