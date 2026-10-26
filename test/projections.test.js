@@ -6,7 +6,8 @@ import path from 'node:path';
 import { createSquareFile } from '../dist/artifact.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { Square } from '../dist/square-api.js';
-import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, resolveParticipant, snapshot, queryStatus, streamProjection } from '../dist/views.js';
+import { resolveKnownName } from '../dist/decisions.js';
+import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, snapshot, queryStatus, streamProjection } from '../dist/views.js';
 
 const queryContext = { location: 'memory', now: 100_000, automaticDeliveryAvailable: false };
 
@@ -55,8 +56,8 @@ test('recovery observes caller gates and bounded unread previews without selecti
   const { square, reads, cell } = measuredSquare(state);
   try {
     const before = (await cell.read((facts) => facts.receiptAssignments())).value;
-    assert.deepEqual(await resolveParticipant(square, 'BOB'), { name: 'Bob' });
-    const recovered = await recoveryObservation(square, 'BOB');
+    assert.equal((await square.artifact.read(facts => resolveKnownName(facts, 'BOB'))).value, 'Bob');
+    const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'BOB', square.clock()))).value;
     assert.deepEqual(recovered, {
       participant: 'Bob', roster: ['Alice', 'Bob'], standingCount: 2,
       held: true, holdReason: 'pause', ownActivityCount: 1, hardCap: 5,
@@ -76,7 +77,7 @@ test('entry hydrates only its newest public page and numbers lifetime says', asy
   acts.push({ kind: 'listen', actor: 'Bob', target: 'Alice', at: 242, index: 242 });
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const entry = await entryPresentation(square, 'BOB', 3);
+    const entry = (await square.artifact.read(facts => entryPresentation(facts, 'BOB', 3))).value;
     assert.deepEqual(entry.recentActivities.map((a) => a.index), [239, 240, 241]);
     assert.deepEqual(entry.sayNumbers, { 239: 238, 240: 239, 241: 240 });
     assert.deepEqual(Object.values(entry.perceptions), ['full', 'full', 'full']);
@@ -84,7 +85,7 @@ test('entry hydrates only its newest public page and numbers lifetime says', asy
     assert.deepEqual(reads.ordinals, [[239, 240, 241]]);
     assert.equal(entry.joinContext, 'context');
     assert.equal(entry.joinedBefore, false);
-    const ambient = await entryPresentation(square, '', 1);
+    const ambient = (await square.artifact.read(facts => entryPresentation(facts, '', 1))).value;
     assert.equal(ambient.perceptions[241], 'presence');
   } finally { await cell.close(); }
 });
@@ -259,7 +260,7 @@ test('SDK delivered closure detaches exact raw assignments including orphan coor
     bob: { 'act/4': { state: 'seen', at: 11 } },
     Unknown: { 'act/2': { state: 'seen', at: 12 } },
   }));
-  const detached = await snapshot(square);
+  const detached = (await square.artifact.read(facts => snapshot(facts, square.clock()))).value;
   await cell.transact((facts) => facts.markSeen('Bob', [5], 20));
   await cell.close();
   assert.equal(detached.delivered('BOB', 'act/3'), true);
@@ -278,12 +279,12 @@ test('recipient stream advances a raw page without bodies and retains seen pre-r
   acts.push({ kind: 'join', actor: 'bob', at: 104, index: 104 });
   const { square, reads, cell } = measuredSquare(fixture(acts, { Bob: { 'act/102': { state: 'seen', at: 200 } } }));
   try {
-    const empty = await streamProjection(square, -1, 'bob');
+    const empty = (await square.artifact.read(facts => streamProjection(facts, -1, 'bob'))).value;
     assert.deepEqual(empty.activities, []);
     assert.equal(empty.cursor, 99);
     assert.equal(empty.hasMore, true);
     assert.deepEqual(reads.batches, [[]]);
-    const historical = await streamProjection(square, empty.cursor, 'BOB');
+    const historical = (await square.artifact.read(facts => streamProjection(facts, empty.cursor, 'BOB'))).value;
     assert.deepEqual(historical.activities.map(({ activity, route }) => [activity.index, route]), [[102, 'mention']]);
     assert.equal(historical.cursor, 104);
     assert.equal(historical.hasMore, false);
@@ -313,7 +314,7 @@ test('presence classifications and nearby watch participants are settled by proj
     assert.deepEqual(status.classificationByName, participants.classificationByName);
     assert.deepEqual(status.orderedHereNames, participants.orderedHereNames);
     const bodyReads = { batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length };
-    const presence = await catchPresence(square);
+    const presence = (await square.artifact.read(facts => catchPresence(facts, square.clock()))).value;
     assert.deepEqual(new Set(presence.participants.map((participant) => participant.name)), new Set(['Watcher', 'Lingering', 'Recent', 'Done']));
     assert.equal(presence.now, now);
     assert.deepEqual({ batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length }, bodyReads);

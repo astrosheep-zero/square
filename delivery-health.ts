@@ -3,8 +3,8 @@ import { formatActivityId } from './square-core.js';
 import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
 import type { DeliveryEvidence } from './ports.js';
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
+import { InternalSquareError, SquareError } from './model.js';
+import { createArtifactPort } from './artifact.js';
 
 export interface WakeAttempt {
   readonly nativeObservations?: readonly NonNullable<DeliveryEvidence['nativeObservations']>[number][];
@@ -65,10 +65,10 @@ export async function classifyDeliveryHealth(
   opts: { graceMs: number; now?: number; env?: NodeJS.ProcessEnv },
 ): Promise<DeliveryHealthItem[]> {
   const now = opts.now ?? Date.now();
-  const square = await openSquare(squarePath, { clock: () => now });
+  const artifact = createArtifactPort(squarePath);
   try {
-    const { pending } = await collectPending(square.artifact);
-    const current = (await square.artifact.read((facts) => pending.map((note) => {
+    const { pending } = await collectPending(artifact);
+    const current = (await artifact.read((facts) => pending.map((note) => {
       const seat = facts.seat(note.recipient);
       const evidence = seat === undefined ? [] : facts.deliveryEvidence(
         seat.participant, seat.generation, formatActivityId(note.index),
@@ -122,8 +122,12 @@ export async function classifyDeliveryHealth(
     // The captured pending set is the ownership boundary: a candidate that was
     // not pending at the scan cannot become a health item during this read.
     return items;
+  } catch (error) {
+    if (error instanceof InternalSquareError && error.code === 'not_found')
+      throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
+    throw error;
   } finally {
-    await closeOpenSquare(square);
+    await artifact.close();
   }
 }
 
@@ -211,9 +215,9 @@ export async function doctorDeliveryHealth(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
   const items = await classifyDeliveryHealth(squarePath, { graceMs, now, env });
-  const square = await openSquare(squarePath, { clock: () => now });
+  const artifact = createArtifactPort(squarePath);
   try {
-    const { value: rows } = await square.artifact.read((facts) => facts.roster().flatMap((participant) => {
+    const { value: rows } = await artifact.read((facts) => facts.roster().flatMap((participant) => {
       const seat = facts.seat(participant.name);
       return seat === undefined ? [] : facts.deliveryEvidence(seat.participant, seat.generation);
     }));
@@ -226,7 +230,11 @@ export async function doctorDeliveryHealth(
       return attempt?.nativeObservations?.length ? [attempt] : [];
     }).sort((a, b) => Math.max(...b.nativeObservations!.map((row) => row.observedAt)) - Math.max(...a.nativeObservations!.map((row) => row.observedAt)));
     return renderDeliveryHealth(items, releases, now, nativeAttempts);
+  } catch (error) {
+    if (error instanceof InternalSquareError && error.code === 'not_found')
+      throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
+    throw error;
   } finally {
-    await closeOpenSquare(square);
+    await artifact.close();
   }
 }

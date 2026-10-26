@@ -3,8 +3,8 @@ import fs from 'node:fs';
 
 import { indexedSquareEntries } from './square-index.js';
 
-import { SquareError, type WakeRouteKind } from './model.js';
-import { openSquare, closeOpenSquare } from './open-square.js';
+import { InternalSquareError, SquareError, type WakeRouteKind } from './model.js';
+import { createArtifactPort } from './artifact.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';
 import type { WakeTransportPort } from './ports.js';
 
@@ -68,16 +68,21 @@ export function createWakeTransport(transports: WakeTransports): WakeTransportPo
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const square = await openSquare(squarePath, { clock: now });
+  const artifact = createArtifactPort(squarePath);
   try {
+    await artifact.read(facts => facts.header());
     const transport = await createDefaultWakeTransport(env, opts.transports);
     try {
-      return await deliverPending({ artifact: square.artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
+      return await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch {
       return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
     }
+  } catch (error) {
+    if (error instanceof InternalSquareError && error.code === 'not_found')
+      throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
+    throw error;
   } finally {
-    await closeOpenSquare(square);
+    await artifact.close();
   }
 }
 
@@ -103,20 +108,21 @@ export async function sweepPrivilegedPending(
   for (const squarePath of paths) {
     if (remainingMs() === 0 || signal?.aborted) break;
     try {
-      const square = await openSquare(squarePath, { signal });
+      const artifact = createArtifactPort(squarePath, undefined, signal);
       try {
+        await artifact.read(facts => facts.header(), signal);
         if (remainingMs() === 0 || signal?.aborted) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
-        const selected = await sweepPending({ artifact: square.artifact, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
+        const selected = await sweepPending({ artifact, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
         for (const actIndex of selected) {
           const remaining = remainingMs();
           if (remaining === 0 || signal?.aborted) break;
           const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
           const timeoutMs = Math.max(1, Math.min(Number.isFinite(configured) && configured > 0 ? configured : 5000, remaining));
-          await deliverPending({ artifact: square.artifact, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
+          await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
         }
-      } finally { await closeOpenSquare(square); }
+      } finally { await artifact.close(); }
     } catch { /* stale index entries are ignored by the hook */ }
   }
 }
@@ -136,12 +142,17 @@ export async function sweepPendingNotifications(
   if (env.SQUARE_DISABLE_PASEO_WAKE === '1') return [];
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 8;
-  const square = await openSquare(squarePath, { clock: () => now });
+  const artifact = createArtifactPort(squarePath);
   let selected: number[];
   try {
-    selected = await sweepPending({ artifact: square.artifact, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
+    await artifact.read(facts => facts.header());
+    selected = await sweepPending({ artifact, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
+  } catch (error) {
+    if (error instanceof InternalSquareError && error.code === 'not_found')
+      throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
+    throw error;
   } finally {
-    await closeOpenSquare(square);
+    await artifact.close();
   }
   if (opts.dispatchCandidate !== undefined) {
     for (const actIndex of selected) await opts.dispatchCandidate(actIndex);

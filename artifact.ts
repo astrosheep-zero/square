@@ -8,9 +8,33 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { observeFileVersion } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
 import { InternalSquareError, SquareError, type BuildOptions } from './model.js';
-import type { SquareArtifactPort, SquareRead, SquareWrite, ArtifactWriteAuthority, DeliveryClaimInput, DeliveryClaimResult } from './ports.js';
+import type { SquareResourceOwner, SquareArtifactPort, SquareRead, SquareWrite, ArtifactWriteAuthority, DeliveryClaimInput, DeliveryClaimResult } from './ports.js';
 import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
 import { APPLICATION_ID, CURRENT_USER_VERSION, createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, invalidArtifact, validateSqliteHeader, emptyRuntimeState, type SquareState } from './square-sqlite.js';
+
+/** Explicit-lifetime holder of one reused artifact connection. Request cancellation
+ * never becomes the shared connection's lifetime; close drains the owner once. */
+export function createSquareResourceOwner(): SquareResourceOwner {
+    let held: { readonly location: string; readonly artifact: SquareArtifactPort } | undefined;
+    let closed = false;
+    return {
+        artifact(location: string): SquareArtifactPort {
+            if (closed) throw new SquareError('unavailable', 'Square resource owner is closed');
+            const key = path.resolve(location);
+            if (held === undefined) held = { location: key, artifact: createArtifactPort(key) };
+            if (held.location !== key)
+                throw new SquareError('unavailable', `Square resource owner already holds ${held.location}; it cannot also open ${key}`);
+            return held.artifact;
+        },
+        async close(): Promise<void> {
+            if (closed) return;
+            closed = true;
+            const artifact = held?.artifact;
+            held = undefined;
+            if (artifact !== undefined) await artifact.close();
+        },
+    };
+}
 
 const guideContents = new Map<string, string>();
 function readGuide(name: string): string {

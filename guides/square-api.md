@@ -66,6 +66,11 @@ try {
 ## One set of operations and defaults
 
 Square owns `history`, `status`, `participants`, `snapshot`, `stream`, and recovery observations.
+A file-backed `stream` follows the path with a fresh artifact read for each page, so atomic file
+replacement is visible even while the resource holds its original connection. Its iterator owns
+its observation lifetime: `return()` interrupts a pending pull; closing the Square does not close
+that independent path observation. Internal readers that explicitly borrow an artifact port leave
+its lifetime with the lender and propagate port failures rather than waiting for path repair.
 Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`;
 its `history` delegates to the same Square history operation.
 

@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writeSquareFile, readSquareSnapshot } from '../../dist/artifact.js';
 import { emptyRuntimeState } from '../../dist/square-sqlite.js';
-import { openSquare, closeOpenSquare } from '../../dist/open-square.js';
 import { createHostLedgerPort } from '../../dist/host-ledger-file-adapter.js';
 import { writeClaudeNative } from '../../dist/packages/agent-delivery/src/claude-native.js';
 import { processActNotificationsOnce } from '../../dist/notifications.js';
@@ -36,7 +35,7 @@ if (op === 'setup') {
   const row = (await ledger.listEvidence({ kind: 'wake' })).find((row) => row.nativeDelivery);
   console.log(JSON.stringify(await writeClaudeNative({ sessionId: row.session, endpoint: row.nativeDelivery.endpoint }, row.nativeDelivery.payload, { deadline: Date.now() + 1000 })));
 } else if (op === 'inspect') {
-  const square = await openSquare(squarePath, { hostLedger: ledger });
+  const square = await Square.at({ path: squarePath, env: { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger') } });
   try { console.log(JSON.stringify({ state: (await readSquareSnapshot(squarePath)).state, presence: await ledger.listPresence(), evidence: await ledger.listEvidence() })); }
-  finally { await closeOpenSquare(square); }
+  finally { await square.close(); }
 }

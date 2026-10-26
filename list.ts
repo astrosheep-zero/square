@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
+import { createArtifactPort } from './artifact.js';
 import { listPresentation } from './views.js';
 import { SquareError } from './model.js';
 import type { DiscoveryResult, DiscoveryOptions, OpenOptions, OperationControl, SquareListItem } from './square-facade.js';
@@ -19,8 +18,10 @@ async function readSquareListItem(filePath: string, root: string, options: OpenO
   try {
     control?.signal?.throwIfAborted();
     const stat = await fs.promises.stat(filePath);
-    const square = await openSquare(filePath, { clock: options.clock, signal: control?.signal }, control);
-    const projection = await listPresentation(square, control).finally(() => closeOpenSquare(square));
+    const artifact = createArtifactPort(filePath, undefined, control?.signal);
+    let projection;
+    try { projection = (await artifact.read(listPresentation, control?.signal)).value; }
+    finally { await artifact.close(); }
     return {
       path: path.relative(root, filePath) || path.basename(filePath),
       lastActiveAt: stat.mtimeMs,

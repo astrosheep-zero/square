@@ -1,17 +1,16 @@
 import fs from 'node:fs/promises';
 import { SquareError } from './model.js';
-import { observeSquareRevision } from './artifact.js';
-import { openSquare, closeOpenSquare } from './open-square.js';
+import { createArtifactPort, observeSquareRevision } from './artifact.js';
+import type { SquareArtifactPort } from './ports.js';
 import { streamProjection, streamTailProjection } from './views.js';
-import type { OpenOptions, OperationControl, StreamOptions, StreamRecord } from './square-facade.js';
+import type { OperationControl, StreamOptions, StreamRecord } from './square-facade.js';
 
 /** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
-export function streamSquare(squarePath: string, options: StreamOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): AsyncIterable<StreamRecord> {
+export function streamSquare(squarePath: string, options: StreamOptions = {}, control?: OperationControl, borrowed?: SquareArtifactPort): AsyncIterable<StreamRecord> {
   return {
     [Symbol.asyncIterator]() {
       const disposal = new AbortController();
       const signal = control?.signal === undefined ? disposal.signal : AbortSignal.any([control.signal, disposal.signal]);
-      const iterationControl = { ...control, signal };
       const records = observe();
       return {
         next: () => records.next(),
@@ -44,15 +43,15 @@ export function streamSquare(squarePath: string, options: StreamOptions = {}, co
               let projection;
               try {
                 baseline = await observer.read(signal);
-                const square = await openSquare(squarePath, { clock: openOptions.clock, signal }, iterationControl);
+                const artifact = borrowed ?? createArtifactPort(squarePath, undefined, signal);
                 try {
-                  projection = initial === undefined
-                    ? await streamProjection(square, cursor, options.recipient, iterationControl)
-                    : await streamTailProjection(square, initial.last, options.recipient, iterationControl);
-                } finally { await closeOpenSquare(square); }
+                  projection = (await artifact.read(facts => initial === undefined
+                    ? streamProjection(facts, cursor, options.recipient)
+                    : streamTailProjection(facts, initial.last, options.recipient), signal)).value;
+                } finally { if (borrowed === undefined) await artifact.close(); }
               } catch (error) {
                 signal.throwIfAborted();
-                if (error instanceof SquareError && error.code === 'invalid_args') throw error;
+                if (borrowed !== undefined || error instanceof SquareError && error.code === 'invalid_args') throw error;
                 // Repair/replacement is a hint, not a reason to scan history on a timer.
                 await observer.hinted(generation, Infinity, signal);
                 continue;

@@ -7,7 +7,7 @@ import { decideCatch } from '../dist/catch-decisions.js';
 import { coreHold, coreIgnore, coreListen, coreListening, coreParticipants, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
-import { done, express, ignore, join, listen, listening } from '../dist/square-actions.js';
+import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
@@ -66,7 +66,7 @@ test('participant lists share actual action and receipt times, including a fresh
     const projections = [
       (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
       (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
-      (await catchPresence(square)).participants,
+      (await cell.read(facts => catchPresence(facts, 180000))).value.participants,
     ];
     for (const participants of projections) {
       assert.deepEqual(participants.map((p) => [p.name, p.lastActiveAt]), expected);
@@ -75,7 +75,7 @@ test('participant lists share actual action and receipt times, including a fresh
       assert.ok(output.indexOf('@Returning') < output.indexOf('@Reader'));
       assert.match(output, /@Reader.*catching.*2m/);
     }
-    assert.deepEqual((await listPresentation(square)).participants, expected.map(([name]) => name));
+    assert.deepEqual((await cell.read(listPresentation)).value.participants, expected.map(([name]) => name));
   } finally {
     await cell.close();
   }
@@ -219,22 +219,16 @@ test('host controls preserve the requesting actor and body', async () => {
 
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
-  const cell = createArtifactPort(':memory:', makeState());
-  const base = { artifact: cell, clock: () => (now += 1), location: 'memory', body: { channel: 'test', session: 'cursor' } };
+  const square = Square.inMemory({ markdown: '', clock: () => ++now, body: { channel: 'test', session: 'cursor' } });
   try {
-    const { seat } = await join(base, 'Alice');
-    const square = { ...base, participantSeat: seat };
-    await express(square, 'Alice', 'hello @Alice', { force: true, mentions: ['Alice'] });
-    await done(square, 'Alice');
-
-    const stored = (await cell.read((facts) => ({
-      cursor: readCursor(facts, 'Alice'),
-      indexes: facts.activityHeads({}, { edge: 'oldest', limit: 10 }).items.map((head) => head.index),
-    }))).value;
-    assert.equal(stored.cursor, 2);
-    assert.deepEqual(stored.indexes, [0, 1, 2]);
+    const alice = (await square.join('Alice')).participant;
+    await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
+    await alice.done();
+    const history = (await square.history()).activities;
+    assert.equal((await square.snapshot()).participants.find(p => p.name === 'Alice').consumedThrough, 'act/2');
+    assert.deepEqual(history.map(activity => activity.id), ['act/0', 'act/1', 'act/2']);
   } finally {
-    await cell.close();
+    await square.close();
   }
 });
 
@@ -351,26 +345,23 @@ test('mention and listening caps reject without enumerating the roster', async (
 
 test('listener landings append only real edge changes', async () => {
   let now = 10;
-  const cell = createArtifactPort(':memory:', makeState());
-  const base = { artifact: cell, clock: () => ++now, location: 'memory', body: { channel: 'test', session: 'listener' } };
+  const square = Square.inMemory({ markdown: '', clock: () => ++now, body: { channel: 'test', session: 'listener' } });
   try {
-    const { seat } = await join(base, 'Caller');
-    const square = { ...base, participantSeat: seat };
-    const first = await listen(square, 'Caller', 'aku/riko');
-    const repeated = await listen(square, 'caller', 'AKU/RIKO');
+    const caller = (await square.join('Caller')).participant;
+    const first = await caller.listen('aku/riko');
+    const repeated = await (await square.participant('caller')).listen('AKU/RIKO');
     assert.equal(first.activity.kind, 'listen');
     assert.equal(first.activity.target, 'aku/riko');
     assert.equal(repeated.activity, null);
-    assert.deepEqual(await listening(square, 'Caller'), ['aku/riko']);
+    assert.deepEqual((await caller.listening()).listening, ['aku/riko']);
 
-    const removed = await ignore(square, 'Caller', 'aku/riko');
-    const absent = await ignore(square, 'Caller', 'aku/riko');
+    const removed = await caller.ignore('aku/riko');
+    const absent = await caller.ignore('aku/riko');
     assert.equal(removed.activity.kind, 'ignore');
     assert.equal(absent.activity, null);
-    const kinds = (await cell.read((facts) => facts.activityHeads({}, { edge: 'oldest', limit: 10 }).items.map((head) => head.kind))).value;
-    assert.deepEqual(kinds, ['join', 'listen', 'ignore']);
+    assert.deepEqual((await square.history()).activities.map(activity => activity.kind), ['join', 'listen', 'ignore']);
   } finally {
-    await cell.close();
+    await square.close();
   }
 });
 

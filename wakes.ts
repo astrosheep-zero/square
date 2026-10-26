@@ -1,8 +1,8 @@
 import { type WatchLease, type WatchOptions } from './model.js';
 import { resolveKnownName } from './decisions.js';
 import { WATCH_STALE_MS, freshWatchLease, watchTerminalStatus } from './runtime.js';
-import { requireSeat } from './seats.js';
-import type { OperationContext } from './square-actions.js';
+import type { SquareArtifactPort } from './ports.js';
+import type { Seat } from './model.js';
 
 export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active'; readonly lease: WatchLease };
 export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held'; readonly heartbeatAt?: number } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
@@ -12,9 +12,9 @@ function newLease(leaseId: string, at: number, options: WatchOptions): WatchLeas
   return { leaseId, heartbeatAt: at, expiresAt: at + WATCH_STALE_MS, ...(Object.keys(filter).length === 0 ? {} : { filter }) };
 }
 
-export async function acquireWatchLease(square: OperationContext, name: string, leaseId: string, options: WatchOptions, signal?: AbortSignal): Promise<WatchLeaseStart> {
-  const seat = requireSeat(square, name), at = square.clock();
-  const { value } = await square.artifact.transactAs({ kind: 'participant', seat }, facts => {
+export async function acquireWatchLease(artifact: SquareArtifactPort, seat: Seat, at: number, leaseId: string, options: WatchOptions, signal?: AbortSignal): Promise<WatchLeaseStart> {
+  const name = seat.participant;
+  const { value } = await artifact.transactAs({ kind: 'participant', seat }, facts => {
     const known = resolveKnownName(facts, name), existing = freshWatchLease(facts, known, at);
     if (existing !== undefined && !options.replace) return { type: 'active', lease: existing } as const;
     facts.putLease(known, newLease(leaseId, at, options), seat.generation);
@@ -23,9 +23,9 @@ export async function acquireWatchLease(square: OperationContext, name: string, 
   return value;
 }
 
-export async function pulseWatchLease(square: OperationContext, name: string, leaseId: string, options: WatchOptions, heartbeatDue: boolean, signal?: AbortSignal): Promise<WatchLeasePulse> {
-  const seat = requireSeat(square, name), at = square.clock();
-  const { value } = await square.artifact.transactAs({ kind: 'participant', seat }, facts => {
+export async function pulseWatchLease(artifact: SquareArtifactPort, seat: Seat, at: number, leaseId: string, options: WatchOptions, heartbeatDue: boolean, signal?: AbortSignal): Promise<WatchLeasePulse> {
+  const name = seat.participant;
+  const { value } = await artifact.transactAs({ kind: 'participant', seat }, facts => {
     const known = resolveKnownName(facts, name), lease = freshWatchLease(facts, known, at);
     if (lease?.leaseId !== leaseId) return { type: 'replaced' } as const;
     const held = facts.hold().active;
@@ -39,17 +39,15 @@ export async function pulseWatchLease(square: OperationContext, name: string, le
   return value;
 }
 
-export async function releaseWatchLease(square: OperationContext, name: string, leaseId: string | undefined): Promise<void> {
-  if (leaseId === undefined) return;
-  const seat = requireSeat(square, name);
-  await square.artifact.transactAs({ kind: 'participant', seat }, facts => facts.removeLease(resolveKnownName(facts, name), leaseId, seat.generation));
+export async function releaseWatchLease(artifact: SquareArtifactPort, seat: Seat, leaseId: string): Promise<void> {
+  await artifact.transactAs({ kind: 'participant', seat }, facts => facts.removeLease(seat.participant, leaseId, seat.generation));
 }
 
-export async function ownsWatchLease(square: OperationContext, name: string, leaseId: string, signal?: AbortSignal): Promise<boolean> {
-  const seat = requireSeat(square, name);
-  return (await square.artifact.read(facts => {
+export async function ownsWatchLease(artifact: SquareArtifactPort, seat: Seat, at: number, leaseId: string, signal?: AbortSignal): Promise<boolean> {
+  const name = seat.participant;
+  return (await artifact.read(facts => {
     const current = facts.seat(name);
     if (current === undefined || current.generation !== seat.generation) return false;
-    return freshWatchLease(facts, resolveKnownName(facts, name), square.clock())?.leaseId === leaseId;
+    return freshWatchLease(facts, resolveKnownName(facts, name), at)?.leaseId === leaseId;
   }, signal)).value;
 }

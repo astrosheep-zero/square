@@ -10,8 +10,8 @@ import test from 'node:test';
 import { activityRetryCommand, executeExpression } from '../dist/cli/express-presentation.js';
 import { renderActivityUncertain } from '../dist/presentation.js';
 import { SquareError } from '../dist/model.js';
-import { buildMemorySquare } from '../dist/open-square.js';
-import { express, join } from '../dist/square-actions.js';
+import { createArtifactPort } from '../dist/artifact.js';
+import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 import { Square } from '../dist/index.js';
 import { CLI, ROOT, run, withName, persistSquare, draftPathFrom, testEnv } from './square-cli-helpers.js';
 
@@ -232,25 +232,26 @@ test('retry commands quote shell data and keep every original recipient', () => 
   assert.ok(command.includes("'\\''"));
 });
 
-test('only admission rejection proves a failed express unsent; post-commit failure never suggests sending again', async () => {
-  const square = buildMemorySquare({ markdown: 'test', body: { channel: 'test', session: 'express-recovery' } });
-  // Action-level writes present the handle that join established.
-  const opened = { ...square, participantSeat: (await join(square, 'Alice')).seat };
-  await assert.rejects(express(opened, 'Alice', 'bad target', { mentions: ['Nobody'] }), (error) => error.facts?.activityUnsent === true);
-  const transactAs = square.artifact.transactAs.bind(square.artifact);
-  square.artifact.transactAs = async (...args) => {
+test('only admission rejection proves a failed express unsent; post-commit failure never suggests sending again', async t => {
+  const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+  t.after(() => artifact.close());
+  const square = await resourceWithArtifact(t, artifact, { channel: 'test', session: 'express-recovery' });
+  const alice = (await square.join('Alice')).participant;
+  await assert.rejects(alice.express('bad target', { mentions: ['Nobody'] }), error => error.facts?.activityUnsent === true && error.operation.expressEffect === 'unsent');
+  const transactAs = artifact.transactAs.bind(artifact);
+  artifact.transactAs = async (...args) => {
     await transactAs(...args);
     throw new SquareError('invalid_args', 'injected failure after the commit');
   };
-  await assert.rejects(express(opened, 'Alice', 'actually committed'), (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
-  assert.equal((await square.artifact.read((facts) => facts.activity(facts.header().lastActIndex))).value.body, 'actually committed');
+  await assert.rejects(alice.express('actually committed'), error => error.code === 'invalid_args' && error.facts?.activityUnsent !== true && error.operation.expressEffect === 'unknown');
+  assert.equal((await square.history()).activities.at(-1).body, 'actually committed');
   for (const landedId of [undefined, 'act/1']) {
     const rendered = renderActivityUncertain({ squarePath: '/tmp/test.square', name: 'Alice', draftPath: '/tmp/draft.md', landedId });
     assert.match(rendered, /sending it again could repeat your activity/);
     assert.match(rendered, /history .*--no-truncate/);
     assert.doesNotMatch(rendered, / express |--force|< '\/tmp\/draft.md'/);
   }
-  await square.artifact.close();
+  await square.close();
 });
 
 test('a failed observation clock cannot prevent raw draft saving or landed reconciliation', async (t) => {

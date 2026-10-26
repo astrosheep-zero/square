@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
-import { catchUp } from '../dist/square-actions.js';
+import { observeCatchSelection, selectCatchPage } from '../dist/catch-decisions.js';
 import { inSquareCount, terminalStatusFor, watchTerminalStatus } from '../dist/runtime.js';
 
 function fixture(t, hardCap = null) {
@@ -79,26 +79,25 @@ test('catch and terminal summaries use aggregate facts and preserve all-known-pe
     roster() { assert.fail('summary must not hydrate the roster'); },
     participantCounts() { countReads++; return facts.participantCounts(); },
   });
-  const square = { clock: () => 100, location: 'memory', body: bobSeat.body, participantSeat: bobSeat, artifact: {
-    ...cell,
-    read: (select, signal) => cell.read((facts) => select(wrap(facts)), signal),
-    transact: (change, signal) => cell.transact((facts) => change(wrap(facts)), signal),
-  } };
-  const pendingPeer = await catchUp(square, 'bOB');
+  const summary = () => cell.read(facts => {
+    const wrapped = wrap(facts), page = selectCatchPage(wrapped, 'bOB', {});
+    return observeCatchSelection(wrapped, page.participant, [], page.filter, 100);
+  }).then(result => result.value);
+  const pendingPeer = await summary();
   assert.equal(pendingPeer.standingCount, 1);
   assert.equal(pendingPeer.terminalStatus, undefined, 'a known nonstanding peer still blocks quorum');
   assert.equal(countReads, 1, 'catch shares its aggregate read');
   assert.equal((await cell.read((facts) => inSquareCount(wrap(facts)))).value, 1);
 
   await cell.transact((facts) => facts.land({ kind: 'done', actor: 'Ghost', at: 4 }));
-  assert.equal((await catchUp(square, 'Bob')).terminalStatus, 'quorum');
+  assert.equal((await summary()).terminalStatus, 'quorum');
   assert.equal((await cell.read((facts) => watchTerminalStatus(wrap(facts), 'Missing'))).value, undefined);
   await cell.transact((facts) => facts.land({ kind: 'say', actor: 'Bob', at: 5, body: 'at cap' }));
   assert.equal((await cell.read((facts) => watchTerminalStatus({
     ...wrap(facts),
     participantCounts() { assert.fail('a capped watcher needs no aggregate read'); },
   }, 'BOB'))).value, 'capped');
-  assert.equal((await catchUp(square, 'Bob')).terminalStatus, 'capped', 'cap takes precedence over quorum');
+  assert.equal((await summary()).terminalStatus, 'capped', 'cap takes precedence over quorum');
 
   await cell.transact((facts) => facts.land({ kind: 'done', actor: 'Bob', at: 6 }));
   await cell.read((facts) => {

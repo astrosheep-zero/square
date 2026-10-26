@@ -3,6 +3,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { Square } from '../dist/index.js';
 import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from '../dist/artifact.js';
+import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
 function aborted(message = 'cancelled') {
   const controller = new AbortController();
@@ -170,47 +171,64 @@ test('abort inside a transition before commit rolls back the whole change', asyn
   await cell.close();
 });
 
-test('post-commit express preserves its result after response cancellation', async () => {
-  const { buildMemorySquare } = await import('../dist/open-square.js');
-  const { join, express } = await import('../dist/square-actions.js');
-  const open = buildMemorySquare({ markdown: 'context', body: body('memory') });
-  const joined = await join(open, 'Writer');
-  const writerContext = { ...open, participantSeat: joined.seat };
+test('post-commit express preserves its result after response cancellation', async t => {
+  const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
+  t.after(() => artifact.close());
+  const square = await resourceWithArtifact(t, artifact, body('memory'));
+  const writer = (await square.join('Writer')).participant;
   const controller = new AbortController();
-  const artifact = open.artifact;
-  const wrapped = { ...writerContext, artifact: { ...artifact, transactAs: async (authority, fn, signal) => {
-    const result = await artifact.transactAs(authority, fn, signal);
+  const transactAs = artifact.transactAs.bind(artifact);
+  artifact.transactAs = async (authority, fn, signal) => {
+    const result = await transactAs(authority, fn, signal);
     controller.abort(new Error('response discarded'));
     return result;
-  } } };
-  const result = await express(wrapped, joined.name, 'committed', { force: true }, { signal: controller.signal });
+  };
+  const result = await writer.express('committed', { force: true }, { signal: controller.signal });
   assert.equal(result.activity.body, 'committed');
-  const latest = (await artifact.read(facts => facts.activityHeads({}, { edge: 'newest', limit: 1 }))).value.items[0];
-  assert.equal((await artifact.read(facts => facts.activity(latest.index))).value.body, 'committed');
-  await artifact.close();
+  assert.equal((await square.history()).activities.at(-1).body, 'committed');
 });
 
-test('post-commit catch preserves its receipt and result before return cancellation', async () => {
-  const { buildMemorySquare } = await import('../dist/open-square.js');
-  const { join, express, catchUp } = await import('../dist/square-actions.js');
-  const open = buildMemorySquare({ markdown: 'context', body: body('memory') });
-  const alice = await join(open, 'Alice');
-  const bob = await join(open, 'Bob');
-  const aliceContext = { ...open, participantSeat: alice.seat };
-  const bobContext = { ...open, participantSeat: bob.seat };
-  await catchUp(bobContext, bob.name);
-  await express(aliceContext, alice.name, 'boundary catch', { force: true, mentions: ['Bob'] });
+test('post-commit catch preserves its receipt and result before return cancellation', async t => {
+  const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
+  t.after(() => artifact.close());
+  const square = await resourceWithArtifact(t, artifact, body('memory'));
+  const alice = (await square.join('Alice')).participant;
+  const bob = (await square.join('Bob')).participant;
+  await bob.catch();
+  await alice.express('boundary catch', { force: true, mentions: ['Bob'] });
   const controller = new AbortController();
-  const artifact = open.artifact;
-  const wrapped = { ...bobContext, artifact: { ...artifact, transactAs: async (authority, fn, signal) => {
-    const result = await artifact.transactAs(authority, fn, signal);
+  const transactAs = artifact.transactAs.bind(artifact);
+  artifact.transactAs = async (authority, fn, signal) => {
+    const result = await transactAs(authority, fn, signal);
     controller.abort(new Error('response discarded'));
     return result;
-  } } };
-  const result = await catchUp(wrapped, bob.name, {}, { signal: controller.signal });
+  };
+  const result = await bob.catch({ observe: true }, { signal: controller.signal });
   assert.equal(result.activities[0].body, 'boundary catch');
-  assert.deepEqual((await catchUp(bobContext, bob.name)).activities, []);
-  await artifact.close();
+  assert.equal(result.observation.enrichmentUnavailable, true);
+  assert.deepEqual((await bob.catch()).activities, []);
+});
+
+test('a result-assembly failure after express commit retains landed certainty and its activity id', async t => {
+  const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
+  t.after(() => artifact.close());
+  const square = await resourceWithArtifact(t, artifact, body('memory'));
+  const writer = (await square.join('Writer')).participant;
+  const transactAs = artifact.transactAs.bind(artifact);
+  artifact.transactAs = async (...args) => {
+    const result = await transactAs(...args);
+    return { ...result, value: { ...result.value, stored: new Proxy(result.value.stored, {
+      get(target, key) {
+        if (key === 'kind') throw new Error('public conversion failed after landing');
+        return Reflect.get(target, key);
+      },
+    }) } };
+  };
+  await assert.rejects(writer.express('landed despite assembly failure'), error => {
+    assert.deepEqual(error.operation, { operation: 'express', participant: 'Writer', subject: 'caller', expressEffect: 'landed', landedId: 'act/1' });
+    return /public conversion failed/.test(error.message);
+  });
+  assert.equal((await square.history()).activities.at(-1).body, 'landed despite assembly failure');
 });
 
 test('concurrent joins from one body establish one artifact seat and one join activity', async t => {

@@ -1,14 +1,13 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries } from './decisions.js';
 import { SquareError, nameKey, type StoredAct } from './model.js';
-import type { OpenSquare } from './open-square.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
 import { inSquareCount, readCursor, rosterNames } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
 import { compileSearchPattern } from './search.js';
 import type {
   Activity, ArchiveRecord, HistoryQuery, HistoryContinuation,
-  OperationControl, ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsResult, SquareSnapshot,
+  ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsResult, SquareSnapshot,
   EntryPresentation, ListPresentation, StatusResult, SquareObservation, CatchPresence, StreamProjection,
 } from './square-facade.js';
 export type { EntryPresentation, ListPresentation, CatchPresence, StreamProjection } from './square-facade.js';
@@ -103,46 +102,34 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
   return activities.flatMap((activity) => activity.kind === 'read' || activity.actor === undefined ? [] : [toPublicActivity(activity)]);
 }
-export async function resolveParticipant(square: OpenSquare, name: string, control?: OperationControl) {
-  return (await square.artifact.read((facts) => ({ name: resolveKnownName(facts, name) }), control?.signal)).value;
-}
-export async function currentParticipant(square: OpenSquare, name: string, control?: OperationControl): Promise<string | undefined> {
-  return (await square.artifact.read((facts) => { const p = facts.participant(name); return p?.joined ? p.name : undefined; }, control?.signal)).value;
-}
 function statuses(facts: SquareRead, now: number): ParticipantStatus[] {
   return coreParticipants(facts, now).filter((p) => p.state !== 'not joined').map((p) => {
     const cursor = readCursor(facts, p.name);
     return { name: p.name, state: p.state === 'done' ? 'done' : 'joined', consumedThrough: cursor < 0 ? null : formatActivityId(cursor), watching: p.presence === 'watching', listening: p.listening };
   });
 }
-export async function snapshot(square: OpenSquare, control?: OperationControl): Promise<SquareSnapshot> {
-  return (await square.artifact.read((facts) => {
-    const header = facts.header(), hold = facts.hold();
-    const names = new Map(facts.roster().map((p) => [nameKey(p.name), p.name]));
-    const receipts = new Set(facts.receiptAssignments().map((r) => JSON.stringify([r.owner, r.index])));
-    return { context: [...header.preamble, ...header.warmup].join('\n'), actCount: facts.activityCount({ kinds: NON_READ }), hardCap: header.hardCap,
-      ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
-      held: hold.active && hold.actor !== undefined ? { by: hold.actor, ...(hold.reason === undefined ? {} : { reason: hold.reason }) } : null,
-      participants: statuses(facts, square.clock()), delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
-  }, control?.signal)).value;
+export function snapshot(facts: SquareRead, now: number): SquareSnapshot {
+  const header = facts.header(), hold = facts.hold();
+  const names = new Map(facts.roster().map((p) => [nameKey(p.name), p.name]));
+  const receipts = new Set(facts.receiptAssignments().map((r) => JSON.stringify([r.owner, r.index])));
+  return { context: [...header.preamble, ...header.warmup].join('\n'), actCount: facts.activityCount({ kinds: NON_READ }), hardCap: header.hardCap,
+    ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
+    held: hold.active && hold.actor !== undefined ? { by: hold.actor, ...(hold.reason === undefined ? {} : { reason: hold.reason }) } : null,
+    participants: statuses(facts, now), delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
 }
-export async function recoveryObservation(square: OpenSquare, name: string, control?: OperationControl) {
-  return (await square.artifact.read((facts) => {
-    const known = resolveKnownName(facts, name), hold = facts.hold();
-    return { participant: known, roster: rosterNames(facts), activitySummaries: unreadActivitySummaries(facts, known, square.clock()), standingCount: inSquareCount(facts), held: hold.active,
-      ...(hold.reason === undefined ? {} : { holdReason: hold.reason }), ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
-  }, control?.signal)).value;
+export function recoveryObservation(facts: SquareRead, name: string, now: number) {
+  const known = resolveKnownName(facts, name), hold = facts.hold();
+  return { participant: known, roster: rosterNames(facts), activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts), held: hold.active,
+    ...(hold.reason === undefined ? {} : { holdReason: hold.reason }), ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
 }
-export async function entryPresentation(square: OpenSquare, name: string, lastN: number | null = HISTORY_DEFAULT_LIMIT, control?: OperationControl): Promise<EntryPresentation> {
-  return (await square.artifact.read((facts) => {
-    const header = facts.header();
-    const recentActivities = selectHistory(facts, {}, lastN, ['say', 'done']).activities;
-    return { joinedBefore: facts.activityCount({ kinds: ['join'], actors: [name] }) > 1,
-      scene: header.warmup.join('\n').trim(),
-      joinContext: (header.preamble.at(-1) === '---' ? header.preamble.slice(0, -1) : header.preamble).join('\n').trim(), recentActivities,
-      perceptions: Object.fromEntries(recentActivities.map((a) => [a.index, perceiveActivity(facts, a, name)])),
-      sayNumbers: facts.sayOrdinals(recentActivities.map((a) => a.index)) };
-  }, control?.signal)).value;
+export function entryPresentation(facts: SquareRead, name: string, lastN: number | null = HISTORY_DEFAULT_LIMIT): EntryPresentation {
+  const header = facts.header();
+  const recentActivities = selectHistory(facts, {}, lastN, ['say', 'done']).activities;
+  return { joinedBefore: facts.activityCount({ kinds: ['join'], actors: [name] }) > 1,
+    scene: header.warmup.join('\n').trim(),
+    joinContext: (header.preamble.at(-1) === '---' ? header.preamble.slice(0, -1) : header.preamble).join('\n').trim(), recentActivities,
+    perceptions: Object.fromEntries(recentActivities.map((a) => [a.index, perceiveActivity(facts, a, name)])),
+    sayNumbers: facts.sayOrdinals(recentActivities.map((a) => a.index)) };
 }
 function classifyPresence(participants: readonly ParticipantSummary[], now: number): PresenceClassification {
   const here = participants.filter((participant) => participant.state === 'active' && (participant.presence === 'watching'
@@ -159,14 +146,12 @@ export function queryParticipants(facts: SquareRead, context: ParticipantQueryCo
   return { participants, ...(!observe ? {} : { observation: { ...context, ...classifyPresence(participants, context.now),
     standingCount: inSquareCount(facts), held: facts.hold().active } }) };
 }
-export async function listPresentation(square: OpenSquare, control?: OperationControl): Promise<ListPresentation> {
-  return (await square.artifact.read((facts) => {
-    const participants = facts.roster().filter((p) => p.joined).map((p) => {
-      const receiptAt = facts.receiptFacts(p.name, p.lastJoinIndex ?? -1).latestAt;
-      return { name: p.name, lastActiveAt: receiptAt === undefined ? p.lastActiveAt : Math.max(p.lastActiveAt ?? -Infinity, receiptAt) };
-    }).sort(compareParticipantActivity).map((p) => p.name);
-    return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
-  }, control?.signal)).value;
+export function listPresentation(facts: SquareRead): ListPresentation {
+  const participants = facts.roster().filter((p) => p.joined).map((p) => {
+    const receiptAt = facts.receiptFacts(p.name, p.lastJoinIndex ?? -1).latestAt;
+    return { name: p.name, lastActiveAt: receiptAt === undefined ? p.lastActiveAt : Math.max(p.lastActiveAt ?? -Infinity, receiptAt) };
+  }).sort(compareParticipantActivity).map((p) => p.name);
+  return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
 }
 export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', observe = false): StatusResult {
   const participants = coreParticipants(facts, context.now);
@@ -203,32 +188,25 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
     },
   };
 }
-export async function catchPresence(square: OpenSquare, control?: OperationControl): Promise<CatchPresence> {
-  return (await square.artifact.read((facts) => {
-    const now = square.clock();
-    const participants = coreParticipants(facts, now).filter((participant) => participant.state === 'done' || participant.presence === 'watching'
-      || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
-    return { participants, now };
-  }, control?.signal)).value;
+export function catchPresence(facts: SquareRead, now: number): CatchPresence {
+  const participants = coreParticipants(facts, now).filter((participant) => participant.state === 'done' || participant.presence === 'watching'
+    || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
+  return { participants, now };
 }
-export async function streamProjection(square: OpenSquare, cursor: number, recipient?: string, control?: OperationControl): Promise<StreamProjection> {
-  return (await square.artifact.read((facts) => {
-    const page = facts.activityHeads({ afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE });
-    const heads = page.items.flatMap((head) => {
-      const route = recipient === undefined ? undefined : facts.directedAt(recipient, head.index)?.route;
-      return recipient !== undefined && route === undefined ? [] : [{ index: head.index, route }];
-    });
-    return { activities: facts.activities(heads.map((h) => h.index)).map((activity) => {
-      const route = heads.find((h) => h.index === activity.index)!.route;
-      return { activity, ...(route === undefined ? {} : { route }) };
-    }), cursor: page.items.at(-1)?.index ?? cursor, hasMore: page.hasMore };
-  }, control?.signal)).value;
+export function streamProjection(facts: SquareRead, cursor: number, recipient?: string): StreamProjection {
+  const page = facts.activityHeads({ afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE });
+  const heads = page.items.flatMap((head) => {
+    const route = recipient === undefined ? undefined : facts.directedAt(recipient, head.index)?.route;
+    return recipient !== undefined && route === undefined ? [] : [{ index: head.index, route }];
+  });
+  return { activities: facts.activities(heads.map((h) => h.index)).map((activity) => {
+    const route = heads.find((h) => h.index === activity.index)!.route;
+    return { activity, ...(route === undefined ? {} : { route }) };
+  }), cursor: page.items.at(-1)?.index ?? cursor, hasMore: page.hasMore };
 }
-export async function streamTailProjection(square: OpenSquare, last = HISTORY_DEFAULT_LIMIT, recipient?: string, control?: OperationControl): Promise<StreamProjection> {
-  return (await square.artifact.read((facts) => {
-    if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
-    const heads = last === 0 ? [] : recipient === undefined ? facts.activityHeads({}, { edge: 'newest', limit: last }).items : facts.directed(recipient, {}, { edge: 'newest', limit: last }).items;
-    return { activities: facts.activities(heads.map((h) => h.index)).map((activity) => ({ activity,
-      ...(recipient === undefined ? {} : { route: facts.directedAt(recipient, activity.index)!.route }) })), cursor: facts.header().lastActIndex, hasMore: false };
-  }, control?.signal)).value;
+export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_LIMIT, recipient?: string): StreamProjection {
+  if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
+  const heads = last === 0 ? [] : recipient === undefined ? facts.activityHeads({}, { edge: 'newest', limit: last }).items : facts.directed(recipient, {}, { edge: 'newest', limit: last }).items;
+  return { activities: facts.activities(heads.map((h) => h.index)).map((activity) => ({ activity,
+    ...(recipient === undefined ? {} : { route: facts.directedAt(recipient, activity.index)!.route }) })), cursor: facts.header().lastActIndex, hasMore: false };
 }

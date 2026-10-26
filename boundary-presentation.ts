@@ -2,12 +2,11 @@ import { squareIndexPath } from './square-index.js';
 import { createHash } from 'node:crypto';
 
 import { withFileLock } from './file-lock.js';
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
+import { createArtifactPort } from './artifact.js';
 import { presentPending } from './presentation-operations.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
 import type { Body, PendingMembership } from './model.js';
-import type { OpenSquare } from './open-square.js';
+import type { SquareArtifactPort } from './ports.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 export { pendingAtBoundary };
 
@@ -105,18 +104,19 @@ async function presentPendingAtBoundaryUnlocked<T>(
   let rendered = false;
   const renderOnce = async () => { if (!rendered) { rendered = true; result = await present(delivered.context); } };
   for (const entry of delivered.complete) {
-    let square: OpenSquare | undefined;
+    let artifact: SquareArtifactPort | undefined;
     try {
-      try { square = await openSquare(entry.membership.location, { signal }); } catch { continue; }
+      artifact = createArtifactPort(entry.membership.location, undefined, signal);
+      try { await artifact.read(facts => facts.header(), signal); } catch { continue; }
       for (const index of entry.actIndexes) {
         const key = pendingKey(entry.membership, index);
         const prior = presentationLocks.get(key);
         if (prior !== undefined) { await awaitWithSignal(prior, signal); if (signal?.aborted) return undefined; if (!rendered) return undefined; continue; }
-        const work = presentPending({ artifact: square.artifact, location: entry.membership.location, participant: entry.membership.seat.participant, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
+        const work = presentPending({ artifact, location: entry.membership.location, participant: entry.membership.seat.participant, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
           // A stale projection can outlive its activity; still surface the bounded preview,
           // but there is no artifact observation to commit.
           if (!outcome.presented) {
-            const exists = await square!.artifact.read((facts) => facts.activity(index) !== undefined, signal).catch(() => undefined);
+            const exists = await artifact!.read((facts) => facts.activity(index) !== undefined, signal).catch(() => undefined);
             if (exists?.value === false) await renderOnce();
           }
         });
@@ -125,7 +125,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
         if (!rendered) return undefined;
       }
     } finally {
-      if (square !== undefined) await closeOpenSquare(square);
+      if (artifact !== undefined) await artifact.close();
     }
   }
   return result;

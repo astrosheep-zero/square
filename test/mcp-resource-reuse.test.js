@@ -9,7 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square } from '../dist/square-api.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
-import { createSquareResourceOwner, openSquare, closeOpenSquare } from '../dist/open-square.js';
+import { createSquareResourceOwner } from '../dist/artifact.js';
 
 async function fixture(label, participant = 'rei') {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `square-reuse-${label}-`));
@@ -162,14 +162,29 @@ test('a resource owner lends one connection, refuses a second location, and clos
   assert.equal(owner.artifact(path.join(cwd, '.', 'square.square')), artifact, 'same path resolves to one connection');
   assert.throws(() => owner.artifact(path.join(cwd, 'other.square')), /already holds/);
 
-  const borrowed = await openSquare(squarePath, { artifact, body });
-  assert.equal(borrowed.ownsArtifact, false);
-  await closeOpenSquare(borrowed);
+  const borrowed = await Square.at({ path: squarePath, env: { SQUARE_INDEX: path.join(cwd, 'index.ndjsonl') }, resources: owner, body });
+  await borrowed.close();
   assert.ok((await artifact.read((facts) => facts.header())).value.nextActIndex >= 0, 'closing a borrowed view leaves the connection open');
 
   await owner.close();
   await assert.rejects(() => artifact.read((facts) => facts.header()));
   assert.throws(() => owner.artifact(squarePath), /is closed/);
+});
+
+test('a cancelled borrowed request never closes or poisons the owner connection', async t => {
+  const { cwd, squarePath, env, body } = await fixture('borrowed-cancellation');
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const resources = createSquareResourceOwner();
+  t.after(() => resources.close());
+  const artifact = resources.artifact(squarePath);
+  await artifact.read(facts => facts.header());
+  const controller = new AbortController();
+  controller.abort(new Error('request cancelled, owner remains'));
+  await assert.rejects(Square.at({ path: squarePath, env, body, resources }, { signal: controller.signal }), /request cancelled/);
+  const next = await Square.at({ path: squarePath, env, body, resources });
+  await next.join('Alive');
+  await next.close();
+  assert.equal((await artifact.read(facts => facts.participant('Alive').joined)).value, true);
 });
 
 test('a transport disconnect releases the connection even without server.close()', async (t) => {

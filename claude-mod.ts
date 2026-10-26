@@ -1,6 +1,5 @@
 import { operationEnv } from './participant-identity.js';
-import { openSquare } from './open-square.js';
-import { closeOpenSquare } from './open-square.js';
+import { createArtifactPort } from './artifact.js';
 import { recordClaudeDeliveryStatus, type ClaudeDeliveryStatus } from './claude-delivery-status.js';
 import { Square } from './square-api.js';
 import { observeClaudeDelivery, type ClaudeBinding } from './claude-delivery.js';
@@ -9,7 +8,7 @@ import { sweepPending } from './delivery-operations.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { asSeatRef } from './seats.js';
 import { projectSessionSeats, projectSessionCandidates } from './inbox.js';
-import { sameBody, type LocatedSeat } from './model.js';
+import { InternalSquareError, SquareError, sameBody, type LocatedSeat } from './model.js';
 
 /** Persisted hook state keeps its wire coordinate; internal consumers keep the located seat. */
 function claudeBinding({ location, seat }: LocatedSeat): ClaudeBinding {
@@ -82,11 +81,15 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     const seen = new Set<string>();
     for (const candidate of candidates) {
       if (signal.aborted) break;
-      const probe = await openSquare(candidate.location, { body: candidate.body, signal });
+      const probe = createArtifactPort(candidate.location, undefined, signal);
       let names: string[];
       try {
-        names = (await probe.artifact.read(facts => facts.completedSeatsForBody(body).map(seat => seat.participant), signal)).value;
-      } finally { await closeOpenSquare(probe); }
+        names = (await probe.read(facts => facts.completedSeatsForBody(body).map(seat => seat.participant), signal)).value;
+      } catch (error) {
+        if (error instanceof InternalSquareError && error.code === 'not_found')
+          throw new SquareError('unavailable', `Square is unavailable at ${candidate.location}`);
+        throw error;
+      } finally { await probe.close(); }
       for (const participant of names) {
         const key = `${candidate.location}\0${participant}`;
         if (seen.has(key)) continue;
@@ -110,16 +113,16 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
         && joinedAt <= input.cancelAt && expected === undefined;
       if (lateCancelledJoin && !cancelledBindings.some(matches)) cancelledBindings.push(claudeBinding(member));
       if (input.operation !== 'start' && input.operation !== 'reconcile' && !lateCancelledJoin && expected === undefined) continue;
-      const square = await openSquare(location, { body, signal });
+      const artifact = createArtifactPort(location, undefined, signal);
       try {
-        const { value: currentSeat } = await square.artifact.read((facts) => facts.seat(capturedSeat.participant), signal);
+        const { value: currentSeat } = await artifact.read((facts) => facts.seat(capturedSeat.participant), signal);
         if (currentSeat === undefined || currentSeat.generation !== capturedSeat.generation
           || !sameBody(currentSeat.body, capturedSeat.body)) continue;
         const seat = asSeatRef(currentSeat);
         const existing = currentSeat.wakeAddress?.kind === 'claude-native' ? currentSeat.wakeAddress : undefined;
         const cutoff = input.cancelAt !== undefined && (cancelled !== undefined || lateCancelledJoin) ? input.cancelAt : undefined;
         if (cutoff !== undefined) {
-          const { value: through } = await square.artifact.read((facts) => {
+          const { value: through } = await artifact.read((facts) => {
             let beforeIndex: number | undefined;
             for (;;) {
               const page = facts.activityHeads({ beforeIndex }, { edge: 'newest', limit: 100 });
@@ -129,17 +132,21 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
               beforeIndex = page.items[0].index;
             }
           }, signal);
-          if (through >= 0) await square.artifact.cancelDeliveries(seat, through, signal);
+          if (through >= 0) await artifact.cancelDeliveries(seat, through, signal);
         }
         if (!supported) {
-          if (existing !== undefined) await square.artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, undefined), signal);
+          if (existing !== undefined) await artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, undefined), signal);
           continue;
         }
         if (existing === undefined || existing.address.endpoint !== input.endpoint) recovery.add(location);
-        await square.artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, {
+        await artifact.transactAs({ kind: 'participant', seat }, (facts) => facts.updateWakeAddress(seat, {
           kind: 'claude-native', address: { sessionId: input.sessionId, endpoint: input.endpoint!, version: input.version, platform: 'darwin', loaded: 'true' },
         }), signal);
-      } finally { await closeOpenSquare(square); }
+      } catch (error) {
+        if (error instanceof InternalSquareError && error.code === 'not_found')
+          throw new SquareError('unavailable', `Square is unavailable at ${location}`);
+        throw error;
+      } finally { await artifact.close(); }
     }
   }
   if (input.operation === 'start' || input.operation === 'reconcile' || input.operation === 'cancel') {
@@ -148,10 +155,14 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     if (supported && input.operation !== 'cancel') for (const { location } of members) {
       if (signal.aborted) break;
       if (input.operation !== 'start' && !recovery.has(location)) continue;
-      const square = await openSquare(location, { body, signal });
+      const artifact = createArtifactPort(location, undefined, signal);
       let indices: number[];
-      try { indices = await sweepPending({ artifact: square.artifact, location, now: Date.now(), graceMs: 0, limit: 8 }); }
-      finally { await closeOpenSquare(square); }
+      try { indices = await sweepPending({ artifact, location, now: Date.now(), graceMs: 0, limit: 8 }); }
+      catch (error) {
+        if (error instanceof InternalSquareError && error.code === 'not_found')
+          throw new SquareError('unavailable', `Square is unavailable at ${location}`);
+        throw error;
+      } finally { await artifact.close(); }
       for (const index of indices) { if (signal.aborted) break; await processActNotificationsOnce(location, index, { env: { ...env, SQUARE_NOTIFY_DELIVERY_WAIT_MS: '200' } }); }
     }
     return `${JSON.stringify({ available: supported, diagnostic: supported ? undefined : 'Native inbox unavailable: requires macOS Claude with an interactive loaded mod and its real endpoint.', bindings: members.map(claudeBinding), cancelledBindings })}\n`;

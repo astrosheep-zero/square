@@ -1,10 +1,9 @@
-import { createArtifactPort } from '../../dist/artifact.js';
-import { express } from '../../dist/square-actions.js';
+import { Square } from '../../dist/square-api.js';
 
-const [squarePath, actor, body] = process.argv.slice(2);
-const cell = createArtifactPort(squarePath);
+const [squarePath, actor, text] = process.argv.slice(2);
+const square = await Square.at({ path: squarePath, participant: actor });
 try {
-  await express({ artifact: cell, clock: Date.now, location: squarePath }, actor, body, { force: true });
+  await (await square.participant()).express(text, { force: true });
 } finally {
-  await cell.close();
+  await square.close();
 }

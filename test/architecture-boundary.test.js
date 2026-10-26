@@ -53,13 +53,17 @@ function resolvedTarget(file, module) {
 
 function storageLeaks(sources) {
   const artifactBindings = new Map([
-    ['open-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild']],
-    ['sqlite-square.ts', ['createSquare', 'diagnoseSquareFile']],
+    ['sqlite-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile', 'createSquareResourceOwner']],
+    ['boundary-presentation.ts', ['createArtifactPort']],
+    ['notifications.ts', ['createArtifactPort']],
+    ['delivery-health.ts', ['createArtifactPort']],
+    ['list.ts', ['createArtifactPort']],
+    ['claude-mod.ts', ['createArtifactPort']],
     ['inbox.ts', ['createArtifactPort', 'observeSquareDeliveryRevision', 'observeSquareRevision']],
     ['claude-delivery-status.ts', ['createArtifactPort']],
     ['claude-delivery.ts', ['createArtifactPort']],
     ['plugins/opencode/delivery.ts', ['createArtifactPort', 'observeSquareRevision']],
-    ['stream.ts', ['observeSquareRevision']],
+    ['stream.ts', ['createArtifactPort', 'observeSquareRevision']],
     ['square-migration.ts', ['openExistingSquareDatabase']],
   ]);
   const leaks = [];
@@ -89,10 +93,10 @@ test('resolved imports preserve artifact and SQL ownership across native integra
   assert.deepEqual(storageLeaks(new Map([
     ['native.ts', "import { createArtifactPort } from './artifact.js';"],
     ['plugins/opencode/helper.ts', "export { createSqliteDriver } from '../../square-sqlite.js';"],
-    ['open-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
+    ['sqlite-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
     ['cli/hidden.ts', "import { withLedger } from '../host-ledger-sqlite.js';"],
     ['decisions.ts', "import { inSqliteTransaction } from './sqlite-transaction.js';"],
-  ])), ['decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'open-square.ts -> square-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts']);
+  ])), ['decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts', 'sqlite-square.ts -> square-sqlite.ts']);
 });
 
 test('one canonicalizer owns square location keys', () => {
@@ -190,16 +194,18 @@ test('decisions and perception use domain facts, outside host and storage operat
     assert.doesNotMatch(source, /SquareArtifactPort|HostLedgerPort|\.artifact\.|\.transact\s*\(/, file);
     assert.doesNotMatch(source, /from ['"](?:node:|\.\/(?:artifact|square-storage|square-actions|participant-host|registry)\.js)/, file);
   }
-  const actions = productionSources.get('square-actions.ts') ?? '';
-  assert.doesNotMatch(actions, /CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|PI_SESSION_ID|PASEO_AGENT_ID/);
+  const resource = productionSources.get('sqlite-square.ts') ?? '';
+  assert.doesNotMatch(resource, /CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|PI_SESSION_ID|PASEO_AGENT_ID/);
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['open-square.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode/delivery.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['artifact.ts', 'sqlite-square.ts', 'stream.ts', 'list.ts', 'boundary-presentation.ts', 'notifications.ts', 'delivery-health.ts', 'claude-mod.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode/delivery.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The real Square resource is the only entry into participant execution.
-  const actionBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)(?:square-actions)\.js['"]/, ['sqlite-square.ts', 'wakes.ts']);
-  assert.deepEqual(actionBypasses, [], `participant mutation bypasses Square/Participant facade: ${actionBypasses.join(', ')}`);
+  for (const file of ['open-square.ts', 'square-actions.ts']) assert.equal(productionSources.has(file), false, `${file} must be deleted`);
+  assert.deepEqual(filesContaining(/\b(?:OpenSquare|HostContext|OperationContext|ExpressCommittedResult|ListenerCommittedResult|LifecycleCommittedResult)\b/), []);
+  assert.deepEqual(filesContaining(/from ['"][^'"]*(?:open-square|square-actions)\.js['"]/), []);
+  assert.doesNotMatch(productionSources.get('views.ts'), /SquareArtifactPort|OperationControl|\.artifact\.|\basync\b/);
   const presenceBypasses = filesContaining(/from ['"](?:\.\/|\.\.\/)presence\.js['"]/, []);
   assert.deepEqual(presenceBypasses, [], `boundary acknowledgement bypasses facade: ${presenceBypasses.join(', ')}`);
 });
@@ -316,7 +322,7 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     ['cli/render.ts', "export { history } from '../views.js'; export { createArtifactPort } from '../artifact.js';"],
     ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
     ['mcp.ts', "import * as identity from './participant-identity.js'; import { beginClaudeMcpCall } from './claude-mcp-context.js'; import './square-tools.js';"],
-    ['square-tools.ts', "import { express } from './square-actions.js';"],
+    ['square-tools.ts', "import { SqliteSquare } from './sqlite-square.js';"],
   ]);
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
     'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
@@ -325,6 +331,6 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',
-    'private execution import: mcp.ts -> square-tools.ts -> square-actions.ts',
+    'private execution import: mcp.ts -> square-tools.ts -> sqlite-square.ts',
   ]);
 });

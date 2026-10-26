@@ -535,8 +535,7 @@ test('the detached snapshot closure answers exactly, survives later writes and c
     facts.markSeen('Alice', [25], T0 + 900);
     facts.markSeen('ghost', [1], T0 + 950);
   });
-  const square = { artifact: port, clock: () => T0 + 1000, location: ':memory:' };
-  const captured = await snapshot(square);
+  const captured = (await port.read(facts => snapshot(facts, T0 + 1000))).value;
 
   assert.equal(captured.delivered('alice', 'act/25'), true);
   assert.equal(captured.delivered('Alice', 'act/25'), true);
@@ -547,7 +546,7 @@ test('the detached snapshot closure answers exactly, survives later writes and c
 
   await port.transact((facts) => facts.markSeen('Alice', [20], T0 + 1100));
   assert.equal(captured.delivered('Alice', 'act/20'), false, 'a later write does not alter the captured snapshot');
-  assert.equal((await snapshot(square)).delivered('Alice', 'act/20'), true);
+  assert.equal((await port.read(facts => snapshot(facts, T0 + 1000))).value.delivered('Alice', 'act/20'), true);
 
   await port.close();
   assert.equal(captured.delivered('Alice', 'act/25'), true);

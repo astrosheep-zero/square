@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
-import { Square } from '../dist/square-api.js';
-import { catchUp } from '../dist/square-actions.js';
+import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
+import { createArtifactPort as createRealArtifactPort } from '../dist/artifact.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
-import { catchPresence, toPublicActivity } from '../dist/views.js';
+import { catchPresence } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
@@ -56,12 +56,12 @@ async function stateWithHistory(unrelatedSays, participants = 96) {
   return { cell, p0 };
 }
 
-test('catch hydrates only its page while the remaining count is a bounded fact read', async () => {
+test('catch hydrates only its page while the remaining count is a bounded fact read', async t => {
   const { cell, p0 } = await stateWithHistory(900);
   const { counters, artifact } = instrumentCell(cell);
-  const square = { artifact, clock: () => 2_000, location: 'memory', body: p0.body, participantSeat: p0 };
+  const square = await resourceWithArtifact(t, artifact, p0.body, () => 2_000);
   try {
-    const caught = await catchUp(square, 'P0');
+    const caught = await (await square.participant('P0')).catch();
     assert.equal(caught.activities.length, 10);
     assert.equal(caught.remaining, 890);
     assert.deepEqual(counters.hydrated.flat(), Array.from({ length: 10 }, (_value, index) => index + 97));
@@ -75,13 +75,14 @@ test('catch hydrates only its page while the remaining count is a bounded fact r
   }
 });
 
-test('recipient hot reads do not hydrate unrelated history as the square grows', async () => {
+test('recipient hot reads do not hydrate unrelated history as the square grows', async t => {
   const measurements = [];
   for (const unrelated of [900, 1_800]) {
     const { cell, p0 } = await stateWithHistory(unrelated);
     const { counters, artifact } = instrumentCell(cell);
     try {
-      const caught = await catchUp({ artifact, clock: () => 2_000, location: 'memory', body: p0.body, participantSeat: p0 }, 'P0');
+      const square = await resourceWithArtifact(t, artifact, p0.body, () => 2_000);
+      const caught = await (await square.participant('P0')).catch();
       measurements.push({
         delivered: caught.activities.length,
         remaining: caught.remaining,
@@ -100,29 +101,24 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
   assert.equal(measurements[0].headReads, measurements[1].headReads, 'selector cost must not scale with unrelated history');
 });
 
-test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async () => {
+test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
   const { cell, p0 } = await stateWithHistory(900, 1);
   const { counters, artifact } = instrumentCell(cell);
-  const square = { artifact, clock: () => 100_000, location: 'memory', body: p0.body, participantSeat: p0 };
+  const square = await resourceWithArtifact(t, artifact, p0.body, () => 100_000);
   const measurements = () => structuredClone(counters);
   try {
-    const caught = await catchUp(square, 'P0');
+    const participant = await square.participant('P0');
+    const outcome = await participant.catch({ observe: true });
+    const caught = outcome.observation;
     const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
-    assert.deepEqual(caught.activities.map((activity) => `act/${activity.index}`), caughtIds);
-    assert.equal(caught.remaining, 890);
+    assert.deepEqual(outcome.activities.map(activity => activity.id), caughtIds);
+    assert.equal(outcome.remaining, 890);
     assert.equal(caught.standingCount, 2);
     assert.deepEqual(caught.sayNumbers, Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [index + 2, index + 1])));
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))));
 
-    const presence = await catchPresence(square);
+    const presence = (await artifact.read(facts => catchPresence(facts, 100_000))).value;
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
-    // Compose transaction selection and optional presence in the concrete catch result.
-    const { activities, consumedThrough, remaining, terminalStatus, ...observation } = caught;
-    const data = { activities: activities.map((activity) => ({ ...toPublicActivity(activity), perception: 'full' })), consumedThrough, remaining, idleExpired: false };
-    const outcome = { ...data, observation: { ...observation, presence,
-      location: 'memory', participant: 'P0',
-      automaticDeliveryAvailable: false, waitStarted: false, replaced: false,
-    } };
     const beforeRender = measurements();
     const output = renderCatchOutcome('memory', outcome);
     assert.equal(output.exitCode, 0);
@@ -134,17 +130,11 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     // A valid sender filter with no matching pending activity settles empty;
     // unrelated remaining activity cannot force body hydration for that result.
     const hydrationCount = counters.hydrated.length;
-    const settled = await catchUp(square, 'P0', { from: ['P0'] });
-    assert.deepEqual(settled.activities, []);
-    assert.deepEqual(settled.sayNumbers, {});
-    assert.equal(settled.standingCount, 2);
+    const emptyOutcome = await participant.catch({ from: ['P0'], observe: true });
+    assert.deepEqual(emptyOutcome.activities, []);
+    assert.deepEqual(emptyOutcome.observation.sayNumbers, {});
+    assert.equal(emptyOutcome.observation.standingCount, 2);
     assert.equal(counters.hydrated.length, hydrationCount, 'empty catch must not request body hydration');
-    const { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, terminalStatus: emptyTerminal, ...emptyObservation } = settled;
-    const emptyData = { activities: emptyActivities, consumedThrough: emptyCursor, remaining: emptyRemaining, idleExpired: false };
-    const emptyOutcome = { ...emptyData, observation: { ...emptyObservation, presence,
-      location: 'memory', participant: 'P0',
-      automaticDeliveryAvailable: false, stop: 'empty-now', waitStarted: false, replaced: false,
-    } };
     const beforeEmptyRender = measurements();
     const emptyOutput = renderCatchOutcome('memory', emptyOutcome, { from: ['P0'] });
     assert.equal(emptyOutput.exitCode, 0);
@@ -155,68 +145,74 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
   }
 });
 
-test('catch fences selection and captures the page facts in its receipt transaction', async () => {
-  const resource = Square.inMemory({ markdown: 'test', hardCap: 5, clock: () => 100, body: bodyFor('owner') });
-  try {
-    const alice = (await resource.join('Alice')).participant;
-    await resource.join('Bob');
-    await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
-    await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
-    const square = resource.square;
-    const cell = square.artifact;
-    const bobSeat = (await cell.read(facts => facts.seat('Bob'))).value;
-    const aliceSeat = (await cell.read(facts => facts.seat('Alice'))).value;
-    const context = { ...square, participantSeat: bobSeat };
-    await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts =>
-      facts.putLease('Bob', { leaseId: 'replacement', heartbeatAt: 100, expiresAt: 100_000 }, bobSeat.generation));
-    const revision = await cell.revision();
-    assert.equal(await catchUp(context, 'Bob', {}, undefined, 'old'), null);
-    assert.equal(await cell.revision(), revision, 'a replaced lease cannot insert a receipt');
-    const artifact = {
-      ...cell,
-      read: () => { throw new Error('committed selection must not be looked up again'); },
-      async transactAs(authority, change, signal) {
-        const result = await cell.transactAs(authority, change, signal);
-        await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts =>
-          facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 }));
-        await cell.transactAs({ kind: 'participant', seat: aliceSeat }, facts => {
-          facts.land({ kind: 'say', actor: 'Alice', body: 'later for Bob', mentions: ['Bob'], at: 201 });
-          facts.land({ kind: 'hold', actor: 'Alice', body: 'later hold', at: 202 });
-        });
-        return result;
-      },
-    };
-    const caught = await catchUp({ ...context, artifact }, 'Bob', { limit: 1 }, undefined, 'replacement');
-    assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
-    assert.deepEqual(caught, {
-      hint: caught.hint, participant: 'Bob', activities: [{ kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], index: 2, at: 100 }],
-      consumedThrough: 'act/2', remaining: 1, sayNumbers: { 2: 1 }, standingCount: 2,
-      held: false, now: 100, ownActivityCount: 0, hardCap: 5, terminalStatus: undefined,
-    });
-    assert.deepEqual((await cell.read((facts) => ({
-      receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
-      held: facts.hold().active, ownActivityCount: facts.participant('Bob').sayCount,
-    }))).value, { receipt: { at: 100 }, remaining: 2, held: true, ownActivityCount: 1 });
-  } finally {
-    await resource.close();
-  }
+test('catch fences selection and captures the page facts in its receipt transaction', async t => {
+  const cell = createRealArtifactPort(':memory:', { hardCap: 5, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+  t.after(() => cell.close());
+  const artifact = { ...cell };
+  const resource = await resourceWithArtifact(t, artifact, bodyFor('owner'));
+  const alice = (await resource.join('Alice')).participant;
+  const bob = (await resource.join('Bob')).participant;
+  await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
+  await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
+  const bobSeat = (await cell.read(facts => facts.seat('Bob'))).value;
+  const aliceSeat = (await cell.read(facts => facts.seat('Alice'))).value;
+  let replaced = false;
+  artifact.transactAs = async (authority, change, signal) => {
+    const result = await cell.transactAs(authority, change, signal);
+    // Replace the lease after its heartbeat but before receipt selection.
+    if (!replaced && result.value?.type === 'sleep') {
+      replaced = true;
+      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.putLease('Bob', { leaseId: 'replacement', heartbeatAt: 100, expiresAt: 100_000 }, bobSeat.generation));
+    }
+    return result;
+  };
+  const interrupted = await bob.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+  assert.equal(interrupted.status, 'replaced');
+  assert.equal(replaced, true);
+  assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, [], 'a replaced lease cannot insert a receipt');
+
+  artifact.transactAs = async (authority, change, signal) => {
+    const result = await cell.transactAs(authority, change, signal);
+    if (result.value?.activities?.length) {
+      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 }));
+      await cell.transactAs({ kind: 'participant', seat: aliceSeat }, facts => {
+        facts.land({ kind: 'say', actor: 'Alice', body: 'later for Bob', mentions: ['Bob'], at: 201 });
+        facts.land({ kind: 'hold', actor: 'Alice', body: 'later hold', at: 202 });
+      });
+      artifact.read = () => { throw new Error('committed selection must not be looked up again'); };
+    }
+    return result;
+  };
+  const caught = await bob.catch({ limit: 1, observe: true });
+  assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
+  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full' }]);
+  assert.equal(caught.consumedThrough, 'act/2');
+  assert.equal(caught.remaining, 1);
+  assert.deepEqual(caught.observation.sayNumbers, { 2: 1 });
+  assert.equal(caught.observation.standingCount, 2);
+  assert.equal(caught.observation.held, false);
+  assert.equal(caught.observation.now, 100);
+  assert.equal(caught.observation.ownActivityCount, 0);
+  assert.equal(caught.observation.hardCap, 5);
+  assert.equal(caught.observation.enrichmentUnavailable, true);
+  assert.deepEqual((await cell.read(facts => ({
+    receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
+    held: facts.hold().active, ownActivityCount: facts.participant('Bob').sayCount,
+  }))).value, { receipt: { at: 100 }, remaining: 2, held: true, ownActivityCount: 1 });
 });
 
-test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async () => {
-  const resource = Square.inMemory({ markdown: 'test', hardCap: 1, clock: () => 100, body: bodyFor('p0') });
-  try {
-    await resource.join('Alice');
-    const participant = (await resource.join('P0')).participant;
-    await participant.express('only say', { force: true });
-    const cell = resource.square.artifact;
-    const before = (await cell.read((facts) => facts.receiptAssignments())).value;
-    const { counters, artifact } = instrumentCell(cell);
-    resource.square.artifact = artifact;
-    const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-    assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0, status: 'capped' });
-    assert.equal(counters.hydrated.flat().length, 0);
-    assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
-  } finally {
-    await resource.close();
-  }
+test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async t => {
+  const cell = createRealArtifactPort(':memory:', { hardCap: 1, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+  t.after(() => cell.close());
+  const { counters, artifact } = instrumentCell(cell);
+  const resource = await resourceWithArtifact(t, artifact, bodyFor('p0'));
+  await resource.join('Alice');
+  const participant = (await resource.join('P0')).participant;
+  await participant.express('only say', { force: true });
+  const before = (await cell.read(facts => facts.receiptAssignments())).value;
+  counters.hydrated = [];
+  const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+  assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0, status: 'capped' });
+  assert.equal(counters.hydrated.flat().length, 0);
+  assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
 });
