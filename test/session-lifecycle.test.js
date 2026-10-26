@@ -31,7 +31,7 @@ async function fixture(t) {
 
 async function joinAt(location, participant, body, env, options = {}) {
   const square = await Square.at({ path: location, body, participant, env });
-  try { return await square.join(undefined, options); }
+  try { return await square.join(participant, options); }
   finally { await square.close(); }
 }
 
@@ -224,7 +224,7 @@ test('binding time is the establishing join and fences late same-body joins at p
   const body = { channel: 'claude-code', session: 'pinned-session' };
   const join = async (participant, at) => {
     const square = await Square.at({ path: f.squarePath, env: f.env, body, participant, clock: () => at });
-    try { await square.join(); } finally { await square.close(); }
+    try { await square.join(participant); } finally { await square.close(); }
   };
   const bridge = value => runClaudeMod(JSON.stringify({ sessionId: body.session, cwd: f.root,
     version: 'test', endpoint: 'relative.sock', ...value }), f.env).then(JSON.parse);

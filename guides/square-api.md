@@ -49,7 +49,10 @@ try {
   `await square.recognize()` returns all current handles held by that exact Body; the discovery index
   never establishes ownership, and a name alone never authorizes writes.
 - Join with an explicit name: `square.join('Alice', options?, control?)` returns one `JoinResult`:
-  `{participant, activity, kind, participantCount, observation?}`. `participant` is a handle, not a
+  `{participant, activity, kind, participantCount, observation?}`. The name is required at every
+  boundary: an omitted or blank name refuses, even when the resource has a default `participant` or
+  the captured Body holds exactly one current seat. Only `participant()` performs that unambiguous
+  current-body selection. `participant` is a handle, not a
   string. `takeover: true` atomically replaces a standing seat; a rejoin after done establishes a new
   join generation. Same-body reconnection retains its generation. Old handles remain fenced after
   takeover or rejoin, including when the same Body reacquires the name. There is no separate

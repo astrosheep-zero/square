@@ -5,7 +5,8 @@ import { presentPending } from './presentation-operations.js';
 import { projectSessionCandidates, nativePendingPreview } from './inbox.js';
 import { sameBody, type WakeRoute } from './model.js';
 import { parseActivityId } from './square-core.js';
-import type { DeliveryEvidence, SeatRef, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
+import type { DeliveryEvidence, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
+import { asSeatRef } from './seats.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
@@ -18,10 +19,6 @@ function sameAddress(left: Readonly<Record<string, string>> | undefined, right: 
   return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
 }
 function hashPayload(payload: string): string { return createHash('sha256').update(payload).digest('hex'); }
-function asSeatRef(seat: import('./model.js').Seat): SeatRef {
-  const { wakeAddress: _wakeAddress, ...ref } = seat;
-  return ref;
-}
 
 interface NativePreview {
   readonly payload: string;

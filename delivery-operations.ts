@@ -3,14 +3,10 @@ import { formatActivityId, parseActivityId, type ActivityId } from './square-cor
 import { sameBody, type Seat, type StoredAct, type WakeRoute } from './model.js';
 import type { SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, DeliveryEvidence, SeatRef } from './ports.js';
 import { pendingNotifications, pendingHead } from './delivery.js';
+import { asSeatRef } from './seats.js';
 import { canonicalPath } from './canonical-path.js';
 import { freshWatchLease } from './runtime.js';
 import { leaseOwnsNotification } from './delivery.js';
-
-function seatRef(seat: Seat): SeatRef {
-  const { wakeAddress: _wakeAddress, ...ref } = seat;
-  return ref;
-}
 
 function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefined {
   if (seat.wakeAddress === undefined) return undefined;
@@ -138,7 +134,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     if (route === undefined) { notCapable += 1; continue; }
     const request = {
       location, participant: seat.participant, activity: formatActivityId(activity.index), actor: activity.actor,
-      seat: seatRef(seat), route,
+      seat: asSeatRef(seat), route,
       artifact: input.artifact,
     } satisfies WakeRequest;
     if (input.transport.probe !== undefined) {

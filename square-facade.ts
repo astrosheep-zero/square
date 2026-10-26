@@ -179,12 +179,6 @@ export interface JoinResult {
   readonly participantCount: number;
   readonly observation?: JoinObservation;
 }
-/** Optional fence for owner-scoped lifecycle actions. */
-export interface OwnershipFenceOptions {
-  readonly expectedGeneration?: ActivityId;
-  /** Retained only while host adapters finish moving to generation fences. */
-  readonly expectedEpoch?: number;
-}
 export interface Participant {
   readonly name: string;
   express(body: string, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;

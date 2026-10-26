@@ -1,13 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { isSquareError, sameBody, type Seat } from './model.js';
-import type { PresentationResult, PresentPendingInput, SeatRef, SquareRead } from './ports.js';
+import type { PresentationResult, PresentPendingInput, SquareRead } from './ports.js';
 import { pendingHead, sameJoin } from './delivery.js';
-
-function asSeatRef(seat: Seat): SeatRef {
-  const { wakeAddress: _wakeAddress, ...ref } = seat;
-  return ref;
-}
+import { asSeatRef } from './seats.js';
 
 function currentFor(input: PresentPendingInput, captured: Seat, participant: import('./ports.js').ParticipantFact, index: number) {
   return (facts: SquareRead) => {

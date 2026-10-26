@@ -257,3 +257,21 @@ test('catch resolves caller and all filters in one read, retaining canonical err
     });
   }
 });
+
+test('join refuses an omitted or blank name even with a default participant or one current seat', async (t) => {
+  const options = await fixture(t, 'explicit-name');
+  const defaulted = await Square.at({ path: options.path, env: options.env, body: options.body, participant: 'Defaulted' });
+  t.after(() => defaulted.close());
+  const before = (await defaulted.history({ limit: null })).activities.length;
+  await assert.rejects(defaulted.join(), { code: 'invalid_args' });
+  await assert.rejects(defaulted.join(''), { code: 'invalid_name' });
+  await assert.rejects(defaulted.join('   '), { code: 'invalid_name' });
+  assert.equal((await defaulted.history({ limit: null })).activities.length, before, 'refused joins leave no activity');
+  assert.equal((await defaulted.join('Defaulted')).kind, 'joined');
+
+  const unbound = await Square.at({ path: options.path, env: options.env, body: options.body });
+  t.after(() => unbound.close());
+  assert.equal((await unbound.participant()).name, 'Defaulted', 'participant() still selects the one held seat');
+  await assert.rejects(unbound.join(), { code: 'invalid_args' });
+  assert.equal((await unbound.history({ limit: null })).activities.filter((activity) => activity.kind === 'join').length, 1);
+});

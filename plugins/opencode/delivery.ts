@@ -5,11 +5,12 @@ import { deliverPending } from '../../delivery-operations.js';
 import { nativePendingPreview, projectPresentation } from '../../inbox.js';
 import { leaseOwnsNotification } from '../../delivery.js';
 import { sameBody, type InboxMembership, type Seat } from '../../model.js';
-import type { DeliveryEvidence, SeatRef, SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
+import type { DeliveryEvidence, SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
 import { createWakeTransport } from '../../notifications.js';
 import { formatActivityId, parseActivityId } from '../../square-core.js';
 import { indexedSquareEntries, observeSquareIndex } from '../../square-index.js';
 import { freshWatchLease } from '../../runtime.js';
+import { asSeatRef } from '../../seats.js';
 import { presentPending } from '../../presentation-operations.js';
 import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
 
@@ -18,11 +19,6 @@ const bodyFor = (sessionId: string) => ({ channel: 'opencode', session: sessionI
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
 type LocatedSeat = { readonly location: string; readonly seat: Seat };
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
-
-function seatRef(seat: Seat): SeatRef {
-  const { wakeAddress: _wakeAddress, ...ref } = seat;
-  return ref;
-}
 
 function preview(facts: SquareRead, location: string, seat: Seat, index: number) {
   return nativePendingPreview(facts, {
@@ -174,7 +170,7 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
       for (const { evidence, index, hash, clipped } of matches) {
         if (signal.aborted || evidence.claimToken === undefined) return;
         await presentPending({ artifact, location, participant: seat.participant,
-          activity: formatActivityId(index), seat: seatRef(seat), sink: { present() {} }, markSeen: !clipped, signal,
+          activity: formatActivityId(index), seat: asSeatRef(seat), sink: { present() {} }, markSeen: !clipped, signal,
           current: (facts) => {
             const current = facts.seat(seat.participant);
             const prepared = current === undefined || !sameSeat(current, seat) ? undefined : preview(facts, location, seat, index);
@@ -243,8 +239,8 @@ export async function publishOpenCodeAddress(sessionId: string, env: NodeJS.Proc
     if (signal.aborted) return false;
     const artifact = createArtifactPort(location, undefined, signal);
     try {
-      await artifact.transactAs({ kind: 'participant', seat: seatRef(seat) }, (facts) =>
-        facts.updateWakeAddress(seatRef(seat), { kind: routeKind, address: { sessionId } }));
+      await artifact.transactAs({ kind: 'participant', seat: asSeatRef(seat) }, (facts) =>
+        facts.updateWakeAddress(asSeatRef(seat), { kind: routeKind, address: { sessionId } }));
     } finally { await artifact.close(); }
   }
   return seats.length > 0;
@@ -256,7 +252,7 @@ export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.Pr
     const artifact = createArtifactPort(location, undefined, signal);
     try {
       const { value: through } = await artifact.read((facts) => facts.header().lastActIndex, signal);
-      if (through >= 0) await artifact.cancelDeliveries(seatRef(seat), through, signal);
+      if (through >= 0) await artifact.cancelDeliveries(asSeatRef(seat), through, signal);
     } finally { await artifact.close(); }
   }
 }

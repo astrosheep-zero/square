@@ -70,7 +70,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
 
   assert.equal(opened(), 0);
-  await call('join');
+  await call('join', { as: participant });
   await call('express', { body: 'first', force: true });
   await call('express', { body: 'second', force: true });
   await call('history');
@@ -82,7 +82,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   await server.close();
   assert.equal(opened(), 1);
   const fresh = await Square.at({ cwd, env: { ...env }, path: squarePath, body, participant: 'other' });
-  await fresh.join();
+  await fresh.join('other');
   await fresh.close();
   assert.equal(opened(), 2);
 });
@@ -96,7 +96,7 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
 
-  await call('join');
+  await call('join', { as: participant });
   await call('hold', { reason: 'concurrency' });
   const [history, status, participants] = await Promise.all([
     call('history'), call('status'), call('participants'),
@@ -114,7 +114,7 @@ test('MCP shutdown waits for an idle catch before releasing the connection', asy
   const server = serverFor({ cwd, squarePath, env, body, participant });
   const client = await connect(server);
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
-  await call('join');
+  await call('join', { as: participant });
   const pending = call('catch', { idle: 60_000 }).then(() => 'settled', (error) => error);
   await sleep(50);
   const started = Date.now();
@@ -181,7 +181,7 @@ test('a transport disconnect releases the connection even without server.close()
   const client = await connect(server);
   t.after(async () => { await server.close().catch(() => undefined); });
 
-  await client.callTool({ name: 'join', arguments: {} });
+  await client.callTool({ name: 'join', arguments: { as: participant } });
   assert.equal(opened(), 1);
   assert.equal(closed(), 0);
   await client.close();
@@ -198,11 +198,11 @@ test('reused connections keep per-call participants and harness sessions separat
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args, meta) => client.callTool({ name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });
 
-  const first = await call('join', {}, { threadId: 'session-one' });
+  const first = await call('join', { as: participant }, { threadId: 'session-one' });
   assert.equal(first.structuredContent.kind, 'joined');
-  const refused = await call('join', {}, { threadId: 'session-two' });
+  const refused = await call('join', { as: participant }, { threadId: 'session-two' });
   assert.equal(refused.structuredContent.error.code, 'already_joined');
-  const reconnected = await call('join', {}, { threadId: 'session-one' });
+  const reconnected = await call('join', { as: participant }, { threadId: 'session-one' });
   assert.equal(reconnected.structuredContent.kind, 'reconnected');
   await call('join', { as: 'other' });
   const expressed = await call('express', { as: 'other', body: 'other speaks', force: true });

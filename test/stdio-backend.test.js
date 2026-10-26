@@ -40,7 +40,7 @@ function assertDead(pid) { assert.throws(() => process.kill(pid, 0), error => er
 async function seedArtifact(location, env, markdown, body, participant, activity) {
   const square = await Square.build({ path: location, env, markdown, body, participant });
   try {
-    const joined = await square.join();
+    const joined = await square.join(participant);
     if (activity !== undefined) await joined.participant.express(activity, { force: true });
   } finally { await square.close(); }
 }
@@ -186,4 +186,18 @@ test('close is bounded even when the child ignores close and SIGTERM, and settle
   const pending = assert.rejects(square.history(), /timed out|closed/);
   await square.close(); await pending; await square.close();
   assertDead(Number(fs.readFileSync(marker, 'utf8')));
+});
+
+test('stdio join refuses an omitted or blank name before touching the backend artifact', async t => {
+  const f = fixture(t);
+  const artifactPath = path.join(f.root, 'discussion.square');
+  await seedArtifact(artifactPath, f.env, 'explicit join', { channel: 'codex', session: 'explicit-seed' }, 'Alice');
+  const square = await f.open({ body: { channel: 'codex', session: 'explicit-join' }, participant: 'Defaulted' });
+  const before = (await square.history({ limit: null })).activities.length;
+  await assert.rejects(square.join(), { code: 'invalid_args' });
+  await assert.rejects(square.join(''), { code: 'invalid_name' });
+  assert.equal((await square.history({ limit: null })).activities.length, before, 'refused joins leave no activity');
+  const joined = await square.join('Bob');
+  assert.equal(joined.kind, 'joined');
+  assert.equal(joined.participant.name, 'Bob');
 });

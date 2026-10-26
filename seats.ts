@@ -1,4 +1,4 @@
-import { SquareError, sameBody, sameName, validateBody, type Body, type Seat, type WakeAddress } from './model.js';
+import { SquareError, sameBody, sameName, validateBody, validateName, type Body, type Seat, type WakeAddress } from './model.js';
 import type { ArtifactWriteAuthority, SeatRef, SquareArtifactPort } from './ports.js';
 import { rememberSquarePath } from './square-index.js';
 
@@ -8,19 +8,15 @@ export function requireBody(context: HostContext): Body {
   return context.body;
 }
 
+export function requireJoinName(name: string | undefined): string {
+  if (name === undefined) throw new SquareError('invalid_args', 'Square.join requires an explicit participant name.');
+  validateName(name);
+  return name;
+}
+
 export function asSeatRef(seat: Seat): SeatRef {
   const { wakeAddress: _wakeAddress, ...ref } = seat;
   return ref;
-}
-
-export async function captureSeat(context: HostContext, participant: string, expectedGeneration?: Seat['generation']): Promise<Seat> {
-  const body = requireBody(context);
-  return (await context.artifact.read((facts) => {
-    const seat = facts.seat(participant);
-    if (seat === undefined || !sameBody(seat.body, body)) throw new SquareError('already_joined', `${participant} is not held by this body.`);
-    if (expectedGeneration !== undefined && seat.generation !== expectedGeneration) throw new SquareError('already_joined', `${participant} has been taken over.`);
-    return seat;
-  })).value;
 }
 
 export function participantAuthority(seat: Seat): ArtifactWriteAuthority {
@@ -48,7 +44,7 @@ export function requireSeat(context: HostContext, participant: string): Seat {
 }
 
 /** Post-commit discovery only. The index never decides whether this seat may write. */
-export async function publishCommittedIdentity(context: HostContext, _participant: string, _generation?: string): Promise<void> {
+export async function publishCommittedIdentity(context: HostContext): Promise<void> {
   if (context.location === undefined || context.location === 'memory' || context.body === undefined || context.indexPath === undefined) return;
   await rememberSquarePath(context.location, context.body, context.indexPath).catch(() => undefined);
 }

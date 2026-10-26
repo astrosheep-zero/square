@@ -45,9 +45,9 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
     const invalid = await client.callTool({ name: 'express', arguments: { body: 7 } });
     assert.equal(invalid.isError, true);
 
-    const joined = await client.callTool({ name: 'join', arguments: {} });
+    const joined = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
     assert.equal(joined.structuredContent.participant, 'rei');
-    const reconnected = await client.callTool({ name: 'join', arguments: {} });
+    const reconnected = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
     assert.equal(reconnected.structuredContent.kind, 'reconnected');
     const expressed = await client.callTool({ name: 'express', arguments: { body: '*waves*', mentions: [] } });
     assert.equal(expressed.structuredContent.activity.body, '*waves*');
@@ -97,7 +97,7 @@ test('one MCP server accepts per-call participants without a configured default'
     }
     const missing = await client.callTool({ name: 'join', arguments: {} });
     assert.equal(missing.structuredContent.error.code, 'invalid_args');
-    assert.match(missing.structuredContent.error.message, /unambiguous participant name/);
+    assert.match(missing.structuredContent.error.message, /explicit participant name/);
     for (const as of ['alice', 'bob']) {
       const joined = await client.callTool({ name: 'join', arguments: { as } });
       assert.equal(joined.structuredContent.participant, as);
@@ -137,7 +137,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         configuredBodySeats: facts.seatsForBody(configuredBody),
       }));
       try {
-        const callJoin = (session) => client.callTool({ name: 'join', arguments: {}, _meta: { [key]: session } });
+        const callJoin = (session) => client.callTool({ name: 'join', arguments: { as: 'rei' }, _meta: { [key]: session } });
         const callBody = { channel, session: `${channel}-first` };
         const joined = await callJoin(callBody.session);
         assert.equal(joined.structuredContent.kind, 'joined');
@@ -153,7 +153,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
 
         const reconnected = await callJoin(callBody.session);
         assert.equal(reconnected.structuredContent.kind, 'reconnected');
-        const fallback = await client.callTool({ name: 'join', arguments: {} });
+        const fallback = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
         assert.equal(fallback.structuredContent.error.code, 'already_joined');
         const startupJoin = await client.callTool({ name: 'join', arguments: { as: 'Startup' } });
         assert.equal(startupJoin.structuredContent.kind, 'joined');
@@ -232,16 +232,16 @@ test('MCP tool schemas reject unknown fields and malformed activity ids', async 
   const { server } = await fixture('kite');
   const { client, close } = await connectedClient(server);
   try {
-    const unknownField = await client.callTool({ name: 'join', arguments: { takeover: false, bogus: 1 } });
+    const unknownField = await client.callTool({ name: 'join', arguments: { as: 'kite', takeover: false, bogus: 1 } });
     assert.equal(unknownField.isError, true);
 
-    const sessionField = await client.callTool({ name: 'join', arguments: { session: 'not-a-schema-field' } });
+    const sessionField = await client.callTool({ name: 'join', arguments: { as: 'kite', session: 'not-a-schema-field' } });
     assert.equal(sessionField.isError, true);
 
     const malformed = await client.callTool({ name: 'history', arguments: { after: 'act/01' } });
     assert.equal(malformed.isError, true);
 
-    const joined = await client.callTool({ name: 'join', arguments: { takeover: false } });
+    const joined = await client.callTool({ name: 'join', arguments: { as: 'kite', takeover: false } });
     assert.equal(joined.isError, undefined);
     await client.callTool({ name: 'express', arguments: { body: 'schema check' } });
     const history = await client.callTool({ name: 'history', arguments: { after: joined.structuredContent.activity.id } });
@@ -255,13 +255,13 @@ test('MCP shares location and noMention parameters with native tools', async (t)
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const { client, close } = await connectedClient(server);
   try {
-    await client.callTool({ name: 'join', arguments: {} });
+    await client.callTool({ name: 'join', arguments: { as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { as: 'bob' } });
     const bare = await client.callTool({ name: 'express', arguments: { body: 'literal @bob', noMention: true, force: true } });
     assert.deepEqual(bare.structuredContent.activity.mentions, []);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
-    const joined = await client.callTool({ name: 'join', arguments: { location: 'other.square' } });
+    const joined = await client.callTool({ name: 'join', arguments: { as: 'rei', location: 'other.square' } });
     assert.equal(joined.structuredContent.kind, 'joined');
     const history = await client.callTool({ name: 'history', arguments: { location: 'other.square' } });
     assert.equal(history.structuredContent.activities.some(a => a.kind === 'say'), false);
@@ -281,7 +281,7 @@ test('MCP cancellation reaches an in-progress application operation', async () =
   const { server } = await fixture('aoi');
   const { client, close } = await connectedClient(server);
   try {
-    await client.callTool({ name: 'join', arguments: {} });
+    await client.callTool({ name: 'join', arguments: { as: 'aoi' } });
     await client.callTool({ name: 'hold', arguments: { reason: 'test cancellation' } });
     const controller = new AbortController();
     const pending = client.callTool({ name: 'express', arguments: { body: 'waiting' } }, undefined, { signal: controller.signal });
@@ -324,7 +324,7 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   };
   await request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'disconnect-test', version: '1' } });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  await request('tools/call', { name: 'join', arguments: {} });
+  await request('tools/call', { name: 'join', arguments: { as: 'disconnected' } });
   await request('tools/call', { name: 'hold', arguments: {} });
   await request('tools/call', { name: 'catch', arguments: {} });
   send('tools/call', { name: 'express', arguments: { body: 'orphan expression', force: true } });

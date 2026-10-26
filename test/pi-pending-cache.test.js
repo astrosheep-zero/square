@@ -26,10 +26,10 @@ async function pendingFixture(root, sessionId) {
   const authorBody = { channel: 'pi', session: `${sessionId}-author` };
   const recipientBody = { channel: 'pi', session: sessionId };
   const author = await Square.build({ path: squarePath, markdown: 'pending-cache', env, body: authorBody, participant: 'Alice' });
-  try { await author.join(); }
+  try { await author.join('Alice'); }
   finally { await author.close(); }
   const recipient = await Square.at({ path: squarePath, env, body: recipientBody, participant: 'Bob' });
-  try { await recipient.join(); }
+  try { await recipient.join('Bob'); }
   finally { await recipient.close(); }
   const speaker = await Square.at({ path: squarePath, env, body: authorBody, participant: 'Alice' });
   try { await (await speaker.participant()).express('cached pending', { force: true, mentions: ['Bob'] }); }

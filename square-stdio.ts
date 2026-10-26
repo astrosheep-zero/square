@@ -6,6 +6,7 @@ import { harnessSessionSources } from './participant-identity.js';
 import type { SquareBackends, SquareBackend } from './square-backend.js';
 import type { ParsedSquareLocation } from './square-location.js';
 import type { Participant, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import { requireJoinName } from './seats.js';
 
 export const STDIO_PROTOCOL_VERSION = 1;
 export const STDIO_MAX_FRAME_BYTES = 8 * 1024 * 1024;
@@ -156,6 +157,7 @@ class StdioSquare implements SquareBackend {
   }
   async participant(name?: string) { return this.participantHandle(await this.call('participant', [name])); }
   async join(...[name, options, control]: Parameters<SquareBackend['join']>): ReturnType<SquareBackend['join']> {
+    requireJoinName(name);
     const result = await this.call('join', [name, options], control);
     return { ...result, participant: this.participantHandle(result.participant) };
   }
@@ -167,7 +169,6 @@ class StdioSquare implements SquareBackend {
   stream(): ReturnType<SquareBackend['stream']> { unsupported('stream'); }
   recognize(): ReturnType<SquareBackend['recognize']> { return Promise.reject(new SquareError('invalid_args', 'stdio does not support host recognition; select a participant explicitly')); }
   implicitJoin(): ReturnType<SquareBackend['implicitJoin']> { unsupported('host implicit join'); }
-  doneOwnedSession(): ReturnType<SquareBackend['doneOwnedSession']> { unsupported('host session cleanup'); }
   endOwnedSession(): ReturnType<SquareBackend['endOwnedSession']> { unsupported('host session cleanup'); }
   cancelDeliveries(): ReturnType<SquareBackend['cancelDeliveries']> { unsupported('host delivery cancellation'); }
   close() { return this.connection.close(); }

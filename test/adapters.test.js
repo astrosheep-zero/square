@@ -324,7 +324,7 @@ test('package facade participant verbs persist through shared actions', async ()
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
-    const alice = (await square.join()).participant;
+    const alice = (await square.join('Alice')).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
@@ -584,10 +584,10 @@ async function piFixture(sessionId, pending = true) {
   const bobBody = { channel: 'pi', session: sessionId };
   const env = { ...process.env, SQUARE_INDEX: indexPath };
   const aliceSquare = await Square.build({ path: squarePath, markdown: 'test', env, body: aliceBody, participant: 'Alice' });
-  try { await aliceSquare.join(); }
+  try { await aliceSquare.join('Alice'); }
   finally { await aliceSquare.close(); }
   const bobSquare = await Square.at({ path: squarePath, env, body: bobBody, participant: 'Bob' });
-  try { await bobSquare.join(); }
+  try { await bobSquare.join('Bob'); }
   finally { await bobSquare.close(); }
   if (pending) {
     const author = await Square.at({ path: squarePath, env, body: aliceBody, participant: 'Alice' });
@@ -1012,7 +1012,7 @@ test('a failed Pi cancellation fences only its native session and does not repla
     const newId = 'pi-new-session-after-old-failure';
     const newBody = { channel: 'pi', session: newId };
     const recipient = await Square.at({ path: item.squarePath, env: item.env, body: newBody, participant: 'NewBob' });
-    try { await recipient.join(); } finally { await recipient.close(); }
+    try { await recipient.join('NewBob'); } finally { await recipient.close(); }
     const author = await Square.at({ path: item.squarePath, env: item.env, body: item.aliceBody, participant: 'Alice' });
     let newIndex;
     try { newIndex = Number((await (await author.participant()).express('new session remains live @NewBob', { mentions: ['NewBob'] })).activity.id.slice(4)); }

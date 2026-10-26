@@ -36,10 +36,10 @@ test('request operations abort under an exclusive artifact lock without a deferr
   const writerBody = body('writer');
   const readerBody = body('reader');
   const built = await Square.build({ path: location, markdown: 'context', env, body: writerBody, participant: 'Writer' });
-  const writer = (await built.join()).participant;
+  const writer = (await built.join('Writer')).participant;
   await built.close();
   const readerSquare = await Square.at({ path: location, env, body: readerBody, participant: 'Reader' });
-  await readerSquare.join();
+  await readerSquare.join('Reader');
   await readerSquare.close();
   const writerSquare = await Square.at({ path: location, env, body: writerBody, participant: 'Writer' });
   await (await writerSquare.participant()).express('unread', { force: true, mentions: ['Reader'] });
@@ -52,7 +52,7 @@ test('request operations abort under an exclusive artifact lock without a deferr
   const requests = [
     ['Reader', readerBody, async square => (await square.participant()).catch({}, { signal: controller.signal })],
     ['Writer', writerBody, async square => (await square.participant()).express('cancelled', { force: true }, { signal: controller.signal })],
-    ['Newcomer', body('newcomer'), async square => square.join()],
+    ['Newcomer', body('newcomer'), async square => square.join('Newcomer')],
   ];
   const pending = requests.map(async ([participant, coordinate, operate]) => {
     const square = await Square.at({ cwd: root, env, path: location, body: coordinate, participant }, { signal: controller.signal });
@@ -222,7 +222,7 @@ test('concurrent joins from one body establish one artifact seat and one join ac
   const square = await Square.build({ path: location, markdown: 'context', env, body: coordinate, participant: 'Same' });
   const peer = await Square.at({ path: location, env, body: coordinate, participant: 'Same' });
   try {
-    await Promise.all([square.join(), peer.join()]);
+    await Promise.all([square.join('Same'), peer.join('Same')]);
     assert.equal((await square.history()).activities.filter(activity => activity.kind === 'join').length, 1);
     const artifact = createArtifactPort(location);
     try { assert.deepEqual((await artifact.read(facts => facts.seatsForBody(coordinate))).value.map(seat => seat.participant), ['Same']); }

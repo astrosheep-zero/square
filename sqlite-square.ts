@@ -7,7 +7,7 @@ import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor 
 import { catchLimit, observeCatchSelection, type CatchSelection } from './catch-decisions.js';
 import { directedSuffix } from './activity-feed.js';
 import { expressHint } from './hints.js';
-import { requireSeat } from './seats.js';
+import { requireJoinName, requireSeat } from './seats.js';
 import { buildMemorySquare, openSquare, closeOpenSquare, type OpenSquare } from './open-square.js';
 import { catchUp, endOwnedSession, express, hold, ignore, implicitJoin, join, takeover, listen, listening, unlisten, resume, done, type ExpressCommittedResult, type OperationContext } from './square-actions.js';
 import { recoveryObservation, currentParticipant, entryPresentation, resolveParticipant, snapshot, queryStatus,
@@ -289,7 +289,7 @@ class ParticipantHandle implements Participant {
       validateDoneBody(body);
     const context = this.context();
     const name = (await resolveParticipant(context, this.name, control)).name;
-    const result = verb === 'done' ? await done(context, name, body ?? '', {}, control)
+    const result = verb === 'done' ? await done(context, name, body ?? '', control)
       : verb === 'hold' ? await hold(context, name, body, control) : await resume(context, name, control);
     const { observation: committed, ...receipt } = result;
     return { ...receipt, ...(!options.observe ? {} : { observation: {
@@ -345,7 +345,7 @@ export class SqliteSquare {
     let name = requested;
     try {
       checkControl(control);
-      name = (await this.participant(requested)).name;
+      name = requireJoinName(requested);
       const last = options.last ?? HISTORY_DEFAULT_LIMIT;
       if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT)
         throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
@@ -378,7 +378,6 @@ export class SqliteSquare {
       throw failure(error, { operation: 'join', subject: 'caller', participant: name });
     }
   }
-  doneOwnedSession(name: string, body: string, expectedEpoch: number, control?: OperationControl): Promise<ActivityResult> { return done(this.square, name, body, { expectedEpoch }, control); }
   async implicitJoin(name: string, control?: OperationControl): Promise<{
     readonly state: 'joined' | 'active' | 'done';
     readonly participant?: Participant;
