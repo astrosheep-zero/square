@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, squareHeadline, squareMessageSchema } from "../shared/message.ts";
+import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, parseSquareBlocks, squareHeadline, squareMessageSchema } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
@@ -101,4 +101,38 @@ test("headline is human-facing when actor and route are present, else falls back
   assert.equal(squareHeadline({ ...items[0], route: "bell" }), "rei rang the bell");
   // Messages from Square <0.3.71 carry only the agent-voice description.
   assert.equal(squareHeadline({ square: "design", description: "rei spoke your name (aoi)" }), "rei spoke your name (aoi)");
+});
+
+test("square activity envelopes take their route line from attributes or from the first inner line", () => {
+  const attributed = [
+    "before the card",
+    '<square-activity square="design" as="aoi" id="act/12">',
+    "● rei spoke your name",
+    "",
+    "*把草图推过来*",
+    "</square-activity>",
+  ].join("\n");
+  assert.deepEqual(parseSquareBlocks(attributed), [
+    { body: "before the card" },
+    { meta: "· design · aoi · act/12", actor: "● rei spoke your name", body: "*把草图推过来*" },
+  ]);
+
+  const attributeLess = [
+    "<square-activity>",
+    "· /tmp/design.square · act/12",
+    "● rei spoke your name",
+    "",
+    "*把草图推过来*",
+    "</square-activity>",
+  ].join("\n");
+  assert.deepEqual(parseSquareBlocks(attributeLess), [
+    { meta: "· /tmp/design.square · act/12", actor: "● rei spoke your name", body: "*把草图推过来*" },
+  ]);
+
+  // A bare activity without a route line keeps its first line as the actor, and loose text stays a body.
+  assert.deepEqual(parseSquareBlocks("<square-activity>\n● rei spoke\nhi\n</square-activity>\n尾"), [
+    { meta: undefined, actor: "● rei spoke", body: "hi" },
+    { body: "尾" },
+  ]);
+  assert.deepEqual(parseSquareBlocks("just words"), [{ body: "just words" }]);
 });

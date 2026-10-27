@@ -3,7 +3,7 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { outputPreview, squareHeadline, type SquareMessageData } from "../shared/message";
-import { MONO, parseInline, SquareMarkdown } from "./markdown";
+import { SquareInline, SquareMarkdown } from "./markdown";
 
 /** A plain card: who, what they did, where, then what they said. No badge, no chrome — the words carry the place. */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
@@ -32,10 +32,6 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     actor: { color: foreground, fontSize: 12.5, fontWeight: "600" as const },
     route: { color: muted, fontSize: 12.5, flex: 1 },
     count: { color: muted, fontSize: 11 },
-    preview: { color: foreground, fontSize: 13, lineHeight: 19 },
-    action: { color: muted, fontStyle: "italic" as const },
-    bold: { fontWeight: "700" as const },
-    code: { fontFamily: MONO, fontSize: 12 },
   }), [foreground, layout.compact, muted, theme.colors.accent, theme.colors.border, theme.colors.surface1]);
 
   const headline = latest !== undefined ? squareHeadline(latest) : "Square context";
@@ -62,18 +58,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
           <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={muted} />
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
-          <Text numberOfLines={2} style={styles.preview}>
-            {parseInline(preview).map((part, index) => (
-              <Text
-                key={index}
-                style={[
-                  part.italic ? styles.action : undefined,
-                  part.bold ? styles.bold : undefined,
-                  part.code ? styles.code : undefined,
-                ]}
-              >{part.text}</Text>
-            ))}
-          </Text>
+          <SquareInline text={preview} theme={theme} numberOfLines={2} />
         )}
       </Pressable>
       {expanded && (
