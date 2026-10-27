@@ -7,6 +7,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { Square } from '../dist/square-api.js';
 import { diagnoseSquareFile } from '../dist/artifact.js';
+import { CURRENT_USER_VERSION } from '../dist/square-sqlite.js';
 import { migrateSquareFile } from '../dist/square-migration.js';
 import { writeLegacyLedger } from './fixtures/legacy-host-ledger.js';
 
@@ -59,7 +60,7 @@ test('explicit v2 migration establishes artifact seats and removes legacy routes
   assert.deepEqual(read(location, 'SELECT * FROM receipts ORDER BY owner_json,act_index'), before.receipts);
   assert.equal(read(location, "SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='routes'")[0].n, 0);
   assert.equal(read(location, 'SELECT COUNT(*) AS n FROM seats')[0].n, 3);
-  assert.equal(read(location, 'SELECT user_version FROM pragma_user_version')[0].user_version, 4);
+  assert.equal(read(location, 'SELECT user_version FROM pragma_user_version')[0].user_version, CURRENT_USER_VERSION);
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 
   const currentBytes = digest(location);

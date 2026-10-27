@@ -7,6 +7,7 @@ import { canonicalPath } from './canonical-path.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
 import { pendingHead, pendingNotifications, leaseOwnsNotification } from './delivery.js';
+import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 
 export interface PendingWaitOptions {
@@ -32,15 +33,22 @@ export function pendingAtBoundary(inbox: readonly PendingMembership[]): PendingM
   }).filter((membership) => membership.notifications.length > 0);
 }
 
-function eligibleNotifications(facts: SquareRead, membership: PendingMembership) {
+function eligibleNotifications(facts: SquareRead, membership: PendingMembership, now = Date.now()): Pick<PendingMembership, 'notifications' | 'deliveryDeferralExpiry'> {
   const seat = facts.seat(membership.seat.participant);
   if (seat === undefined || seat.generation !== membership.seat.generation
-    || !sameBody(seat.body, membership.seat.body)) return [];
+    || !sameBody(seat.body, membership.seat.body)) return { notifications: [] };
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
-  return membership.notifications.filter(notification =>
-    (cancelledThrough === undefined || notification.actIndex > cancelledThrough)
-    && !facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex))
-      .some(row => row.kind === 'presentation' && (row.outcome === 'presented' || row.outcome === 'clipped')));
+  let expiry = Infinity;
+  const notifications = membership.notifications.filter(notification => {
+    if (cancelledThrough !== undefined && notification.actIndex <= cancelledThrough
+      || facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex))
+        .some(row => row.kind === 'presentation' && (row.outcome === 'presented' || row.outcome === 'clipped'))) return false;
+    const deferredUntil = deliveryDeferralExpiry(facts, seat, notification.actIndex, now);
+    if (deferredUntil === undefined) return true;
+    expiry = Math.min(expiry, deferredUntil);
+    return false;
+  });
+  return { notifications, ...(expiry === Infinity ? {} : { deliveryDeferralExpiry: expiry }) };
 }
 
 /** Revalidate a supplied batch immediately before the boundary's independent claim/send checks. */
@@ -56,8 +64,8 @@ export async function projectBoundaryEligibility(inbox: readonly PendingMembersh
     const artifact = createArtifactPort(location);
     try {
       const { value } = await artifact.read(facts => memberships.flatMap(membership => {
-        const notifications = eligibleNotifications(facts, membership);
-        return notifications.length === 0 ? [] : [{ ...membership, notifications }];
+        const eligibility = eligibleNotifications(facts, membership);
+        return eligibility.notifications.length === 0 ? [] : [{ ...membership, ...eligibility }];
       }));
       pending.push(...value);
     } catch {
@@ -174,7 +182,7 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
         // without a conversation revision and must not force body hydration or self-wake retries.
         return { cached, pending: cached.value.map(membership => {
           const catchLease = freshWatchLease(facts, membership.seat.participant);
-          return { ...membership, notifications: eligibleNotifications(facts, membership),
+          return { ...membership, ...eligibleNotifications(facts, membership),
             ...(catchLease === undefined ? {} : { catchLease }) };
         }) };
       }, signal);
@@ -217,7 +225,7 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
   const lease = freshWatchLease(facts, input.participant, input.now);
   if (!head || (lease !== undefined && leaseOwnsNotification(lease, head))) return undefined;
   const item = facts.activity(input.actIndex);
-  if (item?.kind !== 'say') return undefined;
+  if (item?.kind !== 'say' || deliveryDeferralExpiry(facts, seat, input.actIndex, input.now) !== undefined) return undefined;
   return { payload: renderSquareReminder([renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
     actor: item.actor, route: head.route, body: item.body ?? '(structured activity)' })]), clipped: attentionBodyIsClipped(item.body ?? '(structured activity)') };
 }
@@ -354,7 +362,7 @@ export async function observeSessionPending(identity: SessionIdentity, suppliedE
           // Eligibility may change at lease expiry without any storage write.
           const leaseExpiry = Math.min(Infinity, ...inbox.flatMap((membership) =>
             membership.catchLease === undefined ? [] : [Math.min(membership.catchLease.expiresAt, membership.catchLease.heartbeatAt + WATCH_STALE_MS + 1)]));
-          const nextExpiry = leaseExpiry;
+          const nextExpiry = Math.min(leaseExpiry, ...inbox.map(membership => membership.deliveryDeferralExpiry ?? Infinity));
           const duration = Math.min(remaining, Math.max(1, nextExpiry - Date.now()));
           const cancelled = new AbortController();
           const waitSignal = AbortSignal.any([signal, cancelled.signal]);

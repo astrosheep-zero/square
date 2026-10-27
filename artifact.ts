@@ -136,9 +136,9 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
     'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForBody', 'completedSeatsForBody',
-    'deliveryEvidence', 'deliveryByToken', 'cancelledThrough',
+    'deliveryEvidence', 'deliveryByToken', 'cancelledThrough', 'deliveryDeferrals',
 ];
-const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery'];
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery', 'putDeliveryDeferral', 'renewDeliveryDeferral', 'releaseDeliveryDeferral'];
 /** One connection, ordered operations, guarded synchronous transaction capabilities. */
 export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
     let database: DatabaseSync | undefined;
@@ -176,12 +176,11 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
         }
         return database;
     }
-    function queue<T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    function queue<T>(operation: (signal: AbortSignal) => Promise<T>, operationSignal: AbortSignal): Promise<T> {
         if (inCallback)
             throw new TypeError('Square artifact operations cannot nest inside a callback.');
         if (closed)
             return Promise.reject(new Error('Square artifact is closed'));
-        const operationSignal = combined(signal);
         const result = tail.then(() => {
             abort(operationSignal);
             return operation(operationSignal);
@@ -243,19 +242,23 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
     const revision: SquareArtifactPort['revision'] = signal => queue(async (s) => {
         const db = await connection(s);
         return inSqliteTransaction(db, false, () => validate(db), (header) => header.revision, s);
-    }, signal);
+    }, combined(signal));
     return {
         read: (select, signal) => queue(async (s) => {
             const { value, version } = await transaction(select, false, s);
             return { value, version };
-        }, signal),
-        transactAs: (authority, change, signal) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s, authority), signal),
+        }, combined(signal)),
+        transactAs: (authority, change, signal) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s, authority), combined(signal)),
+        // Keep the acquired connection and authority, not the cancelled work lifetime. A
+        // blocked evidence commit/cleanup gets five seconds, and close still cancels it.
+        settleAs: (authority, change) => queue(s => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, s, authority),
+            AbortSignal.any([cancel.signal, AbortSignal.timeout(5000)])),
         revision,
         async deliveryRevision(signal) {
             return queue(async (s) => {
                 const db = await connection(s);
                 return inSqliteTransaction(db, false, () => validate(db), (header) => header.deliveryRevision, s);
-            }, signal);
+            }, combined(signal));
         },
         async claimDelivery(input, signal) {
             return (await this.transactAs({ kind: 'participant', seat: input.seat }, (facts) => (facts as SquareWrite & { claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult }).claimDelivery(input), signal)).value;
@@ -388,7 +391,7 @@ export async function writeSquareFile(location: string, state: SquareState, sign
             const revision = createSqliteDriver(db).header().revision;
             if (revision === Number.MAX_SAFE_INTEGER)
                 throw invalidArtifact('revision cannot advance beyond the safe integer limit.');
-            for (const table of ['landed_audience', 'attention', 'participants', 'delivery_cancellations', 'delivery_evidence', 'seats', 'catch_leases', 'receipts', 'activities', 'square_meta'])
+            for (const table of ['landed_audience', 'attention', 'participants', 'delivery_deferrals', 'delivery_cancellations', 'delivery_evidence', 'seats', 'catch_leases', 'receipts', 'activities', 'square_meta'])
                 db.exec(`DROP TABLE ${table}`);
             initializeSqlite(db, state, revision + 1);
         }, signal);

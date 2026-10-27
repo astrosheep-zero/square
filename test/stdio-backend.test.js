@@ -201,3 +201,41 @@ test('stdio join refuses an omitted or blank name before touching the backend ar
   assert.equal(joined.kind, 'joined');
   assert.equal(joined.participant.name, 'Bob');
 });
+
+test('stdio deferrals preserve scalar matches, independent ids, cancellation and captured generation ownership', async t => {
+  const f = fixture(t);
+  const artifactPath = path.join(f.root, 'discussion.square');
+  const body = { channel: 'test', session: 'stdio-owner' };
+  await seedArtifact(artifactPath, f.env, 'deferrals', body, 'Alice');
+  const square = await f.open({ body });
+  const alice = await square.participant('Alice');
+  const match = { fields: [{ path: ['job', 'kind'], equals: 'outcome' }, { path: ['job', 'id'], equals: 7 }] };
+  const first = await alice.deferDelivery({ match, durationMs: 60000 });
+  const second = await alice.deferDelivery({ match, durationMs: 60000 });
+  assert.notEqual(first.id, second.id);
+  assert.equal(typeof first.expiresAt, 'string');
+  assert.deepEqual(Object.keys(first).sort(), ['expiresAt', 'id']);
+  const artifact = createArtifactPort(artifactPath);
+  try {
+    const stored = (await artifact.read(facts => { const seat = facts.seat('Alice'); return facts.deliveryDeferrals('Alice', seat.generation); })).value;
+    assert.deepEqual(stored.map(lease => lease.match), [match, match]);
+    assert.equal(stored.length, 2);
+  } finally { await artifact.close(); }
+  assert.equal(await alice.releaseDeliveryDeferral(first.id), true);
+  assert.equal(await alice.releaseDeliveryDeferral(first.id), false);
+  assert.equal(await alice.renewDeliveryDeferral(first.id, 10), null);
+  assert.ok(await alice.renewDeliveryDeferral(second.id, 60000));
+  await assert.rejects(alice.deferDelivery({ match: { fields: [{ path: ['x'], equals: undefined }] }, durationMs: 10 }), { code: 'invalid_args' });
+  await assert.rejects(alice.renewDeliveryDeferral(second.id, Infinity), { code: 'invalid_args' });
+  const aborted = new AbortController(); aborted.abort();
+  await assert.rejects(alice.releaseDeliveryDeferral(second.id, { signal: aborted.signal }));
+  assert.ok(await alice.renewDeliveryDeferral(second.id, 60000), 'aborting before dispatch leaves the lease live');
+  const foreign = await f.open({ body: { channel: 'test', session: 'other' } });
+  await assert.rejects((await foreign.participant('Alice')).releaseDeliveryDeferral(second.id), { code: 'already_joined' });
+  await alice.done();
+  const rejoined = (await square.join('Alice')).participant;
+  await assert.rejects(alice.deferDelivery({ match, durationMs: 100 }), { code: 'already_joined' });
+  await assert.rejects(alice.renewDeliveryDeferral(second.id, 100), { code: 'already_joined' });
+  await assert.rejects(alice.releaseDeliveryDeferral(second.id), { code: 'already_joined' });
+  assert.equal(await rejoined.releaseDeliveryDeferral(second.id), false);
+});

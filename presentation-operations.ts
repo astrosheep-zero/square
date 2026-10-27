@@ -1,64 +1,85 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { isSquareError, sameBody, type Seat } from './model.js';
+import { isSquareError, sameBody } from './model.js';
 import type { PresentationResult, PresentPendingInput, SquareRead } from './ports.js';
 import { pendingHead, sameJoin } from './delivery.js';
+import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { asSeatRef } from './seats.js';
 
-function currentFor(input: PresentPendingInput, captured: Seat, participant: import('./ports.js').ParticipantFact, index: number) {
-  return (facts: SquareRead) => {
-    const seat = facts.seat(captured.participant);
-    return seat !== undefined && sameBody(seat.body, captured.body) && seat.generation === captured.generation
-      && sameJoin(facts, participant) && input.current?.(facts) !== false
-      && pendingHead(facts, captured.participant, index) !== undefined;
-  };
-}
-
-/** Presentation is external; its claim and receipt/evidence commit are generation-fenced in the artifact. */
-export async function presentPending(input: PresentPendingInput): Promise<PresentationResult> {
+/** Prepare custody before any external effect. A batch prepares every included item first. */
+export async function preparePendingPresentation(input: Omit<PresentPendingInput, 'sink'>) {
   const index = typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
-  if (index === undefined) return { presented: false };
+  if (index === undefined) return undefined;
   const initial = await input.artifact.read((facts) => {
     const participant = facts.participant(input.participant);
     const seat = facts.seat(input.participant);
     if (!participant?.joined || seat === undefined || input.generation !== undefined && input.generation !== seat.generation
       || input.seat !== undefined && (input.seat.generation !== seat.generation || !sameBody(input.seat.body, seat.body))
-      || input.current?.(facts) === false || !pendingHead(facts, participant.name, index)) return undefined;
+      || input.current?.(facts) === false || !pendingHead(facts, participant.name, index)
+      || deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) !== undefined) return undefined;
     const item = facts.activity(index);
     return item?.kind === 'say' ? { participant, seat, item } : undefined;
   }, input.signal).catch(() => undefined);
-  if (initial?.value === undefined) return { presented: false };
+  if (initial?.value === undefined) return undefined;
   const { participant, seat, item } = initial.value;
   const ref = asSeatRef(seat);
-  const current = currentFor(input, seat, participant, index);
+  const owns = (facts: SquareRead) => {
+    const current = facts.seat(seat.participant);
+    return current !== undefined && sameBody(current.body, seat.body) && current.generation === seat.generation
+      && sameJoin(facts, participant);
+  };
   const claimToken = randomUUID();
   const claimed = await input.artifact.claimDelivery({ seat: ref, activity: formatActivityId(index), kind: 'presentation',
     at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, input.signal).catch(() => ({ status: 'stale' as const }));
-  if (claimed.status !== 'acquired') return { presented: false };
+  if (claimed.status !== 'acquired') return undefined;
 
-  const release = async (outcome: 'released' | 'failed', message?: string) => input.artifact.completeDelivery({
-    seat: ref, activity: formatActivityId(index), claimToken, outcome, at: Date.now(),
-    ...(message === undefined ? {} : { message }),
-  }, input.signal).catch(() => false);
-  const fresh = await input.artifact.read(current, input.signal).catch(() => undefined);
-  if (!fresh?.value) { await release('released', 'The notification changed before presentation.'); return { presented: false }; }
+  let effectObserved = false, released = false;
+  return {
+    activity: item,
+    async eligible(): Promise<boolean> {
+      return (await input.artifact.read(facts => owns(facts) && input.current?.(facts) !== false
+        && pendingHead(facts, participant.name, index) !== undefined
+        && deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) === undefined,
+      input.signal).catch(() => undefined))?.value === true;
+    },
+    async release(outcome: 'released' | 'failed' = 'released', message?: string): Promise<void> {
+      if (effectObserved || released) return;
+      released = true;
+      await input.artifact.settleAs({ kind: 'participant', seat: ref }, facts => facts.completeDelivery({
+        seat: ref, activity: formatActivityId(index), claimToken, outcome, at: Date.now(),
+        ...(message === undefined ? {} : { message }),
+      })).catch(() => false);
+    },
+    async recordPresented(): Promise<PresentationResult> {
+      // Success is an observed external fact, not another eligibility decision. Neither
+      // post-effect cancellation nor a new deferral can erase it and authorize replay.
+      effectObserved = true;
+      const outcome = input.markSeen === false ? 'clipped' : 'presented';
+      const { value: committed } = await input.artifact.settleAs({ kind: 'participant', seat: ref }, facts => {
+        if (!owns(facts)) return false;
+        if (!facts.completeDelivery({ seat: ref, activity: formatActivityId(index), claimToken, outcome, at: input.now ?? Date.now() })) return false;
+        if (input.markSeen !== false) facts.markSeen(participant.name, [index], input.now ?? Date.now());
+        return true;
+      }).catch(error => {
+        if (isSquareError(error) && error.code === 'already_joined') return { value: false };
+        throw error;
+      });
+      return committed ? { presented: true, activity: item } : { presented: false };
+    },
+  };
+}
 
-  try { await input.sink.present(item); }
-  catch (error) {
-    await release('failed', error instanceof Error ? error.message : String(error));
-    throw error;
-  }
-
-  const outcome = input.markSeen === false ? 'clipped' : 'presented';
-  const { value: committed } = await input.artifact.transactAs({ kind: 'participant', seat: ref }, (facts) => {
-    if (!current(facts)) return false;
-    if (!facts.completeDelivery({ seat: ref, activity: formatActivityId(index), claimToken, outcome, at: input.now ?? Date.now() })) return false;
-    if (input.markSeen === false) return true;
-    return facts.markSeen(participant.name, [index], input.now ?? Date.now()) > 0;
-  }, input.signal).catch(error => {
-    if (isSquareError(error) && error.code === 'already_joined') return { value: false };
-    throw error;
-  });
-  if (!committed) return { presented: false };
-  return { presented: true, activity: item };
+/** Eligibility precedes the sink; only captured ownership fences its truthful completion. */
+export async function presentPending(input: PresentPendingInput): Promise<PresentationResult> {
+  const prepared = await preparePendingPresentation(input);
+  if (prepared === undefined) return { presented: false };
+  try {
+    if (!await prepared.eligible() || input.signal?.aborted) return { presented: false };
+    try { await input.sink.present(prepared.activity); }
+    catch (error) {
+      await prepared.release('failed', error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    return await prepared.recordPresented();
+  } finally { await prepared.release(); }
 }

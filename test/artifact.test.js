@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { CURRENT_USER_VERSION } from '../dist/square-sqlite.js';
 import { createArtifactPort, createSquareFile, diagnoseSquareFile, readSquareSnapshot, writeSquareFile } from '../dist/artifact.js';
 
 const empty = () => ({ hardCap: null, preamble: ['topic'], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
@@ -35,7 +36,7 @@ test('new artifacts own only the closed current schema, preserve explicit import
   assert.deepEqual((await readSquareSnapshot(file)).state, state);
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT_USER_VERSION);
     assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='routes'").get().n, 0);
     assert.deepEqual(JSON.parse(db.prepare('SELECT payload_json FROM activities WHERE act_index=2').get().payload_json), { body: '\udfff\u0000' });
@@ -78,6 +79,33 @@ test('memory and file callbacks are synchronous, atomic, ordered, detached and e
     await first;
     assert.equal((await next).value.done, true);
   }
+});
+
+test('settlement has a bounded independent lifetime without losing authority or close fences', { timeout: 15_000 }, async t => {
+  const file = location(t);
+  await createSquareFile(file, empty());
+  const controller = new AbortController();
+  const port = createArtifactPort(file, undefined, controller.signal), peer = createArtifactPort(file);
+  t.after(() => Promise.all([port.close(), peer.close()]));
+  await port.transactAs({ kind: 'join', participant: 'Alice', body: { channel: 'test', session: 'alice' } },
+    facts => facts.land({ kind: 'join', actor: 'Alice', at: 1 }));
+  const seat = (await port.read(facts => facts.seat('Alice'))).value;
+  const authority = { kind: 'participant', seat };
+  const cancelled = new Error('pre-effect work cancelled');
+  controller.abort(cancelled);
+  await assert.rejects(port.read(facts => facts.header()), error => error === cancelled);
+  const blocker = new DatabaseSync(file);
+  try {
+    blocker.exec('BEGIN IMMEDIATE');
+    await assert.rejects(port.settleAs(authority, () => assert.fail('locked settlement cannot run')), { name: 'TimeoutError' });
+  } finally { blocker.exec('ROLLBACK'); blocker.close(); }
+  // The timeout neither poisons the connection nor removes the normal cancellation boundary.
+  assert.equal((await port.settleAs(authority, facts => facts.markSeen('Alice', [0], 2))).value, 1);
+  await assert.rejects(port.transactAs(authority, () => assert.fail('normal work stays cancelled')), error => error === cancelled);
+  await peer.transactAs(authority, facts => facts.land({ kind: 'done', actor: 'Alice', at: 3 }));
+  await assert.rejects(port.settleAs(authority, () => assert.fail('retired seats cannot settle')), error => error.code === 'already_joined');
+  await port.close();
+  await assert.rejects(port.settleAs(authority, () => assert.fail('closed port cannot settle')), /closed/);
 });
 
 test('exact canonical receipts, immutable first timestamps and small-value no-op writes preserve revision', async t => {

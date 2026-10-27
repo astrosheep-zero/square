@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { createInterface } from 'node:readline';
+import { STDIO_PROTOCOL_VERSION } from '../../dist/square-stdio.js';
 import { runSquareStdioServer } from '../../dist/stdio-server.js';
 
 const [mode, root, marker] = process.argv.slice(2);
@@ -13,7 +14,7 @@ if (mode === 'sqlite') {
     const request = JSON.parse(line);
     if (request.method === 'square/open') {
       if (mode === 'malformed') process.stdout.write('not JSON\n');
-      else send({ id: request.id, result: { version: mode === 'version' ? 900 : 1, handle: 'square' } });
+      else send({ id: request.id, result: { version: mode === 'version' ? 900 : STDIO_PROTOCOL_VERSION, handle: 'square' } });
     } else if (request.method === 'participant') send({ id: request.id, result: request.params.args[0] });
     else if (request.method === 'express') {
       fs.appendFileSync(root, 'express\n');

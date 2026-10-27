@@ -1,4 +1,6 @@
 import { formatActivityId } from './square-core.js';
+import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
+import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation, localSquareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -340,6 +342,35 @@ export class SqliteSquare {
         // Cancellation releases only this captured generation and this lease.
         if (leaseId !== undefined) await releaseWatchLease(square.artifact, seat!, leaseId).catch(() => undefined);
       }
+    }
+    async deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral> {
+      checkControl(control);
+      const match = validateMetadataMatch(input?.match), duration = validateDeferralDuration(input?.durationMs);
+      const square = this.owner, seat = requireSeat(this.seat, square.body, this.name);
+      return (await square.artifact.transactAs(participantAuthority(seat), facts => {
+        const now = square.clock(), expiresAt = now + duration, id = crypto.randomUUID();
+        const result = { id, expiresAt: new Date(expiresAt).toISOString() };
+        facts.putDeliveryDeferral(asSeatRef(seat), id, match, expiresAt, now);
+        return result;
+      }, control?.signal)).value;
+    }
+    async renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null> {
+      checkControl(control);
+      validateDeferralId(id);
+      const duration = validateDeferralDuration(durationMs), square = this.owner;
+      const seat = requireSeat(this.seat, square.body, this.name);
+      return (await square.artifact.transactAs(participantAuthority(seat), facts => {
+        const now = square.clock(), expiresAt = now + duration;
+        const result = { id, expiresAt: new Date(expiresAt).toISOString() };
+        return facts.renewDeliveryDeferral(asSeatRef(seat), id, expiresAt, now) ? result : null;
+      }, control?.signal)).value;
+    }
+    async releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean> {
+      checkControl(control);
+      validateDeferralId(id);
+      const square = this.owner, seat = requireSeat(this.seat, square.body, this.name);
+      return (await square.artifact.transactAs(participantAuthority(seat), facts =>
+        facts.releaseDeliveryDeferral(asSeatRef(seat), id, square.clock()), control?.signal)).value;
     }
     history(query?: HistoryQuery, control?: OperationControl) { return this.owner.history(query, control); }
     private async lifecycle(verb: 'done' | 'hold' | 'resume', body: string | undefined, options: ObservationOptions, control?: OperationControl): Promise<LifecycleResult> {

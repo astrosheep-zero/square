@@ -240,6 +240,7 @@ export interface LocatedSeat {
 export interface PendingMembership extends LocatedSeat {
   readonly notifications: InboxNotification[];
   readonly catchLease?: WatchLease;
+  readonly deliveryDeferralExpiry?: number;
 }
 
 export interface WatchOptions {

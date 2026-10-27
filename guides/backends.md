@@ -55,9 +55,10 @@ import { Square, type SquareBackends } from '@astrosheep/square';
 const backends: SquareBackends = {
   local: { command: process.execPath, args: ['/absolute/path/to/square/dist/stdio-server.js', '--root', '/tmp/squares'] },
 };
-const square = await Square.at({ path: 'stdio://local/design', backends, participant: 'Bob' });
+const square = await Square.at({ path: 'stdio://local/design', backends, participant: 'Bob',
+  body: { channel: 'example', session: 'bob-process' } });
 try {
-  const bob = (await square.join()).participant;
+  const bob = (await square.join('Bob')).participant;
   const caught = await bob.catch();
   console.log(caught.activities);
 } finally {
@@ -99,7 +100,7 @@ configured local SQLite connection. Pi tools accept the identical location and r
 - CLI failed-expression drafts stay in local `./drafts` for backend locations; recovery commands and
   display labels retain the URI. Local-artifact draft placement is unchanged.
 
-## Protocol version 1
+## Protocol version 2
 
 Newline-delimited JSON-RPC 2.0 over UTF-8 stdin/stdout, one object per line, at most 8 MiB per frame.
 Stdout is protocol only. No batch requests. The initial versioned handshake opens one logical square
@@ -107,9 +108,9 @@ per connection and returns an opaque handle. IDs are unique positive integers on
 requests may overlap and responses may arrive out of order.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"square/open","params":{"version":1,"key":"design","location":"stdio://local/design","identity":{"PI_SESSION_ID":"session-id"},"participant":"Bob"}}
-{"jsonrpc":"2.0","id":1,"result":{"version":1,"handle":"square"}}
-{"jsonrpc":"2.0","id":2,"method":"join","params":{"handle":"square","args":["Bob",{"observe":true}]}}
+{"jsonrpc":"2.0","id":1,"method":"square/open","params":{"version":2,"key":"design","location":"stdio://local/design","identity":{"PI_SESSION_ID":"session-id"},"body":{"channel":"pi","session":"session-id"},"participant":"Bob"}}
+{"jsonrpc":"2.0","id":1,"result":{"version":2,"handle":"square"}}
+{"jsonrpc":"2.0","id":2,"method":"join","params":{"handle":"square","args":["Bob",{"observe":true},"fresh-participant-reference"]}}
 ```
 
 Open may include `build: {markdown, hardCap?, throttlePerMinute?, template?, force?}` instead of
@@ -120,25 +121,36 @@ coordinates (including PASEO_AGENT_ID), then overlays explicit call-local facts 
 `process.env`. Participant defaults remain separate from square keys. Each new tool open therefore
 uses that call's identity, not MCP/Pi/backend startup identity.
 
-After open, methods take `{handle, args, participant?}`. `args` is the public operation's positional
-arguments excluding `OperationControl`; trailing JSON nulls represent omitted optional arguments.
+After open, square methods take `{handle, args}` and Participant methods additionally require
+`{participant, participantHandle}`. Selection/join supply a fresh opaque connection-local reference;
+the server retains the actual captured Participant under it instead of reselecting by name per
+request. Version 2 deliberately refuses older peers rather than accepting unfenced handles.
+`args` is the public operation's positional arguments excluding `OperationControl`, plus the
+selection reference noted below; trailing JSON nulls represent omitted optional arguments.
 Nested nulls such as `history({limit:null})` retain their public meaning.
 
 | Methods | args | participant field |
 | --- | --- | --- |
-| `participant` | `[name?]` | no; selection only, not joining |
-| `join` | `[name?, options?]` | no |
+| `participant` | `[name?, freshReference]` | no; selection only, not joining |
+| `join` | `[name, options?, freshReference]` | no |
 | `history`, `status`, `participants` | `[options?]` | no |
 | `recovery` | `[name?]` | no |
 | `express` | `[body, options?]` | required |
 | `catch`, `listening`, `resume` | `[options?]` | required |
 | `listen`, `ignore`, `unlisten` | `[target, options?]` | required |
 | `hold`, `done` | `[body?, options?]` | required |
+| `deferDelivery` | `[{match, durationMs}]` | required |
+| `renewDeliveryDeferral` | `[id, durationMs]` | required |
+| `releaseDeliveryDeferral` | `[id]` | required |
 
 Results are the concrete public operation results, including requested observations. Participant
 handles serialize as names for `participant` and `join.participant` and become real local handles
-on the client. Observation locations are canonical remote URIs and automatic delivery is false.
-Errors are JSON-RPC `{code:-32000,message,data:{code?,facts?,operation?}}`; Square codes, structured
+on the client, using their retained connection-local references. Done/takeover/rejoin fences old
+references even when the same Body later reacquires the name. Observation locations are canonical
+remote URIs and automatic delivery is false. SDK/stdio deferrals have identical validation, independent
+lease and owner-generation semantics; create/renew return only `{id, expiresAt}`, renew returns null
+and release false for an inactive ID, and stale handles receive the normal ownership refusal.
+No CLI/MCP/Pi deferral-authoring command is included. Errors are JSON-RPC `{code:-32000,message,data:{code?,facts?,operation?}}`; Square codes, structured
 facts, history bounds and express certainty survive the boundary. The client does not infer
 `unsent` from a connection failure. There is no mutation retry or replay.
 
@@ -147,7 +159,8 @@ Progress is a notification
 `OperationProgress`. Request abort sends `$/cancelRequest` with `{id}`; the server aborts only that
 request and returns its response **after** cleanup, including releasing a catch lease. Another
 request on the same handle continues normally. Cancellation never undoes an explicitly committed
-receipt. `square/close` with `{}` aborts/drains outstanding requests, closes SQLite and acknowledges
+receipt or lease mutation. A committed deferral remains until release, expiry or seat retirement;
+connection close does not cancel it. `square/close` with `{}` aborts/drains outstanding requests, closes SQLite and acknowledges
 with a null result. Client close is idempotent, waits briefly for graceful cleanup, then terminates
 an unresponsive process. EOF, malformed framing, version mismatch and process exit reject pending
 requests and release the connection. A lost express response after dispatch has unknown effect;

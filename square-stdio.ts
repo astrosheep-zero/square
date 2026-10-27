@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -8,7 +10,7 @@ import type { ParsedSquareLocation } from './square-location.js';
 import type { Participant, ExpressInput, ExpressOptions, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { requireJoinName } from './seats.js';
 
-export const STDIO_PROTOCOL_VERSION = 1;
+export const STDIO_PROTOCOL_VERSION = 2;
 export const STDIO_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 export const identityVariables = [...harnessSessionSources.flatMap(source => [source.variable, ...(source.childVariable ? [source.childVariable] : [])])];
 export function wireIdentity(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -137,33 +139,44 @@ class Connection {
 
 class StdioSquare implements SquareBackend {
   constructor(readonly location: string, private readonly connection: Connection, private readonly handle: string) {}
-  private call(method: string, args: readonly unknown[], control?: OperationControl, participant?: string): Promise<any> {
-    return this.connection.request(method, { handle: this.handle, args, ...(participant === undefined ? {} : { participant }) }, control);
+  private call(method: string, args: readonly unknown[], control?: OperationControl, participant?: string, participantHandle?: string): Promise<any> {
+    return this.connection.request(method, { handle: this.handle, args, ...(participant === undefined ? {} : { participant, participantHandle }) }, control);
   }
-  private participantHandle(name: string): Participant {
+  private participantHandle(name: string, reference: string): Participant {
+    const call = (method: string, args: readonly unknown[], control?: OperationControl) => this.call(method, args, control, name, reference);
     return {
       name,
       express: ((bodyOrInput: string | undefined | ExpressInput, optionsOrControl?: ExpressOptions | OperationControl, control?: OperationControl) => {
         if (typeof bodyOrInput === 'object' && bodyOrInput !== null)
-          return this.call('express', [bodyOrInput, undefined], optionsOrControl as OperationControl, name);
-        return this.call('express', [bodyOrInput, optionsOrControl], control, name);
+          return call('express', [bodyOrInput, undefined], optionsOrControl as OperationControl);
+        return call('express', [bodyOrInput, optionsOrControl], control);
       }) as Participant['express'],
-      catch: (options, control) => this.call('catch', [options], control, name),
-      listen: (target, options, control) => this.call('listen', [target, options], control, name),
-      ignore: (target, options, control) => this.call('ignore', [target, options], control, name),
-      unlisten: (target, options, control) => this.call('unlisten', [target, options], control, name),
-      listening: (options, control) => this.call('listening', [options], control, name),
-      hold: (reason, options, control) => this.call('hold', [reason, options], control, name),
-      resume: (options, control) => this.call('resume', [options], control, name),
-      done: (body, options, control) => this.call('done', [body, options], control, name),
+      catch: (options, control) => call('catch', [options], control),
+      listen: (target, options, control) => call('listen', [target, options], control),
+      ignore: (target, options, control) => call('ignore', [target, options], control),
+      unlisten: (target, options, control) => call('unlisten', [target, options], control),
+      listening: (options, control) => call('listening', [options], control),
+      hold: (reason, options, control) => call('hold', [reason, options], control),
+      resume: (options, control) => call('resume', [options], control),
+      done: (body, options, control) => call('done', [body, options], control),
+      deferDelivery: async (input, control) => {
+        const match = validateMetadataMatch(input?.match), durationMs = validateDeferralDuration(input?.durationMs);
+        return call('deferDelivery', [{ match, durationMs }], control);
+      },
+      renewDeliveryDeferral: async (id, durationMs, control) => call('renewDeliveryDeferral', [validateDeferralId(id), validateDeferralDuration(durationMs)], control),
+      releaseDeliveryDeferral: async (id, control) => call('releaseDeliveryDeferral', [validateDeferralId(id)], control),
       history: (query, control) => this.history(query, control),
     };
   }
-  async participant(name?: string) { return this.participantHandle(await this.call('participant', [name])); }
+  async participant(name?: string) {
+    const reference = randomUUID();
+    return this.participantHandle(await this.call('participant', [name, reference]), reference);
+  }
   async join(...[name, options, control]: Parameters<SquareBackend['join']>): ReturnType<SquareBackend['join']> {
     requireJoinName(name);
-    const result = await this.call('join', [name, options], control);
-    return { ...result, participant: this.participantHandle(result.participant) };
+    const reference = randomUUID();
+    const result = await this.call('join', [name, options, reference], control);
+    return { ...result, participant: this.participantHandle(result.participant, reference) };
   }
   history(...[query, control]: Parameters<SquareBackend['history']>): ReturnType<SquareBackend['history']> { return this.call('history', [query], control); }
   status(...[options, control]: Parameters<SquareBackend['status']>): ReturnType<SquareBackend['status']> { return this.call('status', [options], control); }

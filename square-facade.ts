@@ -1,4 +1,6 @@
 import type { SquareBackends } from './square-backend.js';
+import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
+export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { Body, StoredAct, WakeAddress, ActivityMetadata, JsonValue } from './model.js';
 import type { WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
@@ -198,6 +200,9 @@ export interface Participant {
   resume(options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
+  deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral>;
+  renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
+  releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
 export type CatchTerminalStatus = 'already-active' | 'replaced' | 'capped' | 'quorum';
 export type CatchStopStatus = CatchTerminalStatus | 'empty-now' | 'stale';

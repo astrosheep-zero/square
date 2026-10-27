@@ -2,6 +2,7 @@ import type { DirectedNotificationRoute, StoredAct, WatchLease } from './model.j
 import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeRequest } from './ports.js';
 import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 import { parseActivityId } from './square-core.js';
+import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
@@ -16,7 +17,9 @@ export function wakePreview(facts: SquareRead, request: WakeRequest): string | u
   const index = parseActivityId(request.activity);
   const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
   const item = index === undefined ? undefined : facts.activity(index);
-  if (head === undefined || item?.kind !== 'say') return undefined;
+  const seat = facts.seat(request.participant);
+  if (head === undefined || item?.kind !== 'say' || seat === undefined
+    || deliveryDeferralExpiry(facts, request.seat, item.index, Date.now()) !== undefined) return undefined;
   return renderSquareReminder([renderAttentionPreview({
     squarePath: request.location, recipient: request.participant, actIndex: item.index,
     actor: item.actor, route: head.route, body: item.body ?? '(structured activity)',

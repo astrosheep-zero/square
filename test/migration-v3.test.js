@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { createArtifactPort } from '../dist/artifact.js';
 import { observeClaudeDelivery, nativePayload } from '../dist/claude-delivery.js';
+import { CURRENT_USER_VERSION } from '../dist/square-sqlite.js';
 import { migrateSquareFile } from '../dist/square-migration.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 import { renderAttentionPreview, renderSquareReminder } from '../dist/attention-presentation.js';
@@ -113,7 +114,7 @@ test('format-3 conversion imports evidence as current Claude correlation and ret
   const oldActs = rows(location, 'SELECT act_index,kind,actor_json,payload_json FROM activities ORDER BY act_index');
   const result = await migrateSquareFile(location, undefined, env);
   assert.equal(result.status, 'migrated');
-  assert.equal(rows(location, 'SELECT user_version FROM pragma_user_version')[0].user_version, 4);
+  assert.equal(rows(location, 'SELECT user_version FROM pragma_user_version')[0].user_version, CURRENT_USER_VERSION);
   assert.equal(rows(location, "SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='routes'")[0].n, 0);
   assert.deepEqual(rows(location, 'SELECT act_index,kind,actor_json,payload_json FROM activities ORDER BY act_index'), oldActs);
   assert.equal(oldActs.find((act) => act.act_index === 7).kind, 'unlisten');

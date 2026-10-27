@@ -1,4 +1,5 @@
 import type { Act, ActivityId, Body, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
+import type { MetadataMatch, DeliveryDeferralFact } from './delivery-deferral.js';
 
 export type ActivityIndex = number;
 export interface SquareHeader {
@@ -104,7 +105,7 @@ export interface DeliveryClaimInput {
 }
 export type DeliveryClaimResult =
   | { readonly status: 'acquired'; readonly claimToken: string; readonly attemptN: number }
-  | { readonly status: 'busy' | 'terminal' | 'stale'; readonly evidence?: DeliveryEvidence };
+  | { readonly status: 'busy' | 'terminal' | 'stale' | 'deferred'; readonly evidence?: DeliveryEvidence };
 export interface DeliveryPreparation {
   readonly seat: SeatRef;
   readonly claimToken: string;
@@ -156,6 +157,7 @@ export interface SquareRead {
   receiptFacts(requestedName: string, afterIndex: number): ReceiptFacts;
   receiptAssignments(): readonly ReceiptAssignment[];
   lease(requestedName: string): WatchLease | undefined;
+  deliveryDeferrals(participant: string, generation: ActivityId): readonly DeliveryDeferralFact[];
 }
 export interface SquareWrite extends SquareRead {
   land(activity: Act & { readonly at: number }): StoredAct;
@@ -168,6 +170,9 @@ export interface SquareWrite extends SquareRead {
   markSeen(requestedName: string, indexes: readonly ActivityIndex[], at: number): number;
   putLease(requestedName: string, lease: WatchLease, generation?: ActivityId): boolean;
   removeLease(requestedName: string, expectedLeaseId: string, generation?: ActivityId): boolean;
+  putDeliveryDeferral(seat: SeatRef, id: string, match: MetadataMatch, expiresAt: number, now: number): boolean;
+  renewDeliveryDeferral(seat: SeatRef, id: string, expiresAt: number, now: number): boolean;
+  releaseDeliveryDeferral(seat: SeatRef, id: string, now: number): boolean;
 }
 export interface SquareReadResult<R> { readonly value: R; readonly version: number }
 export interface SquareCommitResult<R> extends SquareReadResult<R> { readonly changed: boolean }
@@ -176,6 +181,9 @@ export interface SquareArtifactPort {
   read<R>(select: (facts: SquareRead) => R, signal?: AbortSignal): Promise<SquareReadResult<R>>;
   /** Participant/domain writes must carry an explicit authority; no body-less mutation path exists. */
   transactAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
+  /** Bounded cleanup/evidence settlement on this same connection after custody was acquired.
+   * Independent of request/lifetime cancellation; explicit close and authority fences still apply. */
+  settleAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R): Promise<SquareCommitResult<R>>;
   revision(signal?: AbortSignal): Promise<number>;
   deliveryRevision(signal?: AbortSignal): Promise<number>;
   claimDelivery(input: DeliveryClaimInput, signal?: AbortSignal): Promise<DeliveryClaimResult>;
@@ -272,10 +280,10 @@ export interface PresentPendingInput {
   readonly generation?: ActivityId;
   readonly now?: number;
   readonly timeoutMs?: number;
-  /** One hook deadline propagated into artifact reads/transitions so busy retries stay bounded. */
+  /** Pre-effect work control only; successful sink evidence settles independently, with a bounded lifetime. */
   readonly signal?: AbortSignal;
   /** Boundary previews that were clipped remain pending for a later full presentation. */
   readonly markSeen?: boolean;
-  /** Receiver-specific fences checked inside the artifact observation transaction. */
+  /** Receiver-specific pre-effect eligibility, never a veto of an already successful sink. */
   readonly current?: (facts: SquareRead) => boolean;
 }

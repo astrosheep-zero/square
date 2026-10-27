@@ -8,7 +8,7 @@ import { SquareError, validateBody } from './model.js';
 import { canonicalPath } from './canonical-path.js';
 import { STDIO_PROTOCOL_VERSION, STDIO_MAX_FRAME_BYTES, encodeError, identityVariables } from './square-stdio.js';
 import { parseSquareLocation } from './square-location.js';
-import type { OperationControl, SquareBuildInput } from './square-facade.js';
+import type { OperationControl, SquareBuildInput, Participant } from './square-facade.js';
 
 /** Serve the existing resource API. This adapter contains no activity policy. */
 export async function runSquareStdioServer(root: string): Promise<void> {
@@ -18,6 +18,13 @@ export async function runSquareStdioServer(root: string): Promise<void> {
   let square: SqliteSquare | undefined;
   let location: string | undefined;
   let opening = false, closing = false;
+  const participants = new Map<string, Participant>();
+  const captureParticipant = (reference: unknown, participant: Participant): string => {
+    if (typeof reference !== 'string' || reference.length === 0 || participants.has(reference))
+      throw new SquareError('invalid_args', 'Participant handle must be a fresh connection-local reference');
+    participants.set(reference, participant);
+    return participant.name;
+  };
   const running = new Map<number, { controller: AbortController; work: Promise<void> }>();
   const write = (message: unknown) => { if (!process.stdout.destroyed) process.stdout.write(JSON.stringify(message) + '\n'); };
   const response = (id: number, result: unknown) => write({ jsonrpc: '2.0', id, result });
@@ -76,10 +83,12 @@ export async function runSquareStdioServer(root: string): Promise<void> {
     const args = params.args.map((arg: unknown) => arg === null ? undefined : arg);
     let result: any;
     switch (method) {
-      case 'participant': return (await square.participant(args[0])).name;
+      case 'participant': return captureParticipant(args[1], await square.participant(args[0]));
       case 'join': {
+        if (typeof args[2] !== 'string' || args[2].length === 0 || participants.has(args[2]))
+          throw new SquareError('invalid_args', 'Participant handle must be a fresh connection-local reference');
         const joined = await square.join(args[0], args[1], control);
-        result = { ...joined, participant: joined.participant.name }; break;
+        result = { ...joined, participant: captureParticipant(args[2], joined.participant) }; break;
       }
       case 'history': result = await square.history(args[0], control); break;
       case 'status': result = await square.status(args[0], control); break;
@@ -87,8 +96,13 @@ export async function runSquareStdioServer(root: string): Promise<void> {
       case 'recovery': result = await square.recovery(args[0], control); break;
       default: {
         if (typeof params.participant !== 'string') throw new SquareError('invalid_args', 'Participant operation requires a name');
-        const participant = await square.participant(params.participant);
+        const participant = participants.get(params.participantHandle);
+        if (participant === undefined || participant.name !== params.participant)
+          throw new SquareError('invalid_args', 'Select a captured participant handle on this connection');
         switch (method) {
+          case 'deferDelivery': result = await participant.deferDelivery(args[0], control); break;
+          case 'renewDeliveryDeferral': result = await participant.renewDeliveryDeferral(args[0], args[1], control); break;
+          case 'releaseDeliveryDeferral': result = await participant.releaseDeliveryDeferral(args[0], control); break;
           case 'express': result = await participant.express(args[0], args[1], control); break;
           case 'catch': result = await participant.catch(args[0], control); break;
           case 'listen': result = await participant.listen(args[0], args[1], control); break;

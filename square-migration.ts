@@ -7,8 +7,8 @@ import { canonicalPath, canonicalPathSync } from './canonical-path.js';
 import { formatActivityId, isWakeRouteKind, nameKey, sameBody, validateBody, type Seat, type StoredAct, type WakeAddress } from './model.js';
 import { parseActivityId } from './square-core.js';
 import { readLegacyHostData, type LegacyDeliveryEvidence, type LegacyHostData } from './square-migration-host-ledger.js';
-import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS, FORMAT4_REPLACED_OBJECTS } from './square-legacy-framing.js';
-import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, SCHEMA_SQL, createSqliteDriver, invalidArtifact,
+import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS } from './square-legacy-framing.js';
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
   validateStoredActivity,
   type SquareRuntimeState, type SquareState } from './square-sqlite.js';
 
@@ -152,27 +152,8 @@ function rebuildV2Activities(database: DatabaseSync): void {
   ].join('\n'));
 }
 
-function normalizedSql(sql: string): string {
-  return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1');
-}
-
-function currentFormat4Schema(): string[] {
-  return SCHEMA_SQL.split(';').map((statement) => statement.trim()).filter(Boolean)
-    .filter((statement) => {
-      const match = /^(?:CREATE (?:UNIQUE )?TABLE|CREATE (?:UNIQUE )?INDEX)\s+([a-z_]+)/i.exec(statement);
-      return match === null || !FORMAT4_REPLACED_OBJECTS.has(match[1]);
-    }).map(normalizedSql).sort();
-}
-function validateFormat4Framing(database: DatabaseSync, location: string): void {
-  const before = identity(database);
-  assertSource(before.applicationId === APPLICATION_ID, 'unrelated SQLite database.');
-  assertSource(before.userVersion === CURRENT_USER_VERSION, 'unsupported SQLite format version.');
-  const actual = (database.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as { sql?: unknown }[])
-    .map((row) => typeof row.sql === 'string' ? normalizedSql(row.sql) : '').sort();
-  const expected = currentFormat4Schema();
-  assertSource(actual.length === expected.length && actual.every((sql, index) => sql === expected[index]), 'unsupported row schema.');
-  const journalMode = (database.prepare('PRAGMA journal_mode').get() as { journal_mode?: unknown }).journal_mode;
-  assertSource(journalMode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
+function validateCurrentFraming(database: DatabaseSync, location: string): void {
+  validateRowFraming(database, CURRENT_USER_VERSION, location);
   createSqliteDriver(database).header();
 }
 
@@ -513,20 +494,26 @@ function upgradeRowArtifact(database: DatabaseSync, location: string, plan: RowM
   currentAdditionStatements().forEach((statement) => database.exec(statement));
   importOwnershipAndEvidence(database, plan);
   database.exec('DROP TABLE routes;');
+  database.exec(DELIVERY_DEFERRALS_SQL);
   database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
-  validateFormat4Framing(database, location);
+  validateCurrentFraming(database, location);
 }
 
-function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | undefined {
+function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | undefined {
   const before = identity(database);
   if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
   if (before.userVersion === V2_USER_VERSION || before.userVersion === V3_USER_VERSION) {
-    const issue = legacyRowFramingIssue(database, APPLICATION_ID, before.userVersion, location, SCHEMA_SQL);
+    const issue = legacyRowFramingIssue(database, APPLICATION_ID, before.userVersion, location, FORMAT4_SCHEMA_SQL);
     if (issue !== undefined) throw invalidArtifact(issue);
     return before.userVersion;
   }
+  if (before.userVersion === V4_USER_VERSION) {
+    validateRowFraming(database, V4_USER_VERSION, location);
+    inspectSqlite(database);
+    return V4_USER_VERSION;
+  }
   if (before.userVersion === CURRENT_USER_VERSION) {
-    validateFormat4Framing(database, location);
+    validateCurrentFraming(database, location);
     return undefined;
   }
   throw invalidArtifact('unsupported SQLite format version.');
@@ -534,7 +521,8 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
 
 /**
  * Explicit conversion of the supported legacy formats. Row-backed versions 2 and 3 are
- * preflighted read-only, then receive the format-4 ownership/evidence rows in one transaction.
+ * preflighted read-only, then receive ownership/evidence and deferral storage in one
+ * format-5 transaction. Format 4 adds only the empty deferral table and its index.
  * Legacy delivery evidence is copied from HostLedger only when its owner/session mapping is
  * unique; no source record is retired. Version 1 is not a supported source for this format transition.
  */
@@ -544,6 +532,16 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
   try {
     const source = await inSqliteTransaction(database, false, () => validateMigrationSource(database, squarePath), value => value, signal);
     if (source === undefined) return { status: 'already-current', standing: standing(database) };
+    if (source === V4_USER_VERSION) {
+      return await inSqliteTransaction(database, true, () => {
+        assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');
+      }, () => {
+        database.exec(DELIVERY_DEFERRALS_SQL);
+        database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
+        validateCurrentFraming(database, squarePath);
+        return { status: 'migrated' as const, standing: standing(database) };
+      }, signal);
+    }
     const host = await readLegacyHostData(squarePath, env, signal);
     const plan = await inSqliteTransaction(database, false, () => {
       assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');

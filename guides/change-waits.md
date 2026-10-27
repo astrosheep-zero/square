@@ -1,14 +1,40 @@
 # Waiting for changes
 
-Square's artifact and host-ledger adapters own change detection. Notifications are hints, not activity delivery or consumption receipts.
+Artifact revisions and the rebuildable discovery index drive change detection. Filesystem
+notifications are hints, not activity delivery or consumption receipts.
 
-- A process shares a revision reader per canonical artifact and a filesystem watcher per containing directory. Subscribers have independent baselines, deadlines, and cancellation. The final release closes the watcher, reconciliation timer, and any outstanding read.
-- Directory notifications invalidate lightweight reads. A two-second reconciliation checks revisions/ledger metadata even when notifications are missing. Missing directories, unsupported watches, and watcher failures retain that fallback; directory replacement is detected during reconciliation. Normal notification latency is not a hard guarantee: a missed hint may wait for reconciliation, plus scheduling and lock contention.
-- The artifact revision remains authoritative. No new sidecar, broker, or persistent cache is introduced. Changed projections read typed recipient facts and selected bodies, not the whole historical state. A missing artifact is a stable observation, not a repeated change: reconciliation remains quiet while it stays absent and detects its return without deleting its session bindings. Strict artifact reads still report absence as an error. Host-ledger database metadata invalidates a process-shared read of its separate presence/evidence revisions; unchanged metadata requires no SQLite open. Revisions are read together in one short snapshot and cached against metadata captured before that read, so a concurrent mutation remains detectable. Failed reads are not cached. Missing ledger storage is stable until it appears. Neither metadata nor revisions are delivery evidence.
-- Each Pi session owns a long-lived pending observer, including when it has no bindings yet. Presence and evidence changes update its subscriptions. There is no repeated thirty-second restart and no per-second binding scan. A failed injection waits for a substantive change; its own failed evidence write does not trigger a retry loop.
-- Blocking CLI catch waits for a revision or its next heartbeat/quiet deadline. A held catch keeps its lease alive and pauses quiet expiry. Core catch, NDJSON stream, and delivery-receipt waits use the same change detector. Held express also waits for changes; throttling still waits for its eligibility time.
-- Catch lease expiry, ledger retention/claim expiry, and cancellation are independent wake conditions. No filesystem write is required for a time-based eligibility change.
-- Existing catch filters, lease priority, presentation claims, full-delivery seen receipts, clipped previews, and session-local cancellation suppression remain in force. Sharing storage detection does not share session delivery state. Cancellation never creates a receipt or removes history.
+- A process shares a revision reader per canonical artifact and a filesystem watcher per containing
+  directory. Subscribers have independent baselines, deadlines and cancellation. The final release
+  closes the watcher, reconciliation timer and outstanding read.
+- Directory notifications invalidate lightweight reads. A two-second reconciliation checks revisions
+  even when notifications are missing. Missing directories, unsupported watches, watcher failures
+  and directory replacement retain that fallback. Latency is not a hard guarantee: a missed hint
+  may wait for reconciliation, scheduling and lock contention.
+- Conversation revision controls the pending-content cache. Delivery revision separately invalidates
+  eligibility, including delivery evidence, cancellation and deferral writes. Projections resolve
+  current typed seats and selected bodies in one coherent artifact read; they never grant authority
+  from an index entry or a cached eligibility decision. No sidecar, broker or second delivery store
+  is introduced. An unreadable candidate cannot authorize cached content.
+- Each active session pending observer subscribes before selecting current candidates and facts,
+  including when no seat is yet discoverable. Index publication can wake discovery without an
+  artifact write. A failed injection waits for substantive change; its own failed evidence write
+  does not cause a retry loop.
+- Deferral create/renew/release and opportunistic pruning change delivery revision, not conversation
+  activity. Release rechecks eligibility without a new message. Expiry needs no synthetic write:
+  the observer includes the earliest relevant matching live deferral expiry in its existing wait
+  deadline, alongside catch-lease expiry/staleness. Overlapping leases remain OR; an early expiry
+  rechecks the remaining live leases. Renewal changes that deadline without self-triggered delivery.
+- There is no new daemon or detached per-message timer. A one-shot producer skips deferred work and
+  returns promptly. An existing active delivery observer will reconsider release/expiry; absent an
+  observer, pending work waits for the next normal delivery opportunity. A lease does not create a
+  process that was not already running.
+- Blocking catch waits for conversation revision or its heartbeat/quiet deadline. A held catch keeps
+  its single lease alive and pauses quiet expiry. Core catch and streams use the same storage change
+  detector. Held express also waits for changes; throttling waits for its eligibility time.
+- Deferrals are independent of catch filters, presentation claims, full-delivery seen receipts,
+  clipped previews and session-local cancellation. Sharing storage detection does not share session
+  delivery state. Cancellation never creates a receipt or removes archive history. A deferral cannot
+  recall a send already past its final freshness check.
 
 ## Verification
 
@@ -23,6 +49,9 @@ node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 30
 node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 300 --mode session --active --no-hints
 ```
 
-The benchmark creates disposable synthetic history. poll200 measures 200ms revision polling; events measures revision waits. session includes binding and notification projection, but excludes initial setup. Active session runs compare 1,800 and 18,000 unrelated history rows, inject one bell without push, then catch concurrently. `--no-hints` disables filesystem hints only inside benchmark workers. Runs report committed-write-to-projection latency, not native Pi message landing, and retain the twenty-second discovery deadline as a probe bound rather than an SLA. Three hundred processes still have three hundred monitors: sharing is process-local, not cross-process deduplication. See [row runtime delivery evidence](row-runtime-delivery-evidence.md) for actual completion, hydration, CPU, lock contention and host-ledger costs.
-
-A long-running Pi process must reload/restart its Square extension to use rebuilt code.
+The benchmark creates disposable synthetic history. Process-local sharing does not deduplicate
+monitors across processes. Timings measure committed-write-to-projection latency, not native
+message landing, and discovery deadlines are probe bounds rather than an SLA. Historical benchmark
+evidence may describe older HostLedger implementations; it is not current custody authority.
+A long-running extension must reload upgraded code before using the new artifact format; this
+delivery does not install or restart one.

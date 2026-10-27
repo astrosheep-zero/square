@@ -1,6 +1,8 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, validateBody, validateActivityMetadata, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Body, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
+import { sameBody, SquareError, nameKey, isWakeRouteKind, validateBody, validateActivityMetadata, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Body, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
 import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, SeatRef, DeliveryClaimInput, DeliveryClaimResult, DeliveryCompletion, DeliveryPreparation, DeliveryEvidence } from './ports.js';
+import type { DeliveryDeferralFact } from './delivery-deferral.js';
+import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
 import { legacyRowFramingIssue } from './square-legacy-framing.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
@@ -25,7 +27,8 @@ export const APPLICATION_ID = 0x53515245;
 const V1_USER_VERSION = 1;
 export const V2_USER_VERSION = 2;
 export const V3_USER_VERSION = 3;
-export const CURRENT_USER_VERSION = 4;
+export const V4_USER_VERSION = 4;
+export const CURRENT_USER_VERSION = 5;
 export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
@@ -91,6 +94,16 @@ export const ACTIVITY_INDEXES_SQL = [
   "CREATE INDEX activity_say_time ON activities(at, act_index) WHERE kind='say'",
   "CREATE INDEX activity_bell_actor_time ON activities(actor_key_json, at, act_index) WHERE kind='say' AND reach='bell'",
 ] as const;
+export const DELIVERY_DEFERRALS_SQL = `CREATE TABLE delivery_deferrals (
+  participant_key_json TEXT COLLATE BINARY NOT NULL,
+  participant_json TEXT NOT NULL,
+  generation_json TEXT NOT NULL,
+  deferral_id_json TEXT NOT NULL,
+  match_json TEXT NOT NULL CHECK (json_valid(match_json)),
+  expires_at REAL NOT NULL,
+  PRIMARY KEY (participant_key_json,generation_json,deferral_id_json)
+) WITHOUT ROWID;
+CREATE INDEX delivery_deferral_expiry ON delivery_deferrals(participant_key_json,generation_json,expires_at);`;
 export const SCHEMA_SQL = `CREATE TABLE square_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991),
@@ -153,6 +166,8 @@ CREATE TABLE delivery_cancellations (
   PRIMARY KEY (participant_key_json,generation_json)
 ) WITHOUT ROWID;
 
+${DELIVERY_DEFERRALS_SQL}
+
 CREATE TABLE participants (
   name_key_json TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
   name_json TEXT NOT NULL,
@@ -182,7 +197,9 @@ CREATE TABLE landed_audience (
   UNIQUE (act_index, recipient_order)
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
+export const FORMAT4_SCHEMA_SQL = SCHEMA_SQL.replace(DELIVERY_DEFERRALS_SQL, '');
 const EXPECTED_SCHEMA_SQL = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
+const FORMAT4_SCHEMA = FORMAT4_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 // All strings, including identity keys, are JSON encoded before SQLite binding.
 type Row = Record<string, string | number | null>;
 const encode = JSON.stringify;
@@ -423,22 +440,31 @@ function deliveryEvidence(row: Row): DeliveryEvidence {
         ...(nativeObservations === undefined ? {} : { nativeObservations }),
     });
 }
+function deliveryDeferral(row: Row): DeliveryDeferralFact {
+    const participant = decoded(row.participant_json, true);
+    requireFact(row.participant_key_json === key(participant));
+    const generation = activityId(decoded(row.generation_json, true));
+    const id = validateDeferralId(decoded(row.deferral_id_json, true));
+    const match = validateMetadataMatch(json(row.match_json));
+    requireFact(encode(match) === row.match_json, 'delivery deferral match encoding is malformed.');
+    return immutable({ participant, generation, id, match, expiresAt: finite(row.expires_at) });
+}
 function normalizedSql(sql: string): string { return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1'); }
 function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], location: string): void {
     const actual = (db.prepare("SELECT sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL").all() as Row[]).map(r => normalizedSql(string(r.sql))).sort();
     requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
 }
-export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4, location = ''): void {
+export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5, location = ''): void {
     if (version === V2_USER_VERSION || version === V3_USER_VERSION) {
-        const issue = legacyRowFramingIssue(db, APPLICATION_ID, version, location, SCHEMA_SQL);
+        const issue = legacyRowFramingIssue(db, APPLICATION_ID, version, location, FORMAT4_SCHEMA_SQL);
         if (issue !== undefined) throw invalidArtifact(issue);
         return;
     }
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     requireFact(identity.user_version === version, 'unsupported SQLite format version.');
-    validateOwnedSchema(db, EXPECTED_SCHEMA_SQL, location);
+    validateOwnedSchema(db, version === V4_USER_VERSION ? FORMAT4_SCHEMA : EXPECTED_SCHEMA_SQL, location);
 }
 export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
@@ -447,7 +473,7 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
         validateLegacyFraming(db, APPLICATION_ID, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION) {
+    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION || identity.user_version === V4_USER_VERSION) {
         validateRowFraming(db, identity.user_version, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
@@ -690,6 +716,12 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return immutable({ ...(r.latest === null ? {} : { latestAt: finite(r.latest) }), ...(e.latest === null ? {} : { latestActorActivityIndex: integer(e.latest) }) });
         },
         receiptAssignments: () => immutable(all('SELECT owner_json,act_index FROM receipts ORDER BY owner_json,act_index').map(r => ({ owner: decoded(r.owner_json, true), index: integer(r.act_index) }))),
+        deliveryDeferrals(name, generation) {
+            const canonical = owner(name);
+            const current = read.seat(canonical);
+            if (current === undefined || current.generation !== generation) return [];
+            return immutable(all('SELECT * FROM delivery_deferrals WHERE participant_key_json=? AND generation_json=? ORDER BY expires_at,deferral_id_json', [key(canonical), encode(generation)]).map(deliveryDeferral));
+        },
         lease(name) {
             const canonical = owner(name), current = read.seat(canonical);
             const r = current === undefined
@@ -710,6 +742,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const wake = value.wakeAddress === undefined ? null : encode(value.wakeAddress);
             run('INSERT INTO seats(participant_key_json,participant_json,channel_json,session_json,agent_json,generation_json,wake_address_json) VALUES(?,?,?,?,?,?,?) ON CONFLICT(participant_key_json) DO UPDATE SET participant_json=excluded.participant_json,channel_json=excluded.channel_json,session_json=excluded.session_json,agent_json=excluded.agent_json,generation_json=excluded.generation_json,wake_address_json=excluded.wake_address_json', [key(value.participant), encode(value.participant), encode(value.body.channel), encode(value.body.session), value.body.agent === undefined ? null : encode(value.body.agent), encode(value.generation), wake]);
             run('DELETE FROM catch_leases WHERE owner_json=?', [encode(value.participant)]);
+            run('DELETE FROM delivery_deferrals WHERE participant_key_json=?', [key(value.participant)]);
             deliveryChanged = true;
             return true;
         },
@@ -730,6 +763,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             if (row === undefined || decoded(row.generation_json) !== value.generation) return false;
             run('UPDATE seats SET wake_address_json=NULL WHERE participant_key_json=?', [key(value.participant)]);
             run('DELETE FROM catch_leases WHERE owner_json=?', [encode(value.participant)]);
+            run('DELETE FROM delivery_deferrals WHERE participant_key_json=?', [key(value.participant)]);
             changed = true; deliveryChanged = true;
             return true;
         },
@@ -808,6 +842,28 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             changed = true;
             return true;
         },
+        putDeliveryDeferral(seatRef, id, match, expiresAt, now) {
+            finite(now); finite(expiresAt);
+            const canonicalMatch = validateMetadataMatch(match);
+            run('DELETE FROM delivery_deferrals WHERE participant_key_json=? AND expires_at<=?', [key(seatRef.participant), now]);
+            run('INSERT INTO delivery_deferrals(participant_key_json,participant_json,generation_json,deferral_id_json,match_json,expires_at) VALUES(?,?,?,?,?,?)', [key(seatRef.participant), encode(seatRef.participant), encode(seatRef.generation), encode(id), encode(canonicalMatch), expiresAt]);
+            deliveryChanged = true;
+            return true;
+        },
+        renewDeliveryDeferral(seatRef, id, expiresAt, now) {
+            finite(now); finite(expiresAt);
+            const pruned = run('DELETE FROM delivery_deferrals WHERE participant_key_json=? AND expires_at<=?', [key(seatRef.participant), now]);
+            const count = run('UPDATE delivery_deferrals SET expires_at=? WHERE participant_key_json=? AND generation_json=? AND deferral_id_json=? AND expires_at>?', [expiresAt, key(seatRef.participant), encode(seatRef.generation), encode(id), now]);
+            if (count || pruned) deliveryChanged = true;
+            return count > 0;
+        },
+        releaseDeliveryDeferral(seatRef, id, now) {
+            finite(now);
+            const pruned = run('DELETE FROM delivery_deferrals WHERE participant_key_json=? AND expires_at<=?', [key(seatRef.participant), now]);
+            const count = run('DELETE FROM delivery_deferrals WHERE participant_key_json=? AND generation_json=? AND deferral_id_json=? AND expires_at>?', [key(seatRef.participant), encode(seatRef.generation), encode(id), now]);
+            if (count || pruned) deliveryChanged = true;
+            return count > 0;
+        },
         removeLease(name, expected, generation) {
             const canonical = owner(name), row = one('SELECT generation_json FROM catch_leases WHERE owner_json=? AND lease_id_json=?', [encode(canonical), encode(expected)]);
             if (row === undefined || generation !== undefined && decoded(row.generation_json) !== generation) return false;
@@ -825,7 +881,11 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const leaseMs = integer(input.leaseMs, 1);
             string(input.claimToken, true);
             if (input.route !== undefined) wakeAddress(input.route);
-            if (read.activity(index)?.kind !== 'say' || read.directedAt(input.seat.participant, index) === undefined) return { status: 'stale' };
+            const currentSeat = read.seat(input.seat.participant);
+            const item = read.activity(index);
+            if (currentSeat === undefined || currentSeat.generation !== input.seat.generation || !sameBody(currentSeat.body, input.seat.body)
+                || item?.kind !== 'say' || read.directedAt(input.seat.participant, index) === undefined) return { status: 'stale' };
+            if (matchingDeferrals(read.deliveryDeferrals(currentSeat.participant, currentSeat.generation), item.metadata, input.at).length > 0) return { status: 'deferred' };
             const cancelledThrough = read.cancelledThrough(input.seat.participant, input.seat.generation);
             if (cancelledThrough !== undefined && index <= cancelledThrough) return { status: 'stale' };
             const rows = all('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? ORDER BY attempt_n DESC', [key(input.seat.participant), encode(input.seat.generation), index, input.kind]);
@@ -962,6 +1022,11 @@ export function inspectSqlite(db: DatabaseSync): {
     requireFact(check.length === 1 && check[0].integrity_check === 'ok', 'SQLite integrity check failed.');
     const state = exportSqliteState(db), d = createSqliteDriver(db);
     d.roster();
+    for (const row of db.prepare('SELECT * FROM seats').all() as Row[]) seat(row);
+    for (const row of db.prepare('SELECT * FROM delivery_evidence').all() as Row[]) deliveryEvidence(row);
+    if ((db.prepare('PRAGMA user_version').get() as Row).user_version === CURRENT_USER_VERSION) {
+        for (const row of db.prepare('SELECT * FROM delivery_deferrals').all() as Row[]) deliveryDeferral(row);
+    }
     for (const p of d.roster()) {
         d.attention(p.name);
         d.incomingAttention(p.name);

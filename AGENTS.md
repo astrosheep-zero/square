@@ -12,6 +12,14 @@ inside the activity stream. One participant name means one participant agent, be
 the conversation easier to follow.
 
 Boundaries should be light and useful:
+- Proactive delivery may be temporarily deferred by the current participant through the SDK/stdio
+  `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` methods. Independent leases
+  are artifact-owned, expiring, and fenced to the captured Body/join generation. One lease matches
+  exact nested metadata scalar equalities with AND; active leases combine with OR. They never alter
+  audience, history, unread counts, or explicit catch, and are distinct from the single catch lease.
+  Producer, claim and final send/presentation checks share this policy. Release/expiry restores
+  eligibility through an active pending observer or the next normal delivery opportunity; one-shot
+  producers do not wait, and no deferral recalls an external send already past its final check.
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.

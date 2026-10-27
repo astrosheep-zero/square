@@ -71,7 +71,8 @@ replacement is visible even while the resource holds its original connection. It
 its observation lifetime: `return()` interrupts a pending pull; closing the Square does not close
 that independent path observation. Internal readers that explicitly borrow an artifact port leave
 its lifetime with the lender and propagate port failures rather than waiting for path repair.
-Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`;
+Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`,
+`deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral`;
 its `history` delegates to the same Square history operation.
 
 - Express waits while held/throttled unless `noWait: true`, for **every** caller. `ExpressResult`
@@ -86,10 +87,11 @@ its `history` delegates to the same Square history operation.
   catch, status/latest, unread projections and stream records through the SDK, stdio, CLI and stream.
   MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
   `metadata` argument, and every shared tool receipt omits metadata, so tool history/catch results carry
-  the same activities without it. Metadata does not affect mentions, replies, listening, audience, delivery,
-  ordering, consumption or permissions. Metadata may nest up to 256 levels; the bound is enforced before
+  the same activities without it. Metadata does not affect mentions, replies, listening, audience,
+  ordering, consumption or permissions. A current participant may temporarily defer proactive delivery
+  by exact metadata match through the SDK/stdio lease API below. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
-  metadata JSON. There is no metadata filter, query language or index; CLI `--metadata <json>` is the only
+  metadata JSON. There is no archive metadata filter, query language or index; CLI `--metadata <json>` is the only
   metadata input flag.
 - Catch returns `{activities, consumedThrough, remaining, idleExpired, status?, observation?}`.
   Omitted/zero idle is immediate; positive idle uses the single leased quiet wait. Receipt selection,
@@ -111,6 +113,64 @@ its `history` delegates to the same Square history operation.
 
 Every operation accepts its final `OperationControl` (`signal`, optional typed `onProgress`).
 Listener/lifecycle operations take optional observation options before that control argument.
+
+## Temporary proactive delivery deferral
+
+SDK and stdio Participants expose the same three operations. There are no CLI/MCP/Pi authoring
+commands or listing operation in this delivery. Existing proactive adapters still obey deferrals.
+
+```ts
+const lease = await alice.deferDelivery({
+  match: { fields: [
+    { path: ['job', 'kind'], equals: 'outcome' },
+    { path: ['job', 'id'], equals: 7 },
+  ] },
+  durationMs: 60_000,
+});
+try {
+  // Explicit history and catch remain available, including catch({id}).
+  const renewed = await alice.renewDeliveryDeferral(lease.id, 60_000);
+  // null means absent, expired, or not owned by this current generation.
+} finally {
+  await alice.releaseDeliveryDeferral(lease.id);
+}
+```
+
+- `MetadataScalar` is `null | boolean | number | string`; numbers must be finite. `MetadataMatch`
+  has nonempty `fields`, each `{path: readonly string[], equals: MetadataScalar}`. Paths have one
+  or more nonempty string segments, with no duplicates. Only JSON object own properties are
+  traversed: arrays, missing/nonobject intermediates and inherited properties do not match.
+  Equalities are exact and type-sensitive. A dot inside one segment is a literal key, not path
+  syntax. All fields combine with AND; any matching live lease blocks delivery (OR across leases).
+- Each acquire returns a fresh UUID and an operation-clock ISO `expiresAt`: `{id, expiresAt}`.
+  Match objects are not returned. `durationMs` must be a positive safe integer and is capped at
+  24 hours. Invalid matches, durations and IDs refuse with `invalid_args` before mutation.
+- Renewal extends that same live lease from the renewal operation's clock; expired/missing IDs
+  return `null`, and release returns `false`. Independent overlapping leases are never merged;
+  releasing one cannot end another. A captured current Body/join generation is required for every
+  mutation. Stale handles retain the ownership refusal; done/takeover/rejoin retire old leases.
+- Lease writes change delivery revision, not conversation history. They do not create a receipt,
+  change audience or unread counts, hide an archive record, or prohibit explicit catch. Catch alone
+  consumes normally; a caught record is not replayed when a deferral ends. The catch lease is a
+  separate, single quiet-wait lease with its existing filters and lifecycle.
+- Producer/sweep, atomic claims, session/native projections, final pre-send checks and proactive
+  presentation all share current-generation unexpired matching. Suppressed items get no seen or
+  presented receipt. An active pending observer rechecks on release and the earliest relevant
+  expiry, including renewed deadlines, without needing a new conversation activity. A one-shot
+  producer skips and returns promptly. With no active observer, eligibility is reconsidered at
+  the next normal opportunity; no daemon or per-message timer is created.
+- Acquiring a lease is not recall. An external send already past its final freshness check can race
+  with acquisition and remain dispatched; a sink effect already written cannot be withdrawn.
+  Presentation eligibility is checked before the effect, not again as a veto after success. A batch
+  claims and filters its items before its one sink call, then records exactly the successfully rendered
+  set under each captured Body/join generation. A lease acquired while the sink returns or before a
+  later item's evidence commit does not erase success or allow replay after release. Cancellation
+  likewise stops pre-effect work, not truthful completion after a successful sink: evidence settles
+  on the original connection with an independent bounded storage lifetime and the same seat fences.
+  A rejected/cancelled native landing is not a successful sink. Items filtered
+  out before the sink receive no success receipt.
+  Cancellation before commit prevents the lease mutation; after commit it remains until explicit
+  release, expiry, or seat retirement. See [operation-cancellation.md](operation-cancellation.md).
 
 ## Optional observations, not another execution path
 
@@ -145,13 +205,16 @@ opening a valid current-format Square first.
 
 ## Artifact format and explicit migration
 
-The current artifact format is 4. It owns participant seats, delivery evidence and cancellation,
-separate from conversation activities; `unlisten` remains a real history activity. Ordinary opens
+The current artifact format is 5. It owns participant seats, delivery evidence, cancellation and
+independent delivery deferrals, separate from conversation activities and catch leases; `unlisten` remains a real history activity. Ordinary opens
 refuse older formats with migration guidance and never convert them implicitly.
 
-Stop all sessions and services using the artifact and freeze its legacy HostLedger, back them up
-offline, then run `square --location <path.square> migrate` and `doctor` before reopening with upgraded
-runtimes. Supported row formats 2/3 convert transactionally only when owner/route/join mappings are
+Stop all sessions and services using the artifact, make an offline backup, then run
+`square --location <path.square> migrate` and `doctor` before reopening with upgraded runtimes.
+For formats 2/3, also freeze and back up the legacy HostLedger used for owner/evidence import.
+Format 4 adds only an empty deferral table and its owner/generation/expiry index, preserving
+all existing facts and revisions without consulting HostLedger. Supported row formats 2/3 convert
+directly into format 5 in one transaction, only when owner/route/join mappings are
 directly verifiable; no seat is manufactured for done participants. Replay-critical native ambiguity
 refuses rather than disappears, including the conservative refusal of any nonempty legacy token-only
 tombstone table. Current-format migration is a byte-preserving no-op. See [migration.md](migration.md)

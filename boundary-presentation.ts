@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 
 import { withFileLock } from './file-lock.js';
 import { createArtifactPort } from './artifact.js';
-import { presentPending } from './presentation-operations.js';
+import { preparePendingPresentation } from './presentation-operations.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
 import type { Body, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
@@ -11,25 +11,6 @@ import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } 
 export { pendingAtBoundary };
 
 const CONTEXT_MAX = 1200;
-const presentationLocks = new Map<string, Promise<void>>();
-
-/** One settled promise loses to an abort so an in-process presentation wait stays bounded too. */
-async function awaitWithSignal(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (signal === undefined) return promise;
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        if (signal.aborted) { reject(signal.reason ?? new Error('Presentation aborted')); return; }
-        onAbort = () => reject(signal.reason ?? new Error('Presentation aborted'));
-        signal.addEventListener('abort', onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
-  }
-}
 
 export function renderPendingAtBoundary(inbox: PendingMembership[]): string {
   return renderBoundary(inbox).context;
@@ -98,37 +79,49 @@ async function presentPendingAtBoundaryUnlocked<T>(
   if (signal?.aborted) return undefined;
   const pending = await projectBoundaryEligibility(inbox);
   if (pending.length === 0 || signal?.aborted) return undefined;
-  const delivered = renderBoundary(pending);
-  if (delivered.context === '') return undefined;
-  let result: T | undefined;
-  let rendered = false;
-  const renderOnce = async () => { if (!rendered) { rendered = true; result = await present(delivered.context); } };
-  for (const entry of delivered.complete) {
-    let artifact: SquareArtifactPort | undefined;
-    try {
-      artifact = createArtifactPort(entry.membership.location, undefined, signal);
-      try { await artifact.read(facts => facts.header(), signal); } catch { continue; }
-      for (const index of entry.actIndexes) {
-        const key = pendingKey(entry.membership, index);
-        const prior = presentationLocks.get(key);
-        if (prior !== undefined) { await awaitWithSignal(prior, signal); if (signal?.aborted) return undefined; if (!rendered) return undefined; continue; }
-        const work = presentPending({ artifact, location: entry.membership.location, participant: entry.membership.seat.participant, activity: index, seat: entry.membership.seat, sink: { present: renderOnce }, markSeen: entry.markSeen, now: Date.now(), signal }).then(async (outcome) => {
-          // A stale projection can outlive its activity; still surface the bounded preview,
-          // but there is no artifact observation to commit.
-          if (!outcome.presented) {
-            const exists = await artifact!.read((facts) => facts.activity(index) !== undefined, signal).catch(() => undefined);
-            if (exists?.value === false) await renderOnce();
-          }
-        });
-        presentationLocks.set(key, work);
-        try { await work; } finally { presentationLocks.delete(key); }
-        if (!rendered) return undefined;
+  const artifacts = new Map<string, SquareArtifactPort>();
+  const claims: { key: string; claim: NonNullable<Awaited<ReturnType<typeof preparePendingPresentation>>> }[] = [];
+  try {
+    // Claim the entire candidate batch before its one external effect. No later item needs
+    // a new claim (and new eligibility decision) after its bytes have already been rendered.
+    for (const entry of renderBoundary(pending).complete) {
+      const { location, seat } = entry.membership;
+      let artifact = artifacts.get(location);
+      if (artifact === undefined) {
+        // This boundary owns the connection until all effect evidence/cleanup has settled.
+        // Request cancellation travels with pre-effect operations, not that lifetime.
+        artifact = createArtifactPort(location);
+        artifacts.set(location, artifact);
       }
-    } finally {
-      if (artifact !== undefined) await artifact.close();
+      for (const index of entry.actIndexes) {
+        const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
+          activity: index, seat, markSeen: entry.markSeen, signal });
+        if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, index), claim });
+      }
     }
+    const eligible = new Set<string>();
+    for (const { key, claim } of claims) if (await claim.eligible()) eligible.add(key);
+    const fresh = renderBoundary(pending.map(membership => ({ ...membership,
+      notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
+    })));
+    const included = new Set(fresh.complete.flatMap(entry => entry.actIndexes.map(index => pendingKey(entry.membership, index))));
+    if (included.size === 0 || signal?.aborted) return undefined;
+    const rendered = claims.filter(({ key }) => included.has(key));
+    let result: T;
+    try { result = await present(fresh.context); }
+    catch (error) {
+      await Promise.all(rendered.map(({ claim }) => claim.release('failed', error instanceof Error ? error.message : String(error))));
+      throw error;
+    }
+    // These are successful sink effects, not fresh delivery attempts. Settle the entire
+    // rendered set before closing any connection, even if one member's settlement fails.
+    const settlements = await Promise.allSettled(rendered.map(({ claim }) => claim.recordPresented()));
+    for (const settlement of settlements) if (settlement.status === 'rejected') throw settlement.reason;
+    return result;
+  } finally {
+    await Promise.all(claims.map(({ claim }) => claim.release()));
+    await Promise.all([...artifacts.values()].map(artifact => artifact.close()));
   }
-  return result;
 }
 
 /**
@@ -136,8 +129,9 @@ async function presentPendingAtBoundaryUnlocked<T>(
  *
  * `lookup` returns the session's memberships for this boundary. It may reuse an observation it has
  * verified against the current presence binding and artifact revision; the boundary still projects
- * presentation evidence live, and `presentPending` still re-checks the pending head, join, ownership
- * claim and seen CAS. A source that cannot verify its reuse must read the inbox again.
+ * presentation evidence live. Every item is claimed and revalidated before the batch sink;
+ * after success, captured-seat commits record only its included items without an eligibility veto.
+ * A source that cannot verify its reuse must read the inbox again.
  */
 export async function presentPendingAtBoundary<T>(
   identity: Body,

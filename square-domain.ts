@@ -78,6 +78,7 @@ export function landingFacts(read: SquareRead, activity: StoredAct): LandingFact
 
 export interface LandingWriter extends Pick<SquareWrite,
   'markSeen' | 'putLease' | 'removeLease' | 'updateWakeAddress' | 'cancelThrough' |
+  'putDeliveryDeferral' | 'renewDeliveryDeferral' | 'releaseDeliveryDeferral' |
   'claimDelivery' | 'prepareDelivery' | 'completeDelivery' | 'observeNativeDelivery'> {
   /** Artifact-private seat persistence used only by this gate's lifecycle transition. */
   storeSeat(seat: Seat): boolean;
@@ -222,6 +223,18 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     removeLease(name: string, leaseId: string, generation?: import('./square-core.js').ActivityId): boolean {
       assertParticipant(name, generation);
       return mutations.removeLease(name, leaseId, generation);
+    },
+    putDeliveryDeferral(...args: Parameters<SquareWrite['putDeliveryDeferral']>): boolean {
+      assertSeat(args[0]);
+      return mutations.putDeliveryDeferral(...args);
+    },
+    renewDeliveryDeferral(...args: Parameters<SquareWrite['renewDeliveryDeferral']>): boolean {
+      assertSeat(args[0]);
+      return mutations.renewDeliveryDeferral(...args);
+    },
+    releaseDeliveryDeferral(...args: Parameters<SquareWrite['releaseDeliveryDeferral']>): boolean {
+      assertSeat(args[0]);
+      return mutations.releaseDeliveryDeferral(...args);
     },
     claimDelivery(input: import('./ports.js').DeliveryClaimInput): import('./ports.js').DeliveryClaimResult {
       assertSeat(input.seat);

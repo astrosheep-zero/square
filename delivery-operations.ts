@@ -6,6 +6,7 @@ import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } 
 import { asSeatRef } from './seats.js';
 import { canonicalPath } from './canonical-path.js';
 import { freshWatchLease } from './runtime.js';
+import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
 
 function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefined {
@@ -43,7 +44,8 @@ async function currentness(artifact: SquareArtifactPort, request: WakeRequest, n
     const caught = head !== undefined && lease !== undefined && leaseOwnsNotification(lease, {
       actor: request.actor, route: head.route, recipient: request.participant,
     });
-    return { current: activityPending && !cancelled && !presented && !caught, activityPending, seatCurrent, cancelled, presented };
+    const deferred = deliveryDeferralExpiry(facts, request.seat, index, now) !== undefined;
+    return { current: activityPending && !cancelled && !presented && !caught && !deferred, activityPending, seatCurrent, cancelled, presented };
   });
   return value;
 }
@@ -70,14 +72,14 @@ interface Candidate {
   readonly head: DirectedHead;
 }
 
-async function candidates(artifact: SquareArtifactPort, requested?: number): Promise<Candidate[]> {
+async function candidates(artifact: SquareArtifactPort, requested?: number, now = Date.now()): Promise<Candidate[]> {
   const { value } = await artifact.read((facts) => {
     const heads = requested === undefined
       ? facts.roster().flatMap((participant) => participant.joined ? pendingHeads(facts, participant.name) : [])
       : pendingRecipients(facts, requested);
     return heads.flatMap((head) => {
       const seat = facts.seat(head.recipient);
-      return seat === undefined ? [] : [{ seat, head }];
+      return seat === undefined || deliveryDeferralExpiry(facts, seat, head.index, now) !== undefined ? [] : [{ seat, head }];
     });
   });
   return value;
@@ -106,7 +108,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
   if (input.activity !== undefined && requested === undefined)
     return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 };
 
-  const pending = await candidates(input.artifact, requested);
+  const pending = await candidates(input.artifact, requested, input.now ?? Date.now());
   let attempted = 0, accepted = 0, failed = 0, unknown = 0, notCapable = 0;
   for (const { seat, head } of pending) {
     const route = routeFor(location, seat, input.now ?? Date.now());
@@ -133,7 +135,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     let suppressed = false;
     const beforeSend = async () => {
       try {
-        final = await currentness(input.artifact, withClaim, Date.now());
+        final = await currentness(input.artifact, withClaim, input.now ?? Date.now());
         suppressed = !final.current;
       } catch { suppressed = true; }
       return !suppressed;
@@ -187,7 +189,7 @@ export async function sweepPending(input: {
   readonly limit: number;
 }): Promise<number[]> {
   if (input.limit <= 0) return [];
-  const pending = await candidates(input.artifact);
+  const pending = await candidates(input.artifact, undefined, input.now);
   const selected: number[] = [];
   for (const { head } of pending) {
     if (input.now - head.at <= input.graceMs) continue;
