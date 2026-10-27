@@ -29,16 +29,17 @@ The collapsed heading uses `metadata.details.items`; it never reverse-parses
 the content. Expansion shows `metadata.details.fullText` when available: complete
 notification bodies, even when the model preview was clipped or omitted. Older
 messages fall back to `detail.text`, including clipping notices and catch commands.
+Each displayed body is capped at 32,000 UTF-16 units (omission line included), keeping
+the beginning and end; collapsed previews are capped at 1,000 units before layout.
+Surrogate pairs are not split. Original messages and model input remain unchanged.
 Long content scrolls inside a bounded panel. The
 card does not fetch extra activity or mark anything seen. Live events and fetched history use
 the same transformer.
 
-The card is visually marked as Square: an accent glyph, a SQUARE badge, and the
-square's name sit above the actor line, on a raised surface distinct from ordinary
-tool output. It uses Paseo theme colors, selectable text, accessible expansion state,
-and compact layout on narrow displays. Expansion starts at the top-right arrow;
-collapse returns from the arrow below the expanded content. Removing the plugin restores Paseo's
-ordinary custom-message row.
+An accent glyph, actor and square name identify the card. The header and its arrow
+toggle an inline drawer. It uses Paseo theme colors, selectable text, accessible
+expansion state and compact layout on narrow displays. Removing the plugin restores
+Paseo's ordinary custom-message row.
 
 ## Develop
 

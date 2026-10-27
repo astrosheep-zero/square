@@ -1,5 +1,5 @@
 import type { PluginTimelineTransformerContribution } from "@getpaseo/plugin/client";
-import { squareCardDetailsSchema } from "../shared/message.ts";
+import { COLLAPSED_PREVIEW_MAX_CHARS, outputPreview, squareCardDetailsSchema } from "../shared/message.ts";
 
 // Recognition is metadata-based, not a guess from a tool name or body text.
 // The same projection applies to live events and fetched history.
@@ -16,10 +16,11 @@ export const transformSquareMessage: PluginTimelineTransformerContribution<"tool
       kind: "square-message",
       version: 1,
       data: {
-        text: item.detail.text,
+        text: outputPreview(details.success && details.data.fullText !== undefined ? details.data.fullText : item.detail.text),
         ...(details.success ? {
-          items: details.data.items,
-          ...(details.data.fullText === undefined ? {} : { fullText: details.data.fullText }),
+          // Only the last item's preview is rendered, so only it takes the visible budget.
+          items: details.data.items.map((item, index, all) =>
+            index < all.length - 1 || item.preview === undefined ? item : { ...item, preview: outputPreview(item.preview, COLLAPSED_PREVIEW_MAX_CHARS) }),
         } : {}),
       },
     }],

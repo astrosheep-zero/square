@@ -2,15 +2,15 @@ import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { squareHeadline, type SquareMessageData } from "../shared/message";
-import { parseInline, SquareMarkdown } from "./markdown";
+import { outputPreview, squareHeadline, type SquareMessageData } from "../shared/message";
+import { MONO, parseInline, SquareMarkdown } from "./markdown";
 
 /** A plain card: who, what they did, where, then what they said. No badge, no chrome — the words carry the place. */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
-  const { text, fullText, items } = item.data;
+  const { text, items } = item.data;
   const latest = items?.[items.length - 1];
-  // Preview typography only; expansion prefers the complete renderer-only text.
+  // Transform already bounded the collapsed preview; only normalise whitespace for the single line.
   const preview = latest?.preview?.replace(/\s+/g, " ").trim();
   const muted = theme.colors.foregroundMuted;
   const foreground = theme.colors.foreground;
@@ -27,15 +27,15 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
       paddingVertical: 8,
       gap: 4,
     },
-    whoRow: { flexDirection: "row" as const, alignItems: "baseline" as const, gap: 6 },
+    whoRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
     glyph: { color: theme.colors.accent, fontSize: 9 },
     actor: { color: foreground, fontSize: 12.5, fontWeight: "600" as const },
-    route: { color: muted, fontSize: 12.5, flexShrink: 1 },
+    route: { color: muted, fontSize: 12.5, flex: 1 },
     count: { color: muted, fontSize: 11 },
     preview: { color: foreground, fontSize: 13, lineHeight: 19 },
     action: { color: muted, fontStyle: "italic" as const },
     bold: { fontWeight: "700" as const },
-    code: { fontFamily: "Menlo", fontSize: 12 },
+    code: { fontFamily: MONO, fontSize: 12 },
   }), [foreground, layout.compact, muted, theme.colors.accent, theme.colors.border, theme.colors.surface1]);
 
   const headline = latest !== undefined ? squareHeadline(latest) : "Square context";
@@ -58,7 +58,6 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
           <Text numberOfLines={1} style={styles.route}>
             {routeText}{latest?.square !== undefined && ` · ${latest.square}`}
           </Text>
-          <View style={{ flex: 1 }} />
           {items !== undefined && items.length > 1 && <Text style={styles.count}>{items.length}</Text>}
           <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={muted} />
         </View>
@@ -78,8 +77,8 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         )}
       </Pressable>
       {expanded && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 2 }} nestedScrollEnabled>
-          <SquareMarkdown text={fullText ?? text} theme={theme} />
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 2, borderTopWidth: 1, borderTopColor: theme.colors.border }} contentContainerStyle={{ paddingTop: 8 }} nestedScrollEnabled>
+          <SquareMarkdown text={outputPreview(text)} theme={theme} />
         </ScrollView>
       )}
     </View>

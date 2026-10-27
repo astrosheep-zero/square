@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { squareHeadline, squareMessageSchema } from "../shared/message.ts";
+import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, squareHeadline, squareMessageSchema } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
@@ -33,15 +33,49 @@ test("Square live and history projection preserve exact content and renderer det
   assert.deepEqual(squareMessageSchema.parse(result!.items[0].data), { text, items });
 });
 
-test("complete renderer text survives live/history projection and schema parsing without changing the model preview", () => {
+test("complete renderer text survives live/history projection as one bounded body", () => {
   const fullText = `${text}\n${'complete body '.repeat(200)}\nFULL_BODY_TAIL`;
   const original = row({ metadata: { synthetic: true, customType: "square", details: { items, fullText } } });
   const before = structuredClone(original);
   const result = project(original)!;
   assert.deepEqual(result, project(original, "streaming"));
-  const data = squareMessageSchema.parse(result.items[0].data);
-  assert.equal(data.fullText, fullText);
-  assert.equal(data.text, text);
+  const projected = result.items[0].data as Record<string, unknown>;
+  assert.equal(projected.text, outputPreview(fullText));
+  assert.notEqual(projected.text, text);
+  assert.equal(projected.fullText, undefined);
+  assert.equal(squareMessageSchema.parse(projected).text, projected.text);
+  assert.deepEqual(original, before);
+});
+
+test("oversized messages have bounded head/tail displays and short collapsed previews, not changed history", () => {
+  const body = "START\n" + "🦈".repeat(500_000) + "\nEND";
+  const original = row({ detail: { type: "plain_text", text: body },
+    metadata: { synthetic: true, customType: "square", details: { fullText: body, items: [{ ...items[0], preview: body }] } } });
+  const before = JSON.stringify(original);
+  const data = squareMessageSchema.parse(project(original)!.items[0].data);
+  for (const [preview, limit] of [[data.text, OUTPUT_DISPLAY_MAX_CHARS],
+    [data.items![0]!.preview!, COLLAPSED_PREVIEW_MAX_CHARS]] as const) {
+    assert.ok(preview.length <= limit);
+    assert.ok(preview.startsWith("START\n") && preview.endsWith("\nEND"));
+    assert.match(preview, /middle is hidden/);
+    assert.equal(Buffer.from(preview).toString("utf8"), preview);
+  }
+  assert.equal(JSON.stringify(original), before);
+});
+
+test("only the latest item preview is bounded during projection and source stays untouched", () => {
+  const body = (label: string) => `START ${label}\n${"🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS)}\nEND ${label}`;
+  const earlier = { ...items[0], preview: body("EARLIER") };
+  const latest = { ...items[1], preview: body("LATEST") };
+  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: [earlier, latest] } } });
+  const before = structuredClone(original);
+  const data = squareMessageSchema.parse(project(original)!.items[0].data);
+  assert.equal(data.items![0]!.preview, earlier.preview);
+  const drawn = data.items![1]!.preview!;
+  assert.ok(drawn.length <= COLLAPSED_PREVIEW_MAX_CHARS);
+  assert.ok(drawn.startsWith("START LATEST\n") && drawn.endsWith("\nEND LATEST"));
+  assert.match(drawn, /middle is hidden/);
+  assert.equal(Buffer.from(drawn).toString("utf8"), drawn);
   assert.deepEqual(original, before);
 });
 

@@ -1,6 +1,8 @@
 import { useMemo } from "react";
-import { Text, View, type TextStyle } from "react-native";
+import { Platform, Text, View, type TextStyle } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
+
+export const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "ui-monospace, Menlo, monospace" });
 
 interface InlinePart { text: string; bold?: boolean; italic?: boolean; code?: boolean }
 
@@ -125,7 +127,7 @@ export function SquareMarkdown({ text, theme }: { text: string; theme: PluginThe
     bold: { fontWeight: "700" as const },
     italic: { fontStyle: "italic" as const },
     inlineCode: {
-      fontFamily: "Menlo",
+      fontFamily: MONO,
       fontSize: 12,
       backgroundColor: colors.surface2,
       color: colors.foreground,
@@ -138,7 +140,7 @@ export function SquareMarkdown({ text, theme }: { text: string; theme: PluginThe
       paddingHorizontal: 9,
       paddingVertical: 7,
     },
-    codeText: { fontFamily: "Menlo", fontSize: 11.5, lineHeight: 17, color: colors.foreground },
+    codeText: { fontFamily: MONO, fontSize: 11.5, lineHeight: 17, color: colors.foreground },
     heading: { color: colors.foreground, fontWeight: "700" as const },
     quote: {
       borderLeftWidth: 2,
@@ -147,7 +149,7 @@ export function SquareMarkdown({ text, theme }: { text: string; theme: PluginThe
       gap: 2,
     },
     quoteText: { color: colors.foregroundMuted, fontSize: 13, lineHeight: 20, fontStyle: "italic" as const },
-    meta: { color: colors.foregroundMuted, fontSize: 11, lineHeight: 15, fontFamily: "Menlo" },
+    meta: { color: colors.foregroundMuted, fontSize: 11, lineHeight: 15, fontFamily: MONO },
     actor: { color: colors.accent, fontSize: 12, lineHeight: 17 },
     separator: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
     listRow: { flexDirection: "row" as const, gap: 6 },
@@ -193,18 +195,7 @@ export function SquareMarkdown({ text, theme }: { text: string; theme: PluginThe
             {block.items.map((item, index) => (
               <View key={`${key}-${index}`} style={styles.listRow}>
                 <Text style={styles.bullet}>•</Text>
-                <Text style={[styles.paragraph, { flexShrink: 1 }]}>
-                  {parseInline(item).map((part, partIndex) => (
-                    <Text
-                      key={partIndex}
-                      style={[
-                        part.bold ? styles.bold : undefined,
-                        part.italic ? styles.italic : undefined,
-                        part.code ? styles.inlineCode : undefined,
-                      ]}
-                    >{part.code ? ` ${part.text} ` : part.text}</Text>
-                  ))}
-                </Text>
+                {renderInline(item, `${key}-${index}-text`, { flexShrink: 1 })}
               </View>
             ))}
           </View>
