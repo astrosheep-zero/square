@@ -157,6 +157,7 @@ export function listPresentation(facts: SquareRead): ListPresentation {
 export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', observe = false): StatusResult {
   const participants = coreParticipants(facts, context.now);
   const header = facts.header(), hold = facts.hold(), standingCount = inSquareCount(facts);
+  const listener = participants.find((p) => p.state !== 'not joined' && nameKey(p.name) === nameKey(viewer));
   const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
   const latestAct = latest === undefined ? undefined : facts.activity(latest.index);
   const data: StatusResult = {
@@ -168,6 +169,7 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
       ...(hold.reason === undefined ? {} : { reason: hold.reason }),
       ...(hold.at === undefined ? {} : { at: hold.at }),
     } : null,
+    ...(listener === undefined ? {} : { listening: listener.listening }),
     participants: participants.filter((p) => p.state !== 'not joined'), now: context.now,
     ...(latestAct === undefined || latestAct.actor === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
   };

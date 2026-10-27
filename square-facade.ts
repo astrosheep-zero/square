@@ -221,6 +221,8 @@ export interface StatusOptions extends ObservationOptions {
   readonly viewer?: string;
 }
 export interface StatusResult {
+  /** Present when a viewer resolves; an empty list means they listen to nobody. */
+  readonly listening?: readonly string[];
   readonly hardCap: number | null;
   readonly activeCount: number;
   readonly doneCount: number;

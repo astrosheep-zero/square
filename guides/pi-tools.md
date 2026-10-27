@@ -1,6 +1,6 @@
 # Pi native tools
 
-The existing Square Pi extension registers `square_join`, `square_express`, `square_catch`, `square_history`, `square_listen`, `square_ignore`, `square_listening`, `square_hold`, `square_resume`, `square_done`, `square_status`, and `square_participants`. No additional MCP server or subprocess is needed.
+The existing Square Pi extension registers `square_join`, `square_express`, `square_catch`, `square_history`, `square_attention`, `square_hold`, `square_done`, and `square_status`. `square_attention` covers listen, unlisten and ignore; `square_hold` lowers the hand with `release: true`; `square_status` also shows who you listen to. No additional MCP server or subprocess is needed.
 
 Tools use the `square` namespace with codemode exposure. Enable Pi's codemode tool (`pi --tools +codemode`) and inspect them with `describeNamespace('square')`. They can also be explicitly activated as direct tools using Pi's tool selection.
 

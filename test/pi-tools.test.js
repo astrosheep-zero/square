@@ -43,11 +43,15 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     const tool = tools.get(`square_${shared.name}`);
     assert.equal(tool.exposure, 'codemode');
     assert.equal(tool.namespace.name, 'square');
+    assert.equal(tool.namespace.description, 'A shared square where agents gather to talk, think, and act together.');
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
     assert.equal('session' in tool.parameters.properties, false);
     assert.equal(tool.outputSchema.type, 'object');
+    for (const [name, schema] of Object.entries(tool.parameters.properties)) {
+      assert.ok(schema.description?.length > 0, `${shared.name}.${name} explains its purpose`);
+    }
   }
   assert.equal(tools.get('square_express').parameters.properties.noMention.type, 'boolean');
 });
@@ -55,6 +59,10 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
 test('Pi calls use live context, preserve environment, and return structured data and errors', async (t) => {
   const { cwd, squarePath, context, call } = await fixture(t);
   const before = { ...process.env };
+  const ambient = await call('status');
+  assert.equal(ambient.isError, undefined);
+  assert.equal('listening' in ambient.structuredContent, false, 'no name, no personal listening claim');
+  assert.doesNotMatch(ambient.content[0].text, /you listen to/);
   const joined = await call('join', { as: 'rei' });
   assert.equal(joined.structuredContent.participant, 'rei');
   assert.match(joined.content[0].text, /you stepped into the square/);
@@ -83,9 +91,15 @@ test('Pi calls use live context, preserve environment, and return structured dat
     assert.equal(invalid.structuredContent.error.code, 'invalid_args');
   }
   await call('join', { as: 'bob' });
-  await call('listen', { as: 'bob', target: 'rei' });
-  assert.equal((await call('unlisten', { as: 'bob', target: 'rei' })).structuredContent.activity.kind, 'unlisten');
-  assert.deepEqual((await call('listening', { as: 'bob' })).structuredContent.listening, []);
+  await call('attention', { as: 'bob', action: 'listen', target: 'rei' });
+  assert.deepEqual((await call('status', { as: 'BOB' })).structuredContent.listening, ['rei']);
+  const ambiguous = await call('status');
+  assert.equal(ambiguous.isError, undefined);
+  assert.equal('listening' in ambiguous.structuredContent, false, 'two names require a choice before showing personal listening');
+  assert.doesNotMatch(ambiguous.content[0].text, /you listen to/);
+  assert.equal((await call('attention', { as: 'bob', action: 'unlisten', target: 'rei' })).structuredContent.activity.kind, 'unlisten');
+  assert.deepEqual((await call('status', { as: 'bob' })).structuredContent.listening, []);
+  assert.equal((await call('attention', { as: 'bob', action: 'deafen', target: 'rei' })).structuredContent.error.code, 'invalid_args');
   const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
   assert.deepEqual(bare.structuredContent.activity.mentions, []);
   assert.equal(typeof bare.structuredContent.hint, 'string', 'the first expression carries the shared hint');
@@ -120,5 +134,5 @@ test('Pi cancellation reaches a waiting operation without landing its body', asy
   assert.equal(result.structuredContent.error.code, 'cancelled');
   const history = await call('history');
   assert.equal(history.structuredContent.activities.some(a => a.body === 'must not land'), false);
-  assert.equal((await call('resume', { as: 'rei' })).isError, undefined);
+  assert.equal((await call('hold', { as: 'rei', release: true })).isError, undefined);
 });

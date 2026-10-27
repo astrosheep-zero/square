@@ -40,7 +40,7 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
   try {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), [
-      'join', 'express', 'catch', 'history', 'listen', 'ignore', 'unlisten', 'listening', 'hold', 'resume', 'done', 'status', 'participants',
+      'join', 'express', 'catch', 'history', 'attention', 'hold', 'done', 'status',
     ]);
     const invalid = await client.callTool({ name: 'express', arguments: { body: 7 } });
     assert.equal(invalid.isError, true);
@@ -55,6 +55,7 @@ test('MCP tools validate JSON arguments and return stable JSON projections', asy
     assert.equal(history.structuredContent.activities.at(-1).body, '*waves*');
     const status = await client.callTool({ name: 'status', arguments: {} });
     assert.equal('state' in status.structuredContent, false);
+    assert.deepEqual(status.structuredContent.listening, [], 'the session name resolves, so status shows its listening');
     assert.deepEqual(JSON.parse(JSON.stringify(status.structuredContent)), status.structuredContent);
   } finally { await close(); }
 });
@@ -88,10 +89,10 @@ test('one MCP server accepts per-call participants without a configured default'
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, body }));
   try {
     const tools = (await client.listTools()).tools;
-    for (const name of ['join', 'express', 'catch', 'listen', 'ignore', 'unlisten', 'listening', 'hold', 'resume', 'done']) {
+    for (const name of ['join', 'express', 'catch', 'attention', 'hold', 'done', 'status']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
-      assert.equal(schema.properties.as.description, 'Participant name. Defaults to the configured participant or the current session’s unambiguous participant.');
+      assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square. Give it explicitly when joining.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
       assert.equal(schema.required?.includes('as') ?? false, false);
       assert.equal('session' in schema.properties, false);
     }
@@ -108,12 +109,14 @@ test('one MCP server accepts per-call participants without a configured default'
     assert.deepEqual(history.structuredContent.activities.filter((activity) => activity.kind === 'say').map(({ actor, body }) => ({ actor, body })), [
       { actor: 'alice', body: 'alice speaks' }, { actor: 'bob', body: 'bob speaks' },
     ]);
-    await client.callTool({ name: 'listen', arguments: { as: 'alice', target: 'bob' } });
-    assert.deepEqual((await client.callTool({ name: 'listening', arguments: { as: 'alice' } })).structuredContent.listening, ['bob']);
-    await client.callTool({ name: 'ignore', arguments: { as: 'alice', target: 'bob' } });
-    assert.deepEqual((await client.callTool({ name: 'listening', arguments: { as: 'alice' } })).structuredContent.listening, []);
-    for (const name of ['catch', 'hold', 'resume', 'done']) {
-      const result = await client.callTool({ name, arguments: { as: 'alice' } });
+    await client.callTool({ name: 'attention', arguments: { as: 'alice', action: 'listen', target: 'bob' } });
+    const listening = await client.callTool({ name: 'status', arguments: { as: 'alice' } });
+    assert.deepEqual(listening.structuredContent.listening, ['bob']);
+    assert.match(listening.content[0].text, /you listen to\n  · @bob/);
+    await client.callTool({ name: 'attention', arguments: { as: 'alice', action: 'ignore', target: 'bob' } });
+    assert.deepEqual((await client.callTool({ name: 'status', arguments: { as: 'alice' } })).structuredContent.listening, []);
+    for (const [name, args] of [['catch', {}], ['hold', {}], ['hold', { release: true }], ['done', {}]]) {
+      const result = await client.callTool({ name, arguments: { as: 'alice', ...args } });
       assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
     }
     assert.deepEqual({ ...process.env }, beforeProcessEnv);
@@ -129,7 +132,8 @@ test('MCP request metadata binds the participant seat to the live call body', as
       const configuredBody = { channel: 'configured', session: `startup-${channel}` };
       const beforeProcessEnv = { ...process.env };
       const beforeBaseEnv = { ...env };
-      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, participant: 'rei', body: configuredBody }));
+      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent' }, path: squarePath, participant: 'rei', body: configuredBody,
+        wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }));
       const artifact = createArtifactPort(squarePath);
       const readSeats = () => artifact.read(facts => ({
         seat: facts.seat('rei'),
@@ -143,6 +147,9 @@ test('MCP request metadata binds the participant seat to the live call body', as
         assert.equal(joined.structuredContent.kind, 'joined');
         let seats = (await readSeats()).value;
         assert.deepEqual(seats.seat.body, callBody);
+        assert.deepEqual(seats.seat.wakeAddress, channel === 'codex'
+          ? { kind: 'codex-queue', address: { threadId: callBody.session } }
+          : { kind: 'paseo', address: { agentId: 'managed-agent' } });
         assert.deepEqual(seats.callBodySeats.map(({ participant }) => participant), ['rei']);
 
         const refused = await callJoin(`${channel}-second`);

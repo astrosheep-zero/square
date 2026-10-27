@@ -10,7 +10,7 @@ import test from 'node:test';
 import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-native.js';
 import { connect } from '../dist/packages/agent-delivery/src/index.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
-import { observeClaudeDelivery, nativePayload } from '../dist/claude-delivery.js';
+import { observeClaudeDelivery, nativePayload, createClaudeWakeTransport } from '../dist/claude-delivery.js';
 import { recordClaudeDeliveryStatus } from '../dist/claude-delivery-status.js';
 import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { createArtifactPort } from '../dist/artifact.js';
@@ -185,6 +185,25 @@ test('plain native transport writes tokenless session-targeted NDJSON and record
   assert.equal((await writeClaudeNative({ sessionId: 'target', endpoint: path.join(f.root, 'dead.sock') }, 'body', { deadline: Date.now() + 1000 })).outcome, 'unavailable');
 });
 
+test('native wake persists the same message id used by both wire identifiers before receiver custody', supported, async t => {
+  const f = await fixture(t);
+  await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint, loaded: 'true' } });
+  const artifact = createArtifactPort(f.squarePath);
+  try {
+    const result = await deliverPending({ artifact, transport: createClaudeWakeTransport(f.env), location: f.squarePath, activity: 2 });
+    assert.equal(result.unknown, 1, JSON.stringify(result));
+    await f.firstFrame;
+    const original = (await currentEvidence(f)).find(row => row.kind === 'wake');
+    assert.equal(f.frames.length, 1);
+    assert.equal(f.frames[0].uuid, original.correlation.messageId);
+    assert.equal(f.frames[0].msg_id, original.correlation.messageId);
+    assert.equal(await recordClaudeDeliveryStatus({ provider: 'claude', sessionId: f.coordinate.sessionId,
+      messageId: f.frames[0].uuid, eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() }, f.env), true);
+    assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').outcome, 'unknown');
+    assert.equal(await seen(f), undefined);
+  } finally { await artifact.close(); }
+});
+
 test('native custody is artifact evidence and receiver status never authorizes replay', async t => {
   const f = await fixture(t);
   assert.deepEqual(await dispatch(f), { attempted: 1, accepted: 0, failed: 0, unknown: 1, notCapable: 0 });
@@ -251,6 +270,15 @@ test('reconciliation preserves the native seat address and an unknown attempt is
   const held = (await currentEvidence(f)).find(row => row.kind === 'wake');
   assert.equal(held.outcome, 'unknown');
   assert.equal(held.nativeObservations[0].reason, 'no-mode-asserted');
+  // Withdrawal may expose a fallback for future attention, never replay unknown bytes.
+  await f.bridge({ operation: 'reconcile', endpoint: 'relative.sock' });
+  const fallback = await Square.at({ path: f.squarePath, env: scoped, body: claudeBody,
+    wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } });
+  try { await fallback.join('Bob'); } finally { await fallback.close(); }
+  assert.equal((await seatFor(f)).wakeAddress.kind, 'paseo');
+  assert.equal((await dispatch(f)).attempted, 0);
+  assert.equal((await currentEvidence(f)).filter(row => row.kind === 'wake').length, 1);
+  assert.equal(f.nativeMessages.length, 1);
 });
 
 test('a native observation arriving before transport completion remains attached to its attempt', async t => {

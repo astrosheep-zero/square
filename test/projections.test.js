@@ -233,7 +233,7 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
     const { observation: projection, ...data } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice', true))).value;
     assert.deepEqual(data, {
       hardCap: 7, throttlePerMinute: 3, activeCount: 1, doneCount: 1,
-      hold: { reason: 'historical pause', at: 5 }, now: 100_000,
+      hold: { reason: 'historical pause', at: 5 }, now: 100_000, listening: [],
       latestActivity: { id: 'act/3', at: 3, kind: 'done', actor: 'Gone', mentions: [] },
       participants: [
         { name: 'Alice', state: 'active', listening: [], activityCount: 0, lastActiveAt: 6, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
