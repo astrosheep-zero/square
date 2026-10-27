@@ -477,10 +477,13 @@ export class SqliteSquare {
     }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
-    const viewer = !options.observe ? '' : options.viewer ?? (await this.participant().catch(() => undefined))?.name ?? '';
-    return (await this.artifact.read(facts => queryStatus(facts, {
-      location: this.location, now: this.clock(), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined,
-    }, viewer, options.observe === true), control?.signal)).value;
+    return (await this.artifact.read(facts => {
+      const seats = this.body === undefined ? [] : facts.seatsForBody(this.body);
+      const viewer = options.viewer ?? this.defaultParticipant ?? (seats.length === 1 ? seats[0].participant : '');
+      return queryStatus(facts, {
+        location: this.location, now: this.clock(), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined,
+      }, viewer, options.observe === true);
+    }, control?.signal)).value;
   }
   async participants(options: ObservationOptions = {}, control?: OperationControl): Promise<ParticipantsResult> {
     return (await this.artifact.read(facts => queryParticipants(facts, {

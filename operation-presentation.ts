@@ -315,6 +315,10 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   const output = [
     style('dim', counts),
     ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
+    ...(data.listening === undefined ? [] : [
+      '', style('dim', 'you listen to'),
+      ...(data.listening.length === 0 ? ['  ○ not turned toward anyone'] : data.listening.map((name) => `  · ${participantIdentity(name)}`)),
+    ]),
   ].join('\n');
   return withPathOutput(squarePath, output, { participantCount: presentation.standingCount, held: presentation.held });
 }

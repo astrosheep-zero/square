@@ -64,20 +64,20 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   await call('express', { as: 'Bob', body: 'answer', force: true, reply: 'act/2' });
   await alice.listen('Bob');
   cli(terminal, 'Alice', ['listen', 'Bob']);
-  await call('listen', { as: 'Alice', target: 'Bob' });
+  await call('attention', { as: 'Alice', action: 'listen', target: 'Bob' });
   const caught = await alice.catch();
   cli(terminal, 'Alice', ['catch']);
   assert.deepEqual(await call('catch', { as: 'Alice' }), caught);
   const stopped = await alice.unlisten('Bob');
   assert.equal(stopped.activity.kind, 'unlisten');
   cli(terminal, 'Alice', ['unlisten', 'Bob']);
-  assert.deepEqual(await call('unlisten', { as: 'Alice', target: 'Bob' }), stopped);
+  assert.deepEqual(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), stopped);
   assert.equal((await alice.unlisten('Bob')).activity, null);
   cli(terminal, 'Alice', ['unlisten', 'Bob']);
-  assert.deepEqual(await call('unlisten', { as: 'Alice', target: 'Bob' }), { activity: null });
+  assert.deepEqual(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), { activity: null });
   await alice.ignore('Bob');
   cli(terminal, 'Alice', ['ignore', 'Bob']);
-  await call('ignore', { as: 'Alice', target: 'Bob' });
+  await call('attention', { as: 'Alice', action: 'ignore', target: 'Bob' });
   await bob.done();
   cli(terminal, 'Bob', ['done']);
   await call('done', { as: 'Bob' });
@@ -107,7 +107,7 @@ test('SDK, CLI and MCP bare expressions land without an audience and reach liste
 
   await (await direct.square.participant('Bob')).listen('Alice');
   cli(terminal, 'Bob', ['listen', 'Alice']);
-  await call('listen', { as: 'Bob', target: 'Alice' });
+  await call('attention', { as: 'Bob', action: 'listen', target: 'Alice' });
 
   await (await direct.square.participant('Alice')).express('sdk bare for listener', { force: true });
   cli(terminal, 'Alice', ['express', '--force', 'cli bare for listener']);
@@ -234,7 +234,6 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.ok(archive.hydrated > 0);
   assert.deepEqual(archive.value, await square.history());
   assert.deepEqual(await call('status'), await square.status());
-  assert.deepEqual(await call('participants'), await square.participants());
 });
 
 test('catch resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {

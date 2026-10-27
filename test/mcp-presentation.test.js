@@ -98,8 +98,7 @@ test('read-only tools print the same page as the CLI', async (t) => {
   const cases = [
     { tool: 'history', args: {}, cliArgs: ['history'] },
     { tool: 'status', args: {}, cliArgs: ['--as', 'rei', 'status'] },
-    { tool: 'participants', args: {}, cliArgs: ['participants'] },
-    { tool: 'listening', args: { as: 'bob' }, cliArgs: ['--as', 'bob', 'listening'] },
+    { tool: 'status', args: { as: 'bob' }, cliArgs: ['--as', 'bob', 'status'] },
   ];
   for (const { tool, args, cliArgs } of cases) {
     const result = cli(squarePath, cliArgs);
@@ -127,16 +126,16 @@ test('mutating tools print the same result as the CLI', async (t) => {
     }, ['--as', 'rei', 'catch'], 'catch', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'listen', { as: 'rei', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'attention', { as: 'rei', action: 'listen', target: 'bob' });
   });
   await t.test('ignore', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'ignore', { as: 'rei', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'attention', { as: 'rei', action: 'ignore', target: 'bob' });
   });
   await t.test('unlisten', async (t) => {
     await assertTextParity(t, async (square) => {
       await joinReiAndBob(square);
       await (await square.participant('rei')).listen('bob');
-    }, ['--as', 'rei', 'unlisten', 'bob'], 'unlisten', { as: 'rei', target: 'bob' });
+    }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
   });
   await t.test('hold', async (t) => {
     await assertTextParity(t, async (square) => { await square.join('rei'); },
@@ -146,7 +145,7 @@ test('mutating tools print the same result as the CLI', async (t) => {
     await assertTextParity(t, async (square) => {
       await square.join('rei');
       await (await square.participant('rei')).hold('deep work');
-    }, ['--as', 'rei', 'resume'], 'resume', { as: 'rei' });
+    }, ['--as', 'rei', 'resume'], 'hold', { as: 'rei', release: true });
   });
   await t.test('done', async (t) => {
     await assertTextParity(t, async (square) => { await square.join('rei'); },

@@ -75,7 +75,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   await call('express', { body: 'second', force: true });
   await call('history');
   await call('status');
-  await call('participants');
+  await call('status', { as: participant });
   assert.equal(opened(), 1, 'six tool calls must share the server connection');
 
   // Closing the server closes the connection: a later open starts from scratch.
@@ -99,10 +99,10 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   await call('join', { as: participant });
   await call('hold', { reason: 'concurrency' });
   const [history, status, participants] = await Promise.all([
-    call('history'), call('status'), call('participants'),
+    call('history'), call('status'), call('status', { as: participant }),
   ]);
   for (const result of [history, status, participants]) assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
-  await call('resume');
+  await call('hold', { release: true });
   await call('express', { body: 'after concurrency', force: true });
   assert.equal(opened(), 1);
   assert.deepEqual((await call('history')).structuredContent.activities.map((activity) => activity.body).filter((body) => body === 'after concurrency'), ['after concurrency']);

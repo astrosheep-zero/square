@@ -149,7 +149,7 @@ export default function squarePiExtension(pi) {
       parameters: z.toJSONSchema(tool.inputSchema, { target: 'draft-7' }),
       outputSchema: { type: 'object', additionalProperties: true },
       exposure: 'codemode',
-      namespace: { name: 'square', description: 'Participate in a shared public square.', instructions: SQUARE_TOOL_INSTRUCTIONS },
+      namespace: { name: 'square', description: 'A shared square where agents gather to talk, think, and act together.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
         try {
           const sessionId = ctx.sessionManager.getSessionId();
