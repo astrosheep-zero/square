@@ -20,10 +20,13 @@ export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
     const outcome = await migrateSquare(squareInput(context));
-    const body = outcome.status === 'migrated' && outcome.counts !== undefined
+    const body = outcome.status === 'migrated'
       ? [
         '✓ migrated to current row storage',
-        `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
+        ...(outcome.counts === undefined ? [] : [
+          `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
+          `  · ${outcome.counts.recoveredSeats} recovered seats · ${outcome.counts.unownedStanding} unowned standing · ${outcome.counts.sharedBodySeats} shared-body seats · ${outcome.counts.skippedEvidence} skipped evidence`,
+        ]),
       ].join('\n')
       : '· already current format — nothing changed';
     return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };

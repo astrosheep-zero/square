@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { Square } from '../dist/square-api.js';
-import { diagnoseSquareFile } from '../dist/artifact.js';
+import { createArtifactPort, diagnoseSquareFile } from '../dist/artifact.js';
 import { CURRENT_USER_VERSION } from '../dist/square-sqlite.js';
 import { migrateSquareFile } from '../dist/square-migration.js';
 import { writeLegacyLedger } from './fixtures/legacy-host-ledger.js';
@@ -75,14 +75,23 @@ test('explicit v2 migration establishes artifact seats and removes legacy routes
   } finally { await square.close(); }
 });
 
-test('v2 migration refuses a standing participant without a unique legacy body and leaves bytes untouched', async (t) => {
+test('v2 migration recovers an owner-backed seat without routes or a fabricated wake address', async (t) => {
   const { location, env } = fixture(t);
   const database = new DatabaseSync(location);
   try { database.prepare('DELETE FROM routes WHERE participant_key_json=?').run(JSON.stringify('alice')); }
   finally { database.close(); }
-  const before = digest(location);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /no unique legacy body/);
-  assert.equal(digest(location), before);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.recoveredSeats, 3);
+  assert.equal(result.counts.unownedStanding, 0);
+  assert.equal(result.counts.sharedBodySeats, 0);
+  const artifact = createArtifactPort(location);
+  try {
+    const { value } = await artifact.read(facts => facts.seat('Alice'));
+    assert.deepEqual(value.body, { channel: 'codex', session: 'alice-session' });
+    assert.equal(value.generation, 'act/0');
+    assert.equal(value.wakeAddress, undefined);
+  } finally { await artifact.close(); }
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 });
 
 test('v2 migration refuses malformed framing without changing the artifact', async (t) => {

@@ -122,6 +122,10 @@ export interface MigrationCounts {
   readonly receipts: number;
   readonly leases: number;
   readonly routes: number;
+  readonly recoveredSeats: number;
+  readonly unownedStanding: number;
+  readonly sharedBodySeats: number;
+  readonly skippedEvidence: number;
 }
 
 export interface MigrationOutcome {
@@ -267,25 +271,23 @@ function planSeats(
   owners: LegacyHostData['owners'],
   driver: ReturnType<typeof createSqliteDriver>,
 ): Seat[] {
-  const standing = roster.filter((participant) => participant.joined);
-  return standing.map((participant) => {
+  const seats: Seat[] = [];
+  const localRoutes = routes.filter(route => canonicalPathSync(route.location) === location);
+  for (const participant of roster.filter((participant) => participant.joined)) {
     const joined = establishingJoin(driver, participant);
-    const candidates = routes.filter((route) => canonicalPathSync(route.location) === location && nameKey(route.participant) === nameKey(participant.name));
+    const candidates = localRoutes.filter((route) => nameKey(route.participant) === nameKey(participant.name));
     const owner = owners.find(row => nameKey(row.participant) === nameKey(participant.name));
-    assertSource(owner !== undefined, `standing participant ${participant.name} has no legacy owner.`);
-    const { body } = owner;
-    assertSource(candidates.length > 0 && candidates.every(route => sameBody(route.body, body)), `standing participant ${participant.name} has no unique legacy body agreeing with its owner.`);
-    const shared = [...owners, ...routes.filter(route => canonicalPathSync(route.location) === location)]
-      .some(row => nameKey(row.participant) !== nameKey(participant.name) && sameBody(row.body, body));
-    assertSource(!shared, `standing participant ${participant.name} shares a legacy body with another owner.`);
+    const body = owner?.body ?? candidates[0]?.body;
+    if (body === undefined || !candidates.every(route => sameBody(route.body, body))) continue;
     const address = uniqueSeatAddress(candidates);
-    return {
+    seats.push({
       participant: participant.name,
       body,
       generation: formatActivityId(joined),
       ...(address === undefined ? {} : { wakeAddress: address }),
-    };
-  });
+    });
+  }
+  return seats;
 }
 function tableToken(database: DatabaseSync, table: string, order: string): string {
   const rows = database.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all() as Record<string, unknown>[];
@@ -352,15 +354,20 @@ function inspectLegacyRowArtifact(database: DatabaseSync, location: string, host
     if (ownerParticipant?.lastJoinIndex !== undefined) leaseGenerations.push({ ownerJson: row.owner_json as string, generation: formatActivityId(ownerParticipant.lastJoinIndex) });
   }
   const seats = planSeats(location, roster, routes, host.owners, driver);
+  const standingCount = roster.filter(participant => participant.joined).length;
+  const deliveries = planLegacyDeliveries(host.evidence, seats, driver);
   const counts: MigrationCounts = {
     activities: activityCount,
     receipts: Number((database.prepare('SELECT COUNT(*) AS n FROM receipts').get() as { n: number }).n),
     leases: leaseOwners.length,
     routes: routes.length,
+    recoveredSeats: seats.length,
+    unownedStanding: standingCount - seats.length,
+    sharedBodySeats: seats.filter(seat => seats.some(other => other !== seat && sameBody(other.body, seat.body))).length,
+    skippedEvidence: host.evidence.length - deliveries.length,
   };
   const sourceToken = legacySourceToken(database);
-  return { standing: seats.length, seats, leaseGenerations, sourceToken, counts,
-    deliveries: planLegacyDeliveries(host.evidence, seats, driver) };
+  return { standing: standingCount, seats, leaseGenerations, sourceToken, counts, deliveries };
 }
 function legacyPayloadHash(payload: string): string {
   return createHash('sha256').update(payload).digest('hex');
@@ -388,52 +395,50 @@ function legacyDeliveryPayload(source: LegacyDeliveryEvidence, current?: WakeAdd
 
 function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats: readonly Seat[], driver: ReturnType<typeof createSqliteDriver>): LegacyDelivery[] {
   const byGroup = new Map<string, Array<Omit<LegacyDelivery, 'attemptN'> & { readonly attemptN?: number }>>();
-  const tokens = new Set<string>(), completedBodies = new Map<string, string>();
+  const completedBodies = new Map<string, string | null>();
   for (const source of records) {
-    const participant = driver.participant(source.participant);
-    const native = source.kind === 'wake' && source.nativeDelivery !== undefined;
-    if (!participant?.joined && !native) continue; // Noncritical completed diagnostics are not imported.
-    assertSource(participant?.joined || participant?.done, `native delivery evidence for ${source.participant} has no unique participant.`);
-    const joined = establishingJoin(driver, participant);
-    const generation = formatActivityId(joined);
-    const seat = seats.find(seat => nameKey(seat.participant) === nameKey(participant.name));
-    if (participant.joined) assertSource(seat !== undefined && seat.body.session === source.session
-      && source.agent === seat.body.agent && (source.channel === undefined || source.channel === seat.body.channel),
-      `delivery evidence for standing participant ${source.participant} has no unique owner.`);
-    if (native && seat !== undefined) assertSource((source.nativeDelivery as Record<string, unknown>)?.harness ===
-      (seat.body.channel === 'claude-code' ? 'claude' : seat.body.channel === 'opencode' ? 'opencode' : undefined), 'native delivery harness conflicts with its owner body.');
-    const index = parseActivityId(source.activity);
-    assertSource(index !== undefined && index > joined && driver.activity(index)?.kind === 'say'
-      && driver.directedAt(participant.name, index) !== undefined, `delivery evidence for ${source.participant} has no unique activity in its join generation.`);
-    const payload = legacyDeliveryPayload(source, seat?.wakeAddress);
-    if (participant.done) {
-      const done = driver.activityHeads({ actors: [participant.name], kinds: ['done'] }, { edge: 'newest', limit: 1 }).items[0];
-      assertSource(done !== undefined && index < done.index && source.session.length > 0, `native delivery evidence for ${source.participant} has no unique completed generation.`);
-      const harness = (source.nativeDelivery as Record<string, unknown>).harness;
-      const body = { channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session,
-        ...(source.agent === undefined ? {} : { agent: source.agent }) } as Seat['body'];
-      validateBody(body);
-      const coordinate = JSON.stringify([body.channel, body.session, body.agent]);
-      const previous = completedBodies.get(nameKey(participant.name));
-      assertSource(previous === undefined || previous === coordinate, 'completed native delivery owner mapping is ambiguous.');
-      completedBodies.set(nameKey(participant.name), coordinate);
-    }
+    // Validate structure even when no surviving owner can accept this row.
     assertSource(source.kind === 'wake' || source.kind === 'presentation', 'delivery evidence kind is unsupported.');
     assertSource(['dispatching', 'accepted', 'failed', 'unknown', 'released', 'presented', 'clipped'].includes(source.outcome), 'delivery evidence outcome is unsupported.');
+    assertSource(source.session.length > 0
+      && (source.channel === undefined || typeof source.channel === 'string' && source.channel.length > 0)
+      && (source.agent === undefined || typeof source.agent === 'string' && source.agent.length > 0), 'delivery evidence body is malformed.');
+    const index = parseActivityId(source.activity);
+    assertSource(index !== undefined, 'delivery evidence activity id is malformed.');
     const at = sourceFinite(source.at);
     const expiresAt = source.expiresAt === undefined ? undefined : sourceFinite(source.expiresAt);
     const claimToken = source.claimToken;
     assertSource(claimToken === undefined || typeof claimToken === 'string' && claimToken.length > 0, 'delivery claim token is malformed.');
-    if (claimToken !== undefined) {
-      assertSource(!tokens.has(claimToken), 'delivery claim token is ambiguous.');
-      tokens.add(claimToken);
+    assertSource(source.attemptN === undefined || Number.isSafeInteger(source.attemptN) && source.attemptN >= 0, 'delivery attempt number is malformed.');
+    const participant = driver.participant(source.participant);
+    const seat = seats.find(seat => nameKey(seat.participant) === nameKey(source.participant));
+    const payload = legacyDeliveryPayload(source, seat?.wakeAddress);
+    const native = source.kind === 'wake' && source.nativeDelivery !== undefined;
+    if (!participant?.joined && !(participant?.done && native)) continue;
+    if (participant.joined && (seat === undefined || seat.body.session !== source.session
+      || source.agent !== seat.body.agent || source.channel !== undefined && source.channel !== seat.body.channel)) continue;
+    const harness = (source.nativeDelivery as Record<string, unknown> | undefined)?.harness;
+    if (native && seat !== undefined && harness !==
+      (seat.body.channel === 'claude-code' ? 'claude' : seat.body.channel === 'opencode' ? 'opencode' : undefined)) continue;
+    const joined = establishingJoin(driver, participant);
+    const generation = formatActivityId(joined);
+    if (index <= joined || driver.activity(index)?.kind !== 'say' || driver.directedAt(participant.name, index) === undefined) continue;
+    if (participant.done) {
+      const done = driver.activityHeads({ actors: [participant.name], kinds: ['done'] }, { edge: 'newest', limit: 1 }).items[0];
+      if (done === undefined || index >= done.index) continue;
+      const body = { channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session,
+        ...(source.agent === undefined ? {} : { agent: source.agent }) } as Seat['body'];
+      if (source.channel !== undefined && source.channel !== body.channel) continue;
+      const coordinate = JSON.stringify([body.channel, body.session, body.agent]);
+      const key = nameKey(participant.name), previous = completedBodies.get(key);
+      completedBodies.set(key, previous === undefined || previous === coordinate ? coordinate : null);
     }
     const group = JSON.stringify([nameKey(participant.name), generation, index, source.kind]);
     const row = {
       participant: participant.name,
       generation,
       index,
-      kind: source.kind as LegacyDelivery['kind'],
+      kind: source.kind,
       outcome: source.outcome as LegacyDelivery['outcome'],
       at,
       ...(expiresAt === undefined ? {} : { expiresAt }),
@@ -447,13 +452,16 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
   }
   const deliveries: LegacyDelivery[] = [];
   for (const rows of byGroup.values()) {
-    const attempts = rows.map(row => row.attemptN);
-    const explicit = attempts.filter((attempt): attempt is number => attempt !== undefined);
-    assertSource(explicit.every((attempt) => Number.isSafeInteger(attempt) && attempt >= 0) && new Set(explicit).size === explicit.length, 'delivery attempt mapping is ambiguous.');
-    if (explicit.length !== rows.length) assertSource(rows.length === 1 && explicit.length === 0, 'delivery attempt mapping is ambiguous.');
+    if (completedBodies.get(nameKey(rows[0].participant)) === null) continue;
+    const explicit = rows.flatMap(row => row.attemptN === undefined ? [] : [row.attemptN]);
+    if (new Set(explicit).size !== explicit.length || explicit.length !== rows.length && rows.length !== 1) continue;
     rows.forEach((row, index) => deliveries.push({ ...row, attemptN: explicit.length === 0 ? 0 : explicit[index] as number }));
   }
-  return deliveries;
+  const tokens = new Map<string, number>();
+  for (const row of deliveries) {
+    if (row.claimToken !== undefined) tokens.set(row.claimToken, (tokens.get(row.claimToken) ?? 0) + 1);
+  }
+  return deliveries.filter(row => row.claimToken === undefined || tokens.get(row.claimToken) === 1);
 }
 
 const V4_REBUILT_TABLES = ['square_meta', 'catch_leases'] as const;

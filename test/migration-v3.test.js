@@ -4,9 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 
-import { createArtifactPort } from '../dist/artifact.js';
+import { createArtifactPort, diagnoseSquareFile } from '../dist/artifact.js';
+import { Square } from '../dist/square-api.js';
+import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
 import { observeClaudeDelivery, nativePayload } from '../dist/claude-delivery.js';
 import { CURRENT_USER_VERSION } from '../dist/square-sqlite.js';
 import { migrateSquareFile } from '../dist/square-migration.js';
@@ -101,15 +104,14 @@ function assertRefusedWithoutPublishing(location, env, before, ledgerBefore) {
   assert.equal(rows(location, "SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='seats'")[0].n, 0);
 }
 
-test('format-3 conversion imports evidence as current Claude correlation and retains unlisten', async (t) => {
+test('format-3 conversion imports route-derived Claude correlation and retains unlisten', async (t) => {
   const token = 'legacy-claude-token';
   const messageId = 'legacy-native-message';
   const { location, env, presence } = fixture(t);
   const preview = legacyPreview(location, 'Bob',
     { actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' });
   const legacy = nativeRecord(location, token, messageId, preview);
-  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence);
-
+  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence.filter(row => row.participant !== 'Bob'));
   const before = digest(location);
   const oldActs = rows(location, 'SELECT act_index,kind,actor_json,payload_json FROM activities ORDER BY act_index');
   const result = await migrateSquareFile(location, undefined, env);
@@ -198,35 +200,236 @@ test('format-3 migration selects the latest owner by effectiveAt then seq withou
   } finally { await artifact.close(); }
 });
 
-test('format-3 migration refuses a standing participant with no current legacy owner', async (t) => {
-  const { location, env, presence } = fixture(t);
-  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [], presence.filter((row) => row.participant !== 'Bob'));
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /owner|presence|body|route|evidence/i);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
-});
-
-test('format-3 migration refuses an owner Body that disagrees with the route Body', async (t) => {
-  const { location, env, presence } = fixture(t);
-  const custom = [
-    ...presence.filter((row) => row.participant !== 'Bob'),
-    presenceRecord(location, 'Bob', 'bob-other-session', 'claude-code', 1015),
+test('format-3 migration preserves shared seats and leaves missing or conflicting ownership inert', async (t) => {
+  const routes = defaultRoutes().filter(route => route.participant !== 'Bob');
+  routes[1] = { ...routes[1], channel: routes[0].channel, session: routes[0].session };
+  routes.push(
+    { participant: 'Dana', session: 'dana-session', channel: 'paseo', kind: 'paseo', address: { agentId: 'dana' } },
+    { participant: 'Eve', session: 'eve-route', channel: 'codex', kind: 'paseo', address: { agentId: 'eve' } },
+    { participant: 'Finn', session: 'finn-one', channel: 'codex', kind: 'paseo', address: { agentId: 'finn' } },
+    { participant: 'Finn', session: 'finn-two', channel: 'codex', kind: 'paseo', address: { agentId: 'finn' } },
+  );
+  const { location, env, presence } = fixture(t, { routes });
+  const database = new DatabaseSync(location);
+  try {
+    // Unowned Bob retains outgoing listen and ignore, an existing receipt and a catch lease.
+    database.exec(`
+      INSERT INTO activities VALUES(8,1016,'listen','"Bob"','"bob"',NULL,NULL,'{"target":"Alice"}');
+      INSERT INTO activities VALUES(9,1017,'ignore','"Bob"','"bob"',NULL,NULL,'{"target":"Cara"}');
+      INSERT INTO attention VALUES('"bob"','"alice"','"Alice"','listen',8);
+      INSERT INTO attention VALUES('"bob"','"cara"','"Cara"','ignore',9);
+      UPDATE participants SET last_active_at=1017 WHERE name_key_json='"bob"';
+      INSERT INTO activities VALUES(10,1018,'join','"Dana"','"dana"',NULL,NULL,'{}');
+      INSERT INTO participants VALUES('"dana"','"Dana"',10,1,0,0,1018,10);
+      INSERT INTO activities VALUES(11,1019,'join','"Eve"','"eve"',NULL,NULL,'{}');
+      INSERT INTO participants VALUES('"eve"','"Eve"',11,1,0,0,1019,11);
+      INSERT INTO activities VALUES(12,1020,'join','"Finn"','"finn"',NULL,NULL,'{}');
+      INSERT INTO participants VALUES('"finn"','"Finn"',12,1,0,0,1020,12);
+      INSERT INTO activities VALUES(13,1021,'say','"Alice"','"alice"',NULL,NULL,'{"body":"Dana, you here?","mentions":["Dana"]}');
+      INSERT INTO landed_audience VALUES(13,'"dana"',0,'mention');
+      INSERT INTO landed_audience VALUES(13,'"bob"',1,'attention');
+      UPDATE participants SET say_count=3,last_active_at=1021 WHERE name_key_json='"alice"';
+      UPDATE square_meta SET next_act_index=14,revision=15;
+    `);
+  } finally { database.close(); }
+  const records = [
+    nativeRecord(location, 'unowned-token', 'unowned-message', 'legacy preview'),
+    { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6', kind: 'presentation', outcome: 'presented', at: 1016 },
+    nativeRecord(location, 'mismatch-token', 'mismatch-message', 'legacy preview', { participant: 'Eve', session: 'eve-owner' }),
+    nativeRecord(location, 'conflicting-token', 'conflicting-message', 'legacy preview', { participant: 'Finn', session: 'finn-one' }),
+    { v: 1, location, participant: 'Dana', session: 'obsolete-dana', activity: 'act/13', kind: 'wake', outcome: 'unknown', at: 1021 },
+    { v: 1, location, participant: 'Dana', session: 'dana-session', activity: 'act/13', kind: 'presentation', outcome: 'presented', at: 1021 },
   ];
-  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [], custom);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /owner|route|body|presence/i);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, records, [
+    ...presence.filter(row => row.participant === 'Alice'),
+    presenceRecord(location, 'Eve', 'eve-owner', 'codex', 1020),
+  ]);
+  const ledgerBefore = ledgerDigest(env);
+  const before = Object.fromEntries(['activities', 'participants', 'landed_audience', 'receipts', 'attention']
+    .map(table => [table, rows(location, `SELECT * FROM ${table} ORDER BY 1,2`)]));
+
+  const leaseBefore = rows(location, 'SELECT owner_json,lease_id_json,heartbeat_at,expires_at,filter_json FROM catch_leases');
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.deepEqual(result, { status: 'migrated', standing: 6, counts: {
+    activities: 14, receipts: 1, leases: 1, routes: 6, recoveredSeats: 3, unownedStanding: 3, sharedBodySeats: 2, skippedEvidence: 5,
+  } });
+  for (const [table, original] of Object.entries(before)) {
+    assert.deepEqual(rows(location, `SELECT * FROM ${table} ORDER BY 1,2`), original, `${table} is unchanged`);
+  }
+  assert.deepEqual(rows(location, 'SELECT owner_json,lease_id_json,heartbeat_at,expires_at,filter_json FROM catch_leases'), leaseBefore);
+  assert.equal(rows(location, 'SELECT next_act_index FROM square_meta')[0].next_act_index, 14);
+  assert.equal(rows(location, 'SELECT revision FROM square_meta')[0].revision, 15);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 1);
+  assert.equal(ledgerDigest(env), ledgerBefore);
+
+  const artifact = createArtifactPort(location);
+  try {
+    const { value } = await artifact.read(facts => ({
+      alice: facts.seat('Alice'), cara: facts.seat('Cara'), dana: facts.seat('Dana'), bob: facts.seat('Bob'),
+      eve: facts.seat('Eve'), finn: facts.seat('Finn'),
+      sharedSeats: facts.seatsForBody({ channel: 'codex', session: 'alice-session' }),
+      evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6'),
+      danaEvidence: facts.deliveryEvidence('Dana', 'act/10', 'act/13'),
+      pending: facts.directedAt('Bob', 6),
+    }));
+    assert.deepEqual(value.alice.body, { channel: 'codex', session: 'alice-session' });
+    assert.equal(value.alice.generation, 'act/0');
+    assert.deepEqual(value.cara.body, value.alice.body);
+    assert.equal(value.cara.generation, 'act/2');
+    assert.equal(value.alice.wakeAddress.address.agentId, 'alice');
+    assert.equal(value.cara.wakeAddress.address.agentId, 'cara');
+    assert.deepEqual(value.sharedSeats.map(seat => seat.participant).sort(), ['Alice', 'Cara']);
+    assert.deepEqual(value.dana.body, { channel: 'paseo', session: 'dana-session' });
+    assert.equal(value.dana.generation, 'act/10');
+    assert.equal(value.bob, undefined);
+    assert.equal(value.eve, undefined, 'owner/route disagreement grants neither side a seat');
+    assert.equal(value.finn, undefined, 'conflicting routes grant neither side a seat');
+    assert.deepEqual(value.evidence, [], 'unowned native and presentation evidence is skipped, not completed');
+    assert.deepEqual(value.danaEvidence.map(row => row.kind), ['presentation'], 'seat-session mismatch is skipped but agreeing evidence is imported');
+    assert.equal(value.pending.recipient, 'Bob', 'the unowned name still has historical unread attention');
+    assert.deepEqual(await sweepPending({ artifact, location, now: 3000, graceMs: 0, limit: 10 }), [13]);
+    assert.deepEqual(await deliverPending({ artifact, location, activity: 'act/6', now: 3000,
+      transport: { async attempt() { assert.fail('unowned standing names cannot receive a delivery'); } },
+    }), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  } finally { await artifact.close(); }
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 6 });
+  const square = await Square.at({ path: location, env, body: { channel: 'test', session: 'not-an-owner' } });
+  try {
+    assert.equal((await square.status()).activeCount, 6);
+    assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').state, 'active');
+    assert.equal((await square.history({ limit: null })).activities.length, 14);
+    await assert.rejects((await square.participant('Bob')).done(), error => error.code === 'already_joined');
+  } finally { await square.close(); }
+  const current = digest(location);
+  assert.deepEqual(await migrateSquareFile(location, undefined, env), { status: 'already-current', standing: 6 });
+  assert.equal(digest(location), current);
 });
 
-test('format-3 migration refuses a route Body shared by two owners', async (t) => {
+test('format-3 migration without a ledger recovers one body with different wake addresses', async t => {
+  const routes = defaultRoutes();
+  routes.push({ ...routes[0], address: { agentId: 'another-alice-address' } });
+  const { location, env } = fixture(t, { routes });
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.recoveredSeats, 3);
+  assert.equal(result.counts.unownedStanding, 0);
+  const artifact = createArtifactPort(location);
+  try {
+    const { value } = await artifact.read(facts => facts.seat('Alice'));
+    assert.deepEqual(value.body, { channel: 'codex', session: 'alice-session' });
+    assert.equal(value.wakeAddress, undefined, 'one body with different addresses keeps its seat without a wake address');
+  } finally { await artifact.close(); }
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
+});
+
+test('format-3 migration leaves a name with conflicting routes unowned, with or without a ledger owner', async t => {
+  for (const hasOwner of [false, true]) {
+    const routes = defaultRoutes();
+    routes.push({ ...routes[1], session: 'bob-other-session' });
+    const { location, env, presence } = fixture(t, { routes });
+    writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT,
+      [nativeRecord(location, 'unowned-token', 'unowned-message', 'legacy preview')],
+      hasOwner ? presence.filter(row => row.participant === 'Bob').slice(0, 1) : []);
+    const before = rows(location, 'SELECT * FROM participants ORDER BY 1');
+    const result = await migrateSquareFile(location, undefined, env);
+    assert.equal(result.counts.recoveredSeats, 2);
+    assert.equal(result.counts.unownedStanding, 1);
+    assert.equal(result.counts.sharedBodySeats, 0);
+    assert.deepEqual(rows(location, 'SELECT * FROM participants ORDER BY 1'), before);
+    assert.equal(rows(location, `SELECT COUNT(*) AS n FROM seats WHERE participant_key_json='"bob"'`)[0].n, 0);
+    assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+    assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
+  }
+});
+
+test('format-3 migration keeps every shared-body name whether or not another sharer has a ledger owner', async t => {
+  for (const otherHasOwner of [false, true]) {
+    const routes = defaultRoutes();
+    routes[0] = { ...routes[0], channel: routes[1].channel, session: routes[1].session };
+    const { location, env, presence } = fixture(t, { routes });
+    writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [], otherHasOwner ? presence.filter(row => row.participant === 'Alice') : []);
+    const result = await migrateSquareFile(location, undefined, env);
+    assert.equal(result.counts.recoveredSeats, 3);
+    assert.equal(result.counts.unownedStanding, 0);
+    assert.equal(result.counts.sharedBodySeats, 2);
+    assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
+  }
+});
+
+test('format-3 CLI reports all four counts from a large disposable ownership fixture', async t => {
+  // Disposable evidence categories, not a copy of the live artifact. Body groups
+  // are synthetic; seven disagreements fall inside one shared group.
+  const bodyNumber = ordinal => ordinal < 204 ? Math.floor(ordinal / 12) : ordinal < 219 ? 17 : ordinal - 201;
+  const routes = ['Alice', 'Bob'].map(participant => ({ participant, session: 'body-0', channel: 'codex', kind: 'paseo', address: { agentId: participant } }));
+  const { location, env, presence } = fixture(t, { routes });
+  const owners = presence.filter(row => row.participant === 'Alice');
+  const database = new DatabaseSync(location);
+  try {
+    const join = database.prepare('INSERT INTO activities VALUES(?,?,?,?,?,NULL,NULL,?)');
+    const participant = database.prepare('INSERT INTO participants VALUES(?,?,?,1,0,0,?,?)');
+    const route = database.prepare('INSERT INTO routes VALUES(?,?,?,?,?,?)');
+    // 3 agreeing owners + 657 route-only + 5 owner mismatches + 5 conflicting routes
+    // + 417 names without evidence = 1087 standing names.
+    for (let i = 0; i < 1084; i++) {
+      const name = `Participant-${i}`, index = 8 + i, at = 2000 + i;
+      join.run(index, at, 'join', JSON.stringify(name), JSON.stringify(name.toLowerCase()), '{}');
+      participant.run(JSON.stringify(name.toLowerCase()), JSON.stringify(name), index, at, index);
+      if (i < 668) {
+        const session = `body-${bodyNumber(i + 2)}`;
+        route.run(2 + i, JSON.stringify(name.toLowerCase()), JSON.stringify(session), 'paseo', at,
+          JSON.stringify({ location, participant: name, channel: 'codex', address: { agentId: name }, extra: {} }));
+        if (i < 9) owners.push(presenceRecord(location, name, i >= 2 && i <= 6 ? `owner-${name}` : session, 'codex', at));
+        if (i === 7 || i === 8 || i >= 665) {
+          route.run(2000 + i, JSON.stringify(name.toLowerCase()), JSON.stringify(`conflicting-${name}`), 'paseo', at,
+            JSON.stringify({ location, participant: name, channel: 'codex', address: { agentId: name }, extra: {} }));
+        }
+      }
+    }
+    database.prepare('UPDATE square_meta SET next_act_index=1092,revision=1093').run();
+  } finally { database.close(); }
+  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [
+    { v: 1, location, participant: 'Bob', session: 'obsolete-body', activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1016 },
+  ], owners);
+  const output = execFileSync(process.execPath, ['dist/square.js', '--location', location, 'migrate'], { env, encoding: 'utf8' });
+  assert.match(output, /660 recovered seats · 427 unowned standing · 212 shared-body seats · 1 skipped evidence/);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM seats')[0].n, 660);
+  assert.equal(rows(location, 'SELECT COUNT(DISTINCT session_json) AS n FROM seats')[0].n, 466);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM participants WHERE joined=1 AND done=0')[0].n, 1087);
+  assert.equal(rows(location, "SELECT COUNT(*) AS n FROM activities WHERE kind='done'")[0].n, 0);
+  assert.equal(rows(location, 'SELECT next_act_index FROM square_meta')[0].next_act_index, 1092);
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 1087 });
+  execFileSync(process.execPath, ['dist/square.js', '--location', location, 'doctor'], { env, encoding: 'utf8' });
+});
+
+test('format-3 routes remain location-bound when a disposable artifact is copied elsewhere', async t => {
+  const { root, location, env } = fixture(t);
+  const original = digest(location);
+  const copy = path.join(root, 'COPY.square');
+  fs.copyFileSync(location, copy);
+  const result = await migrateSquareFile(copy, undefined, env);
+  assert.equal(result.standing, 3);
+  assert.equal(result.counts.recoveredSeats, 0);
+  assert.equal(result.counts.unownedStanding, 3);
+  assert.equal(result.counts.sharedBodySeats, 0);
+  assert.deepEqual(await diagnoseSquareFile(copy), { problems: [], standingCount: 3 });
+  assert.equal(digest(location), original, 'the source fixture is untouched');
+});
+
+test('format-3 migration preserves both ledger-backed names sharing a body', async (t) => {
   const routes = defaultRoutes();
   routes[0] = { ...routes[0], channel: 'paseo', session: 'shared-session' };
   routes[2] = { ...routes[2], channel: 'paseo', session: 'shared-session' };
   const { location, env, presence } = fixture(t, { routes });
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [], presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /shared|owner|route|body/i);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.recoveredSeats, 3);
+  assert.equal(result.counts.unownedStanding, 0);
+  assert.equal(result.counts.sharedBodySeats, 2);
+  const artifact = createArtifactPort(location);
+  try {
+    const { value } = await artifact.read(facts => facts.seatsForBody({ channel: 'paseo', session: 'shared-session' }));
+    assert.deepEqual(value.map(seat => [seat.participant, seat.generation]).sort(), [['Alice', 'act/0'], ['Cara', 'act/2']]);
+  } finally { await artifact.close(); }
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 });
 
 test('format-3 migration keeps only retired Claude correlation for a done participant', async (t) => {
@@ -245,6 +448,7 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   const result = await migrateSquareFile(location, undefined, env);
   assert.equal(result.status, 'migrated');
   assert.equal(result.standing, 3);
+  assert.equal(result.counts.skippedEvidence, 1, 'completed non-native diagnostics count as skipped');
 
   const artifact = createArtifactPort(location);
   try {
@@ -286,7 +490,7 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   assert.equal(rows(location, "SELECT COUNT(*) AS n FROM receipts WHERE owner_json='\"dana\"'")[0].n, 0);
 });
 
-test('format-3 migration refuses a done native correlation outside the verified generation', async (t) => {
+test('format-3 migration skips a done native correlation outside the verified generation', async (t) => {
   const { location, env, presence } = fixture(t, { doneNative: true });
   const preview = legacyPreview(location, 'Dana',
     { actIndex: 9, actor: 'Alice', at: 1017, route: 'mention', body: 'dana, you here?' });
@@ -294,12 +498,15 @@ test('format-3 migration refuses a done native correlation outside the verified 
     participant: 'Dana', session: 'dana-session', activity: 'act/6', at: 1014,
   });
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /generation|activity|ambiguous|owner|done|direct|evidence/i);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  const ledgerBefore = ledgerDigest(env);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.skippedEvidence, 1);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+  assert.equal(ledgerDigest(env), ledgerBefore);
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 });
 
-test('format-3 migration refuses native evidence for an unknown participant', async (t) => {
+test('format-3 migration skips native evidence for an unknown participant', async (t) => {
   const { location, env, presence } = fixture(t);
   const preview = legacyPreview(location, 'Bob',
     { actIndex: 6, actor: 'Alice', at: 1014, route: 'attention', body: 'v3 pending attention' });
@@ -307,9 +514,10 @@ test('format-3 migration refuses native evidence for an unknown participant', as
     participant: 'Ghost', session: 'ghost-session', activity: 'act/6', at: 1016,
   });
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /participant|owner|join|ambiguous|unknown|evidence/i);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.skippedEvidence, 1);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 });
 
 test('format-3 migration refuses a done native correlation without a verified join', async (t) => {
@@ -328,30 +536,29 @@ test('format-3 migration refuses a done native correlation without a verified jo
   assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
 });
 
-test('standing migration preserves a known agent and refuses top-level evidence for that child body', async t => {
+test('standing migration preserves a known agent and skips evidence for a different agent', async t => {
   const routes = defaultRoutes();
   routes[1] = { ...routes[1], agent: 'child' };
   const { location, env, presence } = fixture(t, { routes });
   const legacy = { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6',
     kind: 'wake', outcome: 'unknown', at: 1016, claimToken: 'top-level-token' };
-  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [legacy], presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /no unique owner/);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
-  const ledger = new DatabaseSync(path.join(env.SQUARE_HOST_LEDGER_ROOT, 'host-ledger.sqlite'));
-  try {
-    const stored = JSON.parse(ledger.prepare('SELECT row_json FROM host_evidence').get().row_json);
-    ledger.prepare('UPDATE host_evidence SET row_json=?').run(JSON.stringify({ ...stored, agent: 'child' }));
-  } finally { ledger.close(); }
-  assert.equal((await migrateSquareFile(location, undefined, env)).status, 'migrated');
+  writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [
+    legacy,
+    { ...legacy, agent: 'child', channel: 'codex', claimToken: 'wrong-channel-token' },
+    { ...legacy, agent: 'child', claimToken: 'wrong-harness-token', nativeDelivery: { harness: 'opencode', inputId: 'legacy-input', payload: 'legacy preview' } },
+    { ...legacy, agent: 'child', claimToken: 'child-token' },
+  ], presence);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.skippedEvidence, 3);
   const artifact = createArtifactPort(location);
   try {
-    assert.deepEqual((await artifact.read(facts => facts.seat('Bob').body)).value,
-      { channel: 'claude-code', session: 'bob-session', agent: 'child' });
+    const { value } = await artifact.read(facts => ({ body: facts.seat('Bob').body, evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6') }));
+    assert.deepEqual(value.body, { channel: 'claude-code', session: 'bob-session', agent: 'child' });
+    assert.deepEqual(value.evidence.map(row => row.claimToken), ['child-token']);
   } finally { await artifact.close(); }
 });
 
-test('standing migration refuses evidence from before the current last join', async t => {
+test('standing migration skips evidence from before the current last join', async t => {
   const { location, env, presence } = fixture(t);
   const database = new DatabaseSync(location);
   try {
@@ -364,21 +571,58 @@ test('standing migration refuses evidence from before the current last join', as
   } finally { database.close(); }
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [{ v: 1, location, participant: 'Bob', session: 'bob-session',
     activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1016, claimToken: 'old-generation-token' }], presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /join generation/);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.skippedEvidence, 1);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
 });
 
-test('format-3 migration refuses ambiguous imported attempt ordering without publishing', async (t) => {
-  const { location, env, presence } = fixture(t);
-  const records = [
-    { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1016, claimToken: 'token-a' },
-    { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1017, claimToken: 'token-b' },
-  ];
+test('format-3 migration skips all evidence in ambiguous attempt or claim-token mappings', async (t) => {
+  for (const ambiguity of ['missing-attempts', 'duplicate-attempts', 'duplicate-token']) {
+    const { location, env, presence } = fixture(t);
+    const records = [
+      { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1016, claimToken: 'token-a' },
+      { v: 1, location, participant: 'Bob', session: 'bob-session', activity: 'act/6', kind: 'wake', outcome: 'unknown', at: 1017, claimToken: 'token-b' },
+    ];
+    if (ambiguity === 'duplicate-attempts') records.forEach(row => { row.attemptN = 1; });
+    if (ambiguity === 'duplicate-token') {
+      records[1].activity = 'act/5';
+      records[1].claimToken = records[0].claimToken;
+    }
+    writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, records, presence);
+    const result = await migrateSquareFile(location, undefined, env);
+    assert.equal(result.counts.skippedEvidence, 2, ambiguity);
+    assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+    assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
+  }
+});
+
+test('format-3 migration skips every ambiguous completed-body mapping rather than selecting one', async t => {
+  const { location, env, presence } = fixture(t, { doneNative: true });
+  const records = ['one', 'two'].map(session => nativeRecord(location, `retired-${session}`, `message-${session}`, 'legacy preview', {
+    participant: 'Dana', session, activity: 'act/9',
+  }));
   writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, records, presence);
-  const before = digest(location), ledgerBefore = ledgerDigest(env);
-  await assert.rejects(migrateSquareFile(location, undefined, env), /ambiguous/);
-  assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  const result = await migrateSquareFile(location, undefined, env);
+  assert.equal(result.counts.skippedEvidence, 2);
+  assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM delivery_evidence')[0].n, 0);
+  assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
+});
+
+test('format-3 migration refuses structurally malformed evidence even for an unowned name without writing', async t => {
+  for (const extra of [
+    { nativeDelivery: { harness: 'claude', payload: '', endpoint: CLAUDE_ENDPOINT } },
+    { activity: 'act/not-an-index' },
+    { outcome: 'unsupported' },
+    { agent: 42 },
+    { attemptN: -1 },
+  ]) {
+    const { location, env, presence } = fixture(t, { routes: defaultRoutes().filter(route => route.participant !== 'Bob') });
+    writeLegacyLedger(env.SQUARE_HOST_LEDGER_ROOT, [nativeRecord(location, 'malformed-token', 'message', 'legacy preview', extra)], presence);
+    const before = digest(location), ledgerBefore = ledgerDigest(env);
+    await assert.rejects(migrateSquareFile(location, undefined, env), /malformed|unsupported/);
+    assertRefusedWithoutPublishing(location, env, before, ledgerBefore);
+  }
 });
 
 test('format-3 conversion rolls back all publication after a transactional failure', async (t) => {

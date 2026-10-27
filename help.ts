@@ -102,8 +102,8 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
-    summary: 'Convert an existing version 2 or 3 square to current format 4 in place.',
-    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'A version 2 or 3 square is accepted; version 1, unrelated or unsupported artifacts are refused without a write. There is no --check, --backup or --force.'],
+    summary: 'Convert a supported older square to the current format in place.',
+    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2, 3 and 4 are accepted; version 1, unrelated or unsupported artifacts are refused without a write. Names whose own owner and route evidence agrees may share a body; names with missing or conflicting ownership stay standing without write or delivery authority. Migration reports recovered seats, unowned standing names, shared-body seats and skipped evidence. There is no --check, --backup or --force.'],
   },
 ];
 
