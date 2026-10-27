@@ -83,8 +83,10 @@ its `history` delegates to the same Square history operation.
   body may carry `{}`; an omitted, empty or whitespace-only body requires non-empty metadata. Metadata-only
   says omit `body` from public activity records. Invalid objects, cycles, unsupported values and oversized
   metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
-  catch, status/latest, unread projections and stream records,
-  including stdio and structured tools. It does not affect mentions, replies, listening, audience, delivery,
+  catch, status/latest, unread projections and stream records through the SDK, stdio, CLI and stream.
+  MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
+  `metadata` argument, and every shared tool receipt omits metadata, so tool history/catch results carry
+  the same activities without it. Metadata does not affect mentions, replies, listening, audience, delivery,
   ordering, consumption or permissions. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
   metadata JSON. There is no metadata filter, query language or index; CLI `--metadata <json>` is the only

@@ -158,9 +158,52 @@ test('CLI metadata input and retry keep the original JSON without a body redirec
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('structured express tool accepts optional body and metadata together', () => {
+/** Tool receipts are what agents see; a metadata fact must not survive anywhere inside one. */
+function assertNoMetadata(value, at = 'receipt') {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoMetadata(item, `${at}[${index}]`));
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  assert.equal(Object.hasOwn(value, 'metadata'), false, `${at} still carries metadata`);
+  for (const [key, item] of Object.entries(value)) assertNoMetadata(item, `${at}.${key}`);
+}
+
+test('the shared express tool requires a body and rejects metadata input', () => {
   const definition = SQUARE_TOOLS.find(tool => tool.name === 'express');
   assert.ok(definition);
-  const parsed = definition.inputSchema.parse({ metadata: { tool: true } });
-  assert.deepEqual(parsed.metadata, { tool: true });
+  const refused = definition.inputSchema.safeParse({ metadata: { tool: true } });
+  assert.equal(refused.success, false);
+  assert.match(JSON.stringify(refused.error.issues), /metadata/);
+  assert.equal(definition.inputSchema.safeParse({}).success, false);
+  assert.equal(definition.inputSchema.parse({ body: 'words' }).body, 'words');
+});
+
+test('shared history and directed catch receipts keep the activities but no metadata', async () => {
+  const square = await localSquare();
+  try {
+    const alice = (await square.join('Alice')).participant;
+    await square.join('Bob');
+    const metadata = { nested: { wake: true }, values: [1, null, 'text'] };
+    const directed = await alice.express({ metadata, mentions: ['Bob'], force: true });
+    assert.deepEqual(directed.activity.metadata, metadata);
+    const shared = name => SQUARE_TOOLS.find(tool => tool.name === name);
+
+    const caught = await shared('catch').run(square, { as: 'Bob' }, { observe: true });
+    assert.deepEqual(caught.activities.map(activity => activity.id), [directed.activity.id]);
+    assert.equal(caught.activities[0].body, undefined);
+    assert.deepEqual(caught.activities[0].mentions, ['Bob']);
+    assertNoMetadata(caught);
+    assert.doesNotMatch(JSON.stringify(caught), /"metadata"/);
+    assert.match(shared('catch').render(caught, { as: 'Bob' }), /structured activity/);
+
+    const history = await shared('history').run(square, {}, { observe: true });
+    assert.equal(history.activities.at(-1).id, directed.activity.id);
+    assertNoMetadata(history);
+    assert.match(shared('history').render(history, {}), /structured activity/);
+
+    // Receipts are copies: the domain activity and SDK reads keep the exact metadata.
+    assert.deepEqual(directed.activity.metadata, metadata);
+    assert.deepEqual((await square.history({ limit: null })).activities.at(-1)?.metadata, metadata);
+  } finally { await square.close(); }
 });

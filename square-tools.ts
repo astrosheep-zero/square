@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { isSquareError } from './model.js';
 import { CATCH_DEFAULT_LIMIT, type Square } from './square-api.js';
 import type {
-  ActivityId, ActivityMetadata, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult, JoinResult,
+  ActivityId, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult, JoinResult,
   LifecycleResult, ListenerChangeResult, ListeningResult, OperationControl, OperationFailureDetail,
   ParticipantsResult, StatusResult,
 } from './square-facade.js';
@@ -44,15 +44,42 @@ function rendering<T>(render: (result: T, args: JsonObject) => string | undefine
   return (result, args) => render(result as unknown as T, args);
 }
 
+/**
+ * Tool receipts are the one machine surface without activity metadata: a receipt copy drops every
+ * property named `metadata` while domain activities keep theirs for SDK, CLI, stdio and stream readers.
+ */
+function withoutActivityMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutActivityMetadata);
+  if (value === null || typeof value !== 'object') return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'metadata')
+    .map(([key, item]) => [key, withoutActivityMetadata(item)]));
+}
+
+/**
+ * Human text renders from the unfiltered receipt, so metadata-only says keep the placeholder the
+ * CLI prints and every other sentence stays identical. Machines only ever receive the filtered copy.
+ */
+const renderingReceipts = new WeakMap<object, object>();
+
+function renderingReceipt(receipt: JsonObject): JsonObject {
+  return (renderingReceipts.get(receipt) ?? receipt) as JsonObject;
+}
+
 function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S,
   run: (square: Square, args: z.output<z.ZodObject<S>>, control: ToolControl) => Outcome,
   render: ToolRender,
 ): ToolDefinition {
   const inputSchema = z.object({ ...shape, location }).strict();
-  return { name, description, inputSchema, render, run: (square, args, control) => {
-    const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
-    return run(square, operationArgs as z.output<z.ZodObject<S>>, control);
-  } };
+  return { name, description, inputSchema, render: (receipt, args) => render(renderingReceipt(receipt), args),
+    run: async (square, args, control) => {
+      const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
+      const receipt = await run(square, operationArgs as z.output<z.ZodObject<S>>, control);
+      const filtered = withoutActivityMetadata(receipt) as JsonObject;
+      renderingReceipts.set(filtered, receipt);
+      return filtered;
+    } };
 }
 
 export const SQUARE_TOOL_INSTRUCTIONS = 'The catch tool consumes activities. Use history with act/<index> cursors for read-only archive access.';
@@ -64,13 +91,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
       return { ...receipt, participant: participant.name };
     },
     rendering((result: JoinPresentation) => renderJoinResult(result))),
-  tool('express', 'Express a message, structured metadata, or embodied action in the square. Mentions and replies direct attention; bell reaches everyone and keeps body @names literal. Bell cannot combine with explicit mentions. Bare activity is valid even with no listeners.', {
-    as: participant, body: z.string().optional(), metadata: z.record(z.string(), z.unknown()).optional(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(),
+  tool('express', 'Express a message or embodied action in the square. Mentions and replies direct attention; bell reaches everyone and keeps body @names literal. Bell cannot combine with explicit mentions. Bare activity is valid even with no listeners.', {
+    as: participant, body: z.string(), mentions: stringArray.optional(), reach: z.enum(['bell']).optional(),
     reply: activityId.optional(), noMention: z.boolean().optional().describe('Disable body @name scanning; explicit mentions and reply still apply.'),
     force: z.boolean().optional().describe('Speak without first catching unread activity or satisfying attention etiquette.'),
     noWait: z.boolean().optional().describe('Return an error rather than waiting when held or throttled.'),
-  }, async (square, { body, metadata, as, ...options }, control) => {
-    const { delivery: _delivery, ...result } = await (await square.participant(as)).express({ body, metadata: metadata as ActivityMetadata, ...options, ...observation(control) }, control);
+  }, async (square, { body, as, ...options }, control) => {
+    const { delivery: _delivery, ...result } = await (await square.participant(as)).express(body, { ...options, ...observation(control) }, control);
     return result;
   }, rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
   tool('catch', 'Catch and consume activities perceptible to the participant. idle waits for relevant activity or this many milliseconds of quiet; omitted means immediate. id catches one activity and cannot be combined with filters, idle or limit.', {
