@@ -182,7 +182,9 @@ function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: i
   const selected = native[0] ?? paseo;
   if (selected === undefined) return {};
   const body: Body = { channel: selected.channel, session: selected.session };
-  const wakeAddress = paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
+  const wakeAddress: import('../model.js').WakeAddress | undefined = selected.channel === 'codex'
+    ? { kind: 'codex-queue' as const, address: { threadId: selected.session } }
+    : paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
   return { body, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }
 

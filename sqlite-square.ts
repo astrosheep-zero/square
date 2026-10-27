@@ -62,6 +62,11 @@ function rejectUnsentActivity<T>(operation: () => T): T {
   catch (error) { if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true }; throw error; }
 }
 
+/** A generic managed address must not displace the receiver's native registration on reconnect. */
+function canRefreshWakeAddress(current: WakeAddress | undefined, proposed: WakeAddress): boolean {
+  return proposed.kind !== 'paseo' || current === undefined || current.kind === 'paseo';
+}
+
 /** One concrete local resource, including its entry-resolved dependencies and lifetime. */
 export class SqliteSquare {
   private constructor(
@@ -395,7 +400,8 @@ export class SqliteSquare {
         } else if (current?.joined) {
           if (currentSeat === undefined || !sameBody(currentSeat.body, body))
             throw new SquareError('already_joined', `${participantIdentity(participant)} is held by another body; take it over explicitly`);
-          if (this.wakeAddress !== undefined) facts.updateWakeAddress(asSeatRef(currentSeat), this.wakeAddress);
+          if (this.wakeAddress !== undefined && canRefreshWakeAddress(currentSeat.wakeAddress, this.wakeAddress))
+            facts.updateWakeAddress(asSeatRef(currentSeat), this.wakeAddress);
           kind = 'reconnected';
         }
         if (kind !== 'reconnected') {
@@ -431,7 +437,8 @@ export class SqliteSquare {
       if (decision.joinAct === undefined) {
         if (decision.state === 'active' && (seat === undefined || !sameBody(seat.body, body)))
           throw new SquareError('already_joined', `${participantIdentity(decision.joinedName)} is held by another body`);
-        if (decision.state === 'active' && this.wakeAddress !== undefined) facts.updateWakeAddress(asSeatRef(seat!), this.wakeAddress);
+        if (decision.state === 'active' && this.wakeAddress !== undefined && canRefreshWakeAddress(seat!.wakeAddress, this.wakeAddress))
+          facts.updateWakeAddress(asSeatRef(seat!), this.wakeAddress);
       } else {
         facts.land(decision.joinAct);
         seat = facts.seat(decision.joinedName);

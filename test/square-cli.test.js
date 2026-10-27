@@ -37,10 +37,11 @@ test('CLI input derives an explicit body from each harness coordinate', () => {
     const input = inputFor({ [variable]: ` ${session} ` });
     assert.deepEqual(input.body, { channel, session }, variable);
     if (channel === 'paseo') assert.deepEqual(input.wakeAddress, { kind: 'paseo', address: { agentId: session } }, variable);
+    if (channel === 'codex') assert.deepEqual(input.wakeAddress, { kind: 'codex-queue', address: { threadId: session } }, variable);
   }
   const nativeWithPaseo = inputFor({ CODEX_THREAD_ID: 'codex-session', PASEO_AGENT_ID: 'paseo-agent' });
   assert.deepEqual(nativeWithPaseo.body, { channel: 'codex', session: 'codex-session' });
-  assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'paseo', address: { agentId: 'paseo-agent' } });
+  assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'codex-queue', address: { threadId: 'codex-session' } });
   const withoutCoordinate = inputFor({ SQUARE_PARTICIPANT_NAME: 'Alice' });
   assert.equal(Object.hasOwn(withoutCoordinate, 'body'), false);
   assert.equal(Object.hasOwn(withoutCoordinate, 'wakeAddress'), false);

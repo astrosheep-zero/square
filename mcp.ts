@@ -52,6 +52,9 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
                 : baseEnv;
           square = await Square.at({
             ...options, env, body, cwd: claude?.cwd ?? options.cwd,
+            // A call-local Codex thread uses its native queue even when managed by Paseo.
+            wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
+              ? { kind: 'codex-queue', address: { threadId } } : options.wakeAddress,
             path: (location as string | undefined) ?? options.path,
             participant: (participant as string | undefined) ?? options.participant,
             // The server owner is bound to its configured square; overrides close after each call.

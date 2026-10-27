@@ -21,14 +21,14 @@ An absent/broken endpoint is unavailable; it does not consume Square activity.
 
 ## Native-first routing and policy holds
 
-Native delivery is preferred, including under Paseo. Codex proposes its capable
-native queue before Paseo. Claude and OpenCode receivers register their native
-routes only through their loaded integrations. The common publication transaction
-keeps a fresh native registration ahead of a Paseo proposal for the same
-participant, session, channel and ownership epoch. Tool operations cannot flip it
-back to Paseo between receiver reconciliations. An absent, expired or explicitly
-retired native registration does not block a Paseo fallback; a replacement epoch
-cannot inherit an older native registration.
+Native delivery is preferred, including under Paseo. CLI and call-local MCP Codex
+joins register the native queue for their thread. Claude and OpenCode receivers
+register their native wake addresses only through their loaded integrations. An
+ordinary reconnect or implicit join cannot replace a current native address with a
+generic Paseo proposal. Addresses belong to the artifact seat generation, not an
+expiring routes table: explicit receiver withdrawal permits fallback, and a new
+seat generation cannot inherit the previous generation's native registration.
+Participant expressions do not publish replacement addresses.
 
 This is route preference, not permission to bypass receiver policy. Claude can
 legitimately hold an unsolicited peer message with `no-mode-asserted`, especially
@@ -47,7 +47,7 @@ Neither a release nor a drop is a queue receipt, proof of consumption or retry
 authorization.
 
 `square harness doctor delivery` shows native custody separately from pending
-attention, including after the activity is seen or the participant leaves. Paseo
+attention for current seat generations, including after the activity is seen. Paseo
 presents the `peer_message_hold` state in its own timeline. Acceptance means normal
 delivery when the receiver allows it, or a visible reason without bypass/replay when
 policy holds it.
