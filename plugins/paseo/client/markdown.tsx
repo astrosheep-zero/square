@@ -12,30 +12,23 @@ function makeStyles(colors: PluginTheme["colors"]) {
   return {
     block: { gap: 6 },
     text: { color: colors.foreground, fontSize: 13, lineHeight: 19 },
-    strong: { fontWeight: "700" as const },
-    em: { fontStyle: "italic" as const },
-    del: { textDecorationLine: "line-through" as const },
+    strong: { fontWeight: "500" as const, color: colors.foreground },
+    em: { color: colors.foregroundMuted, fontStyle: "italic" as const },
+    del: { color: colors.foregroundMuted, textDecorationLine: "line-through" as const },
     link: { color: colors.accent, textDecorationLine: "underline" as const },
-    inlineCode: { fontFamily: MONO, fontSize: 12, backgroundColor: colors.surface2, color: colors.foreground },
-    codeBlock: {
-      backgroundColor: colors.surface0,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: colors.border,
-      paddingHorizontal: 9,
-      paddingVertical: 7,
-    },
-    codeText: { fontFamily: MONO, fontSize: 11.5, lineHeight: 17, color: colors.foreground },
+    inlineCode: { fontFamily: MONO },
+    codeBlock: { backgroundColor: colors.surface0, borderRadius: 6, paddingHorizontal: 9, paddingVertical: 7 },
+    codeText: { fontFamily: MONO, fontSize: 13, lineHeight: 19, color: colors.foreground },
     quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: 8, gap: 2 },
     quoteText: { color: colors.foregroundMuted, fontStyle: "italic" as const },
-    meta: { color: colors.foregroundMuted, fontSize: 11, lineHeight: 15, fontFamily: MONO },
-    actor: { color: colors.accent, fontSize: 12, lineHeight: 17 },
+    meta: { color: colors.foregroundMuted, fontSize: 13, lineHeight: 19, fontFamily: MONO },
+    actor: { color: colors.accent, fontSize: 13, lineHeight: 19, fontWeight: "500" as const },
     separator: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
     listRow: { flexDirection: "row" as const, gap: 6 },
     listItem: { flexShrink: 1, gap: 2 },
     bullet: { color: colors.accent, fontSize: 13, lineHeight: 19 },
     tableRow: { flexDirection: "row" as const, gap: 8 },
-    tableCell: { flex: 1, fontSize: 12 },
+    tableCell: { flex: 1 },
   };
 }
 
@@ -55,7 +48,7 @@ function renderInlines(tokens: Token[], styles: Styles, prefix: string, extra?: 
       case "em": return nested(styles.em);
       case "del": return nested(styles.del);
       case "link": return nested(styles.link);
-      case "codespan": return <Text key={key} style={[styles.text, extra, styles.inlineCode]}>{` ${token.text} `}</Text>;
+      case "codespan": return <Text key={key} style={[styles.text, extra, styles.inlineCode]}>{token.text}</Text>;
       case "br": return "\n";
       case "image": return token.text;
       default: {
@@ -86,7 +79,7 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
         );
       case "heading":
         return (
-          <Text key={key} style={[styles.text, textStyle, styles.strong, { fontSize: Math.max(13, 18 - token.depth) }]}>
+          <Text key={key} style={[styles.text, textStyle, styles.strong]}>
             {renderInlines(children(token), styles, key)}
           </Text>
         );

@@ -29,7 +29,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     },
     whoRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
     glyph: { color: theme.colors.accent, fontSize: 9 },
-    actor: { color: foreground, fontSize: 12.5, fontWeight: "600" as const },
+    actor: { color: foreground, fontSize: 12.5, fontWeight: "500" as const },
     route: { color: muted, fontSize: 12.5, flex: 1 },
     count: { color: muted, fontSize: 11 },
   }), [foreground, layout.compact, muted, theme.colors.accent, theme.colors.border, theme.colors.surface1]);
