@@ -1,4 +1,5 @@
 import { formatActivityId } from './square-core.js';
+import { canonicalPath } from './canonical-path.js';
 import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
 import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation, localSquareLocation } from './square-location.js';
@@ -82,6 +83,7 @@ export class SqliteSquare {
     private readonly automaticDelivery = true,
     private readonly ownsArtifact = true,
     private readonly defaultParticipant?: string,
+    private readonly deliveryLocation = location,
   ) { }
 
   static async at(input: SquareAtInput, control?: OperationControl, automaticDelivery = true): Promise<SqliteSquare> {
@@ -95,7 +97,7 @@ export class SqliteSquare {
     try {
       await artifact.read(facts => facts.header(), control?.signal);
       const resource = new SqliteSquare(location, artifact, clock, input.body, input.wakeAddress,
-        wakeTransport, squareIndexPath(env), automaticDelivery, borrowed === undefined, input.participant);
+        wakeTransport, squareIndexPath(env), automaticDelivery, borrowed === undefined, input.participant, await canonicalPath(location));
       await resource.publishIdentity();
       return resource;
     } catch (error) {
@@ -115,12 +117,21 @@ export class SqliteSquare {
   }
   static inMemory(input: Omit<SquareBuildInput, 'path' | 'resources'>): SqliteSquare {
     const env = { ...(input.env ?? process.env) };
-    return new SqliteSquare('memory', createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
+    return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
       squareClock(env, input.clock), input.body, input.wakeAddress, input.wakeTransport, undefined, true, true, input.participant);
+  }
+  /** Trusted local SDK binding: shares this resource, never changes an existing caller's identity.
+   * The original resource owner controls lifetime; closing a borrowed handle is a no-op. */
+  forBody(input: { readonly body: Body; readonly wakeAddress?: WakeAddress }): SqliteSquare {
+    const body = { ...requireBody(input.body) };
+    const wakeAddress = input.wakeAddress === undefined ? undefined
+      : { kind: input.wakeAddress.kind, address: { ...input.wakeAddress.address } };
+    return new SqliteSquare(this.location, this.artifact, this.clock, body, wakeAddress,
+      this.wakeTransport, this.indexPath, this.automaticDelivery, false, undefined, this.deliveryLocation);
   }
   /** Discovery is best effort and never grants write authority. Finish it before returning. */
   private async publishIdentity(): Promise<void> {
-    if (this.location !== 'memory' && this.body !== undefined && this.indexPath !== undefined)
+    if (this.body !== undefined && this.indexPath !== undefined)
       await rememberSquarePath(this.location, this.body, this.indexPath).catch(() => undefined);
   }
   private observation(standingCount: number, held: boolean, participant?: string, now = this.clock()): SquareObservation {
@@ -185,8 +196,8 @@ export class SqliteSquare {
             landedId = formatActivityId(committed.stored.index);
             effect = 'landed';
             await square.publishIdentity();
-            const delivery = square.wakeTransport !== undefined && square.location !== 'memory'
-              ? await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.location, activity: committed.stored.index, now })
+            const delivery = square.wakeTransport !== undefined
+              ? await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now })
                 .catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }))
               : { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
             const { stored, standingCount, held, ownActivityCount, hardCap, ...metadata } = committed;

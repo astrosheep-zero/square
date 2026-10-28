@@ -4,7 +4,6 @@ import { sameBody, type Seat, type WakeRoute } from './model.js';
 import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
 import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
-import { canonicalPath } from './canonical-path.js';
 import { freshWatchLease } from './runtime.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
@@ -102,7 +101,8 @@ function safeJson(value: unknown): import('./model.js').JsonValue {
 }
 
 export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
-  const location = await canonicalPath(input.location);
+  // The resource owner supplies its identity; delivery does not interpret it as a file.
+  const location = input.location;
   const requested = input.activity === undefined ? undefined
     : typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
   if (input.activity !== undefined && requested === undefined)

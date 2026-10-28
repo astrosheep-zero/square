@@ -32,7 +32,9 @@ try {
 
 - `Square.build({path, markdown, hardCap?, throttlePerMinute?, template?, force?, ...})` returns
   the same open resource. `Square.inMemory({markdown, ...})` is synchronous and creates no default
-  native wake transport.
+  native wake transport. An explicitly injected transport runs the same claim, deferral and final
+  currentness checks as file delivery. Each memory resource has a unique `memory://` identity;
+  this is not a remotely openable address, is not indexed, and does not enable file-based hooks.
 - `Square.at` accepts `path`, optional `cwd`, `body`, `wakeAddress`, `clock`, `wakeTransport`,
   `backends`, default `participant`, and a caller-owned connection via `resources`. At the entry
   boundary, optional `env` resolves path/configuration, the clock, the concrete transport and the
@@ -57,6 +59,13 @@ try {
   join generation. Same-body reconnection retains its generation. Old handles remain fenced after
   takeover or rejoin, including when the same Body reacquires the name. There is no separate
   `Participant.join()` or public `takeover()` API. `participantCount` counts known joined-or-done names.
+- Local resources expose `square.forBody({body, wakeAddress?})`: a synchronous borrowed handle
+  sharing the artifact, clock and transport but capturing its own caller identity and optional wake
+  address. It neither joins nor inherits the source handle's participant or wake address. This is a
+  trusted SDK operation, not authentication; never let an untrusted client select another caller's
+  Body. Participant ownership and takeover-generation checks are unchanged. Closing the borrowed
+  handle is a no-op; closing the resource owner invalidates all handles. Stdio explicitly refuses
+  this local operation: open a separate stdio handle with its own Body instead.
 - A Square owns its connection unless `resources: createSquareResourceOwner()` lends it one.
   Closing a borrowing handle leaves that owner open. Request signals never become the borrowed
   connection's lifetime. The MCP server drains cancelled/in-flight work before closing its owner;

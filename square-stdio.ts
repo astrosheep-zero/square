@@ -188,6 +188,7 @@ class StdioSquare implements SquareBackend {
   implicitJoin(): ReturnType<SquareBackend['implicitJoin']> { unsupported('host implicit join'); }
   endOwnedSession(): ReturnType<SquareBackend['endOwnedSession']> { unsupported('host session cleanup'); }
   cancelDeliveries(): ReturnType<SquareBackend['cancelDeliveries']> { unsupported('host delivery cancellation'); }
+  forBody(): ReturnType<SquareBackend['forBody']> { unsupported('local resource identity binding; open a separate stdio handle with its own body'); }
   close() { return this.connection.close(); }
 }
 

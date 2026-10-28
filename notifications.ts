@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { canonicalPath } from './canonical-path.js';
 import fs from 'node:fs';
 
 import { indexedSquareEntries } from './square-index.js';
@@ -68,6 +69,7 @@ export function createWakeTransport(transports: WakeTransports): WakeTransportPo
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
+  squarePath = await canonicalPath(squarePath);
   const artifact = createArtifactPort(squarePath);
   try {
     await artifact.read(facts => facts.header());
@@ -105,9 +107,10 @@ export async function sweepPrivilegedPending(
   } catch { /* no local square directory */ }
   if (remainingMs() === 0 || signal?.aborted) return;
   const transport = await createDefaultWakeTransport(env, suppliedTransports);
-  for (const squarePath of paths) {
+  for (const candidate of paths) {
     if (remainingMs() === 0 || signal?.aborted) break;
     try {
+      const squarePath = await canonicalPath(candidate);
       const artifact = createArtifactPort(squarePath, undefined, signal);
       try {
         await artifact.read(facts => facts.header(), signal);
