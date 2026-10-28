@@ -1,84 +1,11 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import crossSpawn from 'cross-spawn';
+import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, SyntaxKind, type ParseError } from 'jsonc-parser';
 
 import { SQUARE_IDENTITY } from './identity.js';
 import { truncateExternalDiagnostic } from './presentation.js';
-
-export interface HarnessLink {
-  source: string;
-  target: string;
-  kind?: 'skill' | 'extension';
-}
-
-function packageRoot(): string {
-  // Emitted modules live in dist; package assets are one level above them.
-  return fileURLToPath(new URL('../', import.meta.url));
-}
-
-export function installHarnessLinks(links: HarnessLink[], force = false): string[] {
-  const prepared = links.map((link) => {
-    if (!fs.existsSync(link.source)) {
-      throw new Error(`Harness link source is missing: ${link.source}`);
-    }
-    const existing = (() => {
-      try {
-        return fs.lstatSync(link.target);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-        throw error;
-      }
-    })();
-    return {
-      ...link,
-      existing,
-      sourceIsDirectory: fs.statSync(link.source).isDirectory(),
-      alreadyManaged: existing !== undefined && sameLink(link.source, link.target),
-    };
-  });
-  for (const { target, existing, alreadyManaged } of prepared) {
-    if (existing !== undefined && !alreadyManaged && !force) throw new Error(`Refusing to overwrite existing link: ${target}\nPass -f to replace it.`);
-  }
-  for (const { source, target, existing, sourceIsDirectory, alreadyManaged } of prepared) {
-    if (alreadyManaged) continue;
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (existing !== undefined) fs.rmSync(target, { recursive: true, force: true });
-    const symlinkType = os.platform() === 'win32' && sourceIsDirectory ? 'junction' : 'file';
-    fs.symlinkSync(source, target, symlinkType);
-  }
-  return prepared.map(({ target }) => target);
-}
-
-function sameLink(source: string, target: string): boolean {
-  try {
-    return fs.realpathSync(source) === fs.realpathSync(target);
-  } catch {
-    return false;
-  }
-}
-
-export function uninstallHarnessLinks(links: HarnessLink[]): string[] {
-  const removed: string[] = [];
-  for (const link of links) {
-    try {
-      if (fs.lstatSync(link.target).isSymbolicLink() && sameLink(link.source, link.target)) {
-        fs.rmSync(link.target, { force: true });
-        removed.push(link.target);
-      }
-    } catch {
-      // A missing or user-owned target is preserved.
-    }
-  }
-  return removed;
-}
-
-export function doctorHarnessLinks(links: HarnessLink[]): string[] {
-  return links.map((link) => sameLink(link.source, link.target)
-    ? `✓ Square ${link.kind ?? 'link'} ${link.target}`
-    : `○ Square ${link.kind ?? 'link'} missing ${link.target}`);
-}
 
 export type OpenCodeCommandRunner = (homeDir: string, args: string[]) => { status: number; stdout: string; stderr: string };
 
@@ -101,36 +28,143 @@ function runOpenCode(homeDir: string, args: string[]): { status: number; stdout:
 }
 
 export function installOpenCodePlugin(homeDir: string, force = false, run: OpenCodeCommandRunner = runOpenCode): string[] {
-  // OpenCode v2's `plugin add` is idempotent and has no --global/--force flags.
+  // Explicit `square install` replaces owned pins/duplicates with one unpinned
+  // current-field entry; updating an exact old pin otherwise succeeds unchanged.
   void force;
-  const args = ['plugin', 'add', SQUARE_IDENTITY.packageName];
-  const result = run(homeDir, args);
-  if (result.status !== 0) throw new Error(`OpenCode plugin install failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
+  const configs = readOpenCodeConfigs(homeDir);
+  const entries = configs.flatMap((config) => config.entries);
+  const options = entries.map((entry) => entry.options).filter((value) => value !== undefined);
+  if (options.some((value) => !isDeepStrictEqual(value, options[0]))) {
+    throw new Error('Conflicting Square plugin options in OpenCode configuration; reconcile the owned plugin/plugins entries before installing.');
+  }
+  const canonical = options.length ? { package: SQUARE_IDENTITY.packageName, options: options[0] } : SQUARE_IDENTITY.packageName;
+  const targets = configs.length ? configs : [{ target: openCodeConfigPaths(homeDir)[0], source: '{}', entries: [] }];
+  const alreadyCanonical = entries.length === 1 && configs[0]?.entries[0]?.field === 'plugins'
+    && isDeepStrictEqual(entries[0].value, canonical);
+  const changes = alreadyCanonical ? [] : targets.map(({ target, source, entries }, index) => {
+    let next = source;
+    for (const { field, index } of entries.toReversed()) next = removeOpenCodeEntry(next, field, index);
+    if (index === 0) next = applyEdits(next, modify(next, ['plugins', -1], canonical, {}));
+    return { target, source, next };
+  }).filter(({ source, next }) => source !== next);
+  // Appending just our element avoids native add's whole-array rewrite, which
+  // drops comments belonging to unrelated plugins. Native add still owns npm.
+  for (const { target, next } of changes) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, next);
+  }
+  if (!entries.some(({ spec }) => spec === SQUARE_IDENTITY.packageName)) {
+    try { openCodeCommand(homeDir, ['plugin', 'add', SQUARE_IDENTITY.packageName], run, 'install'); } catch (error) {
+      // Undo only our preparation, never files the native command/user changed.
+      for (const { target, source, next } of changes) {
+        if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === next) {
+          if (configs.length) fs.writeFileSync(target, source);
+          else fs.rmSync(target);
+        }
+      }
+      throw error;
+    }
+  }
+  // Even add can reuse an older cached package. Always request the latest.
+  openCodeCommand(homeDir, ['plugin', 'update', SQUARE_IDENTITY.packageName], run, 'update');
   return [SQUARE_IDENTITY.packageName];
 }
 
-function configPath(homeDir: string): string {
-  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config');
-  return path.join(configHome, 'opencode', 'opencode.jsonc');
+function openCodeCommand(homeDir: string, args: string[], run: OpenCodeCommandRunner, operation: string): string {
+  const result = run(homeDir, args);
+  if (result.status !== 0) throw new Error(`OpenCode ${operation} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
+  return result.stdout;
 }
 
-function removeConfiguredPlugin(homeDir: string): boolean {
-  const target = configPath(homeDir);
-  let source: string;
-  try { source = fs.readFileSync(target, 'utf8'); } catch { return false; }
-  const escaped = SQUARE_IDENTITY.packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const packageLine = new RegExp(`^\\s*"${escaped}(?:@[^"\\n]+)?"\\s*,?\\s*$`, 'm');
-  const next = source.replace(packageLine, '');
-  if (next === source) return false;
-  fs.writeFileSync(target, next);
-  return true;
+function openCodeConfigPaths(homeDir: string): string[] {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homeDir, '.config');
+  const root = path.resolve(configHome, 'opencode');
+  return [root, path.join(root, '.opencode')].flatMap((directory) => ['opencode.json', 'opencode.jsonc'].map((name) => path.join(directory, name)));
+}
+
+function readOpenCodeConfigs(homeDir: string) {
+  return openCodeConfigPaths(homeDir).flatMap((target) => {
+    let source: string;
+    try { source = fs.readFileSync(target, 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const errors: ParseError[] = [];
+    const config: unknown = parse(source, errors, { allowTrailingComma: true });
+    if (errors.length || typeof config !== 'object' || config === null || Array.isArray(config)) {
+      throw new Error(`Invalid OpenCode configuration: ${target}`);
+    }
+    const entries = ['plugin', 'plugins'].flatMap((field) => {
+      const plugins = (config as Record<string, unknown>)[field];
+      if (plugins === undefined) return [];
+      if (!Array.isArray(plugins)) throw new Error(`Invalid OpenCode ${field} configuration: ${target}`);
+      return plugins.flatMap((entry, index) => {
+        const spec = openCodePluginSpec(entry);
+        const options = Array.isArray(entry) ? entry[1]
+          : typeof entry === 'object' && entry !== null ? entry.options : undefined;
+        return spec === undefined ? [] : [{ field, index, spec, options, value: entry }];
+      });
+    });
+    return [{ target, source, entries }];
+  });
 }
 
 export function uninstallOpenCodePlugin(homeDir: string): string[] {
-  return removeConfiguredPlugin(homeDir) ? [SQUARE_IDENTITY.packageName] : [];
+  // Native remove only handles `plugins` in one file. Delete our elements in
+  // both fields/files, from the end so indexes remain stable, keeping JSONC.
+  const changes = readOpenCodeConfigs(homeDir).filter(({ entries }) => entries.length).map(({ target, source, entries }) => {
+    for (const { field, index } of entries.reverse()) {
+      source = removeOpenCodeEntry(source, field, index);
+    }
+    return { target, source };
+  });
+  for (const { target, source } of changes) fs.writeFileSync(target, source);
+  return changes.length ? [SQUARE_IDENTITY.packageName] : [];
 }
 
-/** Verify that OpenCode accepts its resolved runtime configuration after links are installed. */
+// jsonc-parser's array `modify` also removes intervening comments. Use its AST
+// and scanner to remove only the owned value and one separator, not the trivia.
+function removeOpenCodeEntry(source: string, field: string, index: number): string {
+  const array = findNodeAtLocation(parseTree(source)!, [field])!;
+  const node = array.children![index];
+  const scanner = createScanner(source, true);
+  scanner.setPosition(node.offset + node.length);
+  let comma = scanner.scan() === SyntaxKind.CommaToken ? scanner.getTokenOffset() : undefined;
+  if (comma === undefined && index > 0) {
+    const previous = array.children![index - 1];
+    scanner.setPosition(previous.offset + previous.length);
+    if (scanner.scan() === SyntaxKind.CommaToken) comma = scanner.getTokenOffset();
+  }
+  return applyEdits(source, [
+    { offset: node.offset, length: node.length, content: '' },
+    ...(comma === undefined ? [] : [{ offset: comma, length: 1, content: '' }]),
+  ]);
+}
+
+function openCodePluginSpec(entry: unknown): string | undefined {
+  const spec = typeof entry === 'string' ? entry : Array.isArray(entry) ? entry[0]
+    : typeof entry === 'object' && entry !== null && 'package' in entry ? entry.package : undefined;
+  return typeof spec === 'string' && (spec === SQUARE_IDENTITY.packageName || spec.startsWith(`${SQUARE_IDENTITY.packageName}@`))
+    ? spec : undefined;
+}
+
+interface OpenCodeConfigSource {
+  type: string;
+  path?: string;
+  info?: { plugins?: unknown[] };
+}
+
+function parseOpenCodeConfig(stdout: string): OpenCodeConfigSource[] {
+  let sources: unknown;
+  try { sources = JSON.parse(stdout); } catch { throw new Error('OpenCode debug config returned invalid JSON'); }
+  if (!Array.isArray(sources) || sources.some((source) => source === null || typeof source !== 'object'
+    || !['document', 'directory'].includes(source.type))) {
+    throw new Error('OpenCode debug config returned unexpected configuration sources');
+  }
+  return sources as OpenCodeConfigSource[];
+}
+
+/** Config sources prove configuration, not that a running session loaded the plugin. */
 export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunner = runOpenCode): string {
   try {
     const result = run(homeDir, ['debug', 'config']);
@@ -138,26 +172,17 @@ export function verifyOpenCodeRuntime(homeDir: string, run: OpenCodeCommandRunne
       const diagnostic = result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`;
       return `✕ OpenCode debug config failed: ${truncateExternalDiagnostic(diagnostic)}`;
     }
-    let config: { config?: { plugin?: unknown } };
-    try {
-      config = JSON.parse(result.stdout) as { config?: { plugin?: unknown } };
-    } catch {
-      return '✕ OpenCode debug config returned invalid JSON';
+    let sources: OpenCodeConfigSource[];
+    try { sources = parseOpenCodeConfig(result.stdout); } catch (error) {
+      return `✕ ${(error as Error).message}`;
     }
-    const plugin = config.config?.plugin;
-    const expected = SQUARE_IDENTITY.packageName;
-    if (Array.isArray(plugin) && plugin.includes(expected)) return '✓ OpenCode npm plugin loaded';
-    return `○ OpenCode npm plugin not loaded: ${expected}`;
+    const configured = sources.some((source) => source.type === 'document'
+      && Array.isArray(source.info?.plugins) && source.info.plugins.some((entry) => openCodePluginSpec(entry) !== undefined));
+    return configured
+      ? '✓ OpenCode npm plugin configured (runtime loading not verified)'
+      : `○ OpenCode npm plugin not configured: ${SQUARE_IDENTITY.packageName}`;
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
     return `○ OpenCode runtime unavailable (${truncateExternalDiagnostic(diagnostic)})`;
   }
-}
-
-export function skillLinks(homeDir = os.homedir(), parents: Array<'.claude' | '.agents'> = ['.claude', '.agents']): HarnessLink[] {
-  return parents.flatMap((parent) => ['square'].map((name) => ({
-    source: path.join(packageRoot(), 'skills', name),
-    target: path.join(homeDir, parent, 'skills', name),
-    kind: 'skill' as const,
-  })));
 }

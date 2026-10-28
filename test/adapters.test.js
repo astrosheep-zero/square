@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { parse } from 'jsonc-parser';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -45,9 +46,7 @@ import { executeHarnessTarget } from '../dist/harness.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installOpenCodePlugin,
-  installHarnessLinks,
   uninstallOpenCodePlugin,
-  skillLinks,
   verifyOpenCodeRuntime,
 } from '../dist/harness-links.js';
 
@@ -82,6 +81,20 @@ function enabledPlugins(pluginId) { return JSON.stringify({ installed: [{ plugin
 function enabledClaudePlugins(pluginId) { return JSON.stringify([{ id: pluginId, version: SQUARE_IDENTITY.packageVersion, enabled: true, installPath: '/tmp/plugin' }]); }
 function clippedDiagnostic(value) { return `${[...value].slice(0, 159).join('')}…`; }
 
+function openCodeHome(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-'));
+  const previousConfigHome = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = path.join(home, 'config');
+  const config = path.join(process.env.XDG_CONFIG_HOME, 'opencode');
+  fs.mkdirSync(config, { recursive: true });
+  t.after(() => {
+    if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousConfigHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  return { home, config };
+}
+
 test('multi-target installation continues after an independent target fails', async () => {
   const attempted = [];
   const result = await executeTargetBatch(['claude', 'codex'], 'install', {
@@ -114,73 +127,28 @@ test('Square identity keeps package, plugin, and marketplace coordinates aligned
   assert.equal(SQUARE_IDENTITY.packageVersion, JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')).version);
 });
 
-test('managed link targets are idempotent and still require force for another owner', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-links-'));
-  const links = skillLinks(home, ['.agents']);
-  try {
-    assert.equal(links.length, 1);
-    installHarnessLinks(links);
-    assert.equal(path.basename(fs.realpathSync(path.join(home, '.agents', 'skills', 'square'))), 'square');
-    assert.equal(installHarnessLinks(links).length, 1);
-    fs.rmSync(links[0].target, { force: true });
-    fs.writeFileSync(links[0].target, 'another owner');
-    assert.throws(() => installHarnessLinks(links), /Pass -f to replace it/);
-    assert.equal(installHarnessLinks(links, true).length, 1);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('managed link installation preflights every target before replacing any target', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-link-preflight-'));
-  const links = [
-    { source: path.join(home, 'source-a'), target: path.join(home, '.agents', 'skills', 'square') },
-    { source: path.join(home, 'source-b'), target: path.join(home, '.agents', 'skills', 'brainstorm') },
-  ];
-  fs.writeFileSync(links[0].source, 'available');
-  fs.writeFileSync(links[1].source, 'available');
-  try {
-    fs.mkdirSync(path.dirname(links[1].target), { recursive: true });
-    fs.writeFileSync(links[1].target, 'unmanaged conflict');
-    assert.throws(() => installHarnessLinks(links), /Refusing to overwrite existing link/);
-    assert.equal(fs.existsSync(links[0].target), false);
-    assert.equal(fs.readFileSync(links[1].target, 'utf8'), 'unmanaged conflict');
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('managed link installation validates sources before replacing forced targets', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-link-source-preflight-'));
-  const target = path.join(home, 'target');
-  const source = path.join(home, 'source');
-  fs.writeFileSync(target, 'preserve me');
-  fs.writeFileSync(source, 'available');
-  try {
-    assert.throws(
-      () => installHarnessLinks([
-        { source, target },
-        { source: path.join(home, 'missing-source'), target: path.join(home, 'missing-target') },
-      ], true),
-      /Harness link source is missing/
-    );
-    assert.equal(fs.readFileSync(target, 'utf8'), 'preserve me');
-    assert.equal(fs.existsSync(path.join(home, 'missing-target')), false);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('OpenCode doctor runs debug config through its runtime boundary', () => {
+test('OpenCode doctor reads current config sources without claiming runtime loading', () => {
   const home = '/tmp/square-opencode';
-  const loaded = verifyOpenCodeRuntime(home, () => {
-    return { status: 0, stdout: JSON.stringify({ config: { plugin: ['@astrosheep/square'] } }), stderr: '' };
-  });
-  assert.equal(loaded, '✓ OpenCode npm plugin loaded');
+  for (const entry of ['@astrosheep/square', { package: '@astrosheep/square@0.3.92', options: {} }]) {
+    const configured = verifyOpenCodeRuntime(home, (_home, args) => {
+      assert.equal(_home, home);
+      assert.deepEqual(args, ['debug', 'config']);
+      return { status: 0, stdout: JSON.stringify([
+        { type: 'document', path: '/config/opencode.jsonc', info: { plugins: [entry] } },
+        { type: 'directory', path: '/config' },
+      ]), stderr: '' };
+    });
+    assert.equal(configured, '✓ OpenCode npm plugin configured (runtime loading not verified)');
+  }
   assert.match(
-    verifyOpenCodeRuntime(home, () => ({ status: 0, stdout: JSON.stringify({ config: { plugin: [] } }), stderr: '' })),
-    /npm plugin not loaded/
+    verifyOpenCodeRuntime(home, () => ({ status: 0, stdout: JSON.stringify([
+      { type: 'document', info: { plugins: ['@astrosheep/square-other'] } }, { type: 'directory' },
+    ]), stderr: '' })),
+    /npm plugin not configured/
   );
+  for (const stdout of ['not JSON', JSON.stringify({ config: { plugin: ['@astrosheep/square'] } }), 'null']) {
+    assert.match(verifyOpenCodeRuntime(home, () => ({ status: 0, stdout, stderr: '' })), /^✕ OpenCode debug config returned/);
+  }
   assert.match(
     verifyOpenCodeRuntime(home, () => ({ status: 1, stdout: '', stderr: 'extension failed' })),
     /OpenCode debug config failed: extension failed/
@@ -221,37 +189,187 @@ test('OpenCode runtime doctor bounds stderr, stdout, and thrown diagnostics', ()
   );
 });
 
-test('OpenCode installation delegates plugin ownership to OpenCode npm config', () => {
+test('OpenCode installation adds globally once and updates even a cached fresh install', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.json');
+  const source = '{ // header\n "plugins": [ // keep plugin comment\n "other", // keep trailing\n ], "model":"provider/model",\n}\n';
+  fs.writeFileSync(target, source);
   const calls = [];
   const run = (_home, args) => {
+    assert.equal(_home, home);
     calls.push(args);
+    // Native add sees its exact entry and does not rewrite the entire array.
+    assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugins, ['other', '@astrosheep/square']);
     return { status: 0, stdout: '', stderr: '' };
   };
-  const result = installOpenCodePlugin('/tmp/square-opencode', true, run);
-  installOpenCodePlugin('/tmp/square-opencode', false, run);
-  // `plugin add` is idempotent and takes no --global/--force flags, so force does not change argv.
+  assert.deepEqual(installOpenCodePlugin(home, true, run), ['@astrosheep/square']);
+  const installed = fs.readFileSync(target, 'utf8');
+  installOpenCodePlugin(home, false, run);
   assert.deepEqual(calls, [
-    ['plugin', 'add', '@astrosheep/square'],
-    ['plugin', 'add', '@astrosheep/square']
+    ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square'],
+    ['plugin', 'update', '@astrosheep/square'],
   ]);
-  assert.deepEqual(result, ['@astrosheep/square']);
+  assert.deepEqual(parse(installed), { plugins: ['other', '@astrosheep/square'], model: 'provider/model' });
+  for (const comment of source.matchAll(/\/\/[^\n]*/g)) assert.ok(installed.includes(comment[0]));
+  assert.equal(fs.readFileSync(target, 'utf8'), installed);
 });
 
-test('OpenCode uninstall removes only the Square npm plugin entry', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-uninstall-'));
-  const config = path.join(home, '.config', 'opencode');
-  fs.mkdirSync(config, { recursive: true });
-  const configPath = path.join(config, 'opencode.jsonc');
-  fs.writeFileSync(configPath, JSON.stringify({ plugin: ['@astrosheep/square@0.3.27', 'other-plugin'] }, null, 2));
-  const previousConfigHome = process.env.XDG_CONFIG_HOME;
-  delete process.env.XDG_CONFIG_HOME;
-  try {
+test('OpenCode installation creates its global config when absent', (t) => {
+  const { home, config } = openCodeHome(t);
+  const calls = [];
+  installOpenCodePlugin(home, false, (_home, args) => { calls.push(args); return { status: 0, stdout: '', stderr: '' }; });
+  assert.deepEqual(calls, [['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(config, 'opencode.json'), 'utf8')), { plugins: ['@astrosheep/square'] });
+});
+
+test('OpenCode install converges legacy duplicates and old pins to one unpinned current entry, retaining options', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.jsonc');
+  const options = { enabled: true, nested: { a: 1, b: 2 } };
+  const source = `{
+    // keep header and unrelated legacy entry
+    "plugin": ["keiyaku", ["@astrosheep/square@0.3.67", ${JSON.stringify(options)}]],
+    "plugins": [
+      "@astrosheep/square", // keep inline comment
+      // keep next plugin comment
+      "other", {"package":"@astrosheep/square@0.3.67", "options":{"nested":{"b":2,"a":1},"enabled":true}}
+    ],
+    "model": "provider/model",
+  }`;
+  fs.writeFileSync(target, source);
+  const otherTarget = path.join(config, 'opencode.json');
+  fs.writeFileSync(otherTarget, '{"plugins":["other-json","@astrosheep/square@0.3.67"],"setting":true}');
+  const calls = [];
+  const run = (_home, args) => { calls.push(args); return { status: 0, stdout: '', stderr: '' }; };
+  installOpenCodePlugin(home, false, run);
+  const installed = fs.readFileSync(target, 'utf8');
+  const installedOther = fs.readFileSync(otherTarget, 'utf8');
+  assert.deepEqual(parse(installed), { plugin: ['keiyaku'], plugins: ['other'], model: 'provider/model' });
+  assert.deepEqual(parse(installedOther), { plugins: ['other-json', { package: '@astrosheep/square', options }], setting: true });
+  for (const comment of source.matchAll(/\/\/[^\n]*/g)) assert.ok(installed.includes(comment[0]));
+  installOpenCodePlugin(home, true, run);
+  assert.deepEqual(calls, [['plugin', 'update', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+  assert.equal(fs.readFileSync(target, 'utf8'), installed);
+  assert.equal(fs.readFileSync(otherTarget, 'utf8'), installedOther);
+});
+
+test('OpenCode install unpins a sole old object or tuple before native add and latest update', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.jsonc');
+  const options = { enabled: true };
+  for (const configuration of [
+    { plugins: [{ package: '@astrosheep/square@0.3.67', options }] },
+    { plugin: [['@astrosheep/square@0.3.67', options]] },
+  ]) {
+    fs.writeFileSync(target, JSON.stringify(configuration));
+    const calls = [];
+    installOpenCodePlugin(home, false, (_home, args) => {
+      calls.push(args);
+      assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugins, [{ package: '@astrosheep/square', options }]);
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    assert.deepEqual(calls, [['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+    assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugin ?? [], []);
+  }
+});
+
+test('OpenCode install refuses conflicting owned options before changing files or invoking the CLI', (t) => {
+  const { home, config } = openCodeHome(t);
+  const targets = [path.join(config, 'opencode.json'), path.join(config, 'opencode.jsonc')];
+  const sources = [
+    '{"plugin":[["@astrosheep/square@0.3.67",{"enabled":true}]],"model":"provider/model"}',
+    '{"plugins":[{"package":"@astrosheep/square","options":{"enabled":false}}]}',
+  ];
+  targets.forEach((target, index) => fs.writeFileSync(target, sources[index]));
+  assert.throws(() => installOpenCodePlugin(home, false, () => assert.fail('must not invoke OpenCode')), /Conflicting Square plugin options.*reconcile/);
+  targets.forEach((target, index) => assert.equal(fs.readFileSync(target, 'utf8'), sources[index]));
+});
+
+test('OpenCode installation propagates native add and update failures', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.jsonc');
+  for (const failing of ['add', 'update']) {
+    const source = JSON.stringify({ plugins: failing === 'update' ? ['@astrosheep/square'] : [] });
+    fs.writeFileSync(target, source);
+    const run = (_home, args) => ({ status: args[1] === failing ? 1 : 0, stdout: '', stderr: 'external failure' });
+    assert.throws(() => installOpenCodePlugin(home, false, run), /OpenCode .* failed: external failure/);
+    assert.equal(fs.readFileSync(target, 'utf8'), source);
+  }
+  fs.rmSync(target);
+  assert.throws(() => installOpenCodePlugin(home, false, () => ({ status: 1, stdout: '', stderr: 'offline' })), /offline/);
+  assert.equal(fs.existsSync(path.join(config, 'opencode.json')), false);
+});
+
+test('OpenCode uninstall removes every owned entry from both global fields and files, retaining comments', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.jsonc');
+  const source = `{
+  // keep header
+  "plugin": [
+    // keep Keiyaku
+    "file:///keiyaku/build/plugins/opencode", // keep trailing comment
+    "@astrosheep/square", // comment outside owned value
+    // keep the next plugin's comment
+    "other-plugin",
+    ["@astrosheep/square@0.3.67", {"enabled": true}],
+  ],
+  "plugins": ["@astrosheep/square", {"package":"other", "options":{"value":"@astrosheep/square"}}, {"package":"@astrosheep/square@0.3.92", "options":{}}, "@astrosheep/square-tools", "@astrosheep/square"],
+  "model": "provider/model", // keep setting
+  "instructions": ["@astrosheep/square"],
+}
+// keep footer
+`;
+  fs.writeFileSync(target, source);
+  const jsonTarget = path.join(config, 'opencode.json');
+  fs.writeFileSync(jsonTarget, '{"plugins":["@astrosheep/square","other-json"]}');
+  assert.deepEqual(uninstallOpenCodePlugin(home), ['@astrosheep/square']);
+  const next = fs.readFileSync(target, 'utf8');
+  const errors = [];
+  assert.deepEqual(parse(next, errors, { allowTrailingComma: true }), {
+    plugin: ['file:///keiyaku/build/plugins/opencode', 'other-plugin'],
+    plugins: [{ package: 'other', options: { value: '@astrosheep/square' } }, '@astrosheep/square-tools'],
+    model: 'provider/model', instructions: ['@astrosheep/square'],
+  });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(jsonTarget, 'utf8')), { plugins: ['other-json'] });
+  for (const comment of source.matchAll(/\/\/[^\n]*/g)) assert.ok(next.includes(comment[0]), comment[0]);
+  assert.ok(next.includes('{"package":"other", "options":{"value":"@astrosheep/square"}}'));
+  assert.deepEqual(uninstallOpenCodePlugin(home), []);
+  assert.equal(fs.readFileSync(target, 'utf8'), next);
+});
+
+test('OpenCode uninstall keeps empty arrays valid and leaves unowned files byte-identical', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.jsonc');
+  assert.deepEqual(uninstallOpenCodePlugin(home), []);
+  for (const source of [
+    '{"plugin":["@astrosheep/square"],"plugins":["@astrosheep/square","@astrosheep/square"]}',
+    '{"plugin":["@astrosheep/square",],"plugins":["@astrosheep/square",]}',
+  ]) {
+    fs.writeFileSync(target, source);
     assert.deepEqual(uninstallOpenCodePlugin(home), ['@astrosheep/square']);
-    assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), { plugin: ['other-plugin'] });
-  } finally {
-    if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = previousConfigHome;
-    fs.rmSync(home, { recursive: true, force: true });
+    const errors = [];
+    assert.deepEqual(parse(fs.readFileSync(target, 'utf8'), errors, { allowTrailingComma: true }), { plugin: [], plugins: [] });
+    assert.deepEqual(errors, []);
+  }
+  const source = '{ // untouched\n "plugins": ["other"], "model": "provider/model",\n}\n';
+  fs.writeFileSync(target, source);
+  assert.deepEqual(uninstallOpenCodePlugin(home), []);
+  assert.equal(fs.readFileSync(target, 'utf8'), source);
+});
+
+test('OpenCode lifecycle refuses malformed config without editing any files or invoking the CLI', (t) => {
+  const { home, config } = openCodeHome(t);
+  const validTarget = path.join(config, 'opencode.json');
+  const valid = '{"plugins":["@astrosheep/square"]}';
+  fs.writeFileSync(validTarget, valid);
+  const invalidTarget = path.join(config, 'opencode.jsonc');
+  for (const invalid of ['{', 'null', '[]', '{"plugins":false}', '{"plugin":{}}']) {
+    fs.writeFileSync(invalidTarget, invalid);
+    assert.throws(() => installOpenCodePlugin(home, false, () => assert.fail('must not invoke OpenCode')), /Invalid OpenCode/);
+    assert.throws(() => uninstallOpenCodePlugin(home), /Invalid OpenCode/);
+    assert.equal(fs.readFileSync(validTarget, 'utf8'), valid);
+    assert.equal(fs.readFileSync(invalidTarget, 'utf8'), invalid);
   }
 });
 

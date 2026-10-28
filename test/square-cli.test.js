@@ -170,24 +170,27 @@ test('install and uninstall manage an explicit OpenCode target', () => {
   const fake = nodeCommandFixture('square-opencode-install', `
     const fs = require('node:fs');
     const path = require('node:path');
-    const target = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc');
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, JSON.stringify({ plugin: ['@astrosheep/square'] }, null, 2));
-    process.exit(0);
+    const target = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json');
+    const [command, action] = process.argv.slice(2);
+    if (command === 'plugin' && ['add', 'update'].includes(action)) {
+      if (!JSON.parse(fs.readFileSync(target, 'utf8')).plugins.includes('@astrosheep/square')) process.exit(1);
+    } else {
+      process.exit(1);
+    }
   `);
   try {
     const result = run(['install', 'opencode'], {
       env: { HOME: home, XDG_CONFIG_HOME: config, SQUARE_OPENCODE_BIN: fake.bin, SQUARE_OPENCODE_BIN_ARGS: JSON.stringify(fake.args) },
     });
     assert.equal(result.status, 0, result.stderr);
-    const plugin = path.join(config, 'opencode', 'opencode.jsonc');
-    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, ['@astrosheep/square']);
+    const plugin = path.join(config, 'opencode', 'opencode.json');
+    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugins, ['@astrosheep/square']);
 
     const removed = run(['uninstall', 'opencode'], {
       env: { HOME: home, XDG_CONFIG_HOME: config, SQUARE_OPENCODE_BIN: fake.bin, SQUARE_OPENCODE_BIN_ARGS: JSON.stringify(fake.args) },
     });
     assert.equal(removed.status, 0, removed.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugin, []);
+    assert.deepEqual(JSON.parse(fs.readFileSync(plugin, 'utf8')).plugins, []);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(fake.root, { recursive: true, force: true });

@@ -20,12 +20,8 @@ import {
   uninstallPiPackage,
 } from './harness-pi.js';
 import {
-  doctorHarnessLinks,
-  installHarnessLinks,
   installOpenCodePlugin,
-  skillLinks,
   uninstallOpenCodePlugin,
-  uninstallHarnessLinks,
   verifyOpenCodeRuntime,
 } from './harness-links.js';
 
@@ -62,10 +58,6 @@ async function doctorHost(label: string, inspect: () => Promise<string[]>): Prom
     const diagnostic = error instanceof Error ? error.message : String(error);
     return result([`○ ${label} doctor unavailable (${truncateExternalDiagnostic(diagnostic)})`]);
   }
-}
-
-function openCodeLinks(homeDir: string) {
-  return skillLinks(homeDir, ['.agents']);
 }
 
 function readableSquarePath(squarePath: string | undefined): squarePath is string {
@@ -113,15 +105,9 @@ const TARGETS: readonly HarnessTarget[] = [
   {
     name: 'opencode',
     capabilities: ['install', 'uninstall', 'doctor'],
-    install: async ({ homeDir, force }) => result([
-      ...installOpenCodePlugin(homeDir, force),
-      ...installHarnessLinks(openCodeLinks(homeDir), force),
-    ]),
-    uninstall: ({ homeDir }) => result([
-      ...uninstallOpenCodePlugin(homeDir),
-      ...uninstallHarnessLinks(openCodeLinks(homeDir)),
-    ]),
-    doctor: ({ homeDir }) => result([verifyOpenCodeRuntime(homeDir), ...doctorHarnessLinks(openCodeLinks(homeDir))]),
+    install: ({ homeDir, force }) => result(installOpenCodePlugin(homeDir, force)),
+    uninstall: ({ homeDir }) => result(uninstallOpenCodePlugin(homeDir)),
+    doctor: ({ homeDir }) => result([verifyOpenCodeRuntime(homeDir)]),
   },
   {
     name: 'pi',

@@ -9,7 +9,8 @@ export type ParsedSquareLocation = { readonly kind: 'local'; readonly path: stri
   | { readonly kind: 'stdio'; readonly backend: string; readonly key: string; readonly uri: string };
 
 export function parseSquareLocation(value: string): ParsedSquareLocation {
-  if (!/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) return { kind: 'local', path: value };
+  // Windows roots include drive-relative prefixes such as D:.
+  if (path.win32.parse(value).root !== '' || !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) return { kind: 'local', path: value };
   // Parse the raw components, before URL dot-segment normalization or host lowercasing.
   const match = /^stdio:\/\/([A-Za-z0-9_-]+)\/([^/?#]+)$/.exec(value);
   if (!match) throw new SquareError('invalid_args', 'Expected a local path or stdio://<configured-name>/<encoded-square-key>; no credentials, port, query or fragment');
