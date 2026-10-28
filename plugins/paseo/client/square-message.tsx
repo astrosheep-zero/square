@@ -3,14 +3,15 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { parseSquareBlocks, parseSquareVoice, type SquareMessageData } from "../shared/message";
-import { SquareInline, SquareMarkdownBody } from "./markdown";
+import { MONO, SquareInline, SquareMarkdownBody } from "./markdown";
 import { squarePalette } from "./palette";
 
 /**
  * The accent ■ marks the square itself, not a route.
  * Collapsed: ■ who spoke · where · how many, then two preview lines.
- * Expanded: the same header, then the bodies indented under it — one voice bare,
- * several voices each behind their own ● glyph. No divider rules, no narration.
+ * Expanded: the same header, then the bodies indented under it. Several voices
+ * become a stage script: each speaker holds a fixed left column, their words
+ * run down a single ruled dialogue column. No narration.
  */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
@@ -41,7 +42,9 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         onPress={() => setExpanded(value => !value)}
         style={({ pressed }) => ({ gap: 3, opacity: pressed ? 0.7 : 1 })}
       >
-        <View style={row}>
+        <View style={expanded && multi
+          ? { ...row, paddingBottom: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: border }
+          : row}>
           <Text style={{ color: accent, fontSize: 9 }}>■</Text>
           {expanded && multi ? (
             <>
@@ -68,18 +71,22 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
       {expanded && (
         <ScrollView style={{ maxHeight: layout.compact ? 280 : 400 }} nestedScrollEnabled>
           {multi ? (
-            <View style={{ gap: 12 }}>
+            <View style={{ gap: 10 }}>
               {blocks.map((block, index) => {
                 const voice = parseSquareVoice(block.actor, block.meta);
-                const detail = [voice.bell ? "rang the bell" : undefined, voice.actId ? `· ${voice.actId}` : undefined].filter(Boolean).join(" ");
+                const detail = [voice.bell ? "bell" : undefined, voice.actId].filter(Boolean).join(" · ");
                 return (
-                  <View key={voice.actId ?? index} style={{ gap: 3 }}>
-                    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                      <Text style={{ fontSize: 10, color: voice.glyph === "○" ? muted : palette.voice }}>{voice.glyph}</Text>
-                      {voice.speaker && <Text style={{ color: foreground, fontSize: 13, fontWeight: "500" }}>{voice.speaker}</Text>}
-                      <Text numberOfLines={1} style={{ color: muted, fontSize: 12 }}>{detail}</Text>
+                  <View key={voice.actId ?? index} style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+                    <View style={{ width: 62, paddingTop: 1, gap: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                        <Text style={{ fontSize: 8.5, color: voice.glyph === "○" ? muted : palette.voice }}>{voice.glyph}</Text>
+                        {voice.speaker && <Text numberOfLines={1} style={{ color: foreground, fontSize: 12.5, fontWeight: "500", flexShrink: 1 }}>{voice.speaker}</Text>}
+                      </View>
+                      {(voice.bell || voice.actId) && <Text numberOfLines={1} style={{ color: muted, fontSize: 10.5, fontFamily: MONO, paddingLeft: 13 }}>{detail}</Text>}
                     </View>
-                    <SquareMarkdownBody text={block.body} theme={palette.theme} style={indent} />
+                    <View style={{ flex: 1, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: border, paddingLeft: 10 }}>
+                      <SquareMarkdownBody text={block.body} theme={palette.theme} />
+                    </View>
                   </View>
                 );
               })}

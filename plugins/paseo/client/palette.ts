@@ -1,33 +1,34 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 
 /**
- * Square's own courtyard palette: warm clay and fired terracotta, deliberately
- * no relative of notesoup's cream paper or pi-meantime's cold slate. Every
- * token here is opaque and self-contained — the card and Markdown never borrow
- * the host's surface ramp or accent, only its appearance (read from the host
- * ink) and its accentForeground, which paints text on top of an accent fill.
+ * Square's own courtyard palette: cool pewter slate and a cold blue voice,
+ * deliberately no relative of notesoup's warm parchment or pi-meantime's
+ * neutral carbon. Every token here is opaque and self-contained — the card and
+ * Markdown never borrow the host's surface ramp or accent, only its appearance
+ * (read from the host ink) and its accentForeground, which paints text on top
+ * of an accent fill.
  */
 const DARK = {
-  surface0: "#181211", // inset / code
-  surface1: "#211917", // card
-  surface2: "#181211", // inset / code
-  border: "#4a342d",
-  foreground: "#f4e9e2",
-  foregroundMuted: "#b39a8e",
-  accent: "#ef8063", // plaza ■ / links
+  surface0: "#121519", // inset / code
+  surface1: "#171b20", // card
+  surface2: "#121519", // inset / code
+  border: "#262d36",
+  foreground: "#e6ebf2",
+  foregroundMuted: "#7d8999",
+  accent: "#60a5fa", // plaza ■ / links
 } as const;
 
 const LIGHT = {
-  surface0: "#e4d5cc",
-  surface1: "#eee3dc", // clay plaster, not notesoup's #faf6eb cream
-  surface2: "#e4d5cc",
-  border: "#cdb4a7",
-  foreground: "#30211c",
-  foregroundMuted: "#80665b",
-  accent: "#bd4f32",
+  surface0: "#e8edf3",
+  surface1: "#f3f6fa", // pewter slate, not notesoup's warm parchment
+  surface2: "#e8edf3",
+  border: "#d5dee8",
+  foreground: "#141b24",
+  foregroundMuted: "#64748b",
+  accent: "#2563eb",
 } as const;
 
-const VOICE = { dark: "#e5a064", light: "#a96332" } as const;
+const VOICE = { dark: "#93c5fd", light: "#3b82f6" } as const;
 
 export interface SquarePalette {
   /** Complete theme for the card and its Markdown surfaces. */
