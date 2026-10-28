@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { parseSquareBlocks, parseSquareVoice, type SquareMessageData } from "../shared/message";
 import { SquareInline, SquareMarkdownBody } from "./markdown";
+import { squarePalette } from "./palette";
 
 /**
  * The accent ■ marks the square itself, not a route.
@@ -13,6 +14,7 @@ import { SquareInline, SquareMarkdownBody } from "./markdown";
  */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
+  const palette = useMemo(() => squarePalette(theme), [theme]);
   const { text, items } = item.data;
   const latest = items?.[items.length - 1];
   const preview = latest?.preview?.replace(/\s+/g, " ").trim();
@@ -26,7 +28,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const squareName = latest?.square ?? blocks[0].meta?.split("·")[1]?.trim() ?? "Square";
   const bell = latest?.route === "bell" || single?.bell === true;
   const trailing = `· ${squareName}${expanded && single?.actId ? ` · ${single.actId}` : !expanded && items && items.length > 1 ? ` · ${items.length}` : ""}`;
-  const { accent, border, foreground, foregroundMuted: muted, surface1 } = theme.colors;
+  const { accent, border, foreground, foregroundMuted: muted, surface1 } = palette.theme.colors;
   const row = { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 };
   const indent = { paddingLeft: 15 };
 
@@ -59,7 +61,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
           <View style={indent}>
-            <SquareInline text={preview} theme={theme} numberOfLines={2} />
+            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} />
           </View>
         )}
       </Pressable>
@@ -73,17 +75,17 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
                 return (
                   <View key={voice.actId ?? index} style={{ gap: 3 }}>
                     <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                      <Text style={{ fontSize: 10, color: voice.glyph === "○" ? muted : accent }}>{voice.glyph}</Text>
+                      <Text style={{ fontSize: 10, color: voice.glyph === "○" ? muted : palette.voice }}>{voice.glyph}</Text>
                       {voice.speaker && <Text style={{ color: foreground, fontSize: 13, fontWeight: "500" }}>{voice.speaker}</Text>}
                       <Text numberOfLines={1} style={{ color: muted, fontSize: 12 }}>{detail}</Text>
                     </View>
-                    <SquareMarkdownBody text={block.body} theme={theme} style={indent} />
+                    <SquareMarkdownBody text={block.body} theme={palette.theme} style={indent} />
                   </View>
                 );
               })}
             </View>
           ) : (
-            <SquareMarkdownBody text={blocks[0].body} theme={theme} style={indent} />
+            <SquareMarkdownBody text={blocks[0].body} theme={palette.theme} style={indent} />
           )}
         </ScrollView>
       )}
