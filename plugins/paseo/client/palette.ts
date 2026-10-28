@@ -1,34 +1,34 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 
 /**
- * Square's own courtyard palette: cool pewter slate and a cold blue voice,
- * deliberately no relative of notesoup's warm parchment or pi-meantime's
- * neutral carbon. Every token here is opaque and self-contained — the card and
+ * Square's own courtyard palette: Carrara marble (grey-white stone with a
+ * slate-blue vein), deliberately no relative of notesoup's warm parchment or
+ * pi-meantime's neutral carbon. Every token here is opaque and self-contained — the card and
  * Markdown never borrow the host's surface ramp or accent, only its appearance
  * (read from the host ink) and its accentForeground, which paints text on top
  * of an accent fill.
  */
 const DARK = {
-  surface0: "#121519", // inset / code
-  surface1: "#171b20", // card
-  surface2: "#121519", // inset / code
-  border: "#262d36",
-  foreground: "#e6ebf2",
-  foregroundMuted: "#7d8999",
-  accent: "#60a5fa", // plaza ■ / links
+  surface0: "#14171b", // inset / code
+  surface1: "#1c2126", // card
+  surface2: "#14171b", // inset / code
+  border: "#2e353d",
+  foreground: "#e8edf3",
+  foregroundMuted: "#8b96a3",
+  accent: "#8ea8c3", // plaza ■ / links
 } as const;
 
 const LIGHT = {
-  surface0: "#e8edf3",
-  surface1: "#f3f6fa", // pewter slate, not notesoup's warm parchment
-  surface2: "#e8edf3",
-  border: "#d5dee8",
-  foreground: "#141b24",
-  foregroundMuted: "#64748b",
-  accent: "#2563eb",
+  surface0: "#e7ecf1",
+  surface1: "#f2f5f9", // cool marble white
+  surface2: "#e7ecf1",
+  border: "#d2dae3",
+  foreground: "#181d24",
+  foregroundMuted: "#67737f",
+  accent: "#4b6582",
 } as const;
 
-const VOICE = { dark: "#93c5fd", light: "#3b82f6" } as const;
+const VOICE = { dark: "#8b96a3", light: "#67737f" } as const; // grey: only the ■ carries colour
 
 export interface SquarePalette {
   /** Complete theme for the card and its Markdown surfaces. */

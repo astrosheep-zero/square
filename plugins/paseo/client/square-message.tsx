@@ -28,48 +28,42 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const speakers = [...new Set(names.filter((name): name is string => name !== undefined))];
   const squareName = latest?.square ?? blocks[0].meta?.split("·")[1]?.trim() ?? "Square";
   const bell = latest?.route === "bell" || single?.bell === true;
-  const trailing = `· ${squareName}${expanded && single?.actId ? ` · ${single.actId}` : !expanded && items && items.length > 1 ? ` · ${items.length}` : ""}`;
+  // Header is the same in both states; act id is always shown when we know it.
+  const actIds = [...new Set(blocks.flatMap(block => {
+    const id = parseSquareVoice(block.actor, block.meta).actId;
+    return id ? [id] : [];
+  }))];
+  const trailing = `· ${squareName}${actIds.length ? ` · ${actIds.join(", ")}` : ""}${items && items.length > 1 ? ` · ${items.length}` : ""}`;
   const { accent, border, foreground, foregroundMuted: muted, surface1 } = palette.theme.colors;
   const row = { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 };
   const indent = { paddingLeft: 15 };
 
   return (
-    <View style={{ backgroundColor: surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, gap: expanded ? 8 : 3 }}>
+    <View style={{ backgroundColor: surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: border, borderRadius: 4, paddingHorizontal: 12, paddingVertical: 9 }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${expanded ? "收起" : "展开"} ${squareName}: ${speakers.join(", ") || "Square"}`}
         aria-expanded={expanded}
         onPress={() => setExpanded(value => !value)}
-        style={({ pressed }) => ({ gap: 3, opacity: pressed ? 0.7 : 1 })}
+        style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
       >
-        <View style={expanded && multi
-          ? { ...row, paddingBottom: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: border }
-          : row}>
+        <View style={row}>
           <Text style={{ color: accent, fontSize: 9 }}>■</Text>
-          {expanded && multi ? (
-            <>
-              <Text numberOfLines={1} style={{ color: foreground, fontSize: 12.5, fontWeight: "500", flex: 1 }}>{squareName}</Text>
-              <Icon name="ChevronUp" size={15} color={muted} />
-            </>
-          ) : (
-            <>
-              <Text numberOfLines={1} style={{ color: foreground, fontSize: 13, fontWeight: "500", flex: 1 }}>
-                {speakers.join(", ") || "Square"}
-                {bell && <Text style={{ color: muted, fontWeight: "400" }}> · rang the bell</Text>}
-              </Text>
-              <Text style={{ color: muted, fontSize: 12 }}>{trailing}</Text>
-              <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={15} color={muted} />
-            </>
-          )}
+          <Text numberOfLines={1} style={{ color: foreground, fontSize: 13, fontWeight: "500", flex: 1 }}>
+            {speakers.join(", ") || "Square"}
+            {bell && <Text style={{ color: muted, fontWeight: "400" }}> · rang the bell</Text>}
+          </Text>
+          <Text style={{ color: muted, fontSize: 12 }}>{trailing}</Text>
+          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={15} color={muted} />
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
-          <View style={indent}>
+          <View style={{ ...indent, marginTop: 3 }}>
             <SquareInline text={preview} theme={palette.theme} numberOfLines={2} />
           </View>
         )}
       </Pressable>
       {expanded && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400 }} nestedScrollEnabled>
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 3 }} nestedScrollEnabled>
           {multi ? (
             <View style={{ gap: 10 }}>
               {blocks.map((block, index) => {
