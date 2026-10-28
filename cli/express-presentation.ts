@@ -12,6 +12,7 @@ import {
 } from '../presentation.js';
 import { renderExpression } from '../operation-presentation.js';
 import { formatDuration } from '../time.js';
+import { jsonResult } from './json.js';
 
 export { renderExpression } from '../operation-presentation.js';
 
@@ -52,7 +53,7 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
 }
 
 /** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
-export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions): Promise<void> {
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false): Promise<void> {
   let square: Square | undefined;
   let attempted = false;
   let announcedWait: 'held' | 'throttled' | undefined;
@@ -68,18 +69,18 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     attempted = true;
     const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, ...expressOptions } = opts;
     const outcome = await participant.express(rawInput === undefined ? undefined : rawInput.replace(/\r\n/g, '\n').trim(), {
-      ...expressOptions, reply: opts.reply as ActivityId | undefined, observe: true,
+      ...expressOptions, reply: opts.reply as ActivityId | undefined, ...(json ? {} : { observe: true }),
     }, {
       signal: controller.signal,
       onProgress(progress) {
         if (progress.kind !== 'waiting' || announcedWait === progress.reason) return;
-        process.stdout.write(renderExpressWaiting(progress) + '\n');
+        (json ? process.stderr : process.stdout).write(renderExpressWaiting(progress) + '\n');
         announcedWait = progress.reason;
       },
     });
     landedId = outcome.activity.id;
-    name = outcome.observation!.participant;
-    const rendered = renderExpression(squarePath, outcome);
+    if (!json) name = outcome.observation!.participant;
+    const rendered = json ? jsonResult(outcome) : renderExpression(squarePath, outcome);
     if (rendered !== undefined) process.stdout.write(rendered);
   } catch (error) {
     const detail = (error as OperationError | undefined)?.operation;

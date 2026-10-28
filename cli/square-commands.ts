@@ -13,6 +13,7 @@ import {
 } from '../operation-presentation.js';
 import { Square } from '../square-api.js';
 import { executeExpression } from './express-presentation.js';
+import { jsonResult } from './json.js';
 import {
   type CommandContext, type CommandSpec, squareInput, withSquare, fail, parseBoundedLimit,
   parseHardCap, parsePositiveInteger, readStdin, requireSquarePath, requireValue,
@@ -104,13 +105,15 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
           `${context.name === undefined ? commandPrefix(requireSquarePath(context)) : participantCommandPrefix(requireSquarePath(context), context.name)} join --last ${JOIN_MAX_LAST}`);
         index += 1;
       } else if (argv[index] === '--kick') kick = true;
-      else usage(context.command);
+      else if (argv[index] !== '--json') usage(context.command);
     }
     return { lastN, kick };
   },
   async execute(intent, context) {
-    const data = await withSquare(context, (square) => square.join(context.name, { takeover: intent.kick, last: intent.lastN, observe: true }));
-    return renderJoinResult(data)!;
+    const data = await withSquare(context, (square) => square.join(context.name, {
+      takeover: intent.kick, last: intent.lastN, ...(context.json ? {} : { observe: true }),
+    }));
+    return context.json ? jsonResult(data) : renderJoinResult(data)!;
   },
   present: (result) => process.stdout.write(result),
 };
@@ -127,6 +130,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
   const bodyArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
+    if (argument === '--json') continue;
     if (argument === '-f' || argument === '--force') force = true;
     else if (argument === '--no-wait') noWait = true;
     else if (argument === '--beside') fail('✕ express does not know --beside\nsquare express --help');
@@ -163,14 +167,15 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
       mentions: intent.mentions, reach: intent.reach, reply: intent.reply, metadata: intent.metadata,
       metadataJson: intent.metadataJson, bodyProvided: intent.activity !== undefined,
-    });
+    }, context.json);
   },
   present: () => {},
 };
 
 function parseListener(argv: string[], context: CommandContext, targetRequired: boolean): ListenerIntent {
-  if (targetRequired ? argv.length !== 1 : argv.length !== 0) usage(context.command);
-  return targetRequired ? { target: argv[0] } : {};
+  const args = argv.filter((arg) => arg !== '--json');
+  if (targetRequired ? args.length !== 1 : args.length !== 0) usage(context.command);
+  return targetRequired ? { target: args[0] } : {};
 }
 
 function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<ListenerIntent, string> {
@@ -178,8 +183,8 @@ function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<Li
     parse(argv, context) { return parseListener(argv, context, true); },
     async execute(intent, context) {
       const squarePath = requireSquarePath(context);
-      const data = await withSquare(context, async (square) => (await square.participant(context.name))[verb](intent.target!, { observe: true }));
-      return renderListenerChange(squarePath, verb, data)!;
+      const data = await withSquare(context, async (square) => (await square.participant(context.name))[verb](intent.target!, context.json ? {} : { observe: true }));
+      return context.json ? jsonResult(data) : renderListenerChange(squarePath, verb, data)!;
     },
     present: (result) => process.stdout.write(result),
   };
@@ -191,50 +196,34 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, async (square) => (await square.participant(context.name)).listening({ observe: true }));
-    return renderListeningResult(squarePath, data)!;
+    const data = await withSquare(context, async (square) => (await square.participant(context.name)).listening(context.json ? {} : { observe: true }));
+    return context.json ? jsonResult(data) : renderListeningResult(squarePath, data)!;
   },
   present: (result) => process.stdout.write(result),
 };
 
-export const doneCommand: CommandSpec<BodyIntent, string> = {
-  parse(argv, context) {
-    if (argv.length > 1) usage(context.command);
-    return { body: argv[0] };
-  },
-  async execute(intent, context) {
-    const body = intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY)
-      ? await readStdin() : intent.body;
-    const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, async (square) => (await square.participant(context.name)).done(body, { observe: true }));
-    return renderLifecycleResult(squarePath, 'done', data)!;
-  },
-  present: (result) => process.stdout.write(result),
-};
-
-export const holdCommand: CommandSpec<BodyIntent, string> = {
-  parse(argv, context) {
-    if (argv.length > 1) usage(context.command);
-    return { body: argv[0] };
-  },
-  async execute(intent, context) {
-    const body = (await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim();
-    const squarePath = requireSquarePath(context);
-    const result = await withSquare(context, async (square) => (await square.participant(context.name)).hold(body, { observe: true }));
-    return renderLifecycleResult(squarePath, 'hold', result)!;
-  },
-  present: (result) => process.stdout.write(result),
-};
-
-export const resumeCommand: CommandSpec<Record<string, never>, string> = {
-  parse(argv, context) {
-    if (argv.length !== 0) usage(context.command);
-    return {};
-  },
-  async execute(_intent, context) {
-    const squarePath = requireSquarePath(context);
-    const result = await withSquare(context, async (square) => (await square.participant(context.name)).resume({ observe: true }));
-    return renderLifecycleResult(squarePath, 'resume', result)!;
-  },
-  present: (result) => process.stdout.write(result),
-};
+function lifecycleCommand(verb: 'done' | 'hold' | 'resume'): CommandSpec<BodyIntent, string> {
+  return {
+    parse(argv, context) {
+      const args = argv.filter((arg) => arg !== '--json');
+      if (args.length > (verb === 'resume' ? 0 : 1)) usage(context.command);
+      return { body: args[0] };
+    },
+    async execute(intent, context) {
+      const body = verb === 'hold' ? (await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim()
+        : verb === 'done' && (intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY))
+          ? await readStdin() : intent.body;
+      const squarePath = requireSquarePath(context);
+      const result = await withSquare(context, async (square) => {
+        const participant = await square.participant(context.name);
+        const options = context.json ? {} : { observe: true };
+        return verb === 'resume' ? participant.resume(options) : participant[verb](body, options);
+      });
+      return context.json ? jsonResult(result) : renderLifecycleResult(squarePath, verb, result)!;
+    },
+    present: (result) => process.stdout.write(result),
+  };
+}
+export const doneCommand = lifecycleCommand('done');
+export const holdCommand = lifecycleCommand('hold');
+export const resumeCommand = lifecycleCommand('resume');

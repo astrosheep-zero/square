@@ -22,6 +22,7 @@ import { style } from '../tty-style.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { discover, inbox, formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
 import { renderCatchOutcome, renderCatchProgress } from './catch-presentation.js';
+import { jsonResult } from './json.js';
 
 import {
   type CommandContext,
@@ -50,7 +51,6 @@ interface HistoryCommandOptions {
   query: HistoryQuery;
   noTruncate: boolean;
   format?: string[];
-  json: boolean;
   continuationArgs: string[];
 }
 
@@ -196,7 +196,7 @@ export const catchCommand: CommandSpec<CatchOptions> = {
         index += 1;
       } else if (argv[index] === '--replace') replace = true;
       else if (argv[index] === '--now') now = true;
-      else fail(`✕ catch does not know ${argv[index]}\nsquare catch --help`);
+      else if (argv[index] !== '--json') fail(`✕ catch does not know ${argv[index]}\nsquare catch --help`);
     }
     if (id !== undefined) {
       if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--replace'].includes(flag))) {
@@ -220,16 +220,21 @@ export const catchCommand: CommandSpec<CatchOptions> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      const outcome = await withSquare(context, async (square) => (await square.participant(context.name)).catch({ ...intent, observe: true }, {
+      const outcome = await withSquare(context, async (square) => (await square.participant(context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
         signal: controller.signal,
         onProgress(progress) {
           const line = renderCatchProgress(squarePath, progress);
           if (line !== undefined) process.stderr.write(line);
         },
       }), { signal: controller.signal });
-      const rendered = renderCatchOutcome(squarePath, outcome, intent);
-      process.stdout.write(rendered.stdout);
-      process.exitCode = rendered.exitCode;
+      if (context.json) {
+        process.stdout.write(jsonResult(outcome));
+        process.exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
+      } else {
+        const rendered = renderCatchOutcome(squarePath, outcome, intent);
+        process.stdout.write(rendered.stdout);
+        process.exitCode = rendered.exitCode;
+      }
     } catch (error) {
       if (!controller.signal.aborted) throw error;
       process.stdout.write(withPathOutput(squarePath, '○ you step back — catch stopped'));
@@ -280,7 +285,6 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   let fixed: string | undefined;
   let order: 'asc' | 'desc' | undefined;
   let format: string[] | undefined;
-  let json = false;
   const participants: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
@@ -339,8 +343,7 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
     } else if (flag === '--format') {
       format = requireValue(argv, index, flag).split(',').map((item) => item.trim()).filter(Boolean);
       index += 1;
-    } else if (flag === '--json') json = true;
-    else fail(`✕ history does not know ${flag}\nsquare history --help`);
+    } else if (flag !== '--json') fail(`✕ history does not know ${flag}\nsquare history --help`);
   }
   if (grep !== undefined && fixed !== undefined) fail('--grep and --fixed cannot be combined.');
   if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
@@ -348,7 +351,7 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   return {
     query: { limit, from: participants, since, after, before, at: at.length === 0 ? undefined : at,
       contextBefore: beforeContext, contextAfter: afterContext, mention, grep, fixed, order },
-    noTruncate, format, json,
+    noTruncate, format,
     continuationArgs: historyContinuationArgs(argv),
   };
 }
@@ -375,38 +378,20 @@ function renderFields(sayNumbers: Readonly<Record<number, number>>, item: Archiv
   }).join('\t');
 }
 
-function jsonLine(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRecord): string {
-  const act = item;
-  return JSON.stringify({
-    id: formatActivityId(item.index),
-    index: item.index,
-    kind: act.kind,
-    author: act.actor ?? null,
-    at: act.at,
-    ts: formatTimestamp(act.at),
-    body: 'body' in act && typeof act.body === 'string' ? act.body : '',
-    number: act.kind === 'say' ? sayNumbers[act.index] : null,
-    mentions: act.kind === 'say' ? [...(act.mentions ?? [])] : [],
-    metadata: act.kind === 'say' ? act.metadata ?? null : null,
-    reach: act.kind === 'say' ? act.reach ?? null : null,
-    reply: act.kind === 'say' && act.reply !== undefined ? formatActivityId(act.reply) : null,
-  });
-}
-
 export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
   parse(argv, context) { return parseHistory(argv, context); },
   async execute(options, context) {
     const squarePath = requireSquarePath(context);
     let outcome;
-    try { outcome = await withSquare(context, (square) => square.history({ ...options.query, observe: true })); }
+    try { outcome = await withSquare(context, (square) => square.history({ ...options.query, ...(context.json ? {} : { observe: true }) })); }
     catch (error) {
       const bounds = (error as OperationError | null)?.operation?.historyBounds;
       if (bounds !== undefined) fail(`✕ history is capped at ${bounds.maxLimit} activities\n${historyContinuationCommand(options, squarePath, ['--limit', String(bounds.maxLimit)])}`);
       throw error;
     }
+    if (context.json) return jsonResult(outcome);
     const projection = outcome.observation!;
     const events = projection.activities;
-    if (options.json) return events.map((item) => jsonLine(projection.sayNumbers, item)).join('\n') + (events.length > 0 ? '\n' : '');
     if (options.format !== undefined && options.format.length > 0) {
       return events.map((item) => renderFields(projection.sayNumbers, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
     }
@@ -428,6 +413,7 @@ function participantsLimitCommand(squarePath: string, limit: number): string {
 function parseParticipants(argv: string[], context: CommandContext): ParticipantsCommandOptions {
   let limit = PARTICIPANTS_DEFAULT_LIMIT;
   for (let index = 0; index < argv.length; index++) {
+    if (argv[index] === '--json') continue;
     if (argv[index] !== '--limit') usage(context.command);
     limit = parseBoundedLimit(
       argv[index + 1],
@@ -444,33 +430,32 @@ export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string
   parse(argv, context) { return parseParticipants(argv, context); },
   async execute(intent, context) {
     const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, (square) => square.participants({ observe: true }));
-    return renderParticipantsResult(squarePath, data, intent.limit)!;
+    const data = await withSquare(context, (square) => square.participants(context.json ? {} : { observe: true }));
+    return context.json ? jsonResult(data) : renderParticipantsResult(squarePath, data, intent.limit)!;
   },
   present: (result) => process.stdout.write(result),
 };
 
 export const statusCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
+  parse(argv, context) { if (argv.some((arg) => arg !== '--json')) usage(context.command); return undefined; },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const result = await withSquare(context, (square) => square.status({ viewer: context.name, observe: true }));
-    return renderStatusResult(squarePath, result)!;
+    const result = await withSquare(context, (square) => square.status({ viewer: context.name, ...(context.json ? {} : { observe: true }) }));
+    return context.json ? jsonResult(result) : renderStatusResult(squarePath, result)!;
   },
   present: (result) => process.stdout.write(result),
 };
 
-interface InboxIntent { sessionId: string; json: boolean; limit: number; }
+interface InboxIntent { sessionId: string; limit: number; }
 export const inboxCommand: CommandSpec<InboxIntent, string> = {
   parse(argv, context) {
     let sessionId: string | undefined;
-    let json = false;
     let limitValue: string | undefined;
     let hasLimit = false;
     let duplicateLimit = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--for-session') { sessionId = requireValue(argv, index, argv[index]); index += 1; }
-      else if (argv[index] === '--json') json = true;
+      else if (argv[index] === '--json') continue;
       else if (argv[index] === '--limit') {
         if (hasLimit) duplicateLimit = true;
         hasLimit = true;
@@ -480,16 +465,16 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
       else usage(context.command);
     }
     if (!sessionId) fail('inbox requires --for-session <session-id>.');
-    const retry = `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${json ? ' --json' : ''}`;
+    const retry = `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${context.json ? ' --json' : ''}`;
     if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
     const limit = hasLimit
       ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)
       : INBOX_DEFAULT_LIMIT;
-    return { sessionId, json, limit };
+    return { sessionId, limit };
   },
   async execute(intent, context) {
     const data = await inbox(squareInput(context), intent.sessionId, { limit: intent.limit });
-    if (intent.json) return `${JSON.stringify(data)}\n`;
+    if (context.json) return jsonResult(data);
     return [
       ...data.rows.map((row) => `${inboxDisplay(row.name)}\t${inboxDisplay(row.squarePath)}\t${row.pending}\n`),
       ...(data.rows.length < data.total ? [`${data.rows.length} of ${data.total} memberships shown\n`] : []),

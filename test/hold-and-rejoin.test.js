@@ -100,6 +100,6 @@ test('history pairs holds with lowerings and departures with returns', async () 
 
   const json = run(withPath(file, ['history', '--json']));
   assert.equal(json.status, 0, json.stderr);
-  const kinds = json.stdout.trim().split('\n').map((line) => JSON.parse(line).kind);
+  const kinds = JSON.parse(json.stdout).activities.map((activity) => activity.kind);
   assert.deepEqual(kinds, ['join', 'join', 'hold', 'resume', 'done', 'join']);
 });

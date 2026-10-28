@@ -80,6 +80,42 @@ test('stdio clients and the real CLI read the same artifact history without cons
   } finally { await artifact.close(); }
 });
 
+test('stdio CLI JSON serializes the real SDK result, including the remote participant handle', async t => {
+  const f = fixture(t), session = 'stdio-json-parity';
+  const env = { ...f.env, CODEX_THREAD_ID: session, SQUARE_NOW_MS: '1000' };
+  const body = { channel: 'codex', session };
+  const file = path.join(f.root, 'discussion.square'), copy = path.join(f.root, 'oracle.square');
+  fs.mkdirSync(f.root, { recursive: true });
+  const built = await Square.build({ path: file, env, body, markdown: 'stdio JSON' });
+  await built.close();
+  const config = path.join(f.cwd, 'backends.json');
+  fs.writeFileSync(config, JSON.stringify({ backends: f.input.backends }));
+  const cliEnv = { ...env, SQUARE_BACKENDS_CONFIG: config };
+  async function parity(args, call) {
+    fs.copyFileSync(file, copy);
+    const oracle = await Square.at({ ...f.input, path: 'stdio://local/oracle', env, body });
+    let expected;
+    try {
+      const { observation, ...result } = await call(oracle);
+      assert.equal(observation, undefined);
+      if (result.participant) result.participant = { name: result.participant.name };
+      expected = JSON.parse(JSON.stringify(result));
+    } finally { await oracle.close(); }
+    const actual = f.cli([...args, '--json'], cliEnv);
+    assert.equal(actual.status, 0, actual.stderr);
+    assert.deepEqual(JSON.parse(actual.stdout), expected);
+    assert.equal(actual.stdout, `${JSON.stringify(expected)}\n`);
+    return expected;
+  }
+  assert.deepEqual((await parity(['--as', 'Alice', 'join'], square => square.join('Alice', { last: 10, takeover: false }))).participant, { name: 'Alice' });
+  await parity(['--as', 'Bob', 'join'], square => square.join('Bob', { last: 10, takeover: false }));
+  await parity(['--as', 'Alice', 'listen', 'Bob'], async square => (await square.participant('Alice')).listen('Bob'));
+  await parity(['--as', 'Bob', 'express', '--force', 'hello @Alice'], async square => (await square.participant('Bob')).express('hello @Alice', { force: true }));
+  await parity(['--as', 'Alice', 'catch'], async square => (await square.participant('Alice')).catch({ limit: 10 }));
+  const history = await parity(['history'], square => square.history());
+  assert.equal(history.activities.find(activity => activity.kind === 'listen').target, 'Bob');
+});
+
 test('stdio status retains a historical actorless hold with or without observation', async t => {
   const f = fixture(t);
   fs.mkdirSync(f.root, { recursive: true });

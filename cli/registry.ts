@@ -4,6 +4,7 @@ import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
 import { helpCommand, versionCommand } from './meta-commands.js';
 import { mcpServerCommand } from './mcp-server-command.js';
+import { JSON_COMMANDS } from './json.js';
 import {
   catchCommand,
   claudeModCommand,
@@ -59,7 +60,9 @@ export function findCommand(name: string): RegisteredCommand | undefined {
 export async function executeRegisteredCommand(name: string, argv: string[], context: CommandContext): Promise<void> {
   const command = findCommand(name);
   if (command === undefined) throw new Error(`No registered command named ${name}`);
-  const intent = command.spec.parse(argv, context);
-  const result = await command.spec.execute(intent, context);
-  command.spec.present(result, context);
+  const json = JSON_COMMANDS.has(name) && argv.includes('--json');
+  const options = json ? { ...context, json } : context;
+  const intent = command.spec.parse(argv, options);
+  const result = await command.spec.execute(intent, options);
+  command.spec.present(result, options);
 }

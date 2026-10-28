@@ -220,8 +220,14 @@ receives the express abort signal, while recovery reopening is deliberately unca
 ## Adapters and standalone functions
 
 CLI and tools only adapt input, identity, resource lifetime and output. They do not import private
-actions, storage, admission, scanners or query execution. MCP/Pi use the shared `square-tools.ts`
-definitions. All eight tools return only the CLI's rendered text, with no `outputSchema`
+actions, storage, admission, scanners or query execution. CLI `--json` for join, express, catch,
+history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox
+serializes the same SDK result without requesting `observe: true`. Only `observation` is omitted and
+a live Participant handle becomes `{name}`. History returns one JSON document, including an empty
+`activities` array; `history --format` remains human-oriented. `participants --limit` limits only
+human text, not the SDK result. Stream `--ndjson` remains one SDK stream record per line.
+
+MCP/Pi use the shared `square-tools.ts` definitions. All eight tools return only the CLI's rendered text, with no `outputSchema`
 or `structuredContent`. Join text includes its context and recent activity; express text
 includes landing ID/reach, warnings and bounded unread previews, never the sent body echo
 or internal observation tables. Failures remain failed tool results with readable recovery

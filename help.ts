@@ -1,3 +1,5 @@
+import { JSON_COMMANDS } from './cli/json.js';
+
 interface CommandHelp {
   names: readonly string[];
   usage: string;
@@ -62,9 +64,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
-    names: ['inbox'], usage: 'inbox --for-session <session-id> [--limit <N>] [--json]', hiddenFromIndex: true,
+    names: ['inbox'], usage: 'inbox --for-session <session-id> [--limit <N>]', hiddenFromIndex: true,
     summary: 'Inspect a bounded machine-local notification snapshot for a native session.',
-    details: ['Options:', '  --for-session <id>  Required harness session id.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).', '  --json              Emit the bounded snapshot as structured JSON.'],
+    details: ['Options:', '  --for-session <id>  Required harness session id.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).'],
   },
   { names: ['codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   { names: ['claude-mod'], usage: '{command}', summary: 'Receive a structured operation from the loaded Claude mod.', hiddenFromIndex: true },
@@ -77,7 +79,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['participants'], usage: 'participants [--limit <count>]', usesSquare: true, group: 'host',
     summary: 'Show the participant roster and current states.',
-    details: ['Options:', '  --limit <count>  Show the first count names in roster order (default 20, maximum 100).'],
+    details: ['Options:', '  --limit <count>  Show the first count names in human text (default 20, maximum 100).'],
   },
   { names: ['hold'], usage: '--as <name> hold [reason | -]', usesSquare: true, group: 'participant', summary: 'Raise a hand and pause participant activity.' },
   { names: ['resume'], usage: '--as <name> resume', usesSquare: true, group: 'participant', summary: 'Lower the raised hand and resume activity.' },
@@ -134,6 +136,8 @@ export function renderGlobalHelp(): string {
     'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. Use --as to select a participant.',
     'Backends: SQUARE_BACKENDS_CONFIG selects {backends:{name:{command,args?,cwd?,env?}}}; default ~/.config/square/backends.json. See guides/backends.md.',
     'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
+    'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
+    'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
     ...commandLines,
     "Run 'square <command> --help' for command options.",
@@ -145,7 +149,7 @@ export function renderSubcommandHelp(command: string): string | undefined {
   const definition = definitionFor(command);
   if (definition === undefined) return undefined;
   const aliases = definition.names.filter((name) => name !== command);
-  const usage = definition.usage.replace('{command}', command);
+  const usage = definition.usage.replace('{command}', command) + (JSON_COMMANDS.has(command) ? ' [--json]' : '');
   return [
     `Usage: square ${definition.usesSquare ? '[--location <square>] ' : ''}${usage}`,
     ...(aliases.length > 0 ? [`Aliases: ${aliases.join(', ')}`] : []),

@@ -14,6 +14,7 @@ export interface CommandContext {
   name?: string;
   homeDir: string;
   command: string;
+  json?: boolean;
 }
 
 export interface CommandSpec<Intent = unknown, Result = void> {

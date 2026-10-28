@@ -187,7 +187,7 @@ test('history refuses an unbounded merged context and offers a bounded executabl
 
   const bounded = run(withPath(file, ['history', '--at', 'act/100', '-C', '100', '--json', '--limit', '100']));
   assert.equal(bounded.status, 0, bounded.stderr);
-  assert.equal(bounded.stdout.trim().split('\n').length, 100);
+  assert.equal(JSON.parse(bounded.stdout).activities.length, 100);
 });
 
 test('status has no participant preview affordance at ten active participants', async () => {
@@ -377,7 +377,7 @@ test('history --since excludes older public activity', async () => {
 
   const recorded = run(withPath(file, ['history', '--json']));
   assert.equal(recorded.status, 0, recorded.stderr);
-  const acts = recorded.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  const acts = JSON.parse(recorded.stdout).activities;
   const say = acts.find((act) => act.kind === 'say');
   const done = acts.find((act) => act.kind === 'done');
   assert.ok(say !== undefined && done !== undefined, recorded.stdout);
@@ -412,7 +412,7 @@ test('history hides read bookkeeping acts except in time and context windows', a
 
   const kinds = (result) => {
     assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim().split('\n').map((line) => JSON.parse(line).kind);
+    return JSON.parse(result.stdout).activities.map((activity) => activity.kind);
   };
 
   const archive = run(withPath(file, ['history', '--limit', '100', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
@@ -420,10 +420,15 @@ test('history hides read bookkeeping acts except in time and context windows', a
   const cursor = run(withPath(file, ['history', '--after', 'act/0', '--limit', '100', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.deepEqual(kinds(cursor), ['say', 'say']);
 
-  const context = run(withPath(file, ['history', '--at', formatActivityId(readIndex), '-C', '0', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.deepEqual(kinds(context), ['read']);
-  const since = run(withPath(file, ['history', '--since', new Date(readAt - 500).toISOString(), '--json']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.deepEqual(kinds(since), ['read']);
+  const contextArgs = ['history', '--at', formatActivityId(readIndex), '-C', '0'];
+  const sinceArgs = ['history', '--since', new Date(readAt - 500).toISOString()];
+  for (const args of [contextArgs, sinceArgs]) {
+    const json = run(withPath(file, [...args, '--json']), { env: { SQUARE_NOW_MS: '5000' } });
+    assert.deepEqual(kinds(json), [], 'SDK activities omit bookkeeping');
+    const fields = run(withPath(file, [...args, '--format', 'kind']), { env: { SQUARE_NOW_MS: '5000' } });
+    assert.equal(fields.status, 0, fields.stderr);
+    assert.equal(fields.stdout, 'read\n', 'human field output retains the selected raw record');
+  }
 });
 
 test('ambient catch and history render full body to a mention target and presence to others', async () => {
@@ -461,7 +466,7 @@ test('ambient catch and history render full body to a mention target and presenc
 
   const json = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--json']), { env: { SQUARE_NOW_MS: '10000' } });
   assert.equal(json.status, 0, json.stderr);
-  assert.match(JSON.parse(json.stdout).body, /secret reach phrase/);
+  assert.match(JSON.parse(json.stdout).activities[0].body, /secret reach phrase/);
 
   assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Cara', '--mention', 'bob', 'two targets @Cara then @bob']), { env: { SQUARE_NOW_MS: '10500' } }).status, 0);
   const laterJoin = run(withName(file, 'Dan', ['join', '--last', '100']), { env: { SQUARE_NOW_MS: '11000' } });
@@ -591,7 +596,7 @@ test('express --reply renders the causal activity reference', async () => {
 
   const json = run(withPath(file, ['history', '--at', formatActivityId(3), '-C', '0', '--json']));
   assert.equal(json.status, 0, json.stderr);
-  assert.equal(JSON.parse(json.stdout).reply, formatActivityId(2));
+  assert.equal(JSON.parse(json.stdout).activities[0].reply, formatActivityId(2));
 });
 
 test('history --at accepts multiple coordinates and unions their context windows', async () => {
@@ -604,11 +609,11 @@ test('history --at accepts multiple coordinates and unions their context windows
 
   const comma = run(withPath(file, ['history', '--at', 'act/2,act/3', '-C', '0', '--json']));
   assert.equal(comma.status, 0, comma.stderr);
-  assert.deepEqual(comma.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act/2', 'act/3']);
+  assert.deepEqual(JSON.parse(comma.stdout).activities.map((activity) => activity.id), ['act/2', 'act/3']);
 
   const repeated = run(withPath(file, ['history', '--at', 'act/2', '--at', 'act/3', '-C', '0', '--json']));
   assert.equal(repeated.status, 0, repeated.stderr);
-  assert.deepEqual(repeated.stdout.trim().split('\n').map((line) => JSON.parse(line).id), ['act/2', 'act/3']);
+  assert.deepEqual(JSON.parse(repeated.stdout).activities.map((activity) => activity.id), ['act/2', 'act/3']);
 });
 
 test('inbox stays read-only while codex admits pending attention once at a boundary', async () => {
@@ -674,7 +679,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   assert.equal(JSON.parse(afterStop.stdout).total, 1);
 });
 
-test('history power filters and jsonl stay read-only', async () => {
+test('history power filters and JSON stay read-only', async () => {
   const file = await persistSquare(async ({ square }) => {
     const alice = (await square.join('Alice')).participant;
     const bob = (await square.join('Bob')).participant;
@@ -684,7 +689,7 @@ test('history power filters and jsonl stay read-only', async () => {
 
   const grepped = run(withPath(file, ['history', '--grep', 'schema v3', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(grepped.status, 0, grepped.stderr);
-  const row = JSON.parse(grepped.stdout.trim().split('\n').at(-1));
+  const [row] = JSON.parse(grepped.stdout).activities;
   assert.match(row.id, /^act\//);
   assert.match(row.body, /schema v3/);
 
@@ -747,16 +752,16 @@ test('history search reports shown and total matches consistently', async () => 
   const human = run(withPath(file, ['history', '--grep', 'needle']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(human.status, 0, human.stderr);
   assert.match(human.stdout, /10 of 12 matches/);
-  assert.equal(run(withPath(file, ['history', '--grep', 'needle', '--json'])).stdout.trim().split('\n').length, 10);
+  assert.equal(JSON.parse(run(withPath(file, ['history', '--grep', 'needle', '--json'])).stdout).activities.length, 10);
 
   const limited = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--json']));
   assert.equal(limited.status, 0, limited.stderr);
-  const limitedRows = limited.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  const limitedRows = JSON.parse(limited.stdout).activities;
   assert.deepEqual(limitedRows.map((row) => row.body), ['needle 9 @Alice', 'needle 10 @Alice', 'needle 11 @Alice']);
 
   const descending = run(withPath(file, ['history', '--grep', 'needle', '--limit', '3', '--order', 'desc', '--json']));
   assert.equal(descending.status, 0, descending.stderr);
-  assert.deepEqual(descending.stdout.trim().split('\n').map((line) => JSON.parse(line).body), ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice']);
+  assert.deepEqual(JSON.parse(descending.stdout).activities.map((activity) => activity.body), ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice']);
 });
 
 test('manual participant writes require an explicit location', () => {

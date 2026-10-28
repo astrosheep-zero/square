@@ -93,7 +93,7 @@ test('CLI done rejects argument and stdin payloads without leaving or posting', 
 test('done help teaches leaving with no message argument', () => {
   const result = run(['done', '--help']);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /--as <name> done\n/);
+  assert.match(result.stdout, /--as <name> done \[--json\]\n/);
   assert.match(result.stdout, /done takes no message/);
-  assert.doesNotMatch(result.stdout, /final|handoff|done \[/);
+  assert.doesNotMatch(result.stdout, /final|handoff|done \[(?:reason|message|body)/);
 });
