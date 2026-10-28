@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, parseSquareBlocks, squareHeadline, squareMessageSchema } from "../shared/message.ts";
+import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, parseSquareBlocks, parseSquareVoice, squareHeadline, squareMessageSchema } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
@@ -135,4 +135,18 @@ test("square activity envelopes take their route line from attributes or from th
     { body: "尾" },
   ]);
   assert.deepEqual(parseSquareBlocks("just words"), [{ body: "just words" }]);
+});
+
+test("a voice line yields speaker marks, not the stored route prose", () => {
+  assert.deepEqual(parseSquareVoice("● kuro spoke · you're listening", "· design · aoi · act/104"),
+    { glyph: "●", speaker: "kuro", bell: false, actId: "act/104" });
+  assert.deepEqual(parseSquareVoice("○ rei rang the bell"),
+    { glyph: "○", speaker: "rei", bell: true, actId: undefined });
+  assert.deepEqual(parseSquareVoice("◎ aoi answered you", "· design · act/12"),
+    { glyph: "◎", speaker: "aoi", bell: false, actId: "act/12" });
+  // A bare activity keeps its first line: no glyph, and the first word is still the speaker.
+  assert.deepEqual(parseSquareVoice("nobody in particular"),
+    { glyph: "●", speaker: "nobody", bell: false, actId: undefined });
+  assert.deepEqual(parseSquareVoice(undefined, "· design · act/12"),
+    { glyph: "●", speaker: undefined, bell: false, actId: "act/12" });
 });

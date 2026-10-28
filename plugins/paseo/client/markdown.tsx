@@ -1,10 +1,7 @@
 import { useMemo, type ReactNode } from "react";
-import { Platform, Text, View, type TextStyle } from "react-native";
+import { Platform, Text, View, type TextStyle, type ViewStyle } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Lexer, lexer, type Token, type Tokens } from "marked";
-import { parseSquareBlocks } from "../shared/message.ts";
-
-export { parseSquareBlocks };
 
 export const MONO = Platform.select({ ios: "Menlo", android: "monospace", default: "ui-monospace, Menlo, monospace" });
 
@@ -17,16 +14,14 @@ function makeStyles(colors: PluginTheme["colors"]) {
     del: { color: colors.foregroundMuted, textDecorationLine: "line-through" as const },
     link: { color: colors.accent, textDecorationLine: "underline" as const },
     inlineCode: { fontFamily: MONO },
-    codeBlock: { backgroundColor: colors.surface0, borderRadius: 6, paddingHorizontal: 9, paddingVertical: 7 },
+    codeBlock: { backgroundColor: colors.surface0, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 6 },
     codeText: { fontFamily: MONO, fontSize: 13, lineHeight: 19, color: colors.foreground },
     quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: 8, gap: 2 },
     quoteText: { color: colors.foregroundMuted, fontStyle: "italic" as const },
-    meta: { color: colors.foregroundMuted, fontSize: 13, lineHeight: 19, fontFamily: MONO },
-    actor: { color: colors.accent, fontSize: 13, lineHeight: 19, fontWeight: "500" as const },
     separator: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
     listRow: { flexDirection: "row" as const, gap: 6 },
     listItem: { flexShrink: 1, gap: 2 },
-    bullet: { color: colors.accent, fontSize: 13, lineHeight: 19 },
+    bullet: { color: colors.foregroundMuted, fontSize: 13, lineHeight: 19 },
     tableRow: { flexDirection: "row" as const, gap: 8 },
     tableCell: { flex: 1 },
   };
@@ -93,7 +88,7 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
             {list.items.map((item, itemIndex) => (
               <View key={`${key}-${itemIndex}`} style={styles.listRow}>
                 <Text style={styles.bullet}>
-                  {item.task ? (item.checked === true ? "☑" : "☐") : list.ordered ? `${start + itemIndex}.` : "•"}
+                  {item.task ? (item.checked === true ? "☑" : "☐") : list.ordered ? `${start + itemIndex}.` : "·"}
                 </Text>
                 <View style={styles.listItem}>{renderBlocks(children(item), styles, `${key}-${itemIndex}`, textStyle)}</View>
               </View>
@@ -146,19 +141,9 @@ export function SquareInline({ text, theme, numberOfLines, style }: {
   );
 }
 
-export function SquareMarkdown({ text, theme }: { text: string; theme: PluginTheme }) {
+/** A body of Markdown: no envelope, no route line — the words only, indented by the card. */
+export function SquareMarkdownBody({ text, theme, style }: { text: string; theme: PluginTheme; style?: ViewStyle }) {
   const styles = useMemo(() => makeStyles(theme.colors), [theme.colors]);
-  const blocks = useMemo(() => parseSquareBlocks(text), [text]);
-  return (
-    <View style={styles.block}>
-      {blocks.map((block, index) => (
-        <View key={index} style={styles.block}>
-          {index > 0 && <View style={styles.separator} />}
-          {block.meta !== undefined && <Text style={styles.meta}>{block.meta}</Text>}
-          {block.actor !== undefined && <Text style={styles.actor}>{block.actor}</Text>}
-          {renderBlocks(lexer(block.body), styles, `${index}`)}
-        </View>
-      ))}
-    </View>
-  );
+  const tokens = useMemo(() => lexer(text), [text]);
+  return <View style={[styles.block, style]}>{renderBlocks(tokens, styles, "body")}</View>;
 }

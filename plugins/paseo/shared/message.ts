@@ -50,6 +50,21 @@ export function parseSquareBlocks(text: string): SquareBlock[] {
   return blocks;
 }
 
+export interface SquareVoice { glyph: string; speaker?: string; bell: boolean; actId?: string }
+
+// A voice line is chrome for the card: `● rei rang the bell` names who, how, and which
+// activity. Route prose is parsed into those marks, never rendered as narration.
+export function parseSquareVoice(actorLine?: string, metaLine?: string): SquareVoice {
+  const line = actorLine?.trim() ?? "";
+  const cleaned = line.replace(/^[●○◎◆■·]\s*/, "").trim();
+  return {
+    glyph: /^[●○◎·]/.exec(line)?.[0] ?? "●",
+    speaker: /\S+/.exec(cleaned)?.[0],
+    bell: /rang the bell/i.test(cleaned),
+    actId: /act\/\d+/.exec(metaLine ?? "")?.[0],
+  };
+}
+
 export const squareCardDetailsSchema = z.object({
   fullText: z.string().optional(),
   items: z.array(z.object({
@@ -62,7 +77,7 @@ export const squareCardDetailsSchema = z.object({
   })).min(1),
 });
 
-/** Human-facing summary; the stored description is Square's agent voice, and the human is not the recipient. */
+/** Human-facing summary of a route; the card itself leads with people, not this prose. */
 export function squareHeadline(item: z.output<typeof squareCardDetailsSchema>["items"][number]): string {
   if (item.actor === undefined || item.route === undefined) return item.description;
   const to = item.recipient;

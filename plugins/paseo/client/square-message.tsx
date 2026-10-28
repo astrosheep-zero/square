@@ -1,69 +1,90 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { outputPreview, squareHeadline, type SquareMessageData } from "../shared/message";
-import { SquareInline, SquareMarkdown } from "./markdown";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { parseSquareBlocks, parseSquareVoice, type SquareMessageData } from "../shared/message";
+import { SquareInline, SquareMarkdownBody } from "./markdown";
 
-/** A plain card: who, what they did, where, then what they said. No badge, no chrome — the words carry the place. */
+/**
+ * The accent ■ marks the square itself, not a route.
+ * Collapsed: ■ who spoke · where · how many, then two preview lines.
+ * Expanded: the same header, then the bodies indented under it — one voice bare,
+ * several voices each behind their own ● glyph. No divider rules, no narration.
+ */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
   const { text, items } = item.data;
   const latest = items?.[items.length - 1];
-  // Transform already bounded the collapsed preview; only normalise whitespace for the single line.
   const preview = latest?.preview?.replace(/\s+/g, " ").trim();
-  const muted = theme.colors.foregroundMuted;
-  const foreground = theme.colors.foreground;
-
-  const styles = useMemo(() => ({
-    card: {
-      marginVertical: 3,
-      marginRight: layout.compact ? 0 : 8,
-      backgroundColor: theme.colors.surface1,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      borderRadius: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      gap: 4,
-    },
-    whoRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
-    glyph: { color: theme.colors.accent, fontSize: 9 },
-    actor: { color: foreground, fontSize: 12.5, fontWeight: "500" as const },
-    route: { color: muted, fontSize: 12.5, flex: 1 },
-    count: { color: muted, fontSize: 11 },
-  }), [foreground, layout.compact, muted, theme.colors.accent, theme.colors.border, theme.colors.surface1]);
-
-  const headline = latest !== undefined ? squareHeadline(latest) : "Square context";
-  const routeText = latest?.actor !== undefined && headline.startsWith(latest.actor)
-    ? headline.slice(latest.actor.length).trim()
-    : headline;
+  const blocks = useMemo(() => parseSquareBlocks(text), [text]);
+  const multi = blocks.length > 1;
+  const single = multi ? undefined : parseSquareVoice(blocks[0].actor, blocks[0].meta);
+  const names = items !== undefined
+    ? items.map(entry => entry.actor)
+    : blocks.map(block => parseSquareVoice(block.actor, block.meta).speaker);
+  const speakers = [...new Set(names.filter((name): name is string => name !== undefined))];
+  const squareName = latest?.square ?? blocks[0].meta?.split("·")[1]?.trim() ?? "Square";
+  const bell = latest?.route === "bell" || single?.bell === true;
+  const trailing = `· ${squareName}${expanded && single?.actId ? ` · ${single.actId}` : !expanded && items && items.length > 1 ? ` · ${items.length}` : ""}`;
+  const { accent, border, foreground, foregroundMuted: muted, surface1 } = theme.colors;
+  const row = { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 };
+  const indent = { paddingLeft: 15 };
 
   return (
-    <View style={styles.card}>
+    <View style={{ backgroundColor: surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, gap: expanded ? 8 : 3 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${expanded ? "收起" : "展开"} ${latest?.square ?? "square"}: ${headline}`}
+        accessibilityLabel={`${expanded ? "收起" : "展开"} ${squareName}: ${speakers.join(", ") || "Square"}`}
         aria-expanded={expanded}
         onPress={() => setExpanded(value => !value)}
-        style={({ pressed }) => ({ gap: 4, opacity: pressed ? 0.7 : 1 })}
+        style={({ pressed }) => ({ gap: 3, opacity: pressed ? 0.7 : 1 })}
       >
-        <View style={styles.whoRow}>
-          <Text style={styles.glyph}>■</Text>
-          {latest?.actor !== undefined && <Text style={styles.actor}>{latest.actor}</Text>}
-          <Text numberOfLines={1} style={styles.route}>
-            {routeText}{latest?.square !== undefined && ` · ${latest.square}`}
-          </Text>
-          {items !== undefined && items.length > 1 && <Text style={styles.count}>{items.length}</Text>}
-          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={16} color={muted} />
+        <View style={row}>
+          <Text style={{ color: accent, fontSize: 9 }}>■</Text>
+          {expanded && multi ? (
+            <>
+              <Text numberOfLines={1} style={{ color: foreground, fontSize: 12.5, fontWeight: "500", flex: 1 }}>{squareName}</Text>
+              <Icon name="ChevronUp" size={15} color={muted} />
+            </>
+          ) : (
+            <>
+              <Text numberOfLines={1} style={{ color: foreground, fontSize: 13, fontWeight: "500", flex: 1 }}>
+                {speakers.join(", ") || "Square"}
+                {bell && <Text style={{ color: muted, fontWeight: "400" }}> · rang the bell</Text>}
+              </Text>
+              <Text style={{ color: muted, fontSize: 12 }}>{trailing}</Text>
+              <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={15} color={muted} />
+            </>
+          )}
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
-          <SquareInline text={preview} theme={theme} numberOfLines={2} />
+          <View style={indent}>
+            <SquareInline text={preview} theme={theme} numberOfLines={2} />
+          </View>
         )}
       </Pressable>
       {expanded && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 2, borderTopWidth: 1, borderTopColor: theme.colors.border }} contentContainerStyle={{ paddingTop: 8 }} nestedScrollEnabled>
-          <SquareMarkdown text={outputPreview(text)} theme={theme} />
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400 }} nestedScrollEnabled>
+          {multi ? (
+            <View style={{ gap: 12 }}>
+              {blocks.map((block, index) => {
+                const voice = parseSquareVoice(block.actor, block.meta);
+                const detail = [voice.bell ? "rang the bell" : undefined, voice.actId ? `· ${voice.actId}` : undefined].filter(Boolean).join(" ");
+                return (
+                  <View key={voice.actId ?? index} style={{ gap: 3 }}>
+                    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                      <Text style={{ fontSize: 10, color: voice.glyph === "○" ? muted : accent }}>{voice.glyph}</Text>
+                      {voice.speaker && <Text style={{ color: foreground, fontSize: 13, fontWeight: "500" }}>{voice.speaker}</Text>}
+                      <Text numberOfLines={1} style={{ color: muted, fontSize: 12 }}>{detail}</Text>
+                    </View>
+                    <SquareMarkdownBody text={block.body} theme={theme} style={indent} />
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <SquareMarkdownBody text={blocks[0].body} theme={theme} style={indent} />
+          )}
         </ScrollView>
       )}
     </View>
