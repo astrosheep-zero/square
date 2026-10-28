@@ -1,4 +1,5 @@
 import os from 'node:os';
+import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
@@ -183,7 +184,7 @@ function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: i
   if (selected === undefined) return {};
   const body: Body = { channel: selected.channel, session: selected.session };
   const wakeAddress: import('../model.js').WakeAddress | undefined = selected.channel === 'codex'
-    ? { kind: 'codex-queue' as const, address: { threadId: selected.session } }
+    ? codexWakeAddress(selected.session, env)
     : paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
   return { body, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }

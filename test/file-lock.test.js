@@ -56,13 +56,28 @@ test('creates a SQLite lock database and serializes concurrent holders', async (
   try {
     assert.equal(
       database.prepare('SELECT name FROM sqlite_master WHERE type = ? AND name = ?')
-        .get('table', '__square_file_lock')?.name,
-      '__square_file_lock',
+        .get('table', '__agent_delivery_lock')?.name,
+      '__agent_delivery_lock',
     );
   } finally {
     database.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('skipIfBusy skips only contention and does not enter or swallow callback failures', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-file-lock-skip-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockPath = path.join(root, 'square.lock');
+  const shared = await import('../dist/packages/agent-delivery/src/file-lock.js');
+  assert.equal(withFileLock, shared.withFileLock);
+  await withFileLock(lockPath, { retryMs: 1 }, async () => {
+    assert.equal(await withFileLock(lockPath, { retryMs: 1, skipIfBusy: true }, () => assert.fail('busy callback')), undefined);
+  });
+  assert.equal(await withFileLock(lockPath, { retryMs: 1, skipIfBusy: true }, () => 'available'), 'available');
+  await assert.rejects(withFileLock(lockPath, { retryMs: 1, skipIfBusy: true }, () => { throw new Error('callback failed'); }), /callback failed/);
+  fs.writeFileSync(path.join(root, 'invalid.lock'), 'not SQLite');
+  await assert.rejects(withFileLock(path.join(root, 'invalid.lock'), { retryMs: 1, skipIfBusy: true }, () => {}), FileLockError);
 });
 
 test('abort interrupts busy retry without entering the critical section', async () => {

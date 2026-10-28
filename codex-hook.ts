@@ -1,35 +1,16 @@
+import { handleCodexHook } from './packages/agent-delivery/src/codex-hook.js';
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { Body, PendingMembership } from './model.js';
 import { endSessionMemberships } from './session-lifecycle.js';
-import { clearCodexBoundary, recordCodexBoundary } from './codex-boundary-state.js';
+import { codexBoundaryStore } from './codex-boundary-state.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeTransports } from './notifications.js';
 
-export interface CodexHookInput {
-  session_id?: unknown;
-  hook_event_name?: unknown;
-  cwd?: unknown;
-  source?: unknown;
-}
-
+export interface CodexHookInput { session_id?: unknown; hook_event_name?: unknown; cwd?: unknown; source?: unknown }
 export type HookTrace = (line: string) => void;
-
-/** Overall hook budget: Codex kills the hook at its configured 5s timeout, so the hook must
- * bound every wait/retry itself and exit with a readable stage trace before that. */
 export const CODEX_HOOK_BUDGET_MS = 4500;
-
-const CODEX_HOOK_EVENTS: Readonly<Record<string, 'PostToolUse' | 'Stop'>> = {
-  PostToolUse: 'PostToolUse',
-  Stop: 'Stop',
-};
-
 const defaultTrace: HookTrace = (line) => { process.stderr.write(`${line}\n`); };
-
-function hookBudgetMs(env: NodeJS.ProcessEnv): number {
-  const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
-  return Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS;
-}
 
 export async function codexHookResponse(
   input: CodexHookInput,
@@ -38,74 +19,31 @@ export async function codexHookResponse(
   deliveryTransports?: WakeTransports,
   trace: HookTrace = defaultTrace,
 ): Promise<object | undefined> {
-  if (typeof input.session_id !== 'string' || input.session_id === '') return undefined;
-  if (typeof input.hook_event_name !== 'string') return undefined;
-  const hookEventName = CODEX_HOOK_EVENTS[input.hook_event_name];
-  if (hookEventName === undefined) return undefined;
-  // Per-stage timings, emitted as each stage completes so a killed hook still leaves a trace.
+  const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
   const startedAt = Date.now();
   let mark = startedAt;
-  const stage = (name: string, extra = '') => {
-    const now = Date.now();
-    const durationMs = now - mark;
-    mark = now;
-    trace(`square-codex-hook: stage=${name} durationMs=${durationMs} totalMs=${now - startedAt}${extra === '' ? '' : ` ${extra}`}`);
-  };
-  const signal = AbortSignal.timeout(hookBudgetMs(env));
-  const sweepDeadline = Date.now() + Math.min(PRIVILEGED_HOOK_BUDGET_MS, hookBudgetMs(env));
-  const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
-  await recordCodexBoundary(input.session_id, hookEventName === 'Stop' ? 'Stop' : 'non-stop', env, signal);
-  stage('boundary-record');
-  if (hookEventName === 'Stop') {
-    await sweepPrivilegedPending(cwd, env, deliveryTransports, sweepDeadline, signal).catch(() => undefined);
-    stage('sweep', signal.aborted ? 'aborted=true' : '');
-    return undefined;
-  }
-  let response: object | undefined;
-  try {
-    response = await presentPendingAtBoundary(
-      { channel: 'codex', session: input.session_id },
-      (context) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }),
-      lookup,
-      env,
-      signal,
-    );
-    stage('presentation', signal.aborted ? 'aborted=true' : '');
-  } catch (error) {
-    stage('presentation', `error=${error instanceof Error ? error.name : String(error)}`);
-    response = undefined;
-  }
-  await sweepPrivilegedPending(cwd, env, deliveryTransports, sweepDeadline, signal).catch(() => undefined);
-  stage('sweep', signal.aborted ? 'aborted=true' : '');
-  return response;
+  return handleCodexHook(input, {
+    boundaries: codexBoundaryStore(env),
+    timeoutMs: Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS,
+    sweepTimeoutMs: PRIVILEGED_HOOK_BUDGET_MS,
+    pull: (id, signal) => presentPendingAtBoundary({ channel: 'codex', session: id }, (context) => context, lookup, env, signal),
+    sweep: (cwd, deadline, signal) => sweepPrivilegedPending(cwd ?? process.cwd(), env, deliveryTransports, deadline, signal),
+    end: async (id) => { await endSessionMemberships('codex', id, env); },
+    trace: (name, detail = '') => {
+      const now = Date.now();
+      const durationMs = now - mark;
+      mark = now;
+      trace(`square-codex-hook: stage=${name} durationMs=${durationMs} totalMs=${now - startedAt}${detail ? ` ${detail}` : ''}`);
+    },
+  });
 }
 
 export async function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   let input: unknown;
-  try {
-    input = JSON.parse(inputText);
-  } catch {
-    return '';
-  }
-  if (input === null || typeof input !== 'object') return '';
-  const response = await codexHookResponse(input as CodexHookInput, sessionInbox, env);
-  return response === undefined ? '' : `${JSON.stringify(response)}\n`;
-}
-
-export async function runCodexHookAsync(inputText: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  let input: unknown;
   try { input = JSON.parse(inputText); } catch { return ''; }
   if (input === null || typeof input !== 'object') return '';
-  const value = input as CodexHookInput;
-  if (typeof value.session_id !== 'string') return runCodexHook(inputText, env);
-  if (value.hook_event_name === 'SessionStart' || value.hook_event_name === 'SessionResume') {
-    await recordCodexBoundary(value.session_id, 'non-stop', env, AbortSignal.timeout(hookBudgetMs(env)));
-    return '';
-  }
-  if (value.hook_event_name === 'SessionEnd') {
-    await clearCodexBoundary(value.session_id, env, AbortSignal.timeout(hookBudgetMs(env)));
-    try { await endSessionMemberships('codex', value.session_id, env); } catch { /* end remains bounded */ }
-    return '';
-  }
-  return runCodexHook(inputText, env);
+  const result = await codexHookResponse(input as CodexHookInput, sessionInbox, env);
+  return result === undefined ? '' : `${JSON.stringify(result)}\n`;
 }
+
+export const runCodexHookAsync = runCodexHook;

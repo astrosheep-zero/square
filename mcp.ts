@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from './square-tools.js';
 import { operationEnv } from './participant-identity.js';
+import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
 import { Square, createSquareResourceOwner } from './square-api.js';
@@ -54,7 +55,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             ...options, env, body, cwd: claude?.cwd ?? options.cwd,
             // A call-local Codex thread uses its native queue even when managed by Paseo.
             wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-              ? { kind: 'codex-queue', address: { threadId } } : options.wakeAddress,
+              ? codexWakeAddress(threadId, env) : options.wakeAddress,
             path: (location as string | undefined) ?? options.path,
             participant: (participant as string | undefined) ?? options.participant,
             // The server owner is bound to its configured square; overrides close after each call.

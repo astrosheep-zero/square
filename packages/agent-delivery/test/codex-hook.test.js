@@ -61,19 +61,46 @@ test('the host claims its own pending input; a hook pull leaves nothing for the 
   assert.equal(queued, 1)
 })
 
-test('invalid events do not touch state and a stalled pull cannot retain the hook past its budget', async () => {
+test('invalid events leave state untouched and an uncommitted pull cooperatively cancels at its budget', async () => {
   const { boundaries } = await fixture()
   const before = await boundaries.read('target')
   await handleCodexHook({ session_id: 'target', hook_event_name: 'unknown' }, { boundaries })
   assert.equal(await boundaries.read('target'), before)
-  let release
-  const stalled = new Promise((resolve) => { release = resolve })
+  let cancelled = false
   const response = await handleCodexHook({ session_id: 'target', hook_event_name: 'PostToolUse' }, {
-    boundaries, timeoutMs: 60, pull: () => stalled,
+    boundaries, timeoutMs: 100,
+    pull: async (_id, signal) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => { cancelled = true; resolve(undefined) }, { once: true })
+    }),
     sweep: async () => { assert.fail('an expired hook must not sweep') },
   })
+  assert.equal(cancelled, true)
   assert.equal(response, undefined)
-  release('too late')
+})
+
+test('hook awaits host presentation settlement past cancellation and returns its committed text', async () => {
+  const { boundaries } = await fixture()
+  const aborted = Promise.withResolvers(), settlement = Promise.withResolvers()
+  let finished = false, settled = false
+  const response = handleCodexHook({ session_id: 'target', hook_event_name: 'PostToolUse' }, {
+    boundaries, timeoutMs: 100,
+    pull: async (_id, signal) => {
+      signal.addEventListener('abort', () => aborted.resolve(), { once: true })
+      // The host has presented; its evidence settlement deliberately survives cancellation.
+      await settlement.promise
+      settled = true
+      return 'settled host preview 字'
+    },
+    sweep: async () => { assert.fail('settlement outlived the budget; no sweep may start') },
+  }).then(value => { finished = true; return value })
+  await aborted.promise
+  await new Promise(setImmediate)
+  const abandonedSettlement = finished
+  settlement.resolve()
+  const result = await response
+  assert.equal(abandonedSettlement, false, 'the hook must not race away from host custody')
+  assert.equal(settled, true)
+  assert.deepEqual(result, { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'settled host preview 字' } })
 })
 
 test('a timed-out sweep preserves the already committed pull output', async () => {

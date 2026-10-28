@@ -19,6 +19,10 @@ test('generated release artifacts expose the current identity and supported host
   const claudeHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', 'hooks', 'hooks.json'), 'utf8'));
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
+  const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
+  for (const event of ['SessionStart', 'SessionResume', 'UserPromptSubmit', 'SessionEnd', 'PostToolUse', 'Stop']) {
+    assert.equal(codexHooks.hooks[event][0].hooks[0].command, 'square codex-hook');
+  }
   const paseoPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'paseo', 'paseo-plugin.json'), 'utf8'));
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');
   const claudeSkill = fs.readFileSync(path.join(root, 'plugins', 'claude', 'skills', 'square', 'SKILL.md'), 'utf8');
@@ -117,6 +121,11 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/claude/hooks/register.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',
+    'plugins/codex/hooks/hooks.json',
+    'dist/codex-hook.js',
+    'dist/codex-queue.js',
+    ...['codex', 'codex-cli', 'codex-hook', 'codex-boundary', 'codex-endpoint', 'codex-queue', 'file-lock']
+      .flatMap((name) => ['js', 'd.ts'].map((ext) => `dist/packages/agent-delivery/src/${name}.${ext}`)),
     'plugins/pi/square-pi.js',
     'plugins/paseo/paseo-plugin.json',
     'plugins/paseo/index.client.tsx',
@@ -168,4 +177,28 @@ const target=await connectNative({sessionId:'root-packed-native',session});
 console.log(JSON.stringify(await sendNativeText(target,'packed native',{inputId:'msg_root_pack'})));`);
   const native = await run(process.execPath, ['--import', './register.mjs', 'native.mjs'], { cwd: fixture, timeout: 5000 });
   assert.equal(JSON.parse(native.stdout).state, 'accepted');
+
+  assert.match(fs.readFileSync(path.join(shipped, 'dist/codex-hook.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/codex-hook\.js/);
+  fs.writeFileSync(path.join(fixture, 'queue.cjs'), "require('node:fs').writeFileSync('cli.json',JSON.stringify(process.argv.slice(2)))");
+  fs.writeFileSync(path.join(fixture, 'codex.mjs'), `import {connect} from './package/${entryPath}';
+import {createCodexBoundaryStore,handleCodexHook} from './package/dist/packages/agent-delivery/src/codex-hook.js';
+const boundaries=createCodexBoundaryStore('./codex-boundaries.json');
+await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop'},{boundaries});
+const eligible=await boundaries.queueEligible('root-packed-codex');
+const hook=await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'PostToolUse'},{boundaries,pull:async()=>'/packed Codex 字'});
+const stillEligible=await boundaries.queueEligible('root-packed-codex');
+await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop'},{boundaries});
+const cli=await connect({harness:'codex',transport:'cli',sessionId:'root-packed-codex',boundaries,bin:process.execPath,args:['./queue.cjs'],codexHome:process.cwd()});
+const receipt=await cli.queue('/packed CLI 字');
+await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'SessionEnd'},{boundaries});
+let endCode;
+try {await cli.queue('must not send');} catch(error) {endCode=error.code;}
+console.log(JSON.stringify({eligible,hook,stillEligible,receipt,endCode}));`);
+  const codex = JSON.parse((await run(process.execPath, ['--import', './register.mjs', 'codex.mjs'], { cwd: fixture, timeout: 5000 })).stdout);
+  assert.equal(codex.eligible, true);
+  assert.equal(codex.hook.hookSpecificOutput.additionalContext, '/packed Codex 字');
+  assert.equal(codex.stillEligible, false);
+  assert.equal(codex.receipt.proof, 'admitted');
+  assert.equal(codex.endCode, 'session_inactive');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(fixture, 'cli.json'), 'utf8')), ['queue', '--thread', 'root-packed-codex', '--message', '/packed CLI 字']);
 });

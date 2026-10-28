@@ -20,12 +20,17 @@ exports/type declarations and independent installation. Root release fixtures
 verify that Square ships its shared transport leaves without loading the
 OpenCode SDK. These prove packaging/transport, not native scheduling.
 
+The format5 integration also tests a real disposable SQLite writer lock delaying
+hook presentation settlement beyond the internal deadline: committed presentation
+returns its text rather than being abandoned by a timeout race. Shared-lock tests
+preserve nonblocking `skipIfBusy` discovery. Both run without real artifacts.
+
 ## Recorded live evidence
 
 | Runtime | Observed behavior | Evidence |
 | --- | --- | --- |
 | Codex 0.160.1, isolated existing Unix app-server, dummy Responses provider | Packed public API: idle steer rejected without starting a turn; busy fenced steer included in request 2; native queue in request 3; explicit-remote CLI queue uses the recipient endpoint despite a different sender CODEX_HOME in request 4; UUID correlation recovered from history | Final packed consumer `/tmp/ad-codex-packed-final-R6L9Af/{probe.mjs,pack.json,live.log}`; captured payloads and checks `/var/folders/xd/ln7zbjqx4xsdgd6n98ln_wb80000gn/T/ad-codex-runtime-5VDlF2/{summary.json,evidence.json}` |
-| Codex 0.160.1, fresh packed unified API, isolated native fixture | Both CLI modes use `connect({ transport: 'cli', boundaries, ... }).queue()`: explicit remote request 4 across sender homes, ordinary CLI without `--remote` request 5; no steer method; SessionEnd plus late Stop rejects further queue known-unsent | Consumer `/tmp/ad-codex-unified-pack-BvQwxO/{probe.mjs,pack.json,live.log}`; payloads/checks `/tmp/ad-codex-runtime-8ZMoay/{summary.json,evidence.json}` |
+| Codex 0.160.1, packed 0.1.1 unified API, isolated native fixture | Both CLI modes use `connect({ transport: 'cli', boundaries, ... }).queue()`: explicit remote request 4 across sender homes, ordinary CLI without `--remote` request 5; no steer method; SessionEnd plus late Stop rejects further queue known-unsent | Consumer `/tmp/square-format5-release-h22893/consumer/probe.mjs`; pack/live logs `/tmp/square-format5-release-h22893/{agent-pack.json,live.log}`; payloads/checks `/tmp/ad-codex-runtime-27vv3i/{summary.json,evidence.json}` |
 | macOS Claude Code 2.1.295, dummy loopback Anthropic provider | Shipped mod: idle/busy Read boundary, held approval, clear/reload/resume, fork and cancellation; extraction repeated idle/busy using shared leaf | `/tmp/claude-inbox-design-validation.md`, `/tmp/claude-native-independent-review.md`, `/tmp/square-claude-final-runtime.log`; extraction `/tmp/claude-extraction-runtime.log`, `/tmp/square-claude-extraction-corner/{idle,busy}` |
 | Homebrew OpenCode 2.0.20, private loopback service/provider | Independent raw HTTP/SSE probe (not package): idle steer woke; busy queue/steer admitted before consumption; continuation after read tool included steer, next fresh input included queue | `/tmp/opencode-v2-live-validation.md`, reproducer `/tmp/opencode-v2-live-harness.py`, `/tmp/opencode-v2-live-4xqlwdhc/` |
 | OpenCode 2.0.20, actual Square v2 plugin, dummy loopback provider | 21 checks: idle/busy body/context presentation, queue timing, clipped previews, lifecycle, local cancellation and provider failure after admission | `/tmp/square-opencode-live-bm0tr9a2/result.json` |

@@ -1,6 +1,6 @@
 {
   "name": "@astrosheep/agent-delivery",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Text delivery to Codex, OpenCode, Claude, Pi and Paseo agents, independent of Square.",
   "type": "module",
   "license": "MIT",

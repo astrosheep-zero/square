@@ -37,11 +37,15 @@ test('CLI input derives an explicit body from each harness coordinate', () => {
     const input = inputFor({ [variable]: ` ${session} ` });
     assert.deepEqual(input.body, { channel, session }, variable);
     if (channel === 'paseo') assert.deepEqual(input.wakeAddress, { kind: 'paseo', address: { agentId: session } }, variable);
-    if (channel === 'codex') assert.deepEqual(input.wakeAddress, { kind: 'codex-queue', address: { threadId: session } }, variable);
+    if (channel === 'codex') assert.deepEqual(input.wakeAddress, { kind: 'codex-queue', address: { threadId: session, codexHome: path.join(os.homedir(), '.codex') } }, variable);
   }
-  const nativeWithPaseo = inputFor({ CODEX_THREAD_ID: 'codex-session', PASEO_AGENT_ID: 'paseo-agent' });
+  const nativeWithPaseo = inputFor({ CODEX_THREAD_ID: 'codex-session', PASEO_AGENT_ID: 'paseo-agent',
+    CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' });
   assert.deepEqual(nativeWithPaseo.body, { channel: 'codex', session: 'codex-session' });
-  assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'codex-queue', address: { threadId: 'codex-session' } });
+  assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'codex-queue', address: {
+    threadId: 'codex-session', codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock',
+  } });
+  assert.equal(inputFor({ CODEX_THREAD_ID: 'home-default', HOME: '/recipient' }).wakeAddress.address.codexHome, '/recipient/.codex');
   const withoutCoordinate = inputFor({ SQUARE_PARTICIPANT_NAME: 'Alice' });
   assert.equal(Object.hasOwn(withoutCoordinate, 'body'), false);
   assert.equal(Object.hasOwn(withoutCoordinate, 'wakeAddress'), false);

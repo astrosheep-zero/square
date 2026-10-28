@@ -10,7 +10,10 @@ export interface CodexHookResponse {
 }
 export interface CodexHookOptions {
   readonly boundaries: CodexBoundaryStore
-  /** The host owns pending messages, formatting, claiming and suppression. */
+  /** The host owns pending text, claims and cancellation. Honor signal before presenting;
+   * if cancelled before an effect, release custody and resolve undefined or reject.
+   * After presenting, finish any cancellation-independent settlement and return its text,
+   * even if signal aborts meanwhile. This callback is awaited, never raced or abandoned. */
   readonly pull?: (sessionId: string, signal: AbortSignal) => Promise<string | undefined>
   /** Dispatch the host's pending work; Stop merely makes queue eligible. */
   readonly sweep?: (cwd: string | undefined, deadline: number, signal: AbortSignal) => Promise<void>
@@ -46,7 +49,9 @@ export async function handleCodexHook(input: unknown, options: CodexHookOptions)
     let context: string | undefined
     if (event === 'PostToolUse') {
       try {
-        context = await scope.wait(options.pull?.(id, scope.signal) ?? Promise.resolve(undefined))
+        // A host's successful presentation settlement may outlive this signal. Retain
+        // its output instead of leaving background work to consume it without a response.
+        context = await options.pull?.(id, scope.signal)
         options.trace?.('presentation')
       } catch (error) {
         options.trace?.('presentation', `error=${error instanceof Error ? error.name : 'Error'}`)

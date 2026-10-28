@@ -4,17 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import {
-  clearCodexBoundary,
-  codexQueueEligible,
-  readCodexBoundary,
-  recordCodexBoundary,
-} from '../dist/codex-boundary-state.js';
-import {
-  CodexQueueTransport,
-  CodexQueueSendError,
-  sendCodexQueue,
-} from '../dist/codex-queue.js';
+import { clearCodexBoundary, codexQueueEligible, readCodexBoundary, recordCodexBoundary } from '../dist/codex-boundary-state.js';
+import { CodexQueueTransport, CodexQueueSendError, sendCodexQueue } from '../dist/codex-queue.js';
+import { codexHookResponse } from '../dist/codex-hook.js';
+import { connect, DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { deliverPending } from '../dist/delivery-operations.js';
@@ -22,7 +15,7 @@ import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { squareClock } from '../dist/square-api.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
 
-async function pending(t, env) {
+async function pending(t, env, address = { threadId: 'thread-a' }) {
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: emptyRuntimeState() });
   t.after(() => artifact.close());
   const join = async (name, wakeAddress) => (await artifact.transactAs({ kind: 'join', participant: name,
@@ -31,139 +24,135 @@ async function pending(t, env) {
     return facts.seat(name);
   })).value;
   const alice = await join('Alice');
-  const bob = await join('Bob', { kind: 'codex-queue', address: { threadId: 'thread-a' } });
+  const bob = await join('Bob', { kind: 'codex-queue', address });
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'stored awareness', mentions: ['Bob'] }));
   return { artifact, bob, location: '/tmp/codex-test.square', activity: 'act/2',
-    transport: new CodexQueueTransport({ env }) };
+    participant: 'Bob', seat: bob, route: { kind: 'codex-queue', address }, transport: new CodexQueueTransport({ env }) };
 }
 
-function fixture() {
+function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-queue-'));
-  return { root, env: { SQUARE_CODEX_BOUNDARIES: path.join(root, 'boundaries.json') } };
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const capture = path.join(root, 'sent.json'), script = path.join(root, 'queue.cjs');
+  fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),home:process.env.CODEX_HOME}));`);
+  return { root, capture, env: { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl'),
+    SQUARE_DISABLE_PASEO_WAKE: '1', CODEX_HOME: '/sender/codex', SQUARE_CODEX_BOUNDARIES: path.join(root, 'boundaries.json') },
+    connect: (options) => connect({ ...options, bin: process.execPath, args: [script] }) };
 }
 
-test('Codex boundary state allows queue only after the latest Stop', async () => {
-  const item = fixture();
-  try {
-    assert.equal(await codexQueueEligible('thread-a', item.env), false);
-    await recordCodexBoundary('thread-a', 'Stop', item.env);
-    assert.equal(await codexQueueEligible('thread-a', item.env), true);
-    await recordCodexBoundary('thread-a', 'non-stop', item.env);
-    assert.equal(await codexQueueEligible('thread-a', item.env), false);
-    await recordCodexBoundary('thread-a', 'Stop', item.env);
-    assert.equal(await codexQueueEligible('thread-a', item.env), true);
-    assert.deepEqual(await readCodexBoundary('thread-a', item.env), { lastStop: 3, lastNonStop: 2 });
-  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
-});
-
-test('Codex boundary state is isolated per thread and SessionEnd clears it', async () => {
-  const item = fixture();
-  try {
-    await recordCodexBoundary('thread-a', 'Stop', item.env);
-    await recordCodexBoundary('thread-b', 'non-stop', item.env);
-    assert.equal(await codexQueueEligible('thread-a', item.env), true);
-    assert.equal(await codexQueueEligible('thread-b', item.env), false);
-    await clearCodexBoundary('thread-a', item.env);
-    assert.equal(await codexQueueEligible('thread-a', item.env), false);
-    assert.equal(await readCodexBoundary('thread-a', item.env), undefined);
-  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
-});
-
-test('Codex queue transport retains an ineligible route without sending', async (t) => {
-  const item = fixture();
-  let sent = false;
-  try {
-    const input = await pending(t, item.env);
-    const result = await new CodexQueueTransport({
-      env: item.env,
-      sendQueue: () => { sent = true; },
-    }).attempt({ ...input, participant: 'Bob', seat: input.bob,
-      route: { kind: 'codex-queue', address: { threadId: 'thread-a' } } }, 5000, async () => assert.fail('readiness must precede gate'));
-    assert.deepEqual(result, {
-      outcome: 'failed',
-      unavailable: true,
-      signature: 'boundary_not_stopped',
-      message: 'The Codex thread has not reached a current Stop boundary.',
-      retainRoute: true,
-    });
-    assert.equal(sent, false);
-  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
-});
-
-test('Codex queue transport sends stored preview only after the final boundary and artifact gates', async (t) => {
-  const item = fixture();
-  const requests = [];
-  const timeouts = [];
-  try {
-    await recordCodexBoundary('thread-a', 'Stop', item.env);
-    const input = await pending(t, item.env);
-    const result = await deliverPending({ ...input, timeoutMs: 321, transport: new CodexQueueTransport({
-      env: item.env,
-      sendQueue: (request, options) => { requests.push(request); timeouts.push(options.timeoutMs); },
-    }) });
-    assert.equal(result.accepted, 1);
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].threadId, 'thread-a');
-    assert.match(requests[0].message, /Alice spoke your name\./);
-    assert.match(requests[0].message, /stored awareness/);
-    assert.ok(timeouts[0] > 0 && timeouts[0] <= 321);
-  } finally { fs.rmSync(item.root, { recursive: true, force: true }); }
-});
-
-test('Codex final gate can suppress after Stop readiness without queueing', async t => {
-  const item = fixture();
-  t.after(() => fs.rmSync(item.root, { recursive: true, force: true }));
+test('Codex boundary state allows queue only after the latest Stop and stays thread-local', async t => {
+  const item = fixture(t);
+  assert.equal(await codexQueueEligible('thread-a', item.env), false);
   await recordCodexBoundary('thread-a', 'Stop', item.env);
-  const input = await pending(t, item.env);
-  let sends = 0, gates = 0;
-  const transport = new CodexQueueTransport({ env: item.env, sendQueue: () => { sends += 1; } });
-  const result = await transport.attempt({ ...input, participant: 'Bob', seat: input.bob,
-    route: { kind: 'codex-queue', address: { threadId: 'thread-a' } } }, 5000, async () => {
-    gates += 1;
-    assert.equal(await codexQueueEligible('thread-a', item.env), true);
-    return false;
-  });
-  assert.deepEqual(result, { outcome: 'not-capable' });
-  assert.equal(gates, 1);
-  assert.equal(sends, 0);
+  assert.equal(await codexQueueEligible('thread-a', item.env), true);
+  await recordCodexBoundary('thread-a', 'non-stop', item.env);
+  assert.equal(await codexQueueEligible('thread-a', item.env), false);
+  await recordCodexBoundary('thread-a', 'Stop', item.env);
+  assert.deepEqual(await readCodexBoundary('thread-a', item.env), { lastStop: 3, lastNonStop: 2 });
+  await recordCodexBoundary('thread-b', 'non-stop', item.env);
+  assert.equal(await codexQueueEligible('thread-a', item.env), true);
+  assert.equal(await codexQueueEligible('thread-b', item.env), false);
+  await clearCodexBoundary('thread-a', item.env);
+  assert.equal(await readCodexBoundary('thread-a', item.env), undefined);
 });
 
-test('Codex rechecks Stop after an asynchronous final artifact gate', async t => {
-  const item = fixture();
-  t.after(() => fs.rmSync(item.root, { recursive: true, force: true }));
+test('Codex queue transport retains an ineligible route without sending', async t => {
+  const item = fixture(t), input = await pending(t, item.env);
+  const result = await new CodexQueueTransport({ env: item.env, connect: item.connect }).attempt(input, 5000, async () => true);
+  assert.deepEqual(result, { outcome: 'failed', unavailable: true, signature: 'boundary_not_stopped',
+    message: 'The Codex thread has no current Stop boundary for queueing.', retainRoute: true });
+  assert.equal(fs.existsSync(item.capture), false);
+});
+
+test('artifact-owned dispatch sends its stored preview through public connect and one bound lifecycle check', async t => {
+  const item = fixture(t);
+  const address = { threadId: 'thread-a', codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock' };
+  const input = await pending(t, item.env, address);
   await recordCodexBoundary('thread-a', 'Stop', item.env);
-  const input = await pending(t, item.env);
-  let sends = 0;
-  const transport = new CodexQueueTransport({ env: item.env, sendQueue: () => { sends += 1; } });
-  const result = await transport.attempt({ ...input, participant: 'Bob', seat: input.bob,
-    route: { kind: 'codex-queue', address: { threadId: 'thread-a' } } }, 321, async () => {
+  let boundaryReads = 0, timeout;
+  const transport = new CodexQueueTransport({ env: item.env, connect: async options => {
+    assert.equal(options.harness, 'codex');
+    assert.equal(options.transport, 'cli');
+    assert.equal(options.codexHome, address.codexHome);
+    assert.equal(options.endpoint, address.endpoint);
+    const agent = await item.connect({ ...options, boundaries: {
+      queueEligible: async id => { boundaryReads++; return options.boundaries.queueEligible(id); },
+    } });
+    return { ...agent, queue: (text, control) => { timeout = control.timeoutMs; return agent.queue(text, control); } };
+  } });
+  const result = await deliverPending({ ...input, transport, timeoutMs: 2000 });
+  assert.equal(result.accepted, 1);
+  assert.equal(boundaryReads, 1, 'the bound client alone checks lifecycle at queue time');
+  const sent = JSON.parse(fs.readFileSync(item.capture, 'utf8'));
+  assert.equal(sent.home, '/recipient/codex');
+  assert.deepEqual(sent.args.slice(0, 6), ['queue', '--remote', address.endpoint, '--thread', 'thread-a', '--message']);
+  assert.match(sent.args[6], /Alice spoke your name\./);
+  assert.match(sent.args[6], /stored awareness/);
+  assert.ok(timeout > 0 && timeout <= 2000);
+  assert.equal(item.env.CODEX_HOME, '/sender/codex');
+  const evidence = (await input.artifact.read(facts => facts.deliveryEvidence('Bob', input.bob.generation))).value;
+  assert.equal(evidence.find(row => row.kind === 'wake').outcome, 'accepted');
+});
+
+test('Codex final artifact gate can suppress without connecting or queueing', async t => {
+  const item = fixture(t), input = await pending(t, item.env);
+  await recordCodexBoundary('thread-a', 'Stop', item.env);
+  const transport = new CodexQueueTransport({ env: item.env, connect: () => assert.fail('must not connect') });
+  assert.deepEqual(await transport.attempt(input, 5000, async () => false), { outcome: 'not-capable' });
+  assert.equal(fs.existsSync(item.capture), false);
+});
+
+test('Codex bound client checks Stop after an asynchronous final artifact gate', async t => {
+  const item = fixture(t), input = await pending(t, item.env);
+  await recordCodexBoundary('thread-a', 'Stop', item.env);
+  const result = await new CodexQueueTransport({ env: item.env, connect: item.connect }).attempt(input, 321, async () => {
     await recordCodexBoundary('thread-a', 'non-stop', item.env);
     return true;
   });
-  assert.equal(result.outcome, 'failed');
   assert.equal(result.signature, 'boundary_not_stopped');
-  assert.equal(sends, 0);
+  assert.equal(fs.existsSync(item.capture), false);
+});
+
+test('SessionEnd tombstone blocks dispatch during the gate and a late Stop until start or resume', async t => {
+  const item = fixture(t), input = await pending(t, item.env);
+  const hook = event => codexHookResponse({ session_id: 'thread-a', hook_event_name: event, cwd: item.root },
+    () => [], item.env, {}, () => {});
+  const transport = new CodexQueueTransport({ env: item.env, connect: item.connect });
+  await recordCodexBoundary('thread-a', 'Stop', item.env);
+  assert.equal((await transport.attempt(input, 2000, async () => { await hook('SessionEnd'); return true; })).signature, 'boundary_not_stopped');
+  assert.equal((await readCodexBoundary('thread-a', item.env)).ended, true);
+  for (const event of ['Stop', 'PostToolUse', 'UserPromptSubmit']) {
+    await hook(event);
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+  }
+  assert.equal((await transport.attempt(input, 2000, async () => true)).signature, 'boundary_not_stopped');
+  assert.equal(fs.existsSync(item.capture), false);
+  for (const start of ['SessionStart', 'SessionResume']) {
+    await hook(start);
+    assert.equal((await readCodexBoundary('thread-a', item.env)).ended, undefined);
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+    await hook('Stop');
+    assert.equal(await codexQueueEligible('thread-a', item.env), true);
+    await hook('UserPromptSubmit');
+    assert.equal(await codexQueueEligible('thread-a', item.env), false);
+    await hook('SessionEnd');
+  }
 });
 
 test('frozen entry semantic clock cannot freeze the default Codex I/O deadline', async t => {
-  const item = fixture();
-  t.after(() => fs.rmSync(item.root, { recursive: true, force: true }));
+  const item = fixture(t), input = await pending(t, item.env);
   await recordCodexBoundary('thread-a', 'Stop', item.env);
-  const input = await pending(t, item.env);
   const env = { ...item.env, SQUARE_CODEX_BIN: '/must-not-send', SQUARE_NOW_MS: '100' };
-  const semanticClock = squareClock(env);
-  const transport = await createDefaultWakeTransport(env);
+  const semanticClock = squareClock(env), transport = await createDefaultWakeTransport(env);
   let wallNow = 1000;
   t.mock.method(Date, 'now', () => wallNow);
-  const result = await transport.attempt({ ...input, participant: 'Bob', seat: input.bob,
-    route: { kind: 'codex-queue', address: { threadId: 'thread-a' } } }, 321, async () => {
+  const result = await transport.attempt(input, 321, async () => {
     await Promise.resolve();
     wallNow += 321;
     assert.equal(semanticClock(), 100);
     return true;
   });
-  assert.equal(result.outcome, 'failed');
   assert.equal(result.signature, 'dispatch_budget_exhausted');
 });
 
@@ -172,44 +161,42 @@ test('default Codex transport retains supplied executable and child environment 
     require('node:fs').writeFileSync(process.env.SQUARE_CODEX_ARGS, process.argv.slice(2).join('\\n'));
   `);
   t.after(() => fs.rmSync(fake.root, { recursive: true, force: true }));
-  const item = fixture();
-  t.after(() => fs.rmSync(item.root, { recursive: true, force: true }));
-  const args = path.join(fake.root, 'args');
-  // sendCodexQueue's bin is an executable; the fixture launches its script via its shell entry.
-  const bin = path.join(fake.root, 'codex');
+  const item = fixture(t), args = path.join(fake.root, 'args'), bin = path.join(fake.root, 'codex');
   fs.writeFileSync(bin, `#!/bin/sh\nexec '${fake.bin}' '${fake.args[0]}' "$@"\n`, { mode: 0o755 });
   const env = { ...process.env, ...item.env, SQUARE_CODEX_BIN: bin, SQUARE_CODEX_ARGS: args, SQUARE_DISABLE_PASEO_WAKE: '1' };
   await recordCodexBoundary('thread-a', 'Stop', env);
-  const input = await pending(t, env);
-  const transport = await createDefaultWakeTransport(env);
+  const input = await pending(t, env), transport = await createDefaultWakeTransport(env);
   const previous = process.env.SQUARE_CODEX_BIN;
   process.env.SQUARE_CODEX_BIN = '/missing/ambient-codex';
   t.after(() => { if (previous === undefined) delete process.env.SQUARE_CODEX_BIN; else process.env.SQUARE_CODEX_BIN = previous; });
-  // This is a child-startup allowance, not the asserted send deadline. Mocked-budget
-  // and frozen-clock tests above retain 321ms and require exhaustion before sending.
-  const result = await deliverPending({ ...input, transport, timeoutMs: 2000 });
-  const evidence = (await input.artifact.read(facts => facts.deliveryEvidence('Bob', input.bob.generation))).value;
-  assert.equal(result.accepted, 1, JSON.stringify({ result, evidence }));
-  const queued = fs.readFileSync(args, 'utf8');
-  assert.match(queued, /^queue\n--thread\nthread-a\n--message\n/);
-  assert.match(queued, /stored awareness/);
+  // Child startup allowance only; the frozen-clock test separately proves the dispatch deadline.
+  assert.equal((await deliverPending({ ...input, transport, timeoutMs: 5000 })).accepted, 1);
+  assert.match(fs.readFileSync(args, 'utf8'), /^queue\n--thread\nthread-a\n--message\n[\s\S]*stored awareness/);
 });
 
-test('Codex queue transport uses the exact CLI shape and classifies failures', () => {
+test('Codex queue classifies known-unsent errors separately from uncertain admission', async t => {
+  const item = fixture(t), input = await pending(t, item.env);
+  for (const [error, outcome, signature] of [
+    [new DeliveryError('unavailable'), 'failed', 'queue_pre_accept_transient'],
+    [new DeliveryError('rejected'), 'failed', 'queue_pre_accept_rejected'],
+    [new DeliveryError('timeout', true), 'unknown', 'queue_unknown'],
+    [new Error('unclassified'), 'unknown', 'queue_unknown'],
+  ]) {
+    const transport = new CodexQueueTransport({ connect: async () => ({ queue: async () => { throw error; } }) });
+    const result = await transport.attempt(input, 5000, async () => true);
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.signature, signature);
+  }
+});
+
+test('shared asynchronous CLI sender uses the exact default shape and reports missing executable as unsent', async t => {
   const fake = nodeCommandFixture('square-codex-queue', `
     require('node:fs').writeFileSync(process.env.SQUARE_CODEX_ARGS, process.argv.slice(2).join('\\n'));
   `);
-  try {
-    const env = { ...process.env, SQUARE_CODEX_ARGS: path.join(fake.root, 'args') };
-    sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { args: fake.args, bin: fake.bin, env });
-    assert.deepEqual(fs.readFileSync(env.SQUARE_CODEX_ARGS, 'utf8').trim().split('\n'), [
-      'queue', '--thread', 'thread-a', '--message', 'hello',
-    ]);
-    assert.throws(
-      () => sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { bin: '/missing/codex' }),
-      (error) => error instanceof CodexQueueSendError && error.kind === 'transient',
-    );
-  } finally {
-    fs.rmSync(fake.root, { recursive: true, force: true });
-  }
+  t.after(() => fs.rmSync(fake.root, { recursive: true, force: true }));
+  const env = { ...process.env, SQUARE_CODEX_ARGS: path.join(fake.root, 'args') };
+  await sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { args: fake.args, bin: fake.bin, env });
+  assert.deepEqual(fs.readFileSync(env.SQUARE_CODEX_ARGS, 'utf8').trim().split('\n'), ['queue', '--thread', 'thread-a', '--message', 'hello']);
+  await assert.rejects(() => sendCodexQueue({ threadId: 'thread-a', message: 'hello' }, { bin: '/missing/codex' }),
+    error => error instanceof CodexQueueSendError && error.kind === 'transient' && error.maybeDelivered === false);
 });

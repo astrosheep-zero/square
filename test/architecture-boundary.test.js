@@ -110,7 +110,7 @@ test('one canonicalizer owns square location keys', () => {
 
 test('SQLite artifact rows stay private to storage framing and explicit migration', () => {
   const boundary = ['artifact.ts', 'square-sqlite.ts', 'square-legacy-framing.ts', 'square-migration.ts', 'square-migration-host-ledger.ts'];
-  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'file-lock.ts', 'sqlite-transaction.ts']), []);
+  assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'packages/agent-delivery/src/file-lock.ts', 'sqlite-transaction.ts']), []);
   const driver = productionSources.get('square-sqlite.ts') ?? '';
   assert.match(driver, /CREATE TABLE landed_audience/);
   assert.doesNotMatch(driver, /CREATE (?:TRIGGER|VIEW|VIRTUAL TABLE)/);
@@ -253,6 +253,7 @@ const pureBindings = new Map([
   ['runtime.ts', ['HELD_WAIT_BUDGET_MS']],
   ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
   ['participant-identity.ts', ['participantIdentity', 'operationEnv', 'harnessSessionSources']],
+  ['codex-address.ts', ['codexWakeAddress']],
   ['search.ts', ['grepSnippet']],
 ]);
 const pureTypeBindings = new Map([

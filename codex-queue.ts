@@ -1,55 +1,15 @@
-import { spawnSync } from 'node:child_process';
+import { connect, DeliveryError, type CodexCliAgent, type CodexCliConnectOptions } from './packages/agent-delivery/src/index.js';
+export { sendCodexQueue, CodexQueueSendError } from './packages/agent-delivery/src/codex-queue.js';
+export type { CodexQueueRequest, CodexQueueFailureKind } from './packages/agent-delivery/src/codex-queue.js';
 
-import { codexQueueEligible } from './codex-boundary-state.js';
+import { codexBoundaryStore } from './codex-boundary-state.js';
 import type { WakeRequest, WakeOutcome, WakeTransportPort } from './ports.js';
 import { wakePreview } from './delivery.js';
-import { type WakeRoute } from './model.js';
-
-export interface CodexQueueRequest {
-  threadId: string;
-  message: string;
-}
-
-export type CodexQueueFailureKind = 'transient' | 'rejected' | 'unknown';
-
-export class CodexQueueSendError extends Error {
-  constructor(message: string, public readonly kind: CodexQueueFailureKind) {
-    super(message);
-    this.name = 'CodexQueueSendError';
-  }
-}
-
-function classifyFailure(message: string): CodexQueueFailureKind {
-  if (/ENOENT|not found.*executable|ECONNREFUSED|timed out|timeout/i.test(message)) return 'transient';
-  if (/invalid|unknown thread|not found|rejected|permission|auth/i.test(message)) return 'rejected';
-  return 'unknown';
-}
-
-export function sendCodexQueue(
-  { threadId, message }: CodexQueueRequest,
-  opts: { args?: string[]; bin?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
-): void {
-  // The explicit bin wins. Otherwise a supplied env decides the executable and the child
-  // environment; it never falls back to the ambient process env for a key it omits.
-  const env = opts.env ?? process.env;
-  const result = spawnSync(
-    opts.bin ?? env.SQUARE_CODEX_BIN ?? 'codex',
-    [...(opts.args ?? []), 'queue', '--thread', threadId, '--message', message],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeoutMs ?? 5000, env },
-  );
-  if (result.error) {
-    const messageText = result.error.message;
-    throw new CodexQueueSendError(messageText, classifyFailure(messageText));
-  }
-  if (result.status === 0) return;
-  const output = `${result.stderr ?? ''}${result.stdout ?? ''}`.trim();
-  const messageText = output || `codex queue exited with ${result.status ?? 'no status'}`;
-  throw new CodexQueueSendError(messageText, classifyFailure(messageText));
-}
+import type { WakeRoute } from './model.js';
 
 export interface CodexQueueTransportOptions {
   env?: NodeJS.ProcessEnv;
-  sendQueue?: typeof sendCodexQueue;
+  connect?: (options: CodexCliConnectOptions) => Promise<CodexCliAgent>;
 }
 
 export class CodexQueueTransport implements WakeTransportPort {
@@ -57,50 +17,36 @@ export class CodexQueueTransport implements WakeTransportPort {
 
   async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
     const deadline = Date.now() + timeoutMs;
-    const remainingMs = () => Math.max(0, deadline - Date.now());
-    const threadId = request.route.address.threadId?.trim();
+    const { address } = request.route;
+    const threadId = address.threadId?.trim();
     if (!threadId) {
       return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
     }
     const env = this.opts.env ?? process.env;
-    if (!await codexQueueEligible(threadId, env)) {
-      return {
-        outcome: 'failed',
-        unavailable: true,
-        signature: 'boundary_not_stopped',
-        message: 'The Codex thread has not reached a current Stop boundary.',
-        retainRoute: true,
-      };
-    }
     const payload = request.artifact === undefined ? undefined
       : (await request.artifact.read((facts) => wakePreview(facts, request))).value;
     if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
     if (!(await beforeSend())) return { outcome: 'not-capable' };
-    if (!await codexQueueEligible(threadId, env)) {
-      return {
-        outcome: 'failed',
-        unavailable: true,
-        signature: 'boundary_not_stopped',
-        message: 'The Codex thread left its Stop boundary before queueing.',
-        retainRoute: true,
-      };
-    }
-    const remaining = remainingMs();
-    if (remaining === 0) {
-      return { outcome: 'failed', unavailable: true, signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
-    }
     try {
-      (this.opts.sendQueue ?? sendCodexQueue)({ threadId, message: payload }, { env, timeoutMs: remaining });
+      const agent = await (this.opts.connect ?? connect)({
+        harness: 'codex', transport: 'cli', sessionId: threadId, boundaries: codexBoundaryStore(env),
+        env, bin: env.SQUARE_CODEX_BIN, codexHome: address.codexHome, endpoint: address.endpoint,
+      });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return { outcome: 'failed', unavailable: true, signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
+      }
+      await agent.queue(payload, { timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {
+      if (error instanceof DeliveryError && error.code === 'session_inactive') {
+        return { outcome: 'failed', unavailable: true, signature: 'boundary_not_stopped',
+          message: 'The Codex thread has no current Stop boundary for queueing.', retainRoute: true };
+      }
       const message = error instanceof Error ? error.message : String(error);
-      const kind = error instanceof CodexQueueSendError ? error.kind : 'unknown';
-      if (kind === 'unknown') return { outcome: 'unknown', signature: 'queue_unknown', message };
-      return {
-        outcome: 'failed',
-        signature: kind === 'transient' ? 'queue_pre_accept_transient' : 'queue_pre_accept_rejected',
-        message,
-      };
+      if (!(error instanceof DeliveryError) || error.maybeDelivered) return { outcome: 'unknown', signature: 'queue_unknown', message };
+      return { outcome: 'failed', signature: ['unavailable', 'timeout', 'aborted'].includes(error.code)
+        ? 'queue_pre_accept_transient' : 'queue_pre_accept_rejected', message };
     }
   }
 }

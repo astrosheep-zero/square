@@ -27,7 +27,7 @@ instead; both outcomes are reported as `admitted`.
 ## Install and connect
 
 ```sh
-npm install @astrosheep/agent-delivery@0.1.0
+npm install @astrosheep/agent-delivery@0.1.1
 ```
 
 For local development, run `npm ci`, `npm test` and `npm pack` in
@@ -145,8 +145,17 @@ business records. Install the host's command for `SessionStart`, `SessionResume`
 pulls text into `additionalContext`; Stop records queue eligibility and asks the
 host to sweep. Start/resume/new prompts clear Stop eligibility; end records an
 ended marker, blocking queue even if a late Stop/tool callback arrives. Only a
-new start/resume reopens it. Hook waiting defaults to 4.5 seconds; callbacks receive its
-abort signal. Hosts must honor it before committing or sending.
+new start/resume reopens it. The hook's cancellation budget defaults to 4.5 seconds;
+callbacks receive its abort signal. Before presenting or sending, hosts must honor
+cancellation and release uncommitted claims. `pull` is cooperatively awaited, not
+raced against that budget: once a host has presented, it must finish any
+cancellation-independent evidence settlement and return the associated text even
+if the signal aborts meanwhile. Otherwise it should resolve `undefined` or reject
+after cancelling its uncommitted work. A `pull` that ignores cancellation can hold
+the hook open; hosts must leave enough time for settlement within the harness's
+external hook timeout. The handler never abandons an in-flight pull and discards
+its committed output. Sweeps remain bounded by the hook budget, are skipped after
+expiry, and cannot erase a successful pull's response.
 
 For still-pending work, bind that lifecycle source at connection time:
 

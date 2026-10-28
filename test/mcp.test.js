@@ -132,7 +132,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
       const configuredBody = { channel: 'configured', session: `startup-${channel}` };
       const beforeProcessEnv = { ...process.env };
       const beforeBaseEnv = { ...env };
-      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent' }, path: squarePath, participant: 'rei', body: configuredBody,
+      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, participant: 'rei', body: configuredBody,
         wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }));
       const artifact = createArtifactPort(squarePath);
       const readSeats = () => artifact.read(facts => ({
@@ -148,7 +148,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         let seats = (await readSeats()).value;
         assert.deepEqual(seats.seat.body, callBody);
         assert.deepEqual(seats.seat.wakeAddress, channel === 'codex'
-          ? { kind: 'codex-queue', address: { threadId: callBody.session } }
+          ? { kind: 'codex-queue', address: { threadId: callBody.session, codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock' } }
           : { kind: 'paseo', address: { agentId: 'managed-agent' } });
         assert.deepEqual(seats.callBodySeats.map(({ participant }) => participant), ['rei']);
 
