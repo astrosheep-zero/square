@@ -4,7 +4,7 @@ import { WATCH_STALE_MS, freshWatchLease, watchTerminalStatus } from './runtime.
 import type { SquareArtifactPort } from './ports.js';
 import type { Seat } from './model.js';
 
-export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active'; readonly lease: WatchLease };
+export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active' };
 export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held'; readonly heartbeatAt?: number } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
 
 function newLease(leaseId: string, at: number, options: WatchOptions): WatchLease {
@@ -16,7 +16,7 @@ export async function acquireWatchLease(artifact: SquareArtifactPort, seat: Seat
   const name = seat.participant;
   const { value } = await artifact.transactAs({ kind: 'participant', seat }, facts => {
     const known = resolveKnownName(facts, name), existing = freshWatchLease(facts, known, at);
-    if (existing !== undefined && !options.replace) return { type: 'active', lease: existing } as const;
+    if (existing !== undefined && !options.replace) return { type: 'active' } as const;
     facts.putLease(known, newLease(leaseId, at, options), seat.generation);
     return { type: 'started', leaseId, replaced: existing !== undefined, heartbeatAt: at } as const;
   }, signal);

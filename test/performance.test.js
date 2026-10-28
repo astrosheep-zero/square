@@ -9,9 +9,10 @@ import { catchPresence } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
-  const counters = { reads: 0, transacts: 0, hydrated: [], counts: [], directedPages: [] };
+  const counters = { reads: 0, transacts: 0, hydrated: [], counts: [], directedPages: [], ordinals: [] };
   const wrap = (facts) => Object.assign({}, facts, {
     activities: (indexes) => { counters.hydrated.push([...indexes]); return facts.activities(indexes); },
+    sayOrdinals: (indexes) => { counters.ordinals.push([...indexes]); return facts.sayOrdinals(indexes); },
     activityCount: (filter) => { counters.counts.push({ method: 'activityCount', filter }); return facts.activityCount(filter); },
     directedCount: (recipient, filter) => { counters.counts.push({ method: 'directedCount', recipient, filter }); return facts.directedCount(recipient, filter); },
     directed: (recipient, filter, page) => { counters.directedPages.push({ recipient, filter, page }); return facts.directed(recipient, filter, page); },
@@ -114,7 +115,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     assert.deepEqual(outcome.activities.map(activity => activity.id), caughtIds);
     assert.equal(outcome.remaining, 890);
     assert.equal(caught.standingCount, 2);
-    assert.deepEqual(caught.sayNumbers, Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [index + 2, index + 1])));
+    assert.deepEqual(counters.ordinals, [], 'catch does not query history ordinals');
     assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))));
 
     const presence = (await artifact.read(facts => catchPresence(facts, 100_000))).value;
@@ -132,7 +133,6 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     const hydrationCount = counters.hydrated.length;
     const emptyOutcome = await participant.catch({ from: ['P0'], observe: true });
     assert.deepEqual(emptyOutcome.activities, []);
-    assert.deepEqual(emptyOutcome.observation.sayNumbers, {});
     assert.equal(emptyOutcome.observation.standingCount, 2);
     assert.equal(counters.hydrated.length, hydrationCount, 'empty catch must not request body hydration');
     const beforeEmptyRender = measurements();
@@ -188,7 +188,6 @@ test('catch fences selection and captures the page facts in its receipt transact
   assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
   assert.equal(caught.reason, 'drained');
   assert.equal(caught.remaining, 1);
-  assert.deepEqual(caught.observation.sayNumbers, { 2: 1 });
   assert.equal(caught.observation.standingCount, 2);
   assert.equal(caught.observation.held, false);
   assert.equal(caught.observation.now, 100);

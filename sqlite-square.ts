@@ -238,7 +238,7 @@ export class SqliteSquare {
         const activity = act === undefined ? null : toPublicActivity(facts.land(act));
         return { activity, ...(!options.observe ? {} : { observation: {
           ...square.observation(inSquareCount(facts), facts.hold().active, name, now), participant: name,
-          requestedTarget: target, target: activity?.target ?? target,
+          target: activity?.target ?? target,
         } }) };
       }, control?.signal)).value;
     }
@@ -283,7 +283,7 @@ export class SqliteSquare {
         return { activities: view.activities, remaining: view.remaining, reason,
           ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
             ...square.observation(view.standingCount, view.held, view.participant, view.now), participant: view.participant,
-            sayNumbers: view.sayNumbers, ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
+            ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
             ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
           } }) };
       };
@@ -385,9 +385,9 @@ export class SqliteSquare {
       const seat = requireSeat(this.seat, square.body, name), now = square.clock();
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
         const stored = facts.land(verb === 'done' ? coreDone(facts, name, body ?? '', now) : verb === 'hold' ? coreHold(facts, name, body ?? '', now) : coreResume(facts, name, now));
-        return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation: {
-          ...square.observation(inSquareCount(facts), facts.hold().active, name, now), activity: stored,
-        } }) };
+        return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation:
+          square.observation(inSquareCount(facts), facts.hold().active, name, now),
+        }) };
       }, control?.signal)).value;
     }
     hold(reason?: string, options: ObservationOptions = {}, control?: OperationControl) { return this.lifecycle('hold', reason, options, control); }

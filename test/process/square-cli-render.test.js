@@ -419,6 +419,10 @@ test('history hides read bookkeeping acts except in time and context windows', a
   assert.deepEqual(kinds(archive), ['join', 'say', 'say']);
   const cursor = run(withPath(file, ['history', '--after', 'act/0', '--limit', '100', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.deepEqual(kinds(cursor), ['say', 'say']);
+  const second = state.acts.find((activity) => activity.kind === 'say' && activity.body === 'second public activity');
+  const number = run(withPath(file, ['history', '--at', formatActivityId(second.index), '-C', '0', '--format', 'number']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(number.status, 0, number.stderr);
+  assert.equal(number.stdout, '2\n', 'history numbers retain the lifetime ordinal outside the selected page');
 
   const contextArgs = ['history', '--at', formatActivityId(readIndex), '-C', '0'];
   const sinceArgs = ['history', '--since', new Date(readAt - 500).toISOString()];

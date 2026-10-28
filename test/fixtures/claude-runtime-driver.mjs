@@ -30,7 +30,8 @@ if (op === 'setup') {
     const sender = (await square.join('fixture-sender')).participant;
     index = Number((await sender.express('Notification BODY: shipped Square native probe.', { mentions: [receiver.participant] })).activity.id.slice(4));
   } finally { await square.close(); }
-  console.log(JSON.stringify(await processActNotificationsOnce(squarePath, index, { env: { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger') } })));
+  await processActNotificationsOnce(squarePath, index, { env: { ...process.env, SQUARE_HOST_LEDGER_ROOT: path.join(root, 'ledger') } });
+  console.log(JSON.stringify({ dispatchCompleted: true }));
 } else if (op === 'replay') {
   const row = (await ledger.listEvidence({ kind: 'wake' })).find((row) => row.nativeDelivery);
   console.log(JSON.stringify(await writeClaudeNative({ sessionId: row.session, endpoint: row.nativeDelivery.endpoint }, row.nativeDelivery.payload, { deadline: Date.now() + 1000 })));

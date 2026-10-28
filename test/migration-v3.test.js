@@ -288,9 +288,11 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
     assert.deepEqual(value.danaEvidence.map(row => row.kind), ['presentation'], 'seat-session mismatch is skipped but agreeing evidence is imported');
     assert.equal(value.pending.recipient, 'Bob', 'the unowned name still has historical unread attention');
     assert.deepEqual(await sweepPending({ artifact, location, now: 3000, graceMs: 0, limit: 10 }), [13]);
-    assert.deepEqual(await deliverPending({ artifact, location, activity: 'act/6', now: 3000,
-      transport: { async attempt() { assert.fail('unowned standing names cannot receive a delivery'); } },
-    }), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+    let sends = 0;
+    await deliverPending({ artifact, location, activity: 'act/6', now: 3000,
+      transport: { async attempt() { sends++; return { outcome: 'accepted' }; } },
+    });
+    assert.equal(sends, 0, 'unowned standing names cannot receive a delivery');
   } finally { await artifact.close(); }
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 6 });
   const square = await Square.at({ path: location, env, body: { channel: 'test', session: 'not-an-owner' } });

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { sameBody, type Seat, type WakeRoute } from './model.js';
-import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, DeliveryResult, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
+import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
 import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
 import { freshWatchLease } from './runtime.js';
@@ -100,16 +100,14 @@ function safeJson(value: unknown): import('./model.js').JsonValue {
   return String(value);
 }
 
-export async function deliverPending(input: DeliverPendingInput): Promise<DeliveryResult> {
+export async function deliverPending(input: DeliverPendingInput): Promise<void> {
   // The resource owner supplies its identity; delivery does not interpret it as a file.
   const location = input.location;
   const requested = input.activity === undefined ? undefined
     : typeof input.activity === 'number' ? input.activity : parseActivityId(input.activity as ActivityId);
-  if (input.activity !== undefined && requested === undefined)
-    return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 };
+  if (input.activity !== undefined && requested === undefined) return;
 
   const pending = await candidates(input.artifact, requested, input.now ?? Date.now());
-  let attempted = 0, accepted = 0, failed = 0, unknown = 0, notCapable = 0;
   // Preserve order within a receiving session; unrelated receivers need not wait for each other.
   const sessions = new Map<string, Candidate[]>();
   for (const candidate of pending) {
@@ -120,7 +118,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
   }
   const dispatch = async ({ seat, head }: Candidate): Promise<void> => {
     const route = routeFor(location, seat, input.now ?? Date.now());
-    if (route === undefined) { notCapable += 1; return; }
+    if (route === undefined) return;
     const request = {
       location, participant: seat.participant, activity: formatActivityId(head.index), actor: head.actor,
       seat: asSeatRef(seat), route,
@@ -129,8 +127,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     if (input.transport.probe !== undefined) {
       try {
         const probe = await input.transport.probe(route);
-        if (probe === false || typeof probe === 'object' && probe.outcome === 'not-capable') { notCapable += 1; return; }
-      } catch { notCapable += 1; return; }
+        if (probe === false || typeof probe === 'object' && probe.outcome === 'not-capable') return;
+      } catch { return; }
     }
 
     const claimToken = randomUUID();
@@ -168,23 +166,17 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
 
     if (outcome.outcome === 'not-capable') {
       await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'transport_not_capable', undefined, outcome.diagnostic);
-      notCapable += 1;
       return;
     }
 
-    attempted += 1;
     const mapped = outcome.outcome === 'accepted' ? 'accepted'
       : outcome.outcome === 'unknown' ? 'unknown' : 'failed';
-    const completed = await input.artifact.completeDelivery({ seat: request.seat, activity: request.activity, claimToken,
+    await input.artifact.completeDelivery({ seat: request.seat, activity: request.activity, claimToken,
       outcome: mapped, at: Date.now(),
       ...('signature' in outcome && outcome.signature !== undefined ? { signature: outcome.signature } : {}),
       ...('message' in outcome && outcome.message !== undefined ? { message: outcome.message } : {}),
       ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: safeJson(outcome.diagnostic) } : {}),
     }).catch(() => false);
-    if (!completed) return;
-    if (mapped === 'accepted') accepted += 1;
-    else if (mapped === 'unknown') unknown += 1;
-    else failed += 1;
   };
   const groups = sessions.values();
   const settled = await Promise.allSettled(Array.from({ length: Math.min(4, sessions.size) }, async () => {
@@ -192,7 +184,6 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
   }));
   // Even an unexpected failure must drain siblings before the caller closes its artifact.
   for (const result of settled) if (result.status === 'rejected') throw result.reason;
-  return { attempted, accepted, failed, unknown, notCapable };
 }
 
 export async function sweepPending(input: {

@@ -106,7 +106,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     if (isSquareError(error)) {
       if (error.code === 'behind' && fresh?.activitySummaries !== undefined) {
         process.stdout.write(renderActivityBlocked({ ...output, retryCommand: retryInput,
-          activitySummaries: fresh.activitySummaries.map((summary) => ({ ...summary, previews: [...summary.previews] })),
+          activitySummaries: fresh.activitySummaries,
         }));
         exitCode(1); return;
       }

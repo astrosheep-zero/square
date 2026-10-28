@@ -231,7 +231,7 @@ function replyId(reply: number | string): string {
 
 function renderEventCliFacts(
   event: StoredAct | Activity,
-  opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
+  opts: { now?: number; preview?: number; mention?: string } = {}
 ): RenderedEvent {
   const now = opts.now;
   const maxBody = opts.preview;
@@ -274,14 +274,14 @@ function renderEventCliFacts(
 
 export function renderEventCli(
   event: StoredAct | Activity,
-  opts: { now?: number; preview?: number; actNumber?: number; mention?: string } = {}
+  opts: { now?: number; preview?: number; mention?: string } = {}
 ): string {
   return renderEventCliFacts(event, opts).text;
 }
 
 function renderPresenceOnlySay(
   event: Extract<StoredAct, { kind: 'say' }> | Activity,
-  opts: { now?: number; actNumber?: number } = {}
+  opts: { now?: number } = {}
 ): string {
   const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
   const meta = style('dim', ` · ${eventId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
@@ -300,7 +300,7 @@ function renderPresenceOnlySay(
 export function renderAmbientEventFacts(
   event: StoredAct | Activity,
   viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
+  opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
 ): RenderedEvent {
   if (event.kind !== 'say') return renderEventCliFacts(event, opts);
   if (opts.perception === undefined) throw new Error('Ambient say rendering requires a settled perception');
@@ -316,7 +316,7 @@ export function renderAmbientEventFacts(
 export function renderAmbientEvent(
   event: StoredAct | Activity,
   viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; actNumber?: number; mention?: string; perception?: Perception } = {}
+  opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
 ): string {
   return renderAmbientEventFacts(event, viewer, opts).text;
 }
@@ -329,25 +329,18 @@ function withDraftInput(command: string, draftPath: string | undefined): string 
   return draftPath === undefined ? command : `${command} < ${quoteShell(draftPath)}`;
 }
 
-function renderUnreadSummary(opts: { activitySummaries: readonly UnreadActivitySummary[]; viewer: string }): string[] {
-  const visibleSummaries = opts.activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
-  const remainingSummaries = opts.activitySummaries.length - visibleSummaries.length;
+function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]): string[] {
+  const visibleSummaries = activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
+  const remainingSummaries = activitySummaries.length - visibleSummaries.length;
   return [
-    ...visibleSummaries.flatMap((item) => [
-      ...item.previews.slice(-1).map((preview) => {
-        const rendered = renderAmbientEvent(preview.act, opts.viewer, { actNumber: preview.number, perception: preview.perception });
-        if (rendered === '') return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago`);
-        if (preview.perception === 'presence') {
-          return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · ${rendered.replace(/\n/g, ' ')}`);
-        }
-        const compact = (preview.act.body ?? '').replace(/\s+/g, ' ').trim();
-        const bodyPreview = compact === ''
-          ? { text: preview.act.metadata === undefined ? '(empty)' : '(structured activity)', remaining: 0 }
-          : truncateChars(compact, UNREAD_PREVIEW_CHARS);
-        const bodyText = bodyPreview.remaining === 0 ? bodyPreview.text : `${bodyPreview.text}${style('dim', `… (+${bodyPreview.remaining} chars)`)}`;
-        return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${bodyText}"`);
-      }),
-    ]),
+    ...visibleSummaries.map((item) => {
+      const compact = (item.preview.body ?? '').replace(/\s+/g, ' ').trim();
+      const bodyPreview = compact === ''
+        ? { text: item.preview.metadata === undefined ? '(empty)' : '(structured activity)', remaining: 0 }
+        : truncateChars(compact, UNREAD_PREVIEW_CHARS);
+      const bodyText = bodyPreview.remaining === 0 ? bodyPreview.text : `${bodyPreview.text}${style('dim', `… (+${bodyPreview.remaining} chars)`)}`;
+      return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${bodyText}"`);
+    }),
     ...(remainingSummaries === 0 ? [] : [style('dim', `  · ${remainingSummaries} more participants have unread activity`)]),
   ];
 }
@@ -358,7 +351,7 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
     opts.squarePath,
     [
       `${style('blocked', '✕')} your activity hasn't landed — someone spoke while you were away`,
-      ...renderUnreadSummary({ activitySummaries: opts.activitySummaries, viewer: opts.name }),
+      ...renderUnreadSummary(opts.activitySummaries),
       ...draftSavedLines(opts.draftPath),
       `${readNowCommand}`,
       '  · take it in, then retry:',

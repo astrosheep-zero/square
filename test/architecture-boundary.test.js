@@ -321,14 +321,14 @@ test('transport boundary catches hidden execution behind helpers and limits nati
     ['cli/program.ts', "import './nested.js';"],
     ['cli/nested.ts', "import './render.js';"],
     ['cli/render.ts', "export { history } from '../views.js'; export { createArtifactPort } from '../artifact.js';"],
-    ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { nowMs } from './runtime.js';"],
+    ['presentation.ts', "import { audienceIncludes } from './square-core.js'; import { WATCH_STALE_MS } from './runtime.js';"],
     ['mcp.ts', "import * as identity from './participant-identity.js'; import { beginClaudeMcpCall } from './claude-mcp-context.js'; import './square-tools.js';"],
     ['square-tools.ts', "import { SqliteSquare } from './sqlite-square.js';"],
   ]);
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
     'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
     'private binding: mcp.ts -> participant-identity.ts (*)',
-    'private binding: presentation.ts -> runtime.ts (nowMs)',
+    'private binding: presentation.ts -> runtime.ts (WATCH_STALE_MS)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',

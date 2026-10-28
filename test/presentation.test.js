@@ -45,7 +45,7 @@ test('public activities render directly with the same IDs, replies, bodies and p
     { kind: 'done', actor: 'Alice', body: '', index: 10, at: 0 },
     { kind: 'listen', actor: 'Alice', target: 'Bob', index: 11, at: 0 },
   ];
-  const options = { now: 1000, actNumber: 4, mention: 'Bob', perception: 'full' };
+  const options = { now: 1000, mention: 'Bob', perception: 'full' };
   for (const record of records) {
     assert.equal(renderAmbientEvent(toPublicActivity(record), 'Bob', options), renderAmbientEvent(record, 'Bob', options));
   }
@@ -64,11 +64,7 @@ test('blocked activity output bounds unread participant summaries', () => {
     name: `Person${index}`,
     count: 1,
     latestActivityAgeMs: index,
-    previews: [{
-      number: 1,
-      perception: 'full',
-      act: { kind: 'say', actor: `Person${index}`, body: `body ${index}`, mentions: [], index, at: 0 },
-    }],
+    preview: { kind: 'say', actor: `Person${index}`, body: `body ${index}`, mentions: [], index, at: 0 },
   }));
   const output = renderActivityBlocked({
     squarePath: '/tmp/square',

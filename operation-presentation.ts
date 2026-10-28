@@ -1,7 +1,7 @@
 // Human-facing text for one settled operation. The CLI and the MCP transport both
 // render through these functions, so a person sees the same square either way.
-import { sameName, type RoomChangeAct } from './model.js';
-import { formatActivityId, parseActivityId } from './square-core.js';
+import { sameName } from './model.js';
+import { formatActivityId } from './square-core.js';
 import type {
   CatchOptions, CatchResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, ListeningResult, OperationFailureDetail,
@@ -32,9 +32,7 @@ export function renderJoinResult(data: JoinPresentation): string | undefined {
   const entry = after.entry;
   const name = typeof data.participant === 'string' ? data.participant : data.participant.name;
   const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
-    now: after.now, preview: 200,
-    actNumber: event.kind === 'say' ? entry!.sayNumbers[event.index] : undefined,
-    perception: entry!.perceptions[event.index],
+    now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
   const fallback = after.automaticDeliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
     '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
@@ -121,8 +119,7 @@ export function renderCatchOutcome(
     };
   }
   const rendered = data.activities.map((activity) => renderAmbientEvent(activity, name, {
-    now: projection.now, actNumber: projection.sayNumbers[parseActivityId(activity.id)!],
-    perception: activity.perception, mention: options.mention ? name : undefined,
+    now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
   })).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
@@ -151,11 +148,7 @@ function renderHistoryProjection(
   // Presence anchors collect into one closing line instead of interrupting the page.
   const anchored: string[] = [];
   for (const activity of shown) {
-    const options = {
-      preview,
-      actNumber: activity.kind === 'say' ? projection.sayNumbers[activity.index] : undefined,
-    };
-    const rendered = renderEventCli(activity, options);
+    const rendered = renderEventCli(activity, { preview });
     if (rendered !== '') chunks.push(rendered);
     for (const participant of projection.presenceAnchors[activity.index] ?? []) {
       if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
@@ -291,7 +284,6 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
     : renderAmbientEventFacts(data.latestActivity, presentation.viewer, {
         now: data.now,
         preview: 200,
-        actNumber: presentation.latestActNumber,
         perception: presentation.latestPerception,
       });
   const latest = visible.text === ''
@@ -302,7 +294,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   // Presence events after the latest public act: otherwise the roster can say someone is
   // here while the latest line shows them leaving, with nothing to reconcile the two.
   for (const { activity, rejoined } of presentation.joins) {
-    latest.push(style('dim', `  → ${participantIdentity(activity.actor!)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, data.now)}`));
+    latest.push(style('dim', `  → ${participantIdentity(activity.actor)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, data.now)}`));
   }
   if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
@@ -323,7 +315,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
       ...(data.listening.length === 0 ? ['  ○ not turned toward anyone'] : data.listening.map((name) => `  · ${participantIdentity(name)}`)),
     ]),
   ].join('\n');
-  return withPathOutput(squarePath, output, { participantCount: presentation.standingCount, held: presentation.held });
+  return withPathOutput(squarePath, output, { participantCount: presentation.standingCount, held: data.held !== null });
 }
 
 export function renderListeningResult(squarePath: string, data: ListeningResult): string | undefined {
@@ -363,7 +355,7 @@ export function renderLifecycleResult(squarePath: string, verb: LifecycleVerb, d
   if (verb === 'done') {
     return withPathOutput(projection.location ?? squarePath, `○ you stepped out — your footsteps fade · ${data.activity.id}`, header);
   }
-  const line = `${renderRoomChangeText(projection.activity as RoomChangeAct)} · ${formatActivityId(projection.activity.index)} · just now`;
+  const line = `${renderRoomChangeText(data.activity)} · ${data.activity.id} · just now`;
   return withPathOutput(projection.location ?? squarePath, verb === 'hold' ? `· ${line}` : `✓ ${line}`, header);
 }
 

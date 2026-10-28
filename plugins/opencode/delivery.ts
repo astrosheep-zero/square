@@ -66,7 +66,7 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
         inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
       });
       if (result.state === 'accepted') return { outcome: 'accepted' };
-      if (result.state === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: result.code };
+      if (result.state === 'unavailable') return { outcome: 'failed', signature: result.code };
       return { outcome: 'unknown', signature: result.code };
     },
   };

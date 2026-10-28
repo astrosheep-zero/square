@@ -3,7 +3,7 @@ import { terminalStatusFor } from './runtime.js';
 import { SquareError, type StoredAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
-import type { CatchOptions, PerceivedActivity } from './square-facade.js';
+import type { CatchOptions, CatchReason, PerceivedActivity } from './square-facade.js';
 import { toPerceivedActivity } from './views.js';
 import { catchHint } from './hints.js';
 
@@ -11,13 +11,12 @@ export interface CatchSelection {
   readonly participant: string;
   readonly activities: readonly PerceivedActivity[];
   readonly remaining: number;
-  readonly sayNumbers: Readonly<Record<number, number>>;
   readonly standingCount: number;
   readonly held: boolean;
   readonly now: number;
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
-  readonly terminalStatus: 'capped' | 'quorum' | undefined;
+  readonly terminalStatus: Extract<CatchReason, 'capped' | 'quorum'> | undefined;
   readonly hint?: string;
 }
 
@@ -28,7 +27,6 @@ export function observeCatchSelection(facts: SquareRead, participant: string, ac
   return {
     participant, activities: activities.map(activity => toPerceivedActivity(facts, activity, participant)),
     remaining: facts.directedCount(participant, filter),
-    sayNumbers: activities.length === 0 ? {} : facts.sayOrdinals(activities.map((item) => item.index)),
     standingCount: counts.joined, held: facts.hold().active, now: at,
     ownActivityCount: current.sayCount, hardCap: header.hardCap,
     terminalStatus: terminalStatusFor(current, header.hardCap, counts),

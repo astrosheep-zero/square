@@ -28,12 +28,6 @@ export type Act =
   | { kind: 'ignore'; actor: Participant; target: Participant; at?: number }
   | { kind: 'unlisten'; actor: Participant; target: Participant; at?: number };
 
-export function audienceOf(say: { body?: string; mentions?: readonly Participant[]; reach?: Reach }): Audience {
-  if (say.reach === 'bell') return { kind: 'bell' };
-  const names: string[] = [];
-  for (const name of say.mentions ?? []) if (!names.some((existing) => sameName(existing, name))) names.push(name);
-  return { kind: 'mentions', names };
-}
 export function audienceIncludes(audience: Audience, name: string): boolean {
   return audience.kind === 'bell' || audience.names.some((mentioned) => sameName(mentioned, name));
 }

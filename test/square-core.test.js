@@ -1,23 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MAX_IDENTITY_SET_SIZE, audienceIncludes, audienceOf, formatActivityId, parseActivityId } from '../dist/square-core.js';
+import { MAX_IDENTITY_SET_SIZE, audienceIncludes, formatActivityId, parseActivityId } from '../dist/square-core.js';
 import { NAME_GRAPHEME_SOURCE, validateName } from '../dist/model.js';
 
-test('audience metadata keeps first-appearance spelling and case-insensitive uniqueness', () => {
-  assert.deepEqual(audienceOf({ body: 'hey @Bob and @aku/riko/7a then @BOB @Missing', mentions: ['Bob', 'aku/riko/7a', 'BOB', 'Missing'] }), {
-    kind: 'mentions',
-    names: ['Bob', 'aku/riko/7a', 'Missing'],
-  });
-  assert.deepEqual(audienceOf({ body: 'ignore @Bob', reach: 'bell' }), { kind: 'bell' });
-  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob', mentions: ['Bob'] }), 'bob'), true);
+test('settled audience membership is case-insensitive and a bell reaches everyone', () => {
+  assert.equal(audienceIncludes({ kind: 'mentions', names: ['Bob'] }, 'bob'), true);
+  assert.equal(audienceIncludes({ kind: 'mentions', names: [] }, 'Bob'), false);
   assert.equal(audienceIncludes({ kind: 'bell' }, 'Anyone'), true);
-});
-
-test('explicit audience metadata drives routing while body at-signs stay literal', () => {
-  assert.deepEqual(audienceOf({ body: 'hey @Bob' }), { kind: 'mentions', names: [] });
-  assert.deepEqual(audienceOf({ body: 'hey @Bob', mentions: ['Bob'] }), { kind: 'mentions', names: ['Bob'] });
-  assert.equal(audienceIncludes(audienceOf({ body: 'hey @Bob' }), 'Bob'), false);
   assert.equal(MAX_IDENTITY_SET_SIZE, 10);
 });
 

@@ -244,13 +244,9 @@ export interface PendingMembership extends LocatedSeat {
 }
 
 export interface WatchOptions {
-  id?: ActivityId;
   participants?: string[];
   mention?: string;
-  limit?: number;
-  idleMs?: number;
   replace?: boolean;
-  now?: boolean;
 }
 
 export type PublicAct = Extract<StoredAct, { kind: 'say' | 'done' }>;

@@ -102,22 +102,22 @@ test('delivery claim, final revalidation, send outcome and presentation share on
   t.after(() => artifact.close());
   const before = (await artifact.read(facts => facts.header())).value;
   const sends = [];
-  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity,
+  await deliverPending({ artifact, location: '/tmp/one.square', activity,
     transport: { async attempt(request, _timeout, gate) {
       assert.equal(request.seat.generation, bob.generation);
       assert.equal(await gate(), true);
       sends.push(request.claimToken);
       return { outcome: 'accepted' };
     } }, now: 4 });
-  assert.deepEqual(result, { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
   assert.equal(sends.length, 1);
   const state = (await artifact.read(facts => ({ header: facts.header(), evidence: facts.deliveryEvidence('Bob', bob.generation, activity) }))).value;
   assert.equal(state.header.revision, before.revision);
   assert.ok(state.header.deliveryRevision > before.deliveryRevision);
   assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome, row.claimToken]), [['wake', 'accepted', sends[0]]]);
-  assert.deepEqual(await deliverPending({ artifact, location: '/tmp/one.square', activity,
-    transport: { async attempt() { throw new Error('accepted evidence must prevent replay'); } }, now: 5 }),
-  { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  let replays = 0;
+  await deliverPending({ artifact, location: '/tmp/one.square', activity,
+    transport: { async attempt() { replays++; return { outcome: 'accepted' }; } }, now: 5 });
+  assert.equal(replays, 0, 'accepted evidence must prevent replay');
 
   const presented = await presentPending({ artifact, location: '/tmp/one.square', participant: 'Bob', activity,
     seat: bob, sink: { async present(item) { assert.equal(item.body, 'one artifact-owned notice'); } }, now: 6 });
@@ -137,7 +137,7 @@ test('a catch receipt committed before the final send gate suppresses the wake a
   t.after(() => artifact.close());
   let gateResult;
   let calls = 0;
-  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity,
+  await deliverPending({ artifact, location: '/tmp/one.square', activity,
     transport: { async attempt(request, _timeout, gate) {
       calls += 1;
       await artifact.transactAs({ kind: 'participant', seat: bob }, facts => facts.markSeen('Bob', [Number(activity.slice(4))], 4));
@@ -146,7 +146,6 @@ test('a catch receipt committed before the final send gate suppresses the wake a
     } }, now: 4 });
   assert.equal(calls, 1);
   assert.equal(gateResult, false);
-  assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
   const state = (await artifact.read(facts => ({
     seen: facts.receipt('Bob', Number(activity.slice(4))),
     evidence: facts.deliveryEvidence('Bob', bob.generation, activity),
@@ -168,10 +167,9 @@ test('Paseo asynchronous readiness precedes the final gate; consumed attention r
     },
     sendWake: async () => { sends += 1; },
   });
-  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
+  await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
   assert.equal(ready, true);
   assert.equal(sends, 0);
-  assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
   const rows = (await artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, activity))).value;
   assert.deepEqual(rows.map(row => [row.kind, row.outcome, row.signature]), [['wake', 'released', 'pre_send_revalidation_failed']]);
 });
@@ -222,14 +220,13 @@ test('real Paseo outcomes retain distinct accepted, pre-accept failure and uncer
         if (expected !== 'accepted') throw new DeliveryError('unavailable', expected === 'unknown');
       },
     });
-    const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
-    assert.equal(result[expected], 1);
-    assert.equal(result.attempted, 1);
+    await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4, transport });
+    assert.equal(sends, 1);
     const state = (await artifact.read(facts => ({ seen: facts.receipt('Bob', 2), evidence: facts.deliveryEvidence('Bob', bob.generation, activity) }))).value;
     assert.equal(state.seen, undefined, 'wake acceptance is not presentation');
     assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome]), [['wake', expected]]);
     if (expected !== 'failed') {
-      assert.equal((await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 5, transport })).attempted, 0);
+      await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 5, transport });
       assert.equal(sends, 1, 'accepted and unknown sends are never safe replay');
     }
   });
@@ -268,7 +265,7 @@ test('wake revalidates the captured seat after asynchronous takeover and refuses
   t.after(() => artifact.close());
   let sent = false;
   let oldToken;
-  const result = await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4,
+  await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4,
     transport: { async attempt(request, _timeout, beforeSend) {
       oldToken = request.claimToken;
       await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: { ...bob.body, agent: 'replacement' }, expectedGeneration: bob.generation }, facts => {
@@ -279,7 +276,6 @@ test('wake revalidates the captured seat after asynchronous takeover and refuses
       return sent ? { outcome: 'accepted' } : { outcome: 'not-capable' };
     } } });
   assert.equal(sent, false);
-  assert.deepEqual(result, { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
   await assert.rejects(artifact.completeDelivery({ seat: bob, activity, claimToken: oldToken, at: 7, outcome: 'accepted' }),
     error => error.code === 'already_joined');
   assert.equal((await artifact.read(facts => facts.deliveryByToken(oldToken))).value.outcome, 'dispatching');
@@ -357,17 +353,17 @@ test('one requested activity wakes its landed audience without hydrating other u
 
   const { counters, port } = countingArtifact(artifact);
   const deliver = (activity, attempt) => deliverPending({ artifact: port, location: '/tmp/one.square', activity, transport: { attempt }, now: 300 });
-  const noWake = () => assert.fail('an excluded recipient must not be woken');
-  assert.deepEqual(await deliver(`act/${caught.value.index}`, noWake),
-    { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 }, 'a caught activity has no pending recipient');
-  assert.deepEqual(await deliver(`act/${beforeRejoin.value.index}`, noWake),
-    { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 }, 'a replaced seat generation is not the landed recipient');
+  let excludedSends = 0;
+  const noWake = async () => { excludedSends++; return { outcome: 'accepted' }; };
+  await deliver(`act/${caught.value.index}`, noWake);
+  await deliver(`act/${beforeRejoin.value.index}`, noWake);
+  assert.equal(excludedSends, 0, 'caught activity and replaced seat generation cannot wake');
   const sends = [];
-  assert.deepEqual(await deliver(`act/${delivery.value.index}`, async (request, _timeout, gate) => {
+  await deliver(`act/${delivery.value.index}`, async (request, _timeout, gate) => {
     assert.equal(await gate(), true);
     sends.push(request.participant);
     return { outcome: 'accepted' };
-  }), { attempted: 1, accepted: 1, failed: 0, unknown: 0, notCapable: 0 });
+  });
   assert.deepEqual(sends, ['Bob']);
   assert.deepEqual(counters.hydrated, [], 'a requested delivery must never hydrate activity bodies');
   assert.deepEqual([...new Set(counters.directedRecipients)], ['Bob'], 'only the landed audience is consulted');

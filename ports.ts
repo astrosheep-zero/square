@@ -71,7 +71,6 @@ export interface DirectedHead {
 export interface LandedRecipient { readonly recipient: string; readonly route: DirectedHead['route'] }
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
-export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type SeatRef = Omit<Seat, 'wakeAddress'>;
 export type ArtifactWriteAuthority =
   | { readonly kind: 'participant'; readonly seat: SeatRef }
@@ -231,29 +230,11 @@ export interface PresentationSinkPort {
   present(activity: StoredAct): void | Promise<void>;
 }
 
-/** Read-only presentation evidence projection for diagnostics and migration callers. */
-export interface PresentationEvidenceProjection {
-  readonly location: string;
-  readonly participant: string;
-  readonly sessionId: string;
-  readonly activity: string;
-  readonly outcome: string;
-  readonly at?: number;
-}
-
 export type WakeOutcome =
-  | { readonly outcome: 'accepted'; readonly signature?: string; readonly attemptN?: number }
-  | { readonly outcome: 'failed'; readonly message?: string; readonly signature?: string; readonly diagnostic?: unknown; readonly attemptN?: number; readonly unavailable?: boolean; readonly retainRoute?: boolean; readonly routeStale?: boolean }
+  | { readonly outcome: 'accepted'; readonly signature?: string }
+  | { readonly outcome: 'failed'; readonly message?: string; readonly signature?: string; readonly diagnostic?: unknown }
   | { readonly outcome: 'not-capable'; readonly diagnostic?: string }
-  | { readonly outcome: 'unknown'; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown; readonly attemptN?: number };
-
-export interface DeliveryResult {
-  readonly attempted: number;
-  readonly accepted: number;
-  readonly failed: number;
-  readonly unknown: number;
-  readonly notCapable: number;
-}
+  | { readonly outcome: 'unknown'; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown };
 
 export interface DeliverPendingInput {
   readonly artifact: SquareArtifactPort;

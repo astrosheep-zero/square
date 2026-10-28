@@ -2,15 +2,14 @@ import { formatActivityId, parseActivityId, type ActivityId } from './square-cor
 import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries } from './decisions.js';
 import { SquareError, nameKey, type StoredAct } from './model.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
-import { inSquareCount, rosterNames } from './runtime.js';
+import { inSquareCount } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
 import { compileSearchPattern } from './search.js';
 import type {
   Activity, ArchiveRecord, PerceivedActivity, HistoryQuery, HistoryContinuation,
-  ParticipantStatus, ParticipantSummary, PresenceClassification, ParticipantsResult, SquareSnapshot,
-  EntryPresentation, ListPresentation, StatusResult, SquareObservation, CatchPresence, StreamProjection,
+  ParticipantSummary, PresenceClassification, ParticipantsResult, SquareSnapshot,
+  EntryPresentation, StatusResult, SquareObservation, CatchPresence,
 } from './square-facade.js';
-export type { EntryPresentation, ListPresentation, CatchPresence, StreamProjection } from './square-facade.js';
 
 const PAGE_SIZE = 100;
 export const HISTORY_DEFAULT_LIMIT = 10;
@@ -108,11 +107,6 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
   return activities.flatMap((activity) => activity.kind === 'read' || activity.actor === undefined ? [] : [toPublicActivity(activity)]);
 }
-function statuses(facts: SquareRead, now: number): ParticipantStatus[] {
-  return coreParticipants(facts, now).filter((p) => p.presence !== 'never-joined').map((p) => ({
-    name: p.name, state: p.presence === 'done' ? 'done' : 'joined', watching: p.presence === 'watching', listening: p.listening,
-  }));
-}
 export function snapshot(facts: SquareRead, now: number): SquareSnapshot {
   const header = facts.header(), hold = facts.hold();
   const names = new Map(facts.roster().map((p) => [nameKey(p.name), p.name]));
@@ -120,21 +114,21 @@ export function snapshot(facts: SquareRead, now: number): SquareSnapshot {
   return { context: [...header.preamble, ...header.warmup].join('\n'), actCount: facts.activityCount({ kinds: NON_READ }), hardCap: header.hardCap,
     ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
     held: hold.active && hold.actor !== undefined ? { by: hold.actor, ...(hold.reason === undefined ? {} : { reason: hold.reason }) } : null,
-    participants: statuses(facts, now), delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
+    participants: coreParticipants(facts, now).filter((p) => p.presence !== 'never-joined').map(({ name, presence, listening }) => ({ name, presence, listening })),
+    delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
   const known = resolveKnownName(facts, name), hold = facts.hold();
-  return { participant: known, roster: rosterNames(facts), activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts), held: hold.active,
-    ...(hold.reason === undefined ? {} : { holdReason: hold.reason }), ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
+  return { participant: known, activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts), held: hold.active,
+    ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
 }
 export function entryPresentation(facts: SquareRead, name: string, lastN: number | null = HISTORY_DEFAULT_LIMIT): EntryPresentation {
   const header = facts.header();
   const recentActivities = selectHistory(facts, {}, lastN, ['say', 'done']).activities;
   return { joinedBefore: facts.activityCount({ kinds: ['join'], actors: [name] }) > 1,
     scene: header.warmup.join('\n').trim(),
-    joinContext: (header.preamble.at(-1) === '---' ? header.preamble.slice(0, -1) : header.preamble).join('\n').trim(), recentActivities,
-    perceptions: Object.fromEntries(recentActivities.map((a) => [a.index, perceiveActivity(facts, a, name)])),
-    sayNumbers: facts.sayOrdinals(recentActivities.map((a) => a.index)) };
+    joinContext: (header.preamble.at(-1) === '---' ? header.preamble.slice(0, -1) : header.preamble).join('\n').trim(),
+    recentActivities: recentActivities.map((activity) => ({ ...toPublicActivity(activity), perception: perceiveActivity(facts, activity, name) })) };
 }
 function classifyPresence(participants: readonly ParticipantSummary[], now: number): PresenceClassification {
   const standing = (participant: ParticipantSummary) => participant.presence === 'active' || participant.presence === 'watching';
@@ -152,7 +146,7 @@ export function queryParticipants(facts: SquareRead, context: ParticipantQueryCo
   return { participants, ...(!observe ? {} : { observation: { ...context, ...classifyPresence(participants, context.now),
     standingCount: inSquareCount(facts), held: facts.hold().active } }) };
 }
-export function listPresentation(facts: SquareRead): ListPresentation {
+export function listPresentation(facts: SquareRead) {
   const participants = facts.roster().filter((p) => p.joined).map((p) => {
     const receiptAt = facts.receiptFacts(p.name, p.lastJoinIndex ?? -1).latestAt;
     return { name: p.name, lastActiveAt: receiptAt === undefined ? p.lastActiveAt : Math.max(p.lastActiveAt ?? -Infinity, receiptAt) };
@@ -179,19 +173,20 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
   };
   if (!observe) return data;
   const afterIndex = latestAct?.index ?? -1;
-  const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({ activity,
-    rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0 }));
+  const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({
+    rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0,
+    activity: toPublicActivity(activity) }));
   const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
   return {
     ...data,
     observation: {
-      ...context, ...classifyPresence(participants, context.now), standingCount, held: hold.active,
+      location: context.location, automaticDeliveryAvailable: context.automaticDeliveryAvailable,
+      ...classifyPresence(participants, context.now), standingCount,
       knownParticipantCount: participants.length, viewer: canonicalViewer,
       ...(canonicalViewer === '' ? {} : { participant: canonicalViewer }),
       joins, joinCount: facts.activityCount({ kinds: ['join'], afterIndex }),
       attentionNames: participants.filter((p) => canonicalViewer === '' || nameKey(p.name) === nameKey(canonicalViewer)).map((p) => p.name),
       ...(latestAct === undefined ? {} : { latestPerception: perceiveActivity(facts, latestAct, canonicalViewer) }),
-      ...(latestAct?.kind === 'say' ? { latestActNumber: facts.sayOrdinals([latestAct.index])[latestAct.index] } : {}),
     },
   };
 }
@@ -200,14 +195,14 @@ export function catchPresence(facts: SquareRead, now: number): CatchPresence {
     || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
   return { participants, now };
 }
-export function streamProjection(facts: SquareRead, cursor: number, recipient?: string): StreamProjection {
+export function streamProjection(facts: SquareRead, cursor: number, recipient?: string) {
   const page = facts.activityHeads({ afterIndex: cursor, kinds: NON_READ, actorRequired: true }, { edge: 'oldest', limit: PAGE_SIZE });
   const heads = recipient === undefined ? page.items : page.items.filter((head) => facts.directedAt(recipient, head.index) !== undefined);
   const activities = facts.activities(heads.map((head) => head.index)).map((activity) => recipient === undefined
     ? toPublicActivity(activity) : toPerceivedActivity(facts, activity, recipient));
   return { activities, cursor: page.items.at(-1)?.index ?? cursor, hasMore: page.hasMore };
 }
-export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_LIMIT, recipient?: string): StreamProjection {
+export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_LIMIT, recipient?: string) {
   if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
   const heads = last === 0 ? [] : recipient === undefined
     ? facts.activityHeads({ kinds: NON_READ, actorRequired: true }, { edge: 'newest', limit: last }).items

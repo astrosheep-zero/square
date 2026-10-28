@@ -47,19 +47,15 @@ export class PaseoWakeTransport implements WakeTransportPort {
     const remainingMs = () => Math.max(0, deadline - Date.now());
     const budgetUnavailable = (): WakeOutcome => ({
       outcome: 'failed',
-      unavailable: true,
       signature: 'dispatch_budget_exhausted',
       message: 'The wake dispatch budget elapsed before Paseo accepted the wake.',
-      retainRoute: true,
     });
     const agentId = address.agentId?.trim();
     if (!agentId) {
       return {
         outcome: 'failed',
-        unavailable: true,
         signature: 'invalid_address',
         message: 'Paseo route has no agent id.',
-        routeStale: true,
         diagnostic: diagnostic('selection', address, 'invalid_address'),
       };
     }
@@ -73,26 +69,21 @@ export class PaseoWakeTransport implements WakeTransportPort {
     if (discovery.error && discovery.agents.length === 0) {
       return {
         outcome: 'failed',
-        unavailable: true,
         // A credential or authorization refusal is proven; anything else may be transient.
         signature: /password|auth|unauthori[sz]ed/i.test(discovery.error) ? 'discovery_rejected'
           : /DAEMON_NOT_RUNNING|ECONNREFUSED|ENOENT|not found.*executable|ETIMEDOUT|timed out|timeout/i.test(discovery.error)
             ? 'discovery_transient' : 'discovery_rejected',
         message: `Paseo unavailable: ${discovery.error}`,
         diagnostic: diagnostic('discovery', address, 'unavailable'),
-        retainRoute: true,
       };
     }
     const agent = discovery.agents.find((candidate) => candidate.id === agentId);
     if (agent === undefined || agent.status !== 'idle') {
       return {
         outcome: 'failed',
-        unavailable: true,
         signature: agent === undefined ? 'address_not_found' : 'agent_not_idle',
         message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle.',
         diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_idle'),
-        ...(agent === undefined ? {} : { retainRoute: true }),
-        ...(agent === undefined ? { routeStale: true } : {}),
       };
     }
 
@@ -101,11 +92,9 @@ export class PaseoWakeTransport implements WakeTransportPort {
     if (!(await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent, remaining))) {
       return {
         outcome: 'failed',
-        unavailable: true,
         signature: 'boundary_unavailable',
         message: 'Paseo did not reach the current tool boundary before the wake timeout.',
         diagnostic: diagnostic('boundary', address, 'unavailable'),
-        retainRoute: true,
       };
     }
     if (!(await beforeSend())) return { outcome: 'not-capable' };

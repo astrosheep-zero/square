@@ -1,5 +1,4 @@
-import { formatActivityId, type ActivityId } from './square-core.js';
-import { SquareError, type StoredAct, type WatchLease } from './model.js';
+import { SquareError, type WatchLease } from './model.js';
 import type { ParticipantCounts, ParticipantFact, SquareRead } from './ports.js';
 
 function parseIntegerEnv(name: string, fallback: number): number {
@@ -10,24 +9,13 @@ function parseIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 export const WATCH_HEARTBEAT_MS = parseIntegerEnv('SQUARE_WATCH_HEARTBEAT_MS', 60000);
-export const SLEEP_MS = parseIntegerEnv('SQUARE_WATCH_POLL_MS', 10000);
-export const STALE_MS = parseIntegerEnv('SQUARE_WATCH_QUIET_MS', 300000);
 export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', 180000);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
 export const HELD_WAIT_BUDGET_MS = parseIntegerEnv('SQUARE_HELD_WAIT_BUDGET_MS', 10 * 60 * 1000);
 export const FACT_PAGE_SIZE = 100;
 
-export function nowMs(): number {
-  const override = process.env.SQUARE_NOW_MS;
-  if (override === undefined) return Date.now();
-  const value = parseInt(override, 10);
-  if (!Number.isFinite(value)) throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
-  return value;
-}
-export function rosterNames(facts: SquareRead): string[] { return facts.roster().map((participant) => participant.name); }
 export function inSquareCount(facts: SquareRead): number { return facts.participantCounts().joined; }
-export function actId(actOrIndex: StoredAct | number): ActivityId { return formatActivityId(typeof actOrIndex === 'number' ? actOrIndex : actOrIndex.index); }
 
 export function terminalStatusFor(current: ParticipantFact | undefined, hardCap: number | null, counts: ParticipantCounts): 'capped' | 'quorum' | undefined {
   if (hardCap !== null && (current?.sayCount ?? 0) >= hardCap) return 'capped';

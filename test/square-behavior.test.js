@@ -408,10 +408,10 @@ test('snapshot counts only people still in the square and tracks done participan
   await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
   const snapshot = await square.snapshot();
   assert.equal(snapshot.hardCap, 100);
-  assert.equal(snapshot.participants.filter((participant) => participant.state === 'joined').length, 1);
-  assert.equal(snapshot.participants.filter((participant) => participant.state === 'done').length, 1);
-  assert.equal(snapshot.participants.find((participant) => participant.name === 'Alice').state, 'joined');
-  assert.equal(snapshot.participants.find((participant) => participant.name === 'Bob').state, 'done');
+  assert.equal(snapshot.participants.filter((participant) => ['active', 'watching'].includes(participant.presence)).length, 1);
+  assert.equal(snapshot.participants.filter((participant) => participant.presence === 'done').length, 1);
+  assert.equal(snapshot.participants.find((participant) => participant.name === 'Alice').presence, 'active');
+  assert.equal(snapshot.participants.find((participant) => participant.name === 'Bob').presence, 'done');
   await closeSquare(square);
 });
 

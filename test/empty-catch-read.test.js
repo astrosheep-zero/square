@@ -40,7 +40,7 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
   const result = await bob.catch({ from: ['Alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
   const { observation } = result;
-  assert.deepEqual([observation.participant, observation.sayNumbers, observation.standingCount, observation.held, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', {}, 3, true, 100, 1, 1]);
+  assert.deepEqual([observation.participant, observation.standingCount, observation.held, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, true, 100, 1, 1]);
   assert.equal(reads, 2, 'one selection and one explicitly requested presence read');
   assert.equal(await cell.revision(), revision);
   assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
@@ -77,7 +77,6 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
   assert.equal(caught.reason, 'drained');
   assert.equal(caught.activities[0].via, 'mention');
   assert.equal(caught.observation.held, true);
-  assert.deepEqual(caught.observation.sayNumbers, { 3: 2 });
   assert.equal(writes, 1);
   assert.deepEqual(hydrated, [[3]]);
   assert.deepEqual((await cell.read(facts => [facts.receipt('Bob', 2), facts.receipt('Bob', 3), facts.receipt('Bob', 4)])).value, [{ at: 50 }, { at: 100 }, undefined]);

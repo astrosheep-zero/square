@@ -4,12 +4,11 @@ import {
 import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './participant-identity.js';
 import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
-import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
+import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 import { scanMentionCandidates, resolveMention } from './mention-parse.js';
 
 type TimedAct<K extends Act['kind'] = Act['kind']> = Extract<Act, { kind: K }> & { at: number };
-import type { ExpressResult, ParticipantSummary as ParticipantStatus, UnreadActivitySummary } from './square-facade.js';
-export type { ParticipantSummary as ParticipantStatus, ParticipantPresence as CorePresenceState, UnreadActivitySummary, UnreadActivityPreview } from './square-facade.js';
+import type { ExpressResult, ParticipantSummary, UnreadActivitySummary } from './square-facade.js';
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
   validateName(name);
@@ -63,32 +62,27 @@ export type ActDecision =
   | { type: 'held'; reason: string | undefined }
   | { type: 'bell_quota'; nextAt: number };
 
-/** Count the directed suffix, but hydrate only its last three previews per spelling. */
+/** Count the directed suffix and hydrate only its last activity by index per spelling. */
 export function unreadActivitySummaries(facts: SquareRead, name: string, now: number): UnreadActivitySummary[] {
   let afterIndex = readCursor(facts, name);
-  const numbers = new Map<string, number>();
-  const summaries = new Map<string, { count: number; latestAt: number; previews: { index: number; number: number }[] }>();
+  const summaries = new Map<string, { count: number; latestAt: number; lastIndex: number }>();
   while (true) {
     const page = facts.directed(name, { afterIndex }, { edge: 'oldest', limit: FACT_PAGE_SIZE });
     for (const item of page.items) {
-      const key = nameKey(item.actor);
-      const number = (numbers.get(key) ?? 0) + 1;
-      numbers.set(key, number);
-      const summary = summaries.get(item.actor) ?? { count: 0, latestAt: -Infinity, previews: [] };
+      const summary = summaries.get(item.actor) ?? { count: 0, latestAt: -Infinity, lastIndex: item.index };
       summary.count++;
       summary.latestAt = Math.max(summary.latestAt, item.at);
-      summary.previews.push({ index: item.index, number });
-      if (summary.previews.length > 3) summary.previews.shift();
+      summary.lastIndex = item.index;
       summaries.set(item.actor, summary);
     }
     if (!page.hasMore) break;
     afterIndex = page.items.at(-1)!.index;
   }
-  const selected = facts.activities([...summaries.values()].flatMap((item) => item.previews.map((preview) => preview.index)));
+  const selected = facts.activities([...summaries.values()].map((item) => item.lastIndex));
   const byIndex = new Map(selected.map((item) => [item.index, item]));
   return [...summaries].map(([name, summary]) => ({
     name, count: summary.count, latestActivityAgeMs: Math.max(0, now - summary.latestAt),
-    previews: summary.previews.map((preview) => ({ number: preview.number, act: byIndex.get(preview.index) as Extract<StoredAct, { kind: 'say' }>, perception: 'full' as const })),
+    preview: byIndex.get(summary.lastIndex) as Extract<StoredAct, { kind: 'say' }>,
   })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
@@ -197,11 +191,11 @@ export function coreResume(facts: SquareRead, actor: string, now: number): Timed
   return { kind: 'resume', actor: current.name, at: now };
 }
 
-export function compareParticipantActivity(a: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>, b: Pick<ParticipantStatus, 'name' | 'lastActiveAt'>): number {
+export function compareParticipantActivity(a: Pick<ParticipantSummary, 'name' | 'lastActiveAt'>, b: Pick<ParticipantSummary, 'name' | 'lastActiveAt'>): number {
   return (b.lastActiveAt ?? -Infinity) - (a.lastActiveAt ?? -Infinity) || a.name.localeCompare(b.name);
 }
-export function coreParticipants(facts: SquareRead, now: number): ParticipantStatus[] {
-  return facts.roster().map((current): ParticipantStatus => {
+export function coreParticipants(facts: SquareRead, now: number): ParticipantSummary[] {
+  return facts.roster().map((current): ParticipantSummary => {
     let lastActiveAt = current.lastActiveAt;
     if (current.joined) {
       const seenAt = facts.receiptFacts(current.name, current.lastJoinIndex ?? -1).latestAt;

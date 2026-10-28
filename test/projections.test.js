@@ -8,7 +8,7 @@ import { createTestArtifactPort as createArtifactPort } from './fixtures/test-ar
 import { Square } from '../dist/square-api.js';
 import { resolveKnownName } from '../dist/decisions.js';
 import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, snapshot, queryStatus, streamProjection } from '../dist/views.js';
-import { renderStatusResult } from '../dist/operation-presentation.js';
+import { renderLifecycleResult, renderStatusResult } from '../dist/operation-presentation.js';
 
 const queryContext = { location: 'memory', now: 100_000, automaticDeliveryAvailable: false };
 
@@ -50,7 +50,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     { kind: 'join', actor: 'Bob', at: 1, index: 1 },
     { kind: 'say', actor: 'Bob', at: 2, index: 2, body: 'own', mentions: [] },
   ];
-  for (let index = 3; index <= 10; index++) acts.push({ kind: 'say', actor: 'Alice', at: index, index, body: String(index), mentions: ['Bob'] });
+  for (let index = 3; index <= 10; index++) acts.push({ kind: 'say', actor: 'Alice', at: index === 3 ? 40 : index, index, body: String(index), mentions: ['Bob'] });
   acts.push({ kind: 'hold', actor: 'Bob', at: 11, index: 11, body: 'pause' });
   const state = fixture(acts);
   state.hardCap = 5;
@@ -60,34 +60,53 @@ test('recovery observes caller gates and bounded unread previews without selecti
     assert.equal((await square.artifact.read(facts => resolveKnownName(facts, 'BOB'))).value, 'Bob');
     const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'BOB', square.clock()))).value;
     assert.deepEqual(recovered, {
-      participant: 'Bob', roster: ['Alice', 'Bob'], standingCount: 2,
-      held: true, holdReason: 'pause', ownActivityCount: 1, hardCap: 5,
-      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_990,
-        previews: [8, 9, 10].map((index) => ({ number: index - 2, act: acts[index], perception: 'full' })),
-      }],
+      participant: 'Bob', standingCount: 2,
+      held: true, ownActivityCount: 1, hardCap: 5,
+      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: acts[10] }],
     });
-    assert.deepEqual(reads.batches, [[8, 9, 10]]);
+    assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
     assert.deepEqual(reads.ordinals, []);
     assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
   } finally { await cell.close(); }
 });
 
-test('entry hydrates only its newest public page and numbers lifetime says', async () => {
+test('unread summaries retain sender spelling, seen rows beyond a hole, and the last index across pages', async () => {
+  const acts = [
+    { kind: 'join', actor: 'Alice', at: 0, index: 0 },
+    { kind: 'join', actor: 'Bob', at: 1, index: 1 },
+    { kind: 'join', actor: 'Cara', at: 2, index: 2 },
+  ];
+  for (let index = 3; index <= 102; index++)
+    acts.push({ kind: 'say', actor: 'Alice', at: index === 3 ? 900 : 4, index, body: `Alice ${index}`, mentions: ['Bob'] });
+  acts.push({ kind: 'say', actor: 'Cara', at: 1000, index: 103, body: 'already seen after a gap', mentions: ['Bob'] });
+  acts.push({ kind: 'say', actor: 'alice', at: 5, index: 104, body: 'different spelling', mentions: ['Bob'] });
+  const { square, reads, cell } = measuredSquare(fixture(acts, { Bob: { 'act/103': { state: 'seen', at: 2000 } } }));
+  try {
+    const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'Bob', 100_000))).value;
+    assert.deepEqual(recovered.activitySummaries.map(({ name, count, latestActivityAgeMs, preview }) =>
+      [name, count, latestActivityAgeMs, preview.index]), [
+      ['Cara', 1, 99_000, 103], ['Alice', 100, 99_100, 102], ['alice', 1, 99_995, 104],
+    ]);
+    assert.deepEqual(reads.batches, [[102, 103, 104]]);
+    assert.ok(reads.directed >= 3, 'the directed suffix spans pages after the cursor query');
+  } finally { await cell.close(); }
+});
+
+test('entry hydrates only its newest public page and settles viewer perception without ordinals', async () => {
   const acts = [{ kind: 'join', actor: 'Alice', at: 0, index: 0 }, { kind: 'join', actor: 'Bob', at: 1, index: 1 }];
   for (let index = 2; index < 242; index++) acts.push({ kind: 'say', actor: 'Alice', at: index, index, body: String(index), mentions: ['Bob'] });
   acts.push({ kind: 'listen', actor: 'Bob', target: 'Alice', at: 242, index: 242 });
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
     const entry = (await square.artifact.read(facts => entryPresentation(facts, 'BOB', 3))).value;
-    assert.deepEqual(entry.recentActivities.map((a) => a.index), [239, 240, 241]);
-    assert.deepEqual(entry.sayNumbers, { 239: 238, 240: 239, 241: 240 });
-    assert.deepEqual(Object.values(entry.perceptions), ['full', 'full', 'full']);
+    assert.deepEqual(entry.recentActivities.map((a) => a.id), ['act/239', 'act/240', 'act/241']);
+    assert.deepEqual(entry.recentActivities.map((a) => a.perception), ['full', 'full', 'full']);
     assert.deepEqual(reads.batches, [[239, 240, 241]]);
-    assert.deepEqual(reads.ordinals, [[239, 240, 241]]);
+    assert.deepEqual(reads.ordinals, []);
     assert.equal(entry.joinContext, 'context');
     assert.equal(entry.joinedBefore, false);
     const ambient = (await square.artifact.read(facts => entryPresentation(facts, '', 1))).value;
-    assert.equal(ambient.perceptions[241], 'presence');
+    assert.equal(ambient.recentActivities[0].perception, 'presence');
   } finally { await cell.close(); }
 });
 
@@ -213,11 +232,12 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
   try {
     const { observation: projection } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, '', true))).value;
     assert.equal(projection.latestPerception, 'presence');
-    assert.equal(projection.latestActNumber, 1);
     assert.equal(projection.joinCount, 4);
-    assert.deepEqual(projection.joins.map(({ activity, rejoined }) => [activity.index, rejoined]), [[5, false], [6, true], [7, false]]);
+    assert.deepEqual(projection.joins.map(({ activity, rejoined }) => [activity.id, rejoined]), [['act/5', false], ['act/6', true], ['act/7', false]]);
+    assert.deepEqual(projection.joins[0].activity, { id: 'act/5', at: 5, kind: 'join', actor: 'bob', mentions: [] });
     assert.deepEqual(reads.batches, [[5, 6, 7]]);
     assert.deepEqual(reads.singles, [3]);
+    assert.deepEqual(reads.ordinals, []);
     const { observation: own } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'ALICE', true))).value;
     assert.equal(own.latestPerception, 'full');
     assert.equal(own.viewer, 'Alice');
@@ -261,11 +281,34 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
     assert.equal(Object.hasOwn(projection, 'latestAct'), false);
     assert.equal(Object.hasOwn(projection, 'status'), false);
     assert.equal(Object.hasOwn(projection, 'participants'), false);
+    assert.equal(Object.hasOwn(projection, 'now'), false);
+    assert.equal(Object.hasOwn(projection, 'held'), false);
+    const snap = (await square.artifact.read(facts => snapshot(facts, queryContext.now))).value;
+    assert.deepEqual(snap.participants, [
+      { name: 'Alice', presence: 'active', listening: [] },
+      { name: 'Gone', presence: 'done', listening: [] },
+    ]);
     const roster = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
     assert.deepEqual(roster.participants.map((p) => p.name), ['Alice', 'Gone', 'Reserved']);
     assert.equal(Object.hasOwn(roster.observation, 'participants'), false);
     assert.deepEqual((await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value, before);
   } finally { await cell.close(); }
+});
+
+test('observed lifecycle renders its committed public activity and listener keeps only its target', async t => {
+  const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'one' }, clock: () => 100 });
+  t.after(() => square.close());
+  const alice = (await square.join('Alice')).participant;
+  const listened = await alice.listen('Bob', { observe: true });
+  assert.equal(listened.observation.target, 'Bob');
+  assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);
+  const held = await alice.hold('pause', { observe: true });
+  assert.equal(Object.hasOwn(held.observation, 'activity'), false);
+  assert.deepEqual(held.activity, { id: 'act/2', at: 100, kind: 'hold', actor: 'Alice', body: 'pause', mentions: [] });
+  assert.match(renderLifecycleResult(square.location, 'hold', held), /@Alice raised a hand — pause · act\/2 · just now/);
+  const resumed = await alice.resume({ observe: true });
+  assert.equal(Object.hasOwn(resumed.observation, 'activity'), false);
+  assert.match(renderLifecycleResult(square.location, 'resume', resumed), /@Alice lowered the hand · act\/3 · just now/);
 });
 
 test('SDK delivered closure detaches exact raw assignments including orphan coordinates', async () => {

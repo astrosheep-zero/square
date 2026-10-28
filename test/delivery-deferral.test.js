@@ -131,17 +131,21 @@ test('producer, sweep and session projection suppress OR leases without consumpt
   const input = { artifact: f.artifact, location: f.location, transport: { attempt: async (_request, _timeout, beforeSend) => {
     assert.equal(await beforeSend(), true); sends++; return { outcome: 'accepted' };
   } } };
-  assert.equal((await deliverPending(input)).attempted, 0);
+  await deliverPending(input);
+  assert.equal(sends, 0);
+  assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
   assert.deepEqual(await sweepPending({ ...input, now: Date.now(), graceMs: -1, limit: 10 }), []);
   assert.deepEqual((await sessionInbox(f.seat.body, f.env)).flatMap(member => member.notifications), []);
   assert.equal((await f.receiver.status()).participants.find(person => person.name === 'Bob').unreadActivityCount, 1);
   assert.equal((await f.receiver.history()).activities.some(item => item.id === activity.id), true);
   assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
   await f.bob.releaseDeliveryDeferral(one.id);
-  assert.equal((await deliverPending(input)).attempted, 0);
+  await deliverPending(input);
+  assert.equal(sends, 0);
   await f.bob.releaseDeliveryDeferral(two.id);
-  assert.equal((await deliverPending(input)).accepted, 1);
+  await deliverPending(input);
   assert.equal(sends, 1);
+  assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.map(row => row.outcome), ['accepted']);
   const nextLease = await f.bob.deferDelivery({ match, durationMs: 10000 });
   const next = await f.say();
   assert.deepEqual((await f.bob.catch({ id: next.id })).activities.map(item => item.id), [next.id]);
@@ -150,41 +154,50 @@ test('producer, sweep and session projection suppress OR leases without consumpt
   assert.equal(sends, 1, 'explicit consumption prevents a later replay');
   const unmatchedLease = await f.bob.deferDelivery({ match, durationMs: 10000 });
   await f.say({ job: { kind: 'other', id: 7 } });
-  assert.equal((await deliverPending(input)).accepted, 1, 'nonmatching metadata remains eligible');
+  await deliverPending(input);
+  assert.equal(sends, 2, 'nonmatching metadata remains eligible');
   await f.bob.releaseDeliveryDeferral(unmatchedLease.id);
 });
 
 test('atomic claims and final transport checks stop races, while already dispatched sends are not recalled', async t => {
   const f = await fixture(t);
   const activity = await f.say();
-  let lease;
-  const claimedRace = await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  let lease, attempts = 0, sends = 0;
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
     probe: async () => { lease = await f.bob.deferDelivery({ match, durationMs: 10000 }); return true; },
-    attempt: async () => { assert.fail('claim must recheck deferral'); },
+    attempt: async () => { attempts++; return { outcome: 'accepted' }; },
   } });
-  assert.equal(claimedRace.attempted, 0);
+  assert.equal(attempts, 0, 'claim must recheck deferral');
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
     attempt: async (_request, _timeout, beforeSend) => {
+      attempts++;
       lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
       assert.equal(await beforeSend(), false);
       return { outcome: 'accepted' }; // a refused pre-send gate is not an accepted send
     },
-  } })).attempted, 0);
+  } });
+  assert.equal(attempts, 1);
+  assert.equal(sends, 0);
   assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.every(row => row.outcome === 'released'), true);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
     attempt: async (_request, _timeout, beforeSend) => {
+      attempts++;
       assert.equal(await beforeSend(), true);
       // The external send is already past its last gate when this lease commits.
+      sends++;
       lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
       return { outcome: 'accepted' };
     },
-  } })).accepted, 1);
+  } });
+  assert.equal(sends, 1);
+  assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.at(-1).outcome, 'accepted');
   assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: () => assert.fail('no replay') } })).attempted, 0);
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: async () => { attempts++; return { outcome: 'accepted' }; } } });
+  assert.equal(attempts, 2, 'accepted send is not replayed');
 });
 
 test('presentation suppresses before the sink but retains successful post-sink evidence without replay', async t => {
@@ -219,9 +232,11 @@ test('presentation suppresses before the sink but retains successful post-sink e
   await f.bob.releaseDeliveryDeferral(lease.id);
   assert.equal((await presentPending(input)).presented, false);
   assert.equal(writes, 1, 'lease release cannot replay an already successful sink');
-  assert.equal((await deliverPending({ artifact: f.artifact, location: f.location,
-    transport: { attempt: () => assert.fail('a successful presentation must prevent wake replay') },
-  })).attempted, 0);
+  let wakeAttempts = 0;
+  await deliverPending({ artifact: f.artifact, location: f.location,
+    transport: { attempt: async () => { wakeAttempts++; return { outcome: 'accepted' }; } },
+  });
+  assert.equal(wakeAttempts, 0, 'a successful presentation must prevent wake replay');
 });
 
 test('every item in a successful batch retains truthful receipts despite post-sink deferrals', async t => {
@@ -429,8 +444,9 @@ test('active observer expiry follows renewal while a one-shot producer never sle
   assert.equal(await waiting.armed, true);
   const renewed = await f.bob.renewDeliveryDeferral(lease.id, 400);
   assert.ok(renewed);
-  const result = await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: () => assert.fail('deferred producer') } });
-  assert.equal(result.attempted, 0);
+  let sends = 0;
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: async () => { sends++; return { outcome: 'accepted' }; } } });
+  assert.equal(sends, 0);
   assert.ok(Date.now() < Date.parse(renewed.expiresAt), 'producer returns while the lease is still live');
   const eligible = await waiting.result;
   assert.equal(eligible[0].notifications[0].actIndex, Number(activity.id.slice(4)));

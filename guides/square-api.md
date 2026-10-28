@@ -113,25 +113,30 @@ its `history` delegates to the same Square history operation.
 - Catch returns `{activities, remaining, reason, hint?, observation?}`. Each activity includes
   viewer-relative `perception` and `via`. Reasons are `drained`, `idle`, `capped`, `quorum`,
   `replaced`, or `already-active`. Omitted/zero idle is immediate; positive idle uses the single
-  leased quiet wait. Receipt selection, perception, routes, ordinals, counts and terminal facts settle
+  leased quiet wait. Receipt selection, perception, routes, counts and terminal facts settle
   in the receipt transaction. Cancellation/replacement releases only that waiter's lease and never
   consumes future activity.
 - All history callers return a `HistoryResult` object with `activities`. Default page size is ten;
   `limit: null` explicitly requests an unbounded archive. Numeric limits must be 1–100. Contextual
   queries still reject an implicit merged window over 100 activities; an explicit numeric limit
-  bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts.
+  bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts; history
+  observations retain lifetime say ordinals for CLI `history --format number`.
 - `participants()` returns `{participants, observation?}` and `listening()` returns
   `{listening, observation?}`, not arrays carrying metadata. Participant summaries use `presence`
   (`never-joined`, `active`, `watching`, or `done`). Status reports a non-null `held` whenever a
   hold is active; `by` is omitted only for historical actorless holds. Its roster supplies the
-  participant counts.
+  participant counts. Snapshot participants use the same `name`, `presence` and `listening` facts,
+  excluding never-joined people; its detached `delivered(name, id)` predicate remains available.
 - `unlisten(target)` removes only that participant's current listen edge to the target, without
   leaving or blocking future mentions/replies. It returns the same `ListenerChangeResult` as listen
   and ignore, with `activity: null` when no listen exists. Existing ignores are unchanged. Earlier
   landed audiences and receipts are never rewritten; listening again remains available.
-- Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate.
-  Done accepts no message and retires only its captured Body/join generation; it never implicitly
-  rejoins or grants a completed seat write authority.
+- Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate;
+  observations do not repeat the activity. Join entry uses public activities with settled perception,
+  and status observations use public join activities. Done accepts no message and retires only its
+  captured Body/join generation; it never implicitly rejoins or grants a completed seat write authority.
+- Recovery summarizes unread directed activity with per-sender count, latest age and the single
+  greatest-index preview. Age uses the greatest timestamp, which may belong to another activity.
 
 Every operation accepts its final `OperationControl` (`signal`, optional typed `onProgress`).
 Listener/lifecycle operations take optional observation options before that control argument.

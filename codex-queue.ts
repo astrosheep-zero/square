@@ -20,7 +20,7 @@ export class CodexQueueTransport implements WakeTransportPort {
     const { address } = request.route;
     const threadId = address.threadId?.trim();
     if (!threadId) {
-      return { outcome: 'failed', unavailable: true, signature: 'invalid_address', message: 'Codex route has no thread id.', routeStale: true };
+      return { outcome: 'failed', signature: 'invalid_address', message: 'Codex route has no thread id.' };
     }
     const env = this.opts.env ?? process.env;
     const payload = request.artifact === undefined ? undefined
@@ -34,14 +34,14 @@ export class CodexQueueTransport implements WakeTransportPort {
       });
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        return { outcome: 'failed', unavailable: true, signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.', retainRoute: true };
+        return { outcome: 'failed', signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.' };
       }
       await agent.queue(payload, { timeoutMs: remaining });
       return { outcome: 'accepted' };
     } catch (error) {
       if (error instanceof DeliveryError && error.code === 'session_inactive') {
-        return { outcome: 'failed', unavailable: true, signature: 'boundary_not_stopped',
-          message: 'The Codex thread has no current Stop boundary for queueing.', retainRoute: true };
+        return { outcome: 'failed', signature: 'boundary_not_stopped',
+          message: 'The Codex thread has no current Stop boundary for queueing.' };
       }
       const message = error instanceof Error ? error.message : String(error);
       if (!(error instanceof DeliveryError) || error.maybeDelivered) return { outcome: 'unknown', signature: 'queue_unknown', message };

@@ -52,8 +52,8 @@ test('probe uses the same typed route interface and never attempts a send', asyn
 test('route selection preserves accepted, failed, unknown and suppressed outcomes without translation', async () => {
   for (const outcome of [
     { outcome: 'accepted' },
-    { outcome: 'failed', unavailable: true, signature: 'agent_not_idle', retainRoute: true },
-    { outcome: 'failed', unavailable: true, signature: 'invalid_address', routeStale: true },
+    { outcome: 'failed', signature: 'agent_not_idle' },
+    { outcome: 'failed', signature: 'invalid_address' },
     { outcome: 'unknown', signature: 'send_unknown' },
     { outcome: 'not-capable' },
   ]) {

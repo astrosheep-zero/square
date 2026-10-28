@@ -38,7 +38,7 @@ async function preview(artifact: SquareArtifactPort, request: WakeRequest): Prom
 
 async function writeClaudeWake(sessionId: string, endpoint: string, messageId: string, payload: string, timeoutMs: number, signal: AbortSignal): Promise<WakeOutcome> {
   const result = await writeClaudeNative({ sessionId, endpoint, messageId }, payload, { deadline: Date.now() + timeoutMs, signal });
-  if (result.outcome === 'unavailable') return { outcome: 'failed', unavailable: true, retainRoute: true, signature: 'claude_endpoint_unavailable', message: result.message };
+  if (result.outcome === 'unavailable') return { outcome: 'failed', signature: 'claude_endpoint_unavailable', message: result.message };
   return { outcome: 'unknown', signature: 'native_admission_unconfirmed', message: result.outcome === 'written' ? 'Claude accepted the local write; native admission is unconfirmed.' : result.message };
 }
 

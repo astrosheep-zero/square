@@ -61,7 +61,7 @@ export interface ListeningResult {
 }
 export interface LifecycleResult {
   readonly activity: Activity;
-  readonly observation?: LifecycleObservation;
+  readonly observation?: SquareObservation;
 }
 export interface CatchOptions extends ObservationOptions {
   readonly id?: ActivityId;
@@ -128,19 +128,13 @@ export interface HistoryResult {
   readonly activities: readonly Activity[];
   readonly observation?: HistoryObservation;
 }
-export interface ParticipantStatus {
-  readonly name: string;
-  readonly state: 'joined' | 'done';
-  readonly watching: boolean;
-  readonly listening: readonly string[];
-}
 export interface SquareSnapshot {
   readonly context: string;
   readonly actCount: number;
   readonly hardCap: number | null;
   readonly throttlePerMinute?: number;
   readonly held: { readonly by: string; readonly reason?: string } | null;
-  readonly participants: readonly ParticipantStatus[];
+  readonly participants: readonly Pick<ParticipantSummary, 'name' | 'presence' | 'listening'>[];
   delivered(name: string, id: ActivityId): boolean;
 }
 
@@ -262,10 +256,8 @@ export interface RecoveryResult {
   readonly participant?: string;
   readonly standingCount?: number;
   readonly held?: boolean;
-  readonly holdReason?: string;
   readonly ownActivityCount?: number;
   readonly hardCap?: number | null;
-  readonly roster?: readonly string[];
   readonly activitySummaries?: readonly UnreadActivitySummary[];
 }
 export type StreamStart =
@@ -277,29 +269,17 @@ export interface StreamOptions {
 }
 export type StreamRecord = Activity | PerceivedActivity;
 
-export interface UnreadActivityPreview {
-  readonly number: number;
-  readonly act: Extract<ArchiveRecord, { kind: 'say' }>;
-  readonly perception: Perception;
-}
 export interface UnreadActivitySummary {
   readonly name: string;
   readonly count: number;
   readonly latestActivityAgeMs: number;
-  readonly previews: readonly UnreadActivityPreview[];
+  readonly preview: Extract<ArchiveRecord, { kind: 'say' }>;
 }
 export interface EntryPresentation {
   readonly joinedBefore: boolean;
   readonly scene: string;
   readonly joinContext: string;
-  readonly recentActivities: readonly ArchiveRecord[];
-  readonly perceptions: Readonly<Record<number, Perception>>;
-  readonly sayNumbers: Readonly<Record<number, number>>;
-}
-export interface ListPresentation {
-  readonly context: readonly string[];
-  readonly participants: readonly string[];
-  readonly activities: number;
+  readonly recentActivities: readonly PerceivedActivity[];
 }
 export interface PresenceClassification {
   readonly orderedHereNames: readonly string[];
@@ -309,11 +289,6 @@ export interface PresenceClassification {
 export interface CatchPresence {
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
-}
-export interface StreamProjection {
-  readonly activities: readonly StreamRecord[];
-  readonly cursor: number;
-  readonly hasMore: boolean;
 }
 export interface SquareObservation {
   readonly location: string;
@@ -343,7 +318,6 @@ export interface ExpressObservation extends SquareObservation, ExpressionObserva
 }
 export interface CatchObservation extends SquareObservation, ExpressionObservation {
   readonly participant: string;
-  readonly sayNumbers: Readonly<Record<number, number>>;
   readonly presence?: CatchPresence;
   readonly enrichmentUnavailable?: true;
 }
@@ -363,16 +337,11 @@ export interface HistoryObservation extends SquareObservation {
 export interface ListenerObservation extends SquareObservation {
   readonly participant: string;
   readonly target: string;
-  readonly requestedTarget: string;
 }
-export interface LifecycleObservation extends SquareObservation {
-  readonly activity: ArchiveRecord;
-}
-export interface StatusObservation extends SquareObservation, PresenceClassification {
+export interface StatusObservation extends Omit<SquareObservation, 'now' | 'held'>, PresenceClassification {
   readonly knownParticipantCount: number;
-  readonly latestActNumber?: number;
   readonly latestPerception?: Perception;
-  readonly joins: readonly { readonly activity: ArchiveRecord; readonly rejoined: boolean }[];
+  readonly joins: readonly { readonly activity: Activity; readonly rejoined: boolean }[];
   readonly joinCount: number;
   readonly attentionNames: readonly string[];
   readonly viewer: string;

@@ -66,7 +66,7 @@ export function createWakeTransport(transports: WakeTransports): WakeTransportPo
   };
 }
 
-export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}) {
+export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
   squarePath = await canonicalPath(squarePath);
@@ -75,10 +75,8 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
     await artifact.read(facts => facts.header());
     const transport = await createDefaultWakeTransport(env, opts.transports);
     try {
-      return await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
-    } catch {
-      return { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
-    }
+      await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
+    } catch { /* Delivery failure does not undo the activity. */ }
   } catch (error) {
     if (error instanceof InternalSquareError && error.code === 'not_found')
       throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);

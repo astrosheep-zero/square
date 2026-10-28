@@ -190,10 +190,10 @@ test('native wake persists the same message id used by both wire identifiers bef
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint, loaded: 'true' } });
   const artifact = createArtifactPort(f.squarePath);
   try {
-    const result = await deliverPending({ artifact, transport: createClaudeWakeTransport(f.env), location: f.squarePath, activity: 2 });
-    assert.equal(result.unknown, 1, JSON.stringify(result));
+    await deliverPending({ artifact, transport: createClaudeWakeTransport(f.env), location: f.squarePath, activity: 2 });
     await f.firstFrame;
     const original = (await currentEvidence(f)).find(row => row.kind === 'wake');
+    assert.equal(original.outcome, 'unknown');
     assert.equal(f.frames.length, 1);
     assert.equal(f.frames[0].uuid, original.correlation.messageId);
     assert.equal(f.frames[0].msg_id, original.correlation.messageId);
@@ -206,8 +206,10 @@ test('native wake persists the same message id used by both wire identifiers bef
 
 test('native custody is artifact evidence and receiver status never authorizes replay', async t => {
   const f = await fixture(t);
-  assert.deepEqual(await dispatch(f), { attempted: 1, accepted: 0, failed: 0, unknown: 1, notCapable: 0 });
+  await dispatch(f);
   const original = (await currentEvidence(f)).find(row => row.kind === 'wake');
+  assert.equal(original.outcome, 'unknown');
+  assert.equal(f.nativeMessages.length, 1);
   const messageId = original.correlation.messageId;
   const status = { provider: 'claude', sessionId: f.coordinate.sessionId, messageId,
     eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() };
@@ -228,7 +230,8 @@ test('native custody is artifact evidence and receiver status never authorizes r
   assert.deepEqual(await f.bridge({ operation: 'status', status: released }), { recorded: true });
   assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').outcome, 'unknown');
   assert.equal(await seen(f), undefined);
-  assert.deepEqual(await dispatch(f), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1, 'an unknown attempt is not replayed');
   const text = await payload(f);
   await stored(f, text);
   assert.equal(await seen(f), 'seen');
@@ -242,7 +245,8 @@ test('native custody is artifact evidence and receiver status never authorizes r
   const doctor = (await doctorDeliveryHealth(f.squarePath, 0, Date.now(), f.env)).join('\n');
   assert.match(doctor, /no pending delivery attention/);
   assert.match(doctor, /held \(no-mode-asserted\) → released → dropped \(expired\)/);
-  assert.deepEqual(await dispatch(f), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1, 'presented activity is not replayed');
 });
 
 function statusObservation({ eventId, messageId, state, reason, observedAt }) {
@@ -265,7 +269,7 @@ test('reconciliation preserves the native seat address and an unknown attempt is
   assert.equal(seat.wakeAddress.kind, 'claude-native');
   assert.equal(seat.wakeAddress.address.endpoint, f.coordinate.endpoint);
   assert.equal(seat.wakeAddress.address.loaded, 'true');
-  assert.deepEqual(await dispatch(f), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  await dispatch(f);
   assert.equal(f.nativeMessages.length, 1);
   const held = (await currentEvidence(f)).find(row => row.kind === 'wake');
   assert.equal(held.outcome, 'unknown');
@@ -276,7 +280,7 @@ test('reconciliation preserves the native seat address and an unknown attempt is
     wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } });
   try { await fallback.join('Bob'); } finally { await fallback.close(); }
   assert.equal((await seatFor(f)).wakeAddress.kind, 'paseo');
-  assert.equal((await dispatch(f)).attempted, 0);
+  await dispatch(f);
   assert.equal((await currentEvidence(f)).filter(row => row.kind === 'wake').length, 1);
   assert.equal(f.nativeMessages.length, 1);
 });
@@ -368,7 +372,8 @@ test('cancelling Claude authentication aborts its key read without sending', asy
 test('manual artifact seats receive a bounded native preview; admission is not presentation', async t => {
   const f = await fixture(t);
   assert.equal(f.start.available, false);
-  assert.deepEqual(await dispatch(f), { attempted: 1, accepted: 0, failed: 0, unknown: 1, notCapable: 0 });
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1);
   const text = await payload(f);
   assert.match(text, /hello @Bob/);
   assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''),
@@ -383,7 +388,8 @@ test('manual artifact seats receive a bounded native preview; admission is not p
   await stored(f, text);
   assert.equal(await seen(f), 'seen');
   assert.equal((await currentEvidence(f)).filter(row => row.kind === 'presentation' && row.outcome === 'presented').length, 1);
-  assert.equal((await dispatch(f)).attempted, 0);
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1, 'presented activity is not replayed');
 });
 
 test('a clipped preview stays bounded and admission alone does not consume the activity', async t => {
@@ -398,7 +404,8 @@ test('a clipped preview stays bounded and admission alone does not consume the a
   assert.deepEqual(await observeClaudeDelivery(f.coordinate.sessionId, text, 'admitted', f.env), { recognized: true, current: true });
   assert.equal(await seen(f), undefined);
   assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').outcome, 'accepted');
-  assert.deepEqual(await dispatch(f), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 0 });
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1, 'admitted activity is not replayed');
 });
 
 test('unmatched or rewritten native text cannot authorize admission or presentation', async t => {
@@ -440,12 +447,15 @@ test('cancellation fences an old native payload while later artifact activity ca
   await stored(f, old);
   assert.equal(await seen(f), undefined);
   await f.bridge({ operation: 'start', cancelAt: cancelledAt, bindings: f.start.bindings, cancelledBindings: f.start.bindings });
-  assert.deepEqual(await dispatch(f), { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 });
+  await dispatch(f);
+  assert.equal(f.nativeMessages.length, 1, 'cancelled activity is not replayed');
   await setWakeAddress(f, undefined);
   const nextIndex = await landSay(f, 'new @Bob');
   assert.equal(nextIndex, 4);
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint } });
-  assert.equal((await dispatch(f, nextIndex)).unknown, 1);
+  await dispatch(f, nextIndex);
+  assert.equal(f.nativeMessages.length, 2);
+  assert.equal((await currentEvidence(f)).find(row => row.activity === 'act/4' && row.kind === 'wake').outcome, 'unknown');
   const newText = await payload(f, 'act/4');
   await stored(f, newText);
   assert.equal(await seen(f, nextIndex), 'seen');
@@ -566,8 +576,7 @@ test('the final native send gate releases a prepared attempt after a catch recei
   f.onPrepared = async ({ request }) => {
     await request.artifact.transactAs({ kind: 'participant', seat: request.seat }, facts => facts.markSeen('Bob', [2], Date.now()));
   };
-  const result = await dispatch(f);
-  assert.equal(result.attempted, 0);
+  await dispatch(f);
   assert.equal(f.nativeMessages.length, 0);
   assert.equal(await seen(f), 'seen');
   const row = (await currentEvidence(f)).find(item => item.kind === 'wake');

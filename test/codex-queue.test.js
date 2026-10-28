@@ -60,8 +60,8 @@ test('Codex boundary state allows queue only after the latest Stop and stays thr
 test('Codex queue transport retains an ineligible route without sending', async t => {
   const item = fixture(t), input = await pending(t, item.env);
   const result = await new CodexQueueTransport({ env: item.env, connect: item.connect }).attempt(input, 5000, async () => true);
-  assert.deepEqual(result, { outcome: 'failed', unavailable: true, signature: 'boundary_not_stopped',
-    message: 'The Codex thread has no current Stop boundary for queueing.', retainRoute: true });
+  assert.deepEqual(result, { outcome: 'failed', signature: 'boundary_not_stopped',
+    message: 'The Codex thread has no current Stop boundary for queueing.' });
   assert.equal(fs.existsSync(item.capture), false);
 });
 
@@ -81,8 +81,7 @@ test('artifact-owned dispatch sends its stored preview through public connect an
     } });
     return { ...agent, queue: (text, control) => { timeout = control.timeoutMs; return agent.queue(text, control); } };
   } });
-  const result = await deliverPending({ ...input, transport, timeoutMs: 2000 });
-  assert.equal(result.accepted, 1);
+  await deliverPending({ ...input, transport, timeoutMs: 2000 });
   assert.equal(boundaryReads, 1, 'the bound client alone checks lifecycle at queue time');
   const sent = JSON.parse(fs.readFileSync(item.capture, 'utf8'));
   assert.equal(sent.home, '/recipient/codex');
@@ -170,8 +169,9 @@ test('default Codex transport retains supplied executable and child environment 
   process.env.SQUARE_CODEX_BIN = '/missing/ambient-codex';
   t.after(() => { if (previous === undefined) delete process.env.SQUARE_CODEX_BIN; else process.env.SQUARE_CODEX_BIN = previous; });
   // Child startup allowance only; the frozen-clock test separately proves the dispatch deadline.
-  assert.equal((await deliverPending({ ...input, transport, timeoutMs: 5000 })).accepted, 1);
+  await deliverPending({ ...input, transport, timeoutMs: 5000 });
   assert.match(fs.readFileSync(args, 'utf8'), /^queue\n--thread\nthread-a\n--message\n[\s\S]*stored awareness/);
+  assert.equal((await input.artifact.read(facts => facts.deliveryEvidence('Bob', input.bob.generation))).value[0].outcome, 'accepted');
 });
 
 test('Codex queue classifies known-unsent errors separately from uncertain admission', async t => {
