@@ -51,14 +51,14 @@ try {
   `await square.recognize()` returns all current handles held by that exact Body; the discovery index
   never establishes ownership, and a name alone never authorizes writes.
 - Join with an explicit name: `square.join('Alice', options?, control?)` returns one `JoinResult`:
-  `{participant, activity, kind, participantCount, observation?}`. The name is required at every
+  `{participant, kind, activity, observation?}`. The name is required at every
   boundary: an omitted or blank name refuses, even when the resource has a default `participant` or
   the captured Body holds exactly one current seat. Only `participant()` performs that unambiguous
   current-body selection. `participant` is a handle, not a
   string. `takeover: true` atomically replaces a standing seat; a rejoin after done establishes a new
   join generation. Same-body reconnection retains its generation. Old handles remain fenced after
   takeover or rejoin, including when the same Body reacquires the name. There is no separate
-  `Participant.join()` or public `takeover()` API. `participantCount` counts known joined-or-done names.
+  `Participant.join()` or public `takeover()` API.
 - Local resources expose `square.forBody({body, wakeAddress?})`: a synchronous borrowed handle
   sharing the artifact, clock and transport but capturing its own caller identity and optional wake
   address. It neither joins nor inherits the source handle's participant or wake address. This is a
@@ -77,16 +77,24 @@ try {
 Square owns `history`, `status`, `participants`, `snapshot`, `stream`, and recovery observations.
 A file-backed `stream` follows the path with a fresh artifact read for each page, so atomic file
 replacement is visible even while the resource holds its original connection. Its iterator owns
-its observation lifetime: `return()` interrupts a pending pull; closing the Square does not close
-that independent path observation. Internal readers that explicitly borrow an artifact port leave
-its lifetime with the lender and propagate port failures rather than waiting for path repair.
+its observation lifetime: `return()` interrupts a pending pull; closing a local Square does not close
+that independent path observation. A stdio stream belongs to its open connection and closes with it.
+Internal readers that explicitly borrow an artifact port leave its lifetime with the lender and
+propagate port failures rather than waiting for path repair.
+
+`Activity` is `{id, at, kind, actor, body?, metadata?, mentions, reach?, target?, reply?}` throughout
+the SDK and stdio. Stream without a recipient yields these activities; with a recipient it selects
+their landed directed activities and adds `perception` and the landing route `via`
+(`mention`, `reply`, `attention`, or `bell`). Perception follows the viewer's actual landed audience;
+`via` is absent when no directed route exists. Stream starts at a bounded tail or after an `ActivityId`
+like `act/12`; it never consumes activity.
 Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`,
 `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral`;
 its `history` delegates to the same Square history operation.
 
 - Express waits while held/throttled unless `noWait: true`, for **every** caller. `ExpressResult`
-  includes the committed `activity`, `waited`, optional `delivery`, and landing-time warnings
-  (`unmatchedMentions`, `replyAuthorNotHere`). Warnings are not stored on the activity.
+  includes the committed `activity`, optional landing-time warnings (`unmatchedMentions`,
+  `replyAuthorNotHere`), `hint` and `observation`. Warnings are not stored on the activity.
 - A say may carry `metadata`, an immutable JSON object with nested JSON values and a maximum serialized
   UTF-8 size of 16 KiB (`ACTIVITY_METADATA_MAX_BYTES`). `alice.express({body?, metadata?, ...options}, control?)`
   is the object form; the existing `express(body, options?, control?)` form remains valid. A non-empty
@@ -102,23 +110,28 @@ its `history` delegates to the same Square history operation.
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
   metadata JSON. There is no archive metadata filter, query language or index; CLI `--metadata <json>` is the only
   metadata input flag.
-- Catch returns `{activities, consumedThrough, remaining, idleExpired, status?, observation?}`.
-  Omitted/zero idle is immediate; positive idle uses the single leased quiet wait. Receipt selection,
-  ordinals, counts and terminal facts settle in the receipt transaction. Cancellation/replacement
-  releases only that waiter's lease and never consumes future activity.
+- Catch returns `{activities, remaining, reason, hint?, observation?}`. Each activity includes
+  viewer-relative `perception` and `via`. Reasons are `drained`, `idle`, `capped`, `quorum`,
+  `replaced`, or `already-active`. Omitted/zero idle is immediate; positive idle uses the single
+  leased quiet wait. Receipt selection, perception, routes, ordinals, counts and terminal facts settle
+  in the receipt transaction. Cancellation/replacement releases only that waiter's lease and never
+  consumes future activity.
 - All history callers return a `HistoryResult` object with `activities`. Default page size is ten;
   `limit: null` explicitly requests an unbounded archive. Numeric limits must be 1–100. Contextual
   queries still reject an implicit merged window over 100 activities; an explicit numeric limit
   bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts.
 - `participants()` returns `{participants, observation?}` and `listening()` returns
-  `{listening, observation?}`, not arrays carrying metadata.
+  `{listening, observation?}`, not arrays carrying metadata. Participant summaries use `presence`
+  (`never-joined`, `active`, `watching`, or `done`). Status reports a non-null `held` whenever a
+  hold is active; `by` is omitted only for historical actorless holds. Its roster supplies the
+  participant counts.
 - `unlisten(target)` removes only that participant's current listen edge to the target, without
   leaving or blocking future mentions/replies. It returns the same `ListenerChangeResult` as listen
   and ignore, with `activity: null` when no listen exists. Existing ignores are unchanged. Earlier
   landed audiences and receipts are never rewritten; listening again remains available.
-- Lifecycle operations use the same artifact custody gate. Done accepts no message and retires
-  only its captured Body/join generation; it never implicitly rejoins or grants a completed seat
-  write authority.
+- Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate.
+  Done accepts no message and retires only its captured Body/join generation; it never implicitly
+  rejoins or grants a completed seat write authority.
 
 Every operation accepts its final `OperationControl` (`signal`, optional typed `onProgress`).
 Listener/lifecycle operations take optional observation options before that control argument.

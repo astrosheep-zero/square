@@ -628,7 +628,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   assert.equal(inspected1.status, 0, inspected1.stderr);
   const pendingInbox = JSON.parse(inspected1.stdout);
   assert.deepEqual(pendingInbox, {
-    rows: [{ namePreview: 'Bob', squarePathPreview: fs.realpathSync(file), pending: 1 }],
+    rows: [{ name: 'Bob', squarePath: fs.realpathSync(file), pending: 1 }],
     total: 1,
   });
   assert.doesNotMatch(inspected1.stdout, /hey @Bob|notifications|catchLease/);

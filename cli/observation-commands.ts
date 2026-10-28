@@ -118,7 +118,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
     let ndjson = false;
     let forName: string | undefined;
     let last = 10;
-    let after: number | undefined;
+    let after: ActivityId | undefined;
     let hasLast = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--ndjson') ndjson = true;
@@ -133,7 +133,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
         index += 1;
       } else if (argv[index] === '--after') {
         if (hasLast) fail('Invalid stream options: --last and --after cannot be combined.');
-        after = parseActRef(requireValue(argv, index, argv[index]), '--after');
+        after = formatActivityId(parseActRef(requireValue(argv, index, argv[index]), '--after'));
         index += 1;
       } else usage(context.command);
     }
@@ -489,15 +489,10 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
   },
   async execute(intent, context) {
     const data = await inbox(squareInput(context), intent.sessionId, { limit: intent.limit });
-    const rows = data.rows.map((membership) => ({
-      namePreview: inboxDisplay(membership.name),
-      squarePathPreview: inboxDisplay(membership.squarePath),
-      pending: membership.pending,
-    }));
-    if (intent.json) return `${JSON.stringify({ rows, total: data.total })}\n`;
+    if (intent.json) return `${JSON.stringify(data)}\n`;
     return [
-      ...rows.map((row) => `${row.namePreview}\t${row.squarePathPreview}\t${row.pending}\n`),
-      ...(rows.length < data.total ? [`${rows.length} of ${data.total} memberships shown\n`] : []),
+      ...data.rows.map((row) => `${inboxDisplay(row.name)}\t${inboxDisplay(row.squarePath)}\t${row.pending}\n`),
+      ...(data.rows.length < data.total ? [`${data.rows.length} of ${data.total} memberships shown\n`] : []),
     ].join('');
   },
   present: (result) => process.stdout.write(result),

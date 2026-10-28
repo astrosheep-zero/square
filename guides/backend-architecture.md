@@ -30,7 +30,7 @@ Declare the Square resource interface directly using the operation/result types 
 
 Local host operations (`recognize`, `implicitJoin`, `doneOwnedSession`, `endOwnedSession`, `retireEndedSessionRoutes`) are not requirements on every backend. Put them behind the optional host capability described below. The existing SQLite implementation can satisfy that capability using its current ownership and epoch logic.
 
-Snapshot and stream are separate optional read capabilities. They are not prerequisites for participation. The CLI checks stream support before opening a stream; an unsupported operation fails before any mutation. Local file doctor, migrate and filesystem discovery stay local utilities and do not become mandatory backend methods.
+Snapshot and stream are separate read capabilities, not prerequisites for participation. The bundled SQLite and stdio backends support streaming; unsupported operations fail before mutation. Local file doctor, migrate and filesystem discovery stay local utilities and do not become mandatory backend methods.
 
 A backend must return the documented concrete operation results, including requested observations used by current rendering. It may reject a genuinely unavailable operation explicitly. It must not fabricate history, receipts, atomicity, membership or successful mutations to satisfy a type.
 
@@ -84,7 +84,7 @@ A backend with no host capability supports explicit participation and catch/hist
 
 Capability information must distinguish selective body visibility from shared visibility, strict from best-effort policy enforcement, and automatic awareness from explicit catch. Keep this small and tied to actual behavior; do not build a speculative feature catalog.
 
-SQLite retains current selective perception and transaction guarantees. The bundled stdio server inherits those backend guarantees, while currently offering explicit catch only. A Slack thread has shared body visibility: mentions route attention, not confidentiality. Slack hold/cap/throttle may use the previously accepted best-effort behavior. No shared presentation or skill text may promise private bodies or SQLite atomicity for such a backend.
+SQLite retains current selective perception and transaction guarantees. The bundled stdio server inherits those backend guarantees and offers explicit catch and stream without automatic wake delivery. A Slack thread has shared body visibility: mentions route attention, not confidentiality. Slack hold/cap/throttle may use the previously accepted best-effort behavior. No shared presentation or skill text may promise private bodies or SQLite atomicity for such a backend.
 
 Activity IDs and history bounds remain the existing public contract. A backend requiring native IDs must own a stable translation rather than casting Slack timestamps into `act/N`. Its durable mapping strategy belongs to that backend implementation, not the resolver.
 

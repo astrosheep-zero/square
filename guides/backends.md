@@ -100,7 +100,7 @@ configured local SQLite connection. Pi tools accept the identical location and r
 - CLI failed-expression drafts stay in local `./drafts` for backend locations; recovery commands and
   display labels retain the URI. Local-artifact draft placement is unchanged.
 
-## Protocol version 2
+## Protocol version 3
 
 Newline-delimited JSON-RPC 2.0 over UTF-8 stdin/stdout, one object per line, at most 8 MiB per frame.
 Stdout is protocol only. No batch requests. The initial versioned handshake opens one logical square
@@ -108,8 +108,8 @@ per connection and returns an opaque handle. IDs are unique positive integers on
 requests may overlap and responses may arrive out of order.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"square/open","params":{"version":2,"key":"design","location":"stdio://local/design","identity":{"PI_SESSION_ID":"session-id"},"body":{"channel":"pi","session":"session-id"},"participant":"Bob"}}
-{"jsonrpc":"2.0","id":1,"result":{"version":2,"handle":"square"}}
+{"jsonrpc":"2.0","id":1,"method":"square/open","params":{"version":3,"key":"design","location":"stdio://local/design","identity":{"PI_SESSION_ID":"session-id"},"body":{"channel":"pi","session":"session-id"},"participant":"Bob"}}
+{"jsonrpc":"2.0","id":1,"result":{"version":3,"handle":"square"}}
 {"jsonrpc":"2.0","id":2,"method":"join","params":{"handle":"square","args":["Bob",{"observe":true},"fresh-participant-reference"]}}
 ```
 
@@ -124,7 +124,7 @@ uses that call's identity, not MCP/Pi/backend startup identity.
 After open, square methods take `{handle, args}` and Participant methods additionally require
 `{participant, participantHandle}`. Selection/join supply a fresh opaque connection-local reference;
 the server retains the actual captured Participant under it instead of reselecting by name per
-request. Version 2 deliberately refuses older peers rather than accepting unfenced handles.
+request. Version 3 deliberately refuses mismatched peers; there is no result translation.
 `args` is the public operation's positional arguments excluding `OperationControl`, plus the
 selection reference noted below; trailing JSON nulls represent omitted optional arguments.
 Nested nulls such as `history({limit:null})` retain their public meaning.
@@ -135,6 +135,8 @@ Nested nulls such as `history({limit:null})` retain their public meaning.
 | `join` | `[name, options?, freshReference]` | no |
 | `history`, `status`, `participants` | `[options?]` | no |
 | `recovery` | `[name?]` | no |
+| `stream/open` | `[options, freshReference]` | no |
+| `stream/next`, `stream/return` | `[streamReference]` | no |
 | `express` | `[body, options?]` | required |
 | `catch`, `listening`, `resume` | `[options?]` | required |
 | `listen`, `ignore`, `unlisten` | `[target, options?]` | required |
@@ -150,7 +152,10 @@ references even when the same Body later reacquires the name. Observation locati
 remote URIs and automatic delivery is false. SDK/stdio deferrals have identical validation, independent
 lease and owner-generation semantics; create/renew return only `{id, expiresAt}`, renew returns null
 and release false for an inactive ID, and stale handles receive the normal ownership refusal.
-No CLI/MCP/Pi deferral-authoring command is included. Errors are JSON-RPC `{code:-32000,message,data:{code?,facts?,operation?}}`; Square codes, structured
+No CLI/MCP/Pi deferral-authoring command is included. Each stream has a connection-local reference;
+`stream/next` pulls one canonical Activity (or PerceivedActivity for a recipient) and `stream/return`
+disposes it. Pending pulls are cancellable and connection close disposes all streams. Errors are
+JSON-RPC `{code:-32000,message,data:{code?,facts?,operation?}}`; Square codes, structured
 facts, history bounds and express certainty survive the boundary. The client does not infer
 `unsent` from a connection failure. There is no mutation retry or replay.
 
@@ -172,9 +177,9 @@ inspect history before deciding whether to send again.
   The server disables wake dispatch and route publication explicitly, while retaining backend-local
   session ownership. A harness identity does not imply wake capability. Use explicit `catch`
   (including cancellable positive-idle catch) or history.
-- `snapshot` (which contains a function), `stream`, host recognition/implicit join, owner-session
-  cleanup and route-retirement operations refuse explicitly. No partial JSON snapshot or fake stream
-  is offered. Use status/participants/history and explicit participant lifecycle methods.
+- `snapshot` (which contains a function), host recognition/implicit join, owner-session cleanup and
+  route-retirement operations refuse explicitly. Use status/participants/history and explicit
+  participant lifecycle methods.
 - Client clock functions, host-ledger objects and wake transport objects cannot cross the process
   boundary and are refused. Backend process configuration owns its environment, clock and ledger.
 - File doctor, migrate and discovery are local-only and refuse a selected backend URI. Run file

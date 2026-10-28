@@ -38,7 +38,7 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
   artifact.read = (select, signal) => { reads++; return cell.read(facts => select(withoutBodies(facts)), signal); };
   artifact.transactAs = noWriter;
   const result = await bob.catch({ from: ['Alice'], mention: true, limit: 1, observe: true });
-  assert.deepEqual({ ...result, observation: undefined }, { activities: [], consumedThrough: 'act/2', remaining: 0, idleExpired: false, status: 'capped', observation: undefined });
+  assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
   const { observation } = result;
   assert.deepEqual([observation.participant, observation.sayNumbers, observation.standingCount, observation.held, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', {}, 3, true, 100, 1, 1]);
   assert.equal(reads, 2, 'one selection and one explicitly requested presence read');
@@ -74,7 +74,8 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
   const caught = await bob.catch({ from: ['alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual(caught.activities.map(({ id, body }) => ({ id, body })), [{ id: 'act/3', body: 'selected by writer' }]);
   assert.equal(caught.remaining, 1);
-  assert.equal(caught.consumedThrough, 'act/3');
+  assert.equal(caught.reason, 'drained');
+  assert.equal(caught.activities[0].via, 'mention');
   assert.equal(caught.observation.held, true);
   assert.deepEqual(caught.observation.sayNumbers, { 3: 2 });
   assert.equal(writes, 1);

@@ -44,14 +44,22 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   }
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
-    import { Square, SquareError, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
+    import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
     const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'consumer' } });
     const joined: Promise<JoinResult> = square.join('Alice');
     const participant: Promise<Participant> = joined.then(result => result.participant);
     const history: Promise<HistoryResult> = square.history({ limit: null });
     const id: ActivityId = 'act/1';
+    const stream: AsyncIterable<Activity> = square.stream({ start: { kind: 'after', after: id } });
+    const directed: AsyncIterable<PerceivedActivity> = square.stream({ recipient: 'Alice' });
+    // @ts-expect-error stream cursors are activity ids, not raw indexes
+    square.stream({ start: { kind: 'after', after: 1 } });
+    // @ts-expect-error old join count is not a public fact
+    joined.then(result => result.participantCount);
+    // @ts-expect-error old stream fields are not public facts
+    ({} as Activity).seq;
     const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'held', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
-    void participant; void history; void id; void codes;
+    void participant; void history; void stream; void directed; void codes;
   `);
   const typecheck = run(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
     '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',

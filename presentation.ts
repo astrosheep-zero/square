@@ -10,7 +10,7 @@ import type { Activity, UnreadActivitySummary, ParticipantSummary } from './squa
 import { grepSnippet } from './search.js';
 import { style } from './tty-style.js';
 
-export type WatchStatus = 'stale' | 'empty-now' | 'quorum' | 'capped';
+export type WatchStatus = 'idle' | 'drained' | 'quorum' | 'capped';
 
 interface HeaderOptions {
   participantCount?: number;
@@ -144,8 +144,8 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
   if (shown.length === 0) return [style('dim', '  ○ nobody nearby')];
 
   const lines = shown.map((p) => {
-    const glyph = p.state === 'done' ? '○' : p.presence === 'watching' ? '◎' : p.lastActiveAt !== undefined ? '●' : '○';
-    const text = p.state === 'done'
+    const glyph = p.presence === 'done' ? '○' : p.presence === 'watching' ? '◎' : p.lastActiveAt !== undefined ? '●' : '○';
+    const text = p.presence === 'done'
       ? (p.lastActiveAt === undefined ? 'stepped out of the square' : `stepped out of the square · ${formatRelativeTime(p.lastActiveAt, now)}`)
       : p.presence === 'watching'
         ? (p.lastActiveAt === undefined ? 'is nearby · catching' : `is nearby · catching · ${formatRelativeTime(p.lastActiveAt, now)}`)
@@ -533,8 +533,8 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ? ['', 'around the square', ...renderPresenceLines(others, opts.presence.now)]
       : [];
   switch (opts.status) {
-    case 'stale':
-    case 'empty-now': {
+    case 'idle':
+    case 'drained': {
       const prefix = participantCommandPrefix(opts.squarePath, opts.name);
       // Quiet graduates with the idle length; an empty catch has no idle budget to report.
       const idleMs = opts.idleMs;

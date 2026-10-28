@@ -26,11 +26,11 @@ import { migrateSquareFile } from './square-migration.js';
 import { discoverSquares } from './list.js';
 import { streamSquare } from './stream.js';
 import type {
-  ActivityResult, OperationFailureDetail, CatchOptions, CatchResult, CatchStopStatus,
+  OperationFailureDetail, CatchOptions, CatchResult, CatchReason,
   ExpressOptions, ExpressResult, HistoryQuery, HistoryResult, JoinOptions, JoinResult, ListenerChangeResult,
   ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
   SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
-  RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, ExpressInput,
+  RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, StreamRecord, Activity, PerceivedActivity, ExpressInput,
 } from './square-facade.js';
 
 export type * from './square-facade.js';
@@ -156,7 +156,7 @@ export class SqliteSquare {
       const control = input === undefined ? operationControl : optionsOrControl as OperationControl;
       let name = this.name, effect: 'unsent' | 'unknown' | 'landed' = 'unsent';
       let landedId: ExpressResult['activity']['id'] | undefined;
-      let waited = false, heldWaitedMs = 0;
+      let heldWaitedMs = 0;
       try {
         checkControl(control);
         name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
@@ -196,13 +196,11 @@ export class SqliteSquare {
             landedId = formatActivityId(committed.stored.index);
             effect = 'landed';
             await square.publishIdentity();
-            const delivery = square.wakeTransport !== undefined
-              ? await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now })
-                .catch(() => ({ attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 }))
-              : { attempted: 0, accepted: 0, failed: 0, unknown: 0, notCapable: 1 };
+            if (square.wakeTransport !== undefined)
+              await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now }).catch(() => undefined);
             const { stored, standingCount, held, ownActivityCount, hardCap, ...metadata } = committed;
             const hint = expressHint(ownActivityCount);
-            return { activity: toPublicActivity(stored), delivery, waited, ...metadata,
+            return { activity: toPublicActivity(stored), ...metadata,
               ...(hint === undefined ? {} : { hint }), ...(context === undefined ? {} : { observation: {
                 ...square.observation(standingCount, held, name, now), ownActivityCount, hardCap, context, participant: name,
               } }) };
@@ -210,7 +208,6 @@ export class SqliteSquare {
             if (effect !== 'landed' && isSquareError(error) && error.facts?.activityUnsent === true) effect = 'unsent';
             if (effect === 'landed' || !isSquareError(error) || options.noWait || (error.code !== 'held' && error.code !== 'throttled')) throw error;
             if (error.code === 'held' && heldWaitedMs >= HELD_WAIT_BUDGET_MS) throw error;
-            waited = true;
             control?.onProgress?.({ kind: 'waiting', reason: error.code,
               ...(error.code === 'throttled' ? { delayMs: error.facts?.retryAfterMs ?? 1 } : {}),
               ...(error.facts?.holder === undefined ? {} : { holder: error.facts.holder }),
@@ -267,14 +264,13 @@ export class SqliteSquare {
       const square = this.owner;
       let name = this.name, subject: 'caller' | 'filter' = 'caller';
       let leaseId: string | undefined, seat: Seat | undefined;
-      let waitStarted = false, replaced = false;
       let selection = options;
       const idle = options.idle ?? 0;
-      const complete = async (caught: CatchSelection | undefined, stop?: CatchStopStatus): Promise<CatchResult> => {
+      const complete = async (caught: CatchSelection | undefined, reason: CatchReason = 'drained'): Promise<CatchResult> => {
         const view = caught ?? (await square.artifact.read(facts => observeCatchSelection(facts, name, [], {
           unseenOnly: true, senders: selection.from, ...(selection.mention === true ? { attentionOnly: true } : {}),
         }, square.clock()))).value;
-        if (stop === 'empty-now' || stop === undefined) stop = view.terminalStatus ?? stop;
+        if (reason === 'drained') reason = view.terminalStatus ?? reason;
         if (leaseId !== undefined) {
           await releaseWatchLease(square.artifact, seat!, leaseId).catch(() => undefined);
           leaseId = undefined;
@@ -284,13 +280,11 @@ export class SqliteSquare {
           try { presence = (await square.artifact.read(facts => catchPresence(facts, square.clock()), control?.signal)).value; }
           catch { /* Optional presence cannot erase the completed selection or receipts. */ }
         }
-        const status = stop === 'already-active' || stop === 'replaced' || stop === 'capped' || stop === 'quorum' ? stop : undefined;
-        return { activities: view.activities.map(activity => ({ ...toPublicActivity(activity), perception: 'full' as const })),
-          consumedThrough: view.consumedThrough, remaining: view.remaining, idleExpired: stop === 'stale',
-          ...(status === undefined ? {} : { status }), ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
+        return { activities: view.activities, remaining: view.remaining, reason,
+          ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
             ...square.observation(view.standingCount, view.held, view.participant, view.now), participant: view.participant,
-            sayNumbers: view.sayNumbers, ownActivityCount: view.ownActivityCount, hardCap: view.hardCap, stop,
-            ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }), waitStarted, replaced,
+            sayNumbers: view.sayNumbers, ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
+            ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
           } }) };
       };
       try {
@@ -314,7 +308,7 @@ export class SqliteSquare {
         }, control?.signal)).value;
         if (idle === 0) {
           const data = probe ?? (await this.catchPage(name, seat!, selection, control))!;
-          return await complete(data, data.activities.length === 0 ? 'empty-now' : undefined);
+          return await complete(data);
         }
         const watch: WatchOptions = {
           ...(selection.from === undefined ? {} : { participants: [...selection.from] }), ...(options.mention ? { mention: name } : {}),
@@ -323,9 +317,7 @@ export class SqliteSquare {
         const start = await acquireWatchLease(square.artifact, seat!, square.clock(), crypto.randomUUID(), watch, control?.signal);
         if (start.type === 'active') return await complete(undefined, 'already-active');
         leaseId = start.leaseId;
-        waitStarted = true;
-        replaced = start.replaced;
-        control?.onProgress?.({ kind: 'catch-started', participant: name, idleMs: idle, replacementRequested: options.replace ?? false, replaced });
+        control?.onProgress?.({ kind: 'catch-started', participant: name, idleMs: idle, replacementRequested: options.replace ?? false, replaced: start.replaced });
         let quietSince = square.clock(), wasHeld = false, nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
         while (true) {
           checkControl(control);
@@ -344,7 +336,7 @@ export class SqliteSquare {
           wasHeld = pulse.type === 'held';
           if (!wasHeld && square.clock() - quietSince >= idle) {
             const owns = await ownsWatchLease(square.artifact, seat!, square.clock(), leaseId, control?.signal);
-            return await complete(undefined, owns ? 'stale' : 'replaced');
+            return await complete(undefined, owns ? 'idle' : 'replaced');
           }
           const deadline = Math.min(nextHeartbeat, wasHeld ? Infinity : quietSince + idle);
           await square.artifact.changed(baseline, Math.max(0, deadline - square.clock()), control?.signal);
@@ -451,7 +443,6 @@ export class SqliteSquare {
         const seat = facts.seat(participant);
         if (seat === undefined) throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');
         return { participant: this.handle(seat.participant, seat), activity, kind,
-          participantCount: facts.roster().filter(item => item.joined || item.done).length,
           ...(!options.observe ? {} : { observation: this.observation(inSquareCount(facts), facts.hold().active, seat.participant, now) }) };
       }, control?.signal)).value;
       await this.publishIdentity();
@@ -534,7 +525,10 @@ export class SqliteSquare {
     const facts = name === undefined ? undefined : (await this.artifact.read(facts => recoveryObservation(facts, name, this.clock()), control?.signal).catch(() => undefined))?.value;
     return facts ?? await this.contextObservation(name, control);
   }
-  stream(options: StreamOptions, control?: OperationControl) {
+  stream(options: StreamOptions & { readonly recipient: string }, control?: OperationControl): AsyncIterable<PerceivedActivity>;
+  stream(options: StreamOptions & { readonly recipient?: undefined }, control?: OperationControl): AsyncIterable<Activity>;
+  stream(options: StreamOptions, control?: OperationControl): AsyncIterable<StreamRecord>;
+  stream(options: StreamOptions, control?: OperationControl): AsyncIterable<StreamRecord> {
     // A path stream follows replacements independently of this connection's inode
     // and lifetime. Only explicit artifact readers borrow an existing port.
     return streamSquare(this.location, options, control);
@@ -552,7 +546,7 @@ export class SqliteSquare {
     if (seat === undefined || seat.generation !== expectedGeneration || !sameBody(seat.body, body)) return false;
     return this.artifact.cancelDeliveries(asSeatRef(seat));
   }
-  async endOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<ActivityResult | null> {
+  async endOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<LifecycleResult | null> {
     const captured = (await this.artifact.read(facts => facts.seat(name))).value;
     if (captured === undefined || captured.body.session !== sessionId || (body !== undefined && !sameBody(captured.body, body))
       || (expectedGeneration !== undefined && captured.generation !== expectedGeneration)) return null;

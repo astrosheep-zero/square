@@ -451,13 +451,13 @@ test('catch filters before limiting, repeats exact catches, and reports truthful
     await land(port, acts);
 
     const first = (await port.transact((facts) => decideCatch(facts, 'carol', { limit: 2 }, T0 + 500))).value;
-    assert.deepEqual(first.activities.map((act) => act.index), [3, 7]);
+    assert.deepEqual(first.activities.map((act) => act.id), ['act/3', 'act/7']);
     assert.equal(first.remaining, 3, 'remaining counts filtered unseen rows after insertion');
-    assert.equal(first.consumedThrough, 'act/8', 'cursor advances over nonaddressed actor-bearing activity');
+    assert.equal((await port.read(facts => readCursor(facts, 'Carol'))).value, 8, 'cursor advances over nonaddressed actor-bearing activity');
     assert.deepEqual((await port.read((facts) => facts.receipt('Carol', 3))).value, { at: T0 + 500 });
 
     const attentionOnly = (await port.transact((facts) => decideCatch(facts, 'Carol', { mention: true, limit: 10 }, T0 + 501))).value;
-    assert.deepEqual(attentionOnly.activities.map((act) => act.index), [9, 10, 12], 'mention filter drops listener-only edges');
+    assert.deepEqual(attentionOnly.activities.map((act) => act.id), ['act/9', 'act/10', 'act/12'], 'mention filter drops listener-only edges');
     assert.equal(attentionOnly.remaining, 0);
   } finally {
     await port.close();
@@ -471,16 +471,16 @@ test('catch filters before limiting, repeats exact catches, and reports truthful
     assert.equal((await exactPort.read((facts) => facts.receipt('Carol', 3))).value, undefined);
 
     const senders = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { from: ['Alice'], limit: 2 }, T0 + 601))).value;
-    assert.deepEqual(senders.activities.map((act) => act.index), [3, 7], 'sender filter applies before the limit');
+    assert.deepEqual(senders.activities.map((act) => act.id), ['act/3', 'act/7'], 'sender filter applies before the limit');
     assert.equal(senders.remaining, 3);
 
     const repeat = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { id: 'act/3' }, T0 + 602))).value;
-    assert.deepEqual(repeat.activities.map((act) => act.index), [3], 'an exact catch may repeat a seen activity');
+    assert.deepEqual(repeat.activities.map((act) => act.id), ['act/3'], 'an exact catch may repeat a seen activity');
     assert.deepEqual((await exactPort.read((facts) => facts.receipt('Carol', 3))).value, { at: T0 + 601 }, 'the repeat preserves the original receipt');
     assert.equal(repeat.remaining, 3, 'exact remaining covers all historical directed unseen rows');
 
     const page = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { limit: 1 }, T0 + 603))).value;
-    assert.deepEqual(page.activities.map((act) => act.index), [9]);
+    assert.deepEqual(page.activities.map((act) => act.id), ['act/9']);
     assert.equal(page.remaining, 2);
   } finally {
     await exactPort.close();
@@ -507,9 +507,9 @@ test('a pre-rejoin catch sees earlier holes while pending discovery stops at the
     assert.deepEqual(Object.keys(whole.groups[0]).sort(), ['actor', 'at', 'index', 'recipients'], 'pending discovery carries no body');
 
     const caught = (await port.transact((facts) => decideCatch(facts, 'Alice', { limit: 10 }, T0 + 700))).value;
-    assert.deepEqual(caught.activities.map((act) => act.index), [2, 3, 7, 8]);
+    assert.deepEqual(caught.activities.map((act) => act.id), ['act/2', 'act/3', 'act/7', 'act/8']);
     assert.equal(caught.remaining, 0);
-    assert.equal(caught.consumedThrough, 'act/8');
+    assert.equal((await port.read(facts => readCursor(facts, 'Alice'))).value, 8);
     assert.equal((await port.read((facts) => facts.pendingAudience(-1, 8, 10))).value.groups.length, 0, 'catch receipts clear pending discovery');
   } finally {
     await port.close();

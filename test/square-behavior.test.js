@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { readSquareSnapshot } from '../dist/artifact.js';
+import { readCursor } from '../dist/runtime.js';
 import { Square, SquareError } from '../dist/index.js';
 
 function tempSquarePath() {
@@ -112,11 +113,12 @@ test('hold and resume persist the requesting actor and never a system actor', as
 test('any self activity advances the actor cursor', async () => {
   const square = memorySquare({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice')).participant;
-  assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/0');
+  const cursor = async () => (await square.artifact.read(facts => readCursor(facts, 'Alice'))).value;
+  assert.equal(await cursor(), 0);
   await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
-  assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/1');
+  assert.equal(await cursor(), 1);
   await alice.done();
-  assert.equal((await square.snapshot()).participants[0].consumedThrough, 'act/2');
+  assert.equal(await cursor(), 2);
   await closeSquare(square);
 });
 
@@ -248,7 +250,7 @@ test('catch is directed while history is the full archive', async () => {
   const expressed = await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
   const bobCaught = await bob.catch();
   const bobMention = bobCaught.activities.find((activity) => activity.id === expressed.activity.id);
-  assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full' });
+  assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full', via: 'mention' });
   const caraMention = ((await cara.history({ limit: 100 })).activities).find((activity) => activity.id === expressed.activity.id);
   assert.equal(caraMention?.body, 'secret reach phrase @Bob');
   assert.equal(((await square.history({ limit: 100 })).activities).find((activity) => activity.id === expressed.activity.id).body, 'secret reach phrase @Bob');

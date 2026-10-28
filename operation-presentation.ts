@@ -106,7 +106,7 @@ export function renderCatchOutcome(
   if (projection === undefined) return { stdout: '', exitCode: 0 };
   const location = projection.location ?? squarePath;
   const name = projection.participant;
-  const stop = projection.stop ?? data.status;
+  const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
   const header = { participantCount: projection.standingCount, held: projection.held };
   const statusOptions = {
     squarePath: location, name, presence: projection.presence,
@@ -128,7 +128,7 @@ export function renderCatchOutcome(
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
-    ...(stop === 'stale' && options.idle !== undefined ? { idleMs: options.idle } : {}),
+    ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
   });
   const fallback = stop === undefined && !projection.automaticDeliveryAvailable && data.remaining === 0
     ? `${participantCommandPrefix(location, name)} catch --idle 30m\n  stay available for new activity` : '';
@@ -221,8 +221,8 @@ export function renderParticipantsResult(
   const now = projection.now;
   const participants = data.participants;
   const lines = participants.slice(0, limit).map((participant) => {
-    const glyph = participant.state === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && projection.classificationByName[participant.name] === 'here' ? '●' : '○';
-    const state = participant.state === 'done' ? 'done' : participant.presence === 'watching' ? 'catching' : participant.state;
+    const glyph = participant.presence === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && projection.classificationByName[participant.name] === 'here' ? '●' : '○';
+    const state = participant.presence === 'watching' ? 'catching' : participant.presence === 'never-joined' ? 'not joined' : participant.presence;
     const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
     return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
   });
@@ -246,7 +246,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
   const lingering = presentation.lingeringCount;
   const people: string[] = [];
-  if (data.activeCount === 0) {
+  if (presentation.standingCount === 0) {
     people.push('  ○ nobody in the square');
   } else {
     if (orderedHere.length === 0) people.push('  ○ nobody here right now');
@@ -281,9 +281,10 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
     }
   }
   const cap = data.hardCap === null ? 'unlimited' : `${data.hardCap} each`;
-  const holdTime = data.hold?.at === undefined ? 'just now' : formatRelativeTime(data.hold.at, data.now);
-  const hold = data.hold !== null
-    ? `· ${data.hold.by === undefined ? 'someone' : participantIdentity(data.hold.by)} raised a hand${data.hold.reason ? ` — ${data.hold.reason}` : ''}${style('dim', ` · ${holdTime}`)}`
+  const held = data.held;
+  const holdTime = held?.at === undefined ? 'just now' : formatRelativeTime(held.at, data.now);
+  const hold = held !== null
+    ? `· ${held.by === undefined ? 'someone' : participantIdentity(held.by)} raised a hand${held.reason ? ` — ${held.reason}` : ''}${style('dim', ` · ${holdTime}`)}`
     : undefined;
   const visible = data.latestActivity === undefined
     ? { text: '', bodyClipped: false }
@@ -310,7 +311,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   const counts = [
     `${orderedHere.length} here`,
     ...(lingering > 0 ? [`${lingering} lingering`] : []),
-    `${data.doneCount} done`,
+    `${data.participants.filter((participant) => participant.presence === 'done').length} done`,
     `cap ${cap}`,
     `throttle ${data.throttlePerMinute === undefined ? 'none' : `${data.throttlePerMinute}/min`}`,
   ].join(' · ');

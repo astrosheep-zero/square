@@ -5,6 +5,7 @@ import { decideCatch } from '../dist/catch-decisions.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { directedTo, perceiveActivity } from '../dist/perception-projection.js';
+import { toPerceivedActivity } from '../dist/views.js';
 import { readCursor } from '../dist/runtime.js';
 
 function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
@@ -39,7 +40,8 @@ test('catch and delivery share one settled audience across case and rejoin bound
         first: { directed: directedTo(read, at(2), 'BOB'), perception: perceiveActivity(read, at(2), 'BOB') },
         rejoined: { directed: directedTo(read, at(5), 'BOB'), perception: perceiveActivity(read, at(5), 'bob') },
         authorFullUnrouted: { directed: directedTo(read, at(2), 'Alice'), perception: perceiveActivity(read, at(2), 'Alice') },
-        outsiderPresence: perceiveActivity(read, at(2), 'Cara'),
+        outsiderPresence: toPerceivedActivity(read, at(2), 'Cara'),
+        authorPublic: toPerceivedActivity(read, at(2), 'Alice'),
         lifecycleFull: perceiveActivity(read, at(0), 'Alice'),
         bobSuffix: read.directedCount('BOB', { unseenOnly: true }),
       };
@@ -49,16 +51,15 @@ test('catch and delivery share one settled audience across case and rejoin bound
       first: { directed: true, perception: 'full' },
       rejoined: { directed: true, perception: 'full' },
       authorFullUnrouted: { directed: false, perception: 'full' },
-      outsiderPresence: 'presence',
+      outsiderPresence: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', body: 'first @BOB', mentions: ['BOB'], perception: 'presence' },
+      authorPublic: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', body: 'first @BOB', mentions: ['BOB'], perception: 'full' },
       lifecycleFull: 'full',
       bobSuffix: 2,
     });
 
     const caught = await cell.transact((write) => decideCatch(write, 'BOB', {}, 10));
-    assert.deepEqual(caught.value.activities.map((activity) => activity.index), [2, 5]);
-    for (const activity of caught.value.activities) {
-      assert.equal((await cell.read((facts) => perceiveActivity(facts, activity, 'BOB'))).value, 'full');
-    }
+    assert.deepEqual(caught.value.activities.map((activity) => [activity.id, activity.perception, activity.via]),
+      [['act/2', 'full', 'mention'], ['act/5', 'full', 'mention']]);
     assert.equal(caught.value.remaining, 0);
   } finally {
     await cell.close();

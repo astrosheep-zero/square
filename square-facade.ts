@@ -2,11 +2,11 @@ import type { SquareBackends } from './square-backend.js';
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Body, StoredAct, WakeAddress, ActivityMetadata, JsonValue } from './model.js';
-import type { WakeTransportPort, DeliveryResult, SquareResourceOwner } from './ports.js';
+import type { Body, StoredAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { Body, WakeAddress, ActivityMetadata, JsonValue } from './model.js';
+export type { Body, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 /** Indexed archive event, including read and historical actorless lifecycle records. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -23,6 +23,7 @@ export interface Activity {
 }
 export interface PerceivedActivity extends Activity {
   readonly perception: Perception;
+  readonly via?: DirectedNotificationRoute;
 }
 /** Request extra facts for rendering, without changing operation semantics. */
 export interface ObservationOptions {
@@ -40,12 +41,8 @@ export interface ExpressOptions extends ObservationOptions {
 export interface ExpressInput extends ExpressOptions {
   readonly body?: string;
 }
-export interface ActivityResult {
+export interface ExpressResult {
   readonly activity: Activity;
-  readonly delivery?: DeliveryResult;
-}
-export interface ExpressResult extends ActivityResult {
-  readonly waited: boolean;
   /** The replied-to author was not standing when the reply landed. */
   readonly replyAuthorNotHere?: string;
   /** Body @name tokens with no standing match at landing; never stored on the activity. */
@@ -62,7 +59,8 @@ export interface ListeningResult {
   readonly listening: readonly string[];
   readonly observation?: SquareObservation;
 }
-export interface LifecycleResult extends ActivityResult {
+export interface LifecycleResult {
+  readonly activity: Activity;
   readonly observation?: LifecycleObservation;
 }
 export interface CatchOptions extends ObservationOptions {
@@ -73,12 +71,11 @@ export interface CatchOptions extends ObservationOptions {
   readonly limit?: number;
   readonly replace?: boolean;
 }
+export type CatchReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
 export interface CatchResult {
   readonly activities: readonly PerceivedActivity[];
-  readonly consumedThrough: ActivityId | null;
-  readonly idleExpired: boolean;
   readonly remaining: number;
-  readonly status?: CatchTerminalStatus;
+  readonly reason: CatchReason;
   /** Occasional participant-facing nudge; not part of any activity. */
   readonly hint?: string;
   readonly observation?: CatchObservation;
@@ -134,7 +131,6 @@ export interface HistoryResult {
 export interface ParticipantStatus {
   readonly name: string;
   readonly state: 'joined' | 'done';
-  readonly consumedThrough: ActivityId | null;
   readonly watching: boolean;
   readonly listening: readonly string[];
 }
@@ -182,8 +178,6 @@ export interface JoinResult {
   readonly participant: Participant;
   readonly activity: Activity | null;
   readonly kind: 'joined' | 'reconnected' | 'taken-over';
-  /** Known joined-or-done participants, not the current standing count. */
-  readonly participantCount: number;
   readonly observation?: JoinObservation;
 }
 export interface Participant {
@@ -204,12 +198,9 @@ export interface Participant {
   renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
   releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
-export type CatchTerminalStatus = 'already-active' | 'replaced' | 'capped' | 'quorum';
-export type CatchStopStatus = CatchTerminalStatus | 'empty-now' | 'stale';
 export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'done';
 export interface ParticipantSummary {
   readonly name: string;
-  readonly state: 'active' | 'done' | 'not joined';
   readonly listening: readonly string[];
   readonly activityCount: number;
   readonly lastActiveAt?: number;
@@ -224,12 +215,11 @@ export interface StatusResult {
   /** Present when a viewer resolves; an empty list means they listen to nobody. */
   readonly listening?: readonly string[];
   readonly hardCap: number | null;
-  readonly activeCount: number;
-  readonly doneCount: number;
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
   readonly throttlePerMinute?: number;
-  readonly hold: { readonly by?: string; readonly reason?: string; readonly at?: number } | null;
+  /** Non-null whenever held; by is present with an actor and omitted only for historical actorless holds. */
+  readonly held: { readonly by?: string; readonly reason?: string; readonly at?: number } | null;
   readonly latestActivity?: Activity;
   readonly observation?: StatusObservation;
 }
@@ -280,12 +270,12 @@ export interface RecoveryResult {
 }
 export type StreamStart =
   | { readonly kind: 'tail'; readonly last: number }
-  | { readonly kind: 'after'; readonly after: number };
+  | { readonly kind: 'after'; readonly after: ActivityId };
 export interface StreamOptions {
   readonly recipient?: string;
   readonly start?: StreamStart;
 }
-export type StreamRecord = ArchiveRecord & { readonly seq: number; readonly square: string; readonly route?: string };
+export type StreamRecord = Activity | PerceivedActivity;
 
 export interface UnreadActivityPreview {
   readonly number: number;
@@ -321,7 +311,7 @@ export interface CatchPresence {
   readonly now: number;
 }
 export interface StreamProjection {
-  readonly activities: readonly { readonly activity: ArchiveRecord; readonly route?: string }[];
+  readonly activities: readonly StreamRecord[];
   readonly cursor: number;
   readonly hasMore: boolean;
 }
@@ -355,9 +345,6 @@ export interface CatchObservation extends SquareObservation, ExpressionObservati
   readonly participant: string;
   readonly sayNumbers: Readonly<Record<number, number>>;
   readonly presence?: CatchPresence;
-  readonly stop?: CatchStopStatus;
-  readonly waitStarted?: boolean;
-  readonly replaced?: boolean;
   readonly enrichmentUnavailable?: true;
 }
 export interface HistoryContinuation {

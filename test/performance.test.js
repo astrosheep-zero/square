@@ -167,7 +167,7 @@ test('catch fences selection and captures the page facts in its receipt transact
     return result;
   };
   const interrupted = await bob.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-  assert.equal(interrupted.status, 'replaced');
+  assert.equal(interrupted.reason, 'replaced');
   assert.equal(replaced, true);
   assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, [], 'a replaced lease cannot insert a receipt');
 
@@ -185,8 +185,8 @@ test('catch fences selection and captures the page facts in its receipt transact
   };
   const caught = await bob.catch({ limit: 1, observe: true });
   assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
-  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full' }]);
-  assert.equal(caught.consumedThrough, 'act/2');
+  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
+  assert.equal(caught.reason, 'drained');
   assert.equal(caught.remaining, 1);
   assert.deepEqual(caught.observation.sayNumbers, { 2: 1 });
   assert.equal(caught.observation.standingCount, 2);
@@ -212,7 +212,7 @@ test('a capped idle catch through the shared SDK owner hydrates no bodies and wr
   const before = (await cell.read(facts => facts.receiptAssignments())).value;
   counters.hydrated = [];
   const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-  assert.deepEqual(caught, { activities: [], consumedThrough: 'act/2', idleExpired: false, remaining: 0, status: 'capped' });
+  assert.deepEqual(caught, { activities: [], remaining: 0, reason: 'capped' });
   assert.equal(counters.hydrated.flat().length, 0);
   assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
 });

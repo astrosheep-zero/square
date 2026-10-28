@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square, squareLocation, diagnoseSquare, migrateSquare, discover } from '../dist/square-api.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createArtifactPort, createSquareFile } from '../dist/artifact.js';
 import { displayPath, participantCommandPrefix } from '../dist/presentation.js';
 
 const server = path.resolve(import.meta.dirname, '../dist/stdio-server.js');
@@ -78,6 +80,21 @@ test('stdio clients and the real CLI read the same artifact history without cons
   } finally { await artifact.close(); }
 });
 
+test('stdio status retains a historical actorless hold with or without observation', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(f.root, { recursive: true });
+  await createSquareFile(path.join(f.root, 'discussion.square'), {
+    hardCap: null, preamble: [], warmup: [],
+    acts: [{ kind: 'hold', index: 0, at: 5, body: 'historical pause' }],
+    runtime: { nextActIndex: 1, observations: {}, leases: {} },
+  });
+  const square = await f.open();
+  const status = await square.status();
+  assert.deepEqual(status.held, { reason: 'historical pause', at: 5 });
+  const observed = await square.status({ observe: true });
+  assert.deepEqual(observed.held, status.held);
+});
+
 test('stdio open carries the exact typed Body for remote join and express while body-less history stays readable', async t => {
   const f = fixture(t);
   const artifactPath = path.join(f.root, 'discussion.square');
@@ -140,8 +157,7 @@ test('cancelling a blocked history read leaves another backend request usable', 
     database.close();
   }
   const result = await status;
-  assert.equal(result.activeCount, 1);
-  assert.deepEqual(result.participants.map(participant => participant.name), ['Alice']);
+  assert.deepEqual(result.participants.map(participant => [participant.name, participant.presence]), [['Alice', 'active']]);
   await square.close();
 });
 
@@ -239,4 +255,190 @@ test('stdio deferrals preserve scalar matches, independent ids, cancellation and
   await assert.rejects(alice.renewDeliveryDeferral(second.id, 100), { code: 'already_joined' });
   await assert.rejects(alice.releaseDeliveryDeferral(second.id), { code: 'already_joined' });
   assert.equal(await rejoined.releaseDeliveryDeferral(second.id), false);
+});
+
+async function contractSquare(t, backend, hardCap = null) {
+  const f = fixture(t);
+  const body = { channel: 'test', session: 'sdk-parity' };
+  const input = backend === 'stdio' ? f.input : { ...f.input, path: path.join(f.cwd, 'local.square') };
+  const square = await Square.build({ ...input, body, markdown: 'activity contract', hardCap });
+  f.resources.push(square);
+  return square;
+}
+
+function canonical(activity, perceived = false) {
+  const allowed = new Set(['id', 'at', 'kind', 'actor', 'body', 'metadata', 'mentions', 'reach', 'target', 'reply',
+    ...(perceived ? ['perception', 'via'] : [])]);
+  assert.match(activity.id, /^act\/\d+$/);
+  assert.equal(typeof activity.at, 'number');
+  assert.equal(typeof activity.actor, 'string');
+  assert.ok(Array.isArray(activity.mentions));
+  for (const key of Object.keys(activity)) assert.ok(allowed.has(key), `unexpected activity field ${key}`);
+  if (perceived) assert.ok(['full', 'presence'].includes(activity.perception));
+}
+
+async function take(iterator, count) {
+  const items = [];
+  for (let index = 0; index < count; index++) {
+    const next = await iterator.next();
+    assert.equal(next.done, false);
+    items.push(next.value);
+  }
+  await iterator.return();
+  return items;
+}
+
+for (const backend of ['sqlite', 'stdio']) {
+  test(`${backend}: SDK operations and streams share canonical activities and landed routes`, { timeout: 10000 }, async t => {
+    const square = await contractSquare(t, backend);
+    const joined = await square.join('Alice');
+    assert.deepEqual(Object.keys(joined).sort(), ['activity', 'kind', 'participant']);
+    canonical(joined.activity);
+    const reconnected = await square.join('Alice');
+    assert.equal(reconnected.kind, 'reconnected');
+    assert.equal(reconnected.activity, null);
+    assert.equal(Object.hasOwn(reconnected, 'participantCount'), false);
+    const alice = joined.participant, bob = (await square.join('Bob')).participant;
+    await square.join('Cara');
+    const held = await alice.hold('pause');
+    assert.deepEqual(Object.keys(held), ['activity']);
+    canonical(held.activity);
+    const status = await square.status();
+    assert.deepEqual(status.held.by, 'Alice');
+    for (const key of ['hold', 'activeCount', 'doneCount']) assert.equal(Object.hasOwn(status, key), false);
+    for (const person of (await square.participants()).participants) assert.equal(Object.hasOwn(person, 'state'), false);
+    canonical((await alice.resume()).activity);
+    assert.equal((await square.status()).held, null);
+
+    const mention = await alice.express('hello @Bob', { force: true });
+    for (const key of ['delivery', 'waited']) assert.equal(Object.hasOwn(mention, key), false);
+    canonical(mention.activity);
+    const question = await bob.express('question for Alice', { force: true, mentions: ['Alice'] });
+    const reply = await alice.express('answer', { force: true, noMention: true, reply: question.activity.id });
+    const listening = await bob.listen('Alice');
+    canonical(listening.activity);
+    assert.equal((await bob.listen('Alice')).activity, null);
+    const attention = await alice.express({ body: 'heard by listening', metadata: { nested: { value: 3 } }, force: true });
+    const bell = await alice.express('bell', { force: true, reach: 'bell' });
+    const expected = [mention.activity, reply.activity, attention.activity, bell.activity];
+    const caught = await bob.catch();
+    assert.equal(caught.reason, 'drained');
+    for (const key of ['consumedThrough', 'idleExpired', 'status']) assert.equal(Object.hasOwn(caught, key), false);
+    assert.deepEqual(caught.activities, expected.map((activity, index) => ({ ...activity, perception: 'full', via: ['mention', 'reply', 'attention', 'bell'][index] })));
+    caught.activities.forEach(activity => canonical(activity, true));
+
+    const directed = square.stream({ recipient: 'Bob', start: { kind: 'tail', last: 4 } }, { signal: AbortSignal.timeout(3000) })[Symbol.asyncIterator]();
+    assert.deepEqual(await take(directed, 4), caught.activities);
+    const history = (await square.history({ limit: null })).activities;
+    history.forEach(activity => canonical(activity));
+    const stream = square.stream({ start: { kind: 'tail', last: 100 } }, { signal: AbortSignal.timeout(3000) })[Symbol.asyncIterator]();
+    assert.deepEqual(await take(stream, history.length), history);
+    const following = square.stream({ start: { kind: 'after', after: mention.activity.id } }, { signal: AbortSignal.timeout(3000) })[Symbol.asyncIterator]();
+    const after = history.filter(activity => Number(activity.id.slice(4)) > Number(mention.activity.id.slice(4)));
+    assert.deepEqual(await take(following, after.length), after);
+    canonical((await bob.unlisten('Alice')).activity);
+    canonical((await bob.ignore('Alice')).activity);
+    const done = await bob.done();
+    assert.deepEqual(Object.keys(done), ['activity']);
+    canonical(done.activity);
+    const late = await alice.express('late reply', { force: true, reply: question.activity.id });
+    assert.equal(late.replyAuthorNotHere, 'Bob');
+    canonical(late.activity);
+  });
+
+  test(`${backend}: catch returns each stop reason through the real SDK`, { timeout: 10000 }, async t => {
+    const square = await contractSquare(t, backend);
+    const alice = (await square.join('Alice')).participant, bob = (await square.join('Bob')).participant;
+    const cara = (await square.join('Cara')).participant;
+    assert.equal((await alice.catch()).reason, 'drained');
+    assert.equal((await alice.catch({ idle: 20 })).reason, 'idle');
+
+    let startFirst, startReplacement;
+    const firstStarted = new Promise(resolve => { startFirst = resolve; });
+    const replacementStarted = new Promise(resolve => { startReplacement = resolve; });
+    const first = alice.catch({ idle: 10_000 }, { onProgress: progress => { if (progress.kind === 'catch-started') startFirst(); } });
+    await firstStarted;
+    assert.equal((await alice.catch({ idle: 10_000 })).reason, 'already-active');
+    const controller = new AbortController();
+    const replacement = alice.catch({ idle: 10_000, replace: true }, { signal: controller.signal,
+      onProgress: progress => { if (progress.kind === 'catch-started') startReplacement(); } });
+    const cancelled = assert.rejects(replacement);
+    await replacementStarted;
+    assert.equal((await first).reason, 'replaced');
+    controller.abort();
+    await cancelled;
+    await bob.done(); await cara.done();
+    assert.equal((await alice.catch()).reason, 'quorum');
+
+    const cappedSquare = await contractSquare(t, backend, 1);
+    const capped = (await cappedSquare.join('Capped')).participant;
+    await cappedSquare.join('Peer');
+    await capped.express('one', { force: true });
+    assert.equal((await capped.catch()).reason, 'capped');
+  });
+}
+
+test('stdio streams cancel outstanding pulls and leave the connection usable', { timeout: 10000 }, async t => {
+  const square = await contractSquare(t, 'stdio');
+  await square.join('Alice');
+  const iterator = square.stream({ start: { kind: 'tail', last: 1 } })[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).value.kind, 'join');
+  const waiting = iterator.next();
+  await Promise.resolve();
+  assert.equal((await square.status()).participants[0].name, 'Alice', 'other requests run while a pull waits');
+  assert.deepEqual(await iterator.return(), { done: true, value: undefined });
+  assert.deepEqual(await waiting, { done: true, value: undefined });
+  assert.equal((await square.status()).participants[0].name, 'Alice');
+
+  const abort = new AbortController();
+  const second = square.stream({ start: { kind: 'tail', last: 1 } }, { signal: abort.signal })[Symbol.asyncIterator]();
+  assert.equal((await second.next()).value.kind, 'join');
+  const pending = second.next();
+  const rejected = assert.rejects(pending, /cancelled by caller/);
+  await Promise.resolve();
+  await square.status();
+  abort.abort(new Error('cancelled by caller'));
+  await rejected;
+  await second.return();
+  assert.equal((await square.status()).participants[0].name, 'Alice');
+});
+
+for (const backend of ['sqlite', 'stdio']) {
+  test(`${backend}: CLI ndjson stream remains usable with canonical recipient records`, { timeout: 10000 }, async t => {
+    const f = fixture(t), body = { channel: 'test', session: 'stream-cli' };
+    const input = backend === 'stdio' ? f.input : { ...f.input, path: path.join(f.cwd, 'cli.square') };
+    const square = await Square.build({ ...input, body, markdown: '' });
+    f.resources.push(square);
+    const alice = (await square.join('Alice')).participant;
+    const bobJoin = await square.join('Bob');
+    const sent = await alice.express('hello @Bob', { force: true });
+    const config = path.join(f.cwd, 'backends.json');
+    fs.writeFileSync(config, JSON.stringify({ backends: f.input.backends }));
+    const child = spawn(process.execPath, [path.resolve(import.meta.dirname, '../dist/square.js'), '--location', input.path,
+      'stream', '--ndjson', '--for', 'Bob', '--after', bobJoin.activity.id], {
+      cwd: f.cwd, env: { ...f.env, SQUARE_BACKENDS_CONFIG: config }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); });
+    child.stderr.resume();
+    const lines = createInterface({ input: child.stdout });
+    const [line] = await once(lines, 'line');
+    assert.deepEqual(JSON.parse(line), { ...sent.activity, perception: 'full', via: 'mention' });
+    child.kill('SIGINT');
+    assert.equal((await once(child, 'close'))[0], 130);
+  });
+}
+
+test('stdio server refuses an older protocol peer', { timeout: 10000 }, async t => {
+  const f = fixture(t);
+  const child = spawn(process.execPath, [server, '--root', f.root], { env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stderr.resume();
+  const lines = createInterface({ input: child.stdout });
+  const reply = once(lines, 'line');
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'square/open', params: {
+    version: 2, key: 'discussion', location: 'stdio://local/discussion', identity: {},
+  } }) + '\n');
+  const [line] = await reply;
+  assert.match(JSON.parse(line).error.message, /protocol version/);
+  child.stdin.end();
+  await once(child, 'close');
 });

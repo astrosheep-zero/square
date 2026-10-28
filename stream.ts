@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { SquareError } from './model.js';
 import { createArtifactPort, observeSquareRevision } from './artifact.js';
 import type { SquareArtifactPort } from './ports.js';
-import { streamProjection, streamTailProjection } from './views.js';
+import { parseRequiredActivityId, streamProjection, streamTailProjection } from './views.js';
 import type { OperationControl, StreamOptions, StreamRecord } from './square-facade.js';
 
 /** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
@@ -30,7 +30,7 @@ export function streamSquare(squarePath: string, options: StreamOptions = {}, co
           }
           signal.throwIfAborted();
           const start = options.start ?? { kind: 'tail', last: 10 };
-          let cursor = start.kind === 'after' ? start.after : -1;
+          let cursor = start.kind === 'after' ? parseRequiredActivityId(start.after) : -1;
           let initial = start.kind === 'tail' ? start : undefined;
           const observer = await observeSquareRevision(squarePath);
           const close = () => observer.close();
@@ -56,10 +56,9 @@ export function streamSquare(squarePath: string, options: StreamOptions = {}, co
                 await observer.hinted(generation, Infinity, signal);
                 continue;
               }
-              for (const item of projection.activities) {
+              for (const activity of projection.activities) {
                 signal.throwIfAborted();
-                yield { seq: item.activity.index, square: squarePath, ...item.activity,
-                  ...(item.route === undefined ? {} : { route: item.route }) };
+                yield activity;
               }
               cursor = projection.cursor;
               initial = undefined;

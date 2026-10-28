@@ -46,7 +46,8 @@ test('express overlaps four receiver sessions, keeps same-session order, and dra
     assert.equal(starts.includes('R1'), false, 'second name in the same session is still waiting');
   } finally { release(); }
   const result = await sending;
-  assert.equal(result.delivery.accepted, 6);
+  assert.equal(result.activity.body, 'hello');
+  assert.equal(starts.length, 6);
   assert.equal(peak, 4);
   assert.equal(active, 0);
   assert.ok(starts.indexOf('R0') < starts.indexOf('R1'));
@@ -71,11 +72,11 @@ test('concurrent Paseo wakes share only an in-flight discovery, and a later send
     await Promise.race([allEntered, sleep(2000, undefined, { ref: false }).then(() => { throw new Error('discoveries did not overlap'); })]);
     assert.equal(reads, 1);
   } finally { release(); }
-  assert.equal((await sending).delivery.accepted, 3);
+  assert.equal((await sending).activity.body, 'first');
   assert.equal(sends, 3);
   status = 'running';
   const later = await alice.express('later', { mentions: ['R0'], force: true });
   assert.equal(reads, 2);
-  assert.equal(later.delivery.failed, 1);
+  assert.equal(later.activity.body, 'later');
   assert.equal(sends, 3, 'old idle status was not cached');
 });

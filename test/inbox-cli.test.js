@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { Square } from '../dist/index.js';
+import { Square, inbox } from '../dist/index.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 import { persistSquare, run, testEnv } from './square-cli-helpers.js';
@@ -35,14 +35,17 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   const result = run(['inbox', '--for-session', 'inbox-snapshot', '--json'], { env });
   assert.equal(result.status, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
+  assert.deepEqual(snapshot, await inbox({ cwd: root, env }, 'inbox-snapshot'));
   assert.equal(snapshot.total, names.length * 2);
   assert.equal(snapshot.rows.length, names.length * 2);
-  for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['namePreview', 'pending', 'squarePathPreview']);
+  for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['name', 'pending', 'squarePath']);
+  assert.equal(snapshot.rows.some(row => row.name === names[1] && row.squarePath === fs.realpathSync(files[1])), true);
   assert.doesNotMatch(result.stdout, /notification body|notifications|catchLease|route|actIndex/);
 
   const text = run(['inbox', '--for-session', 'inbox-snapshot'], { env });
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout, snapshot.rows.map((row) => `${row.namePreview}\t${row.squarePathPreview}\t${row.pending}\n`).join(''));
+  const preview = value => [...value].length <= 159 ? value : `${[...value].slice(0, 159).join('').trimEnd()}…`;
+  assert.equal(text.stdout, snapshot.rows.map((row) => `${preview(row.name)}\t${preview(row.squarePath)}\t${row.pending}\n`).join(''));
 
   const overMaximum = run(['inbox', '--limit', '101', '--for-session', 'inbox-snapshot', '--json'], { env });
   assert.equal(overMaximum.status, 2);

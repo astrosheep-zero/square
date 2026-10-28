@@ -92,17 +92,17 @@ test('active catches explain the existing lease and point to replacement', () =>
 
 test('quiet graduates with the idle length and an empty catch never repeats its own command', () => {
   const base = { squarePath: '.square/PUBLIC.square', name: 'Alice', showCatchHint: true };
-  assert.match(renderWatchStatus({ ...base, status: 'stale', idleMs: 45_000 }), /^○ only footsteps in the square — nothing new for you$/m);
-  assert.match(renderWatchStatus({ ...base, status: 'stale', idleMs: 5 * 60_000 }), /^○ dust settles on the flagstones — 5m of quiet$/m);
-  assert.match(renderWatchStatus({ ...base, status: 'stale', idleMs: 2 * 60 * 60_000 }), /^○ dust lies thick — 2h of quiet$/m);
+  assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 45_000 }), /^○ only footsteps in the square — nothing new for you$/m);
+  assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 5 * 60_000 }), /^○ dust settles on the flagstones — 5m of quiet$/m);
+  assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 2 * 60 * 60_000 }), /^○ dust lies thick — 2h of quiet$/m);
 
-  const empty = renderWatchStatus({ ...base, status: 'empty-now' });
+  const empty = renderWatchStatus({ ...base, status: 'drained' });
   assert.match(empty, /^○ only footsteps in the square — nothing new for you$/m);
   assert.match(empty, /catch --idle 30m/);
   assert.doesNotMatch(empty, /catch --now/);
 
   // A quiet catch repeats neither itself nor a second copy of the same command.
-  const stale = renderWatchStatus({ ...base, status: 'stale', idleMs: 45_000 });
+  const stale = renderWatchStatus({ ...base, status: 'idle', idleMs: 45_000 });
   assert.doesNotMatch(stale, /catch --now/);
 });
 

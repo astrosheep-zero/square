@@ -27,8 +27,8 @@ test('exact catch acknowledges only its id and repeats without changing observat
   assert.deepEqual(caught.activities.map((item) => item.id), [second.id]);
   assert.equal(caught.activities[0].body, body);
   assert.equal(caught.remaining, 1);
-  assert.equal(caught.consumedThrough, 'act/1');
-  assert.equal(caught.idleExpired, false);
+  assert.equal(caught.reason, 'drained');
+  assert.equal(caught.activities[0].via, 'mention');
   const before = (await readSquareSnapshot(file)).state.runtime.observations;
   assert.deepEqual(await bob.catch({ id: second.id }), caught);
   assert.deepEqual((await readSquareSnapshot(file)).state.runtime.observations, before);

@@ -1,15 +1,15 @@
-import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { readCursor, terminalStatusFor } from './runtime.js';
+import { formatActivityId, parseActivityId } from './square-core.js';
+import { terminalStatusFor } from './runtime.js';
 import { SquareError, type StoredAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
-import type { CatchOptions } from './square-facade.js';
+import type { CatchOptions, PerceivedActivity } from './square-facade.js';
+import { toPerceivedActivity } from './views.js';
 import { catchHint } from './hints.js';
 
 export interface CatchSelection {
   readonly participant: string;
-  readonly activities: readonly StoredAct[];
-  readonly consumedThrough: ActivityId | null;
+  readonly activities: readonly PerceivedActivity[];
   readonly remaining: number;
   readonly sayNumbers: Readonly<Record<number, number>>;
   readonly standingCount: number;
@@ -24,10 +24,9 @@ export interface CatchSelection {
 /** Capture a selected page (or an empty completion) without opening another resource. */
 export function observeCatchSelection(facts: SquareRead, participant: string, activities: readonly StoredAct[], filter: DirectedFilter, at: number): CatchSelection {
   if (typeof at !== 'number' || !Number.isFinite(at)) throw new SquareError('invalid_args', 'Catch time must be a finite number.');
-  const cursor = readCursor(facts, participant);
   const counts = facts.participantCounts(), header = facts.header(), current = facts.participant(participant)!;
   return {
-    participant, activities, consumedThrough: cursor < 0 ? null : formatActivityId(cursor),
+    participant, activities: activities.map(activity => toPerceivedActivity(facts, activity, participant)),
     remaining: facts.directedCount(participant, filter),
     sayNumbers: activities.length === 0 ? {} : facts.sayOrdinals(activities.map((item) => item.index)),
     standingCount: counts.joined, held: facts.hold().active, now: at,

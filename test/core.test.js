@@ -225,7 +225,7 @@ test('landings advance the actor cursor and never reuse an index', async () => {
     await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await alice.done();
     const history = (await square.history()).activities;
-    assert.equal((await square.snapshot()).participants.find(p => p.name === 'Alice').consumedThrough, 'act/2');
+    assert.equal((await square.artifact.read(facts => readCursor(facts, 'Alice'))).value, 2);
     assert.deepEqual(history.map(activity => activity.id), ['act/0', 'act/1', 'act/2']);
   } finally {
     await square.close();
@@ -473,12 +473,12 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
     for (let index = 0; index < 25; index += 1) await landSayTo(first, index % 2 === 0 ? bob : cara, 'Alice', index + 4, `message ${index} @Alice`);
     const page = (options, at) => first.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
     const one = await page({ limit: 10 }, 100);
-    assert.deepEqual(one.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 3));
+    assert.deepEqual(one.activities.map((item) => item.id), Array.from({ length: 10 }, (_, index) => `act/${index + 3}`));
     assert.equal(one.remaining, 15);
     const two = await page({ limit: 10 }, 101);
-    assert.deepEqual(two.activities.map((item) => item.index), Array.from({ length: 10 }, (_, index) => index + 13));
+    assert.deepEqual(two.activities.map((item) => item.id), Array.from({ length: 10 }, (_, index) => `act/${index + 13}`));
     const three = await page({ limit: 10 }, 102);
-    assert.deepEqual(three.activities.map((item) => item.index), [23, 24, 25, 26, 27]);
+    assert.deepEqual(three.activities.map((item) => item.id), ['act/23', 'act/24', 'act/25', 'act/26', 'act/27']);
   } finally {
     await first.close();
   }
@@ -491,7 +491,7 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
     await landSayTo(gap, cara, 'Alice', 4, 'gap @Alice');
     await landSayTo(gap, bob, 'Alice', 5, 'seen @Alice');
     const bobOnly = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 200))).value;
-    assert.deepEqual(bobOnly.activities.map((item) => item.index), [4]);
+    assert.deepEqual(bobOnly.activities.map((item) => item.id), ['act/4']);
     const repeat = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 201))).value;
     assert.deepEqual(repeat.activities, []);
   } finally {

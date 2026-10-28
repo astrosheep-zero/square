@@ -8,7 +8,7 @@ import { SquareError, validateBody } from './model.js';
 import { canonicalPath } from './canonical-path.js';
 import { STDIO_PROTOCOL_VERSION, STDIO_MAX_FRAME_BYTES, encodeError, identityVariables } from './square-stdio.js';
 import { parseSquareLocation } from './square-location.js';
-import type { OperationControl, SquareBuildInput, Participant } from './square-facade.js';
+import type { OperationControl, SquareBuildInput, Participant, StreamRecord } from './square-facade.js';
 
 /** Serve the existing resource API. This adapter contains no activity policy. */
 export async function runSquareStdioServer(root: string): Promise<void> {
@@ -19,6 +19,7 @@ export async function runSquareStdioServer(root: string): Promise<void> {
   let location: string | undefined;
   let opening = false, closing = false;
   const participants = new Map<string, Participant>();
+  const streams = new Map<string, AsyncIterator<StreamRecord>>();
   const captureParticipant = (reference: unknown, participant: Participant): string => {
     if (typeof reference !== 'string' || reference.length === 0 || participants.has(reference))
       throw new SquareError('invalid_args', 'Participant handle must be a fresh connection-local reference');
@@ -35,6 +36,8 @@ export async function runSquareStdioServer(root: string): Promise<void> {
     closing = true;
     for (const request of running.values()) request.controller.abort();
     await Promise.allSettled([...running.values()].map(request => request.work));
+    await Promise.allSettled([...streams.values()].map(stream => stream.return?.()));
+    streams.clear();
     await square?.close();
     lines.close();
     process.stdin.pause();
@@ -94,6 +97,37 @@ export async function runSquareStdioServer(root: string): Promise<void> {
       case 'status': result = await square.status(args[0], control); break;
       case 'participants': result = await square.participants(args[0], control); break;
       case 'recovery': result = await square.recovery(args[0], control); break;
+      case 'stream/open': {
+        const reference = args[1];
+        if (typeof reference !== 'string' || reference.length === 0 || streams.has(reference))
+          throw new SquareError('invalid_args', 'Stream handle must be a fresh connection-local reference');
+        control.signal?.throwIfAborted();
+        streams.set(reference, square.stream(args[0] ?? {})[Symbol.asyncIterator]());
+        return null;
+      }
+      case 'stream/next': {
+        const reference = args[0], stream = streams.get(reference);
+        if (stream === undefined) throw new SquareError('invalid_args', 'Select an open stream on this connection');
+        const abort = () => { void stream.return?.().catch(() => undefined); };
+        control.signal?.addEventListener('abort', abort, { once: true });
+        try {
+          if (control.signal?.aborted) abort();
+          const next = await stream.next();
+          if (next.done) streams.delete(reference);
+          control.signal?.throwIfAborted();
+          return next;
+        } catch (error) {
+          streams.delete(reference);
+          await stream.return?.();
+          throw error;
+        } finally { control.signal?.removeEventListener('abort', abort); }
+      }
+      case 'stream/return': {
+        const stream = streams.get(args[0]);
+        streams.delete(args[0]);
+        await stream?.return?.();
+        return null;
+      }
       default: {
         if (typeof params.participant !== 'string') throw new SquareError('invalid_args', 'Participant operation requires a name');
         const participant = participants.get(params.participantHandle);

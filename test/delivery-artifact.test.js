@@ -51,16 +51,15 @@ test('file-backed public build and at retain injected delivery transport and com
     const alice = (await built.join('Alice')).participant;
     const first = await alice.express('from build', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 1, 'Square.build must retain the supplied transport');
-    assert.equal(first.delivery.accepted, 1);
     reopened = await Square.at({ path: location, body, env, wakeTransport });
     const second = await (await reopened.participant()).express('from at', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 2, 'Square.at must retain the supplied transport');
-    assert.equal(second.delivery.accepted, 1);
     const artifact = createArtifactPort(location);
     try {
       const evidence = (await artifact.read(facts => facts.deliveryEvidence('Bob', facts.seat('Bob').generation))).value;
       assert.deepEqual(evidence.map(row => [row.activity, row.outcome, row.claimToken]),
         calls.map(request => [request.activity, 'accepted', request.claimToken]));
+      assert.deepEqual(calls.map(request => request.activity), [first.activity.id, second.activity.id]);
     } finally { await artifact.close(); }
   } finally { await reopened?.close(); await built.close(); await bob.close(); }
 });

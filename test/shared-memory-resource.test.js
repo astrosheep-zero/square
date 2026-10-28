@@ -52,7 +52,6 @@ test('injected memory transport preserves resource identity, deferrals and final
   assert.equal(attempts, 0);
   await bob.releaseDeliveryDeferral(lease.id);
   const sent = await alice.express('ready', { mentions: ['Bob'], force: true });
-  assert.equal(sent.delivery.accepted, 1);
   assert.equal(observed.location, root.location);
   assert.equal(observed.route.location, root.location);
   assert.equal(observed.seat.body.session, 'bob');
@@ -61,5 +60,6 @@ test('injected memory transport preserves resource identity, deferrals and final
   steal = true;
   const suppressed = await alice.express('racing takeover', { mentions: ['Bob'], force: true });
   assert.equal(attempts, 2);
-  assert.equal(suppressed.delivery.accepted, 0);
+  const suppressedEvidence = (await observed.artifact.read(facts => facts.deliveryEvidence('Bob', observed.seat.generation, suppressed.activity.id))).value;
+  assert.equal(suppressedEvidence.some(row => row.outcome === 'accepted'), false);
 });

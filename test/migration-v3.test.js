@@ -295,8 +295,8 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 6 });
   const square = await Square.at({ path: location, env, body: { channel: 'test', session: 'not-an-owner' } });
   try {
-    assert.equal((await square.status()).activeCount, 6);
-    assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').state, 'active');
+    assert.equal((await square.status()).participants.filter(participant => participant.presence === 'active' || participant.presence === 'watching').length, 6);
+    assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').presence, 'active');
     assert.equal((await square.history({ limit: null })).activities.length, 14);
     await assert.rejects((await square.participant('Bob')).done(), error => error.code === 'already_joined');
   } finally { await square.close(); }

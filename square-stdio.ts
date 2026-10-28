@@ -7,10 +7,10 @@ import { SquareError, type SquareErrorCode, type SquareErrorFacts } from './mode
 import { harnessSessionSources } from './participant-identity.js';
 import type { SquareBackends, SquareBackend } from './square-backend.js';
 import type { ParsedSquareLocation } from './square-location.js';
-import type { Participant, ExpressInput, ExpressOptions, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import type { Activity, PerceivedActivity, StreamRecord, StreamOptions, Participant, ExpressInput, ExpressOptions, OperationControl, OperationFailureDetail, SquareAtInput, SquareBuildInput } from './square-facade.js';
 import { requireJoinName } from './seats.js';
 
-export const STDIO_PROTOCOL_VERSION = 2;
+export const STDIO_PROTOCOL_VERSION = 3;
 export const STDIO_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 export const identityVariables = [...harnessSessionSources.flatMap(source => [source.variable, ...(source.childVariable ? [source.childVariable] : [])])];
 export function wireIdentity(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -183,7 +183,49 @@ class StdioSquare implements SquareBackend {
   participants(...[options, control]: Parameters<SquareBackend['participants']>): ReturnType<SquareBackend['participants']> { return this.call('participants', [options], control); }
   recovery(...[name, control]: Parameters<SquareBackend['recovery']>): ReturnType<SquareBackend['recovery']> { return this.call('recovery', [name], control); }
   snapshot(): ReturnType<SquareBackend['snapshot']> { return Promise.reject(new SquareError('invalid_args', 'stdio does not support function-valued snapshot; use status/participants/history')); }
-  stream(): ReturnType<SquareBackend['stream']> { unsupported('stream'); }
+  stream(options: StreamOptions & { readonly recipient: string }, control?: OperationControl): AsyncIterable<PerceivedActivity>;
+  stream(options: StreamOptions & { readonly recipient?: undefined }, control?: OperationControl): AsyncIterable<Activity>;
+  stream(options: StreamOptions, control?: OperationControl): AsyncIterable<StreamRecord>;
+  stream(options: StreamOptions, control?: OperationControl): AsyncIterable<StreamRecord> {
+    return { [Symbol.asyncIterator]: () => {
+      const reference = randomUUID(), disposal = new AbortController();
+      const signal = control?.signal === undefined ? disposal.signal : AbortSignal.any([control.signal, disposal.signal]);
+      let opening: Promise<unknown> | undefined, finishing: Promise<void> | undefined, closed = false;
+      const open = () => opening ??= this.call('stream/open', [options, reference], { signal });
+      const onAbort = () => { void finish(); };
+      const finish = () => finishing ??= (async () => {
+        closed = true;
+        control?.signal?.removeEventListener('abort', onAbort);
+        disposal.abort();
+        if (opening !== undefined) {
+          try { await opening; await this.call('stream/return', [reference]); } catch { /* connection or open already closed */ }
+        }
+      })();
+      control?.signal?.addEventListener('abort', onAbort, { once: true });
+      if (control?.signal?.aborted) void finish();
+      return {
+        next: async () => {
+          if (control?.signal?.aborted) { await finish(); throw control.signal.reason; }
+          if (closed) return { done: true as const, value: undefined };
+          try {
+            await open();
+            if (control?.signal?.aborted) throw control.signal.reason;
+            if (closed) return { done: true as const, value: undefined };
+            const result = await this.call('stream/next', [reference], { signal });
+            if (control?.signal?.aborted) throw control.signal.reason;
+            if (result.done) await finish();
+            return result;
+          } catch (error) {
+            if (control?.signal?.aborted) { await finish(); throw control.signal.reason; }
+            if (disposal.signal.aborted) return { done: true as const, value: undefined };
+            await finish();
+            throw error;
+          }
+        },
+        return: async () => { await finish(); return { done: true as const, value: undefined }; },
+      };
+    } };
+  }
   recognize(): ReturnType<SquareBackend['recognize']> { return Promise.reject(new SquareError('invalid_args', 'stdio does not support host recognition; select a participant explicitly')); }
   implicitJoin(): ReturnType<SquareBackend['implicitJoin']> { unsupported('host implicit join'); }
   endOwnedSession(): ReturnType<SquareBackend['endOwnedSession']> { unsupported('host session cleanup'); }

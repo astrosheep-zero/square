@@ -767,7 +767,7 @@ test('stream CLI defaults its tail, accepts zero through one hundred, and reject
   assert.deepEqual(streamCommand.parse(['--ndjson'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 10 } });
   assert.deepEqual(streamCommand.parse(['--ndjson', '--last', '0'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 0 } });
   assert.deepEqual(streamCommand.parse(['--ndjson', '--last', '100'], context), { ndjson: true, forName: undefined, start: { kind: 'tail', last: 100 } });
-  assert.deepEqual(streamCommand.parse(['--ndjson', '--after', 'act/12'], context), { ndjson: true, forName: undefined, start: { kind: 'after', after: 12 } });
+  assert.deepEqual(streamCommand.parse(['--ndjson', '--after', 'act/12'], context), { ndjson: true, forName: undefined, start: { kind: 'after', after: 'act/12' } });
 
   const overLimit = run(withPath(context.squarePath, ['stream', '--ndjson', '--last', '101']));
   assert.equal(overLimit.status, 2);

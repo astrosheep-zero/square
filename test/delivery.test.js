@@ -88,7 +88,7 @@ test('pending attention is post-join, independent of the read cursor, and closes
     { kind: 'say', actor: 'Bob', at: 5, body: 'self cursor advance' },
   ], (facts) => {
     assert.deepEqual(pendingNotifications(facts, 'bob').map(({ item }) => item.index), [3]);
-    assert.deepEqual(decideCatch(facts, 'Bob', { id: formatActivityId(3) }, 6).activities.map(({ index }) => index), [3]);
+    assert.deepEqual(decideCatch(facts, 'Bob', { id: formatActivityId(3) }, 6).activities.map(({ id }) => id), ['act/3']);
     assert.deepEqual(pendingNotifications(facts, 'Bob'), []);
     assert.deepEqual(facts.receipt('Bob', 3), { at: 6 });
   }, { Bob: { 'act/4': { state: 'seen', at: 5 } } });
@@ -247,7 +247,7 @@ test('a mention-filtered catch leaves listening-only activity eligible at the na
       joinedAt: 2, catchLease: lease,
       notifications: pending.map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route })) };
     assert.deepEqual(pendingAtBoundary([membership]), [membership]);
-    assert.deepEqual(decideCatch(facts, 'Bob', {}, 12).activities.map(({ index }) => index), [4, 5]);
+    assert.deepEqual(decideCatch(facts, 'Bob', {}, 12).activities.map(({ id }) => id), ['act/4', 'act/5']);
   });
 });
 
@@ -264,7 +264,7 @@ test('bells satisfy mention filtering but still require the catch sender filter'
     assert.deepEqual(decideCatch(facts, 'Bob', { from: ['Cara'] }, 11).activities, []);
     assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'] } }, notification), false);
     assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['alice'], mention: 'bob' } }, notification), true);
-    assert.deepEqual(decideCatch(facts, 'BOB', { from: ['alice'], mention: true }, 12).activities.map(({ index }) => index), [3]);
+    assert.deepEqual(decideCatch(facts, 'BOB', { from: ['alice'], mention: true }, 12).activities.map(({ id }) => id), ['act/3']);
   });
 });
 
@@ -278,7 +278,7 @@ test('mention filtering matches a reply to the viewer like a mention', async () 
     const pending = pendingNotifications(facts, 'Bob');
     assert.deepEqual(pending.map(({ item, route }) => `${item.index}:${route}`), ['6:reply']);
     for (const { item, recipient, route } of pending) assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), true);
-    assert.deepEqual(decideCatch(facts, 'Bob', { mention: true }, 11).activities.map(({ index }) => index), [6]);
+    assert.deepEqual(decideCatch(facts, 'Bob', { mention: true }, 11).activities.map(({ id }) => id), ['act/6']);
   });
 });
 
@@ -291,7 +291,7 @@ test('a catch lease owns all matching unread notifications beyond the current pa
     const owns = ({ item, recipient, route }) => leaseOwnsNotification(lease, { ...item, recipient, route });
     assert.equal(pendingNotifications(facts, 'Bob').every(owns), true);
     const caught = decideCatch(facts, 'Bob', { from: ['alice'], mention: true, limit: 1 }, 11);
-    assert.deepEqual(caught.activities.map(({ index }) => index), [2]);
+    assert.deepEqual(caught.activities.map(({ id }) => id), ['act/2']);
     assert.equal(caught.remaining, 2);
     const pending = pendingNotifications(facts, 'Bob');
     assert.deepEqual(pending.map(({ item }) => item.index), [3, 4]);

@@ -208,7 +208,7 @@ export function coreParticipants(facts: SquareRead, now: number): ParticipantSta
       if (seenAt !== undefined) lastActiveAt = Math.max(lastActiveAt ?? -Infinity, seenAt);
     }
     return {
-      name: current.name, state: current.done ? 'done' : current.joined ? 'active' : 'not joined',
+      name: current.name,
       listening: facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target),
       activityCount: current.sayCount, lastActiveAt,
       presence: current.done ? 'done' : !current.joined ? 'never-joined' : freshWatchLease(facts, current.name, now) !== undefined ? 'watching' : 'active',
