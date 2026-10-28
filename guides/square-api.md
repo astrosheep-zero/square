@@ -86,8 +86,8 @@ its `history` delegates to the same Square history operation.
   metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
   catch, status/latest, unread projections and stream records through the SDK, stdio, CLI and stream.
   MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
-  `metadata` argument, and every shared tool receipt omits metadata, so tool history/catch results carry
-  the same activities without it. Metadata does not affect mentions, replies, listening, audience,
+  `metadata` argument. Tool history/catch return rendered text with a structured-activity placeholder,
+  not metadata JSON or activity objects. Metadata does not affect mentions, replies, listening, audience,
   ordering, consumption or permissions. A current participant may temporarily defer proactive delivery
   by exact metadata match through the SDK/stdio lease API below. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
@@ -179,7 +179,11 @@ has a concrete optional observation type, without conditional generics or a gene
 Data-only calls do not hydrate join history, the pre-expression feed, catch presence enrichment,
 or history/status presentation annotations.
 
-Express captures its optional directed feed before the attempt and returns count/held/time facts
+Express captures optional unread context before the attempt: the latest five directed,
+unseen activities after the current join, each preview capped at 400 Unicode characters,
+plus the count outside that preview. It hydrates only that page, not the entire cursor suffix.
+This is a nonconsuming preview even when a short body fits in full; only `catch` or the
+normal full-notification presentation path consumes it. Count/held/time facts come
 from the committed transaction. Listener and lifecycle observations likewise use their mutation's
 facts, with no postcommit context read. Join uses its mutation's essential facts and treats optional
 entry/history enrichment as best-effort: `observation.enrichmentUnavailable` is explicit and the
@@ -195,8 +199,20 @@ receives the express abort signal, while recovery reopening is deliberately unca
 
 CLI and tools only adapt input, identity, resource lifetime and output. They do not import private
 actions, storage, admission, scanners or query execution. MCP/Pi use the shared `square-tools.ts`
-definitions. Join JSON contains `participant.name` and the receipt fields, never the handle or its
-resources. Express wire output omits the internal delivery diagnostic as before.
+definitions. All eight tools return only the CLI's rendered text, with no `outputSchema`
+or `structuredContent`. Join text includes its context and recent activity; express text
+includes landing ID/reach, warnings and bounded unread previews, never the sent body echo
+or internal observation tables. Failures remain failed tool results with readable recovery
+text. The SDK, CLI JSON and stdio keep their full domain receipts. The optional express observation
+contains `context: {activities: [{id, actor, preview, truncated}], remaining}`, not the old
+unbounded `pendingPublic`/ordinal/perception tables.
+
+Express still finishes attempted notification delivery before releasing its resource.
+It overlaps at most four receiving sessions per dispatch, preserving order within each
+session and draining started work even on failure. Claims, final freshness checks and
+uncertain-delivery suppression remain unchanged. Paseo inventory discovery is asynchronous;
+overlapping attempts share only the in-flight inventory read, never a cached idle status.
+The standalone `discoverPaseoAgents` export now returns a promise.
 
 `discover(input, options?, control?)`, `inbox(input, sessionId, options?, control?)`,
 `diagnoseSquare(input, control?)`, and `migrateSquare(input, control?)` are ordinary public exports.

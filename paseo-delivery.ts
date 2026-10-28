@@ -26,13 +26,20 @@ function diagnostic(
 }
 
 export interface PaseoWakeTransportOptions {
-  discover?: typeof discoverPaseoAgents;
+  discover?: (timeoutMs: number) => ReturnType<typeof discoverPaseoAgents> | Awaited<ReturnType<typeof discoverPaseoAgents>>;
   waitForBoundary?: typeof waitForPaseoWakeBoundary;
   sendWake?: typeof sendPaseoWake;
 }
 
 export class PaseoWakeTransport implements WakeTransportPort {
+  private discovering?: ReturnType<typeof discoverPaseoAgents>;
   constructor(private readonly opts: PaseoWakeTransportOptions = {}) {}
+
+  /** Coalesce overlapping inventory reads only; a later send must rediscover current status. */
+  private discover(timeoutMs: number): ReturnType<typeof discoverPaseoAgents> {
+    return this.discovering ??= Promise.resolve().then(() => (this.opts.discover ?? discoverPaseoAgents)(timeoutMs))
+      .finally(() => { this.discovering = undefined; });
+  }
 
   async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
     const address = request.route.address;
@@ -62,7 +69,7 @@ export class PaseoWakeTransport implements WakeTransportPort {
     if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
     let remaining = remainingMs();
     if (remaining === 0) return budgetUnavailable();
-    const discovery = (this.opts.discover ?? discoverPaseoAgents)(remaining);
+    const discovery = await this.discover(remaining);
     if (discovery.error && discovery.agents.length === 0) {
       return {
         outcome: 'failed',

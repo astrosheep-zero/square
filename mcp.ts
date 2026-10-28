@@ -61,23 +61,17 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             // The server owner is bound to its configured square; overrides close after each call.
             resources: location === undefined && claude === undefined ? resources : undefined,
           }, { signal: extra.signal });
-          let receipt: JsonObject;
-          // The transport shows people the square, so it asks for the rendering facts
-          // the CLI already gathers and keeps that request out of the tool schema.
-          try { receipt = await tool.run(square, args as JsonObject, { signal: extra.signal, observe: true }) as JsonObject; }
+          let text: string;
+          try { text = await tool.run(square, args as JsonObject, { signal: extra.signal }); }
           finally { await square.close(); }
-          // A missing observation renders as nothing, never as raw JSON for a person to read.
-          const text = tool.render(receipt, args as JsonObject) ?? '';
-          // Observation facts are a rendering aid, not part of the receipt machines receive.
-          const { observation: _observation, ...structuredContent } = receipt;
-          return { content: [{ type: 'text' as const, text }], structuredContent };
+          return { content: [{ type: 'text' as const, text }] };
         } catch (error) {
           const failure = squareToolFailure(error, extra.signal);
           const participant = (args as JsonObject).as;
           return { isError: true, content: [{ type: 'text' as const, text: squareToolFailureText(failure, {
             location: square?.location ?? options.path,
             participant: typeof participant === 'string' ? participant : options.participant,
-          }) }], structuredContent: { error: failure } };
+          }) }] };
         }
       })();
       inFlight.add(call);

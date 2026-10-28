@@ -1,18 +1,20 @@
-import { execFileSync } from 'node:child_process';
-
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { waitForPaseoToolBoundary } from './paseo-timeline.js';
+
+const execFileAsync = promisify(execFile);
 
 export interface PaseoAgent { id: string; name: string; status: string; cwd?: string; }
 
-export function discoverPaseoAgents(
+export async function discoverPaseoAgents(
   timeoutMs = 5000,
   opts: { args?: string[]; bin?: string } = {},
-): { agents: PaseoAgent[]; error?: string } {
+): Promise<{ agents: PaseoAgent[]; error?: string }> {
   try {
-    const raw = execFileSync(opts.bin ?? process.env.SQUARE_PASEO_BIN ?? 'paseo', [...(opts.args ?? []), 'ls', '--global', '--json'], {
+    const { stdout: raw } = await execFileAsync(opts.bin ?? process.env.SQUARE_PASEO_BIN ?? 'paseo', [...(opts.args ?? []), 'ls', '--global', '--json'], {
       encoding: 'utf8',
       timeout: timeoutMs,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 1024 * 1024,
     });
     const parsed = JSON.parse(raw) as unknown;
     const agents = Array.isArray(parsed) ? parsed : (parsed as { agents?: unknown })?.agents;

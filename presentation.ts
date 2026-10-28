@@ -352,10 +352,6 @@ function renderUnreadSummary(opts: { activitySummaries: readonly UnreadActivityS
   ];
 }
 
-export function renderPendingFeed(publicItems: readonly StoredAct[], sayNumbers: Readonly<Record<number, number>>, perceptions: Readonly<Record<number, Perception>>, viewer: string): string {
-  return publicItems.map((act) => renderAmbientEvent(act, viewer, { actNumber: sayNumbers[act.index], perception: perceptions[act.index] })).filter(Boolean).join('\n\n');
-}
-
 export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
   const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} catch`;
   return withPathOutput(

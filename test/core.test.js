@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { directedSuffix } from '../dist/activity-feed.js';
+import { expressionContext } from '../dist/activity-feed.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideCatch } from '../dist/catch-decisions.js';
 import { coreHold, coreIgnore, coreListen, coreListening, coreParticipants, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
@@ -170,11 +170,11 @@ test('directed pending attention survives an unrelated later receipt', async () 
   const cell = createArtifactPort(':memory:', state);
   try {
     const facts = (await cell.read((read) => ({
-      suffix: directedSuffix(read, 'Bob').map((activity) => activity.index),
+      context: expressionContext(read, 'Bob').activities.map((activity) => activity.id),
       cursor: readCursor(read, 'Bob'),
       unseen: read.directedCount('Bob', { afterIndex: readCursor(read, 'Bob'), unseenOnly: true }),
     }))).value;
-    assert.deepEqual(facts, { suffix: [2], cursor: 1, unseen: 1 });
+    assert.deepEqual(facts, { context: ['act/2'], cursor: 1, unseen: 1 });
   } finally {
     await cell.close();
   }

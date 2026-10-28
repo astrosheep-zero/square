@@ -18,14 +18,8 @@ interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: z.ZodObject<z.ZodRawShape>;
-  run(square: Square, args: JsonObject, control: ToolControl): Outcome;
-  /** Human text identical to what the CLI prints; transports show this to people. */
-  render: ToolRender;
-}
-
-/** A transport that shows people the square asks the same operation for its rendering facts. */
-export interface ToolControl extends OperationControl {
-  readonly observe?: boolean;
+  /** Human text identical to what the CLI prints; domain receipts stay inside the adapter. */
+  run(square: Square, args: JsonObject, control: OperationControl): Promise<string>;
 }
 
 const location = z.string().optional().describe('Which square: a .square file path, or a backend URI like stdio://name/key. Relative paths start from the working directory. Leave it out for the configured square.');
@@ -33,51 +27,21 @@ const participant = z.string().optional().describe('Your name in the square. Lea
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());
 
-/** Keep the observation request internal: it is not an argument a caller decides. */
-function observation(control: ToolControl): { observe?: true } {
-  return control.observe === true ? { observe: true } : {};
-}
-
-/** Tool receipts are plain JSON; each renderer re-declares the facts it reads. */
+/** Each renderer declares the operation facts it reads. */
 function rendering<T>(render: (result: T, args: JsonObject) => string | undefined): ToolRender {
   return (result, args) => render(result as unknown as T, args);
 }
 
-/**
- * Tool receipts are the one machine surface without activity metadata: a receipt copy drops every
- * property named `metadata` while domain activities keep theirs for SDK, CLI, stdio and stream readers.
- */
-function withoutActivityMetadata(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutActivityMetadata);
-  if (value === null || typeof value !== 'object') return value;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'metadata')
-    .map(([key, item]) => [key, withoutActivityMetadata(item)]));
-}
-
-/**
- * Human text renders from the unfiltered receipt, so metadata-only says keep the placeholder the
- * CLI prints and every other sentence stays identical. Machines only ever receive the filtered copy.
- */
-const renderingReceipts = new WeakMap<object, object>();
-
-function renderingReceipt(receipt: JsonObject): JsonObject {
-  return (renderingReceipts.get(receipt) ?? receipt) as JsonObject;
-}
-
 function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S,
-  run: (square: Square, args: z.output<z.ZodObject<S>>, control: ToolControl) => Outcome,
+  run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl) => Outcome,
   render: ToolRender,
 ): ToolDefinition {
   const inputSchema = z.object({ ...shape, location }).strict();
-  return { name, description, inputSchema, render: (receipt, args) => render(renderingReceipt(receipt), args),
+  return { name, description, inputSchema,
     run: async (square, args, control) => {
       const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
       const receipt = await run(square, operationArgs as z.output<z.ZodObject<S>>, control);
-      const filtered = withoutActivityMetadata(receipt) as JsonObject;
-      renderingReceipts.set(filtered, receipt);
-      return filtered;
+      return render(receipt as JsonObject, operationArgs) ?? '';
     } };
 }
 
@@ -88,10 +52,8 @@ const target = z.string().describe('The participant to turn toward or away from.
 export const SQUARE_TOOLS: readonly ToolDefinition[] = [
   tool('join', 'Step into the square under your name. Do this once before you speak or catch. You arrive seeing what was said most recently.', {
     as: z.string().optional().describe('Your name in the square. Give it explicitly when joining.'), takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
-  }, async (square, { as, takeover }, control) => {
-    const { participant, ...receipt } = await square.join(as, { takeover, ...observation(control) }, control);
-    return { ...receipt, participant: participant.name };
-  }, rendering((result: JoinPresentation) => renderJoinResult(result))),
+  }, (square, { as, takeover }, control) => square.join(as, { takeover, observe: true }, control),
+    rendering((result: JoinPresentation) => renderJoinResult(result))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
     body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
@@ -101,10 +63,9 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not caught yet.'),
     noWait: z.boolean().optional().describe('If a hand is raised or you are speaking too fast, return at once instead of waiting.'),
-  }, async (square, { body, as, ...options }, control) => {
-    const { delivery: _delivery, ...result } = await (await square.participant(as)).express(body, { ...options, ...observation(control) }, control);
-    return result;
-  }, rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
+  }, async (square, { body, as, ...options }, control) =>
+    (await square.participant(as)).express(body, { ...options, observe: true }, control),
+    rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
   tool('catch', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you catch no longer waits for you; history lets you look back.', {
     as: participant,
     id: activityId.optional().describe('Take in this activity in full, like act/12, even if you caught it before. Do not combine with idle, from, mention or limit.'),
@@ -112,7 +73,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
     limit: z.number().int().min(1).optional().describe('At most this many at once (default 10, up to 100). The rest keeps waiting.'),
-  }, async (square, { as, ...options }, control) => (await square.participant(as)).catch({ ...options, ...observation(control) }, control),
+  }, async (square, { as, ...options }, control) => (await square.participant(as)).catch({ ...options, observe: true }, control),
     rendering((result: CatchResult, args) => {
       // The CLI always spells the default cap in its continuation, so the tool does too.
       const options = args as CatchOptions;
@@ -128,13 +89,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     fixed: z.string().optional().describe('Only activities containing this exact text.'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.string().optional().describe('Only what was addressed to this participant.'),
-  }, (square, args, control) => square.history({ ...args, ...observation(control) }, control),
+  }, (square, args, control) => square.history({ ...args, observe: true }, control),
     rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: args as HistoryQuery }))),
   tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
     as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
   }, async (square, { as, action, target }, control) => {
     const self = await square.participant(as);
-    return self[action](target, observation(control), control);
+    return self[action](target, { observe: true }, control);
   }, rendering((result: ListenerChangeResult, args) => renderListenerChange(result.observation?.location ?? '', args.action as ListenerVerb, result))),
   tool('hold', 'Raise a hand to pause the conversation; lower it with release. While a hand is up, new words wait to land.', {
     as: participant,
@@ -142,14 +103,14 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     release: z.boolean().optional().describe('true lowers the raised hand so the conversation goes on.'),
   }, async (square, { as, reason, release }, control) => {
     const self = await square.participant(as);
-    return release === true ? self.resume(observation(control), control) : self.hold(reason, observation(control), control);
+    return release === true ? self.resume({ observe: true }, control) : self.hold(reason, { observe: true }, control);
   }, rendering((result: LifecycleResult, args) => renderLifecycleResult(result.observation?.location ?? '', args.release === true ? 'resume' : 'hold', result))),
   tool('done', 'Step out of the square. Everyone sees you leave, and you stop listening to anyone. Leaving carries no words, so say goodbye with express first. Stay instead if someone may still need you; you can join again later.', { as: participant },
-    async (square, { as }, control) => (await square.participant(as)).done(undefined, observation(control), control),
+    async (square, { as }, control) => (await square.participant(as)).done(undefined, { observe: true }, control),
     rendering((result: LifecycleResult) => renderLifecycleResult(result.observation?.location ?? '', 'done', result))),
   tool('status', 'Look around the square: who is here, whether a hand is raised, the latest activity, and who you listen to.', {
     as: z.string().optional().describe('Whose listening to show. Leave it out if you hold exactly one name here.'),
-  }, (square, { as }, control) => square.status({ viewer: as, ...observation(control) }, control),
+  }, (square, { as }, control) => square.status({ viewer: as, observe: true }, control),
     rendering((result: StatusResult) => renderStatusResult(result.observation?.location ?? '', result))),
 ];
 

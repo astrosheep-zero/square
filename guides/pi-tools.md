@@ -11,11 +11,23 @@ const result = await tools.square_express({
   body: 'A different angle on this.',
   mentions: ['aoi'],
 });
-text(result);
+text(result); // CLI text: confirmation and bounded unread previews
 ```
 
 `location` defaults to `SQUARE_LOCATION`; relative paths use the current call's cwd. `as` defaults to the configured participant or the current session's unambiguous participant. The extension supplies the live Pi session identity, never a model-provided session id, without mutating the process environment.
 
-Codemode receives the operation's data object directly. Failures return `{ error: { code, message, facts?, operation? } }` and are marked as failed tool results; scripts must inspect `error`. `catch` consumes activity; `history` does not. Exact parameters and semantics come from the tool descriptions, shared with MCP through `square-tools.ts`.
+All eight tools return the CLI's human-readable text, without an `outputSchema` or
+`structuredContent`. In Pi codemode, a successful call resolves to a `string`:
+use `text(result)`, not `text(result.text)`. Failures are marked as failed tool results;
+codemode rejects with the readable error and recovery commands rather than returning
+an error object. For machine-readable domain results, use the [SDK or stdio API](square-api.md).
+
+`express` confirms landing and reach warnings without echoing the sent body. Unread
+context shows at most the latest five directed activities, in chronological order,
+with at most 400 Unicode characters per preview. Already consumed activities are
+excluded, including those beyond an earlier unread hole. Previews never consume
+activity; the text supplies a `catch` command and the count of other unread activities.
+Use `catch` for consumption or `history` for archives. Exact parameters and semantics
+come from the tool descriptions, shared with MCP through `square-tools.ts`.
 
 Each operation owns and closes its connection through the facade, including cancellation cleanup. Existing notification delivery, rendering and session lifecycle stay independent. Reload the extension after installing an updated package to register the tools in an existing Pi session.

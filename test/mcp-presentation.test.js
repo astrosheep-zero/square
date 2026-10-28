@@ -72,7 +72,8 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
   const asIndex = cliArgs.indexOf('--as');
   const call = await openMcp(t, mcpPath, asIndex === -1 ? 'rei' : cliArgs[asIndex + 1]);
   const response = await call(tool, toolArgs);
-  assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+  assert.equal(response.isError, undefined, JSON.stringify(response));
+  assert.equal(response.structuredContent, undefined);
   assert.equal(normalized(response.content[0].text, mcpPath), normalized(result.stdout, cliPath),
     `${tool} content text must be the CLI's human text`);
   return response;
@@ -104,10 +105,9 @@ test('read-only tools print the same page as the CLI', async (t) => {
     const result = cli(squarePath, cliArgs);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const response = await call(tool, args);
-    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent), tool);
+    assert.equal(response.isError, undefined, JSON.stringify(response), tool);
     assert.equal(response.content[0].text, result.stdout, `${tool} content text must be the CLI's human text`);
-    assert.equal('observation' in response.structuredContent, false, `${tool} structuredContent stays a receipt`);
-    assert.notEqual(response.content[0].text.trim(), JSON.stringify(response.structuredContent), `${tool} text is not JSON`);
+    assert.equal(response.structuredContent, undefined, `${tool} returns only human text`);
   }
 });
 
@@ -162,7 +162,7 @@ test('failures print the CLI recovery lines instead of JSON', async (t) => {
   const response = await call('catch', { as: 'ghost' });
   assert.equal(response.isError, true);
   const text = response.content[0].text;
-  assert.equal(response.structuredContent.error.facts.reason, 'never_joined');
+  assert.equal(response.structuredContent, undefined);
   assert.throws(() => JSON.parse(text));
   assert.match(text, /✕ @ghost has never stepped into this square/);
   // The CLI prefixes a freshly observed count; the refusal lines themselves are shared.

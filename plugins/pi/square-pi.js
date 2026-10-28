@@ -147,7 +147,6 @@ export default function squarePiExtension(pi) {
       label: `Square ${tool.name}`,
       description: tool.description,
       parameters: z.toJSONSchema(tool.inputSchema, { target: 'draft-7' }),
-      outputSchema: { type: 'object', additionalProperties: true },
       exposure: 'codemode',
       namespace: { name: 'square', description: 'A shared square where agents gather to talk, think, and act together.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
@@ -160,13 +159,13 @@ export default function squarePiExtension(pi) {
             path: args.location,
             participant: args.as,
           }, { signal });
-          let data;
-          try { data = await tool.run(square, args, { signal, observe: true }); }
+          let text;
+          try { text = await tool.run(square, args, { signal }); }
           finally { await square.close(); }
-          return { content: [{ type: 'text', text: tool.render(data, args) ?? '' }], details: data, structuredContent: data };
+          return { content: [{ type: 'text', text }] };
         } catch (error) {
-          const data = { error: squareToolFailure(error, signal) };
-          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(data.error, { location: args.location ?? process.env.SQUARE_LOCATION, participant: args.as }) }], details: data, structuredContent: data };
+          const failure = squareToolFailure(error, signal);
+          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(failure, { location: args.location ?? process.env.SQUARE_LOCATION, participant: args.as }) }] };
         }
       },
     });

@@ -101,11 +101,14 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   const [history, status, participants] = await Promise.all([
     call('history'), call('status'), call('status', { as: participant }),
   ]);
-  for (const result of [history, status, participants]) assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
+  for (const result of [history, status, participants]) {
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+    assert.equal(result.structuredContent, undefined);
+  }
   await call('hold', { release: true });
   await call('express', { body: 'after concurrency', force: true });
   assert.equal(opened(), 1);
-  assert.deepEqual((await call('history')).structuredContent.activities.map((activity) => activity.body).filter((body) => body === 'after concurrency'), ['after concurrency']);
+  assert.match((await call('history')).content[0].text, /after concurrency/);
 });
 
 test('MCP shutdown waits for an idle catch before releasing the connection', async (t) => {
@@ -214,13 +217,16 @@ test('reused connections keep per-call participants and harness sessions separat
   const call = (name, args, meta) => client.callTool({ name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });
 
   const first = await call('join', { as: participant }, { threadId: 'session-one' });
-  assert.equal(first.structuredContent.kind, 'joined');
+  assert.match(first.content[0].text, /you stepped into the square/);
   const refused = await call('join', { as: participant }, { threadId: 'session-two' });
-  assert.equal(refused.structuredContent.error.code, 'already_joined');
+  assert.equal(refused.isError, true);
   const reconnected = await call('join', { as: participant }, { threadId: 'session-one' });
-  assert.equal(reconnected.structuredContent.kind, 'reconnected');
+  assert.match(reconnected.content[0].text, /already in the square/);
   await call('join', { as: 'other' });
   const expressed = await call('express', { as: 'other', body: 'other speaks', force: true });
-  assert.equal(expressed.structuredContent.activity.actor, 'other');
+  assert.equal(expressed.isError, undefined);
+  const history = await call('history');
+  assert.match(history.content[0].text, /@other/);
+  assert.match(history.content[0].text, /other speaks/);
   assert.equal(opened(), 1);
 });

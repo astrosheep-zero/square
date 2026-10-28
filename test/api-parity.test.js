@@ -10,6 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square } from '../dist/square-api.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { readSquareSnapshot } from '../dist/artifact.js';
+import { renderHistoryResult, renderJoinResult, renderStatusResult } from '../dist/operation-presentation.js';
 
 async function fixture(t, label) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `square-parity-${label}-`));
@@ -31,10 +32,10 @@ async function mcp(t, options) {
   t.after(async () => { await client.close(); await server.close(); });
   return async (name, args = {}) => {
     const result = await client.callTool({ name, arguments: args });
-    assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
-    // MCP shows people the same text the CLI prints; facts live in structuredContent.
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+    assert.equal(result.structuredContent, undefined);
     assert.equal(typeof result.content[0].text, 'string');
-    return result.structuredContent;
+    return result.content[0].text;
   };
 }
 function cli(options, participant, args) {
@@ -65,16 +66,16 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   await alice.listen('Bob');
   cli(terminal, 'Alice', ['listen', 'Bob']);
   await call('attention', { as: 'Alice', action: 'listen', target: 'Bob' });
-  const caught = await alice.catch();
+  await alice.catch();
   cli(terminal, 'Alice', ['catch']);
-  assert.deepEqual(await call('catch', { as: 'Alice' }), caught);
+  assert.match(await call('catch', { as: 'Alice' }), /answer/);
   const stopped = await alice.unlisten('Bob');
   assert.equal(stopped.activity.kind, 'unlisten');
   cli(terminal, 'Alice', ['unlisten', 'Bob']);
-  assert.deepEqual(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), stopped);
+  assert.match(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), /stops listening to @Bob/);
   assert.equal((await alice.unlisten('Bob')).activity, null);
   cli(terminal, 'Alice', ['unlisten', 'Bob']);
-  assert.deepEqual(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), { activity: null });
+  assert.match(await call('attention', { as: 'Alice', action: 'unlisten', target: 'Bob' }), /is not listening to @Bob/);
   await alice.ignore('Bob');
   cli(terminal, 'Alice', ['ignore', 'Bob']);
   await call('attention', { as: 'Alice', action: 'ignore', target: 'Bob' });
@@ -83,7 +84,8 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   await call('done', { as: 'Bob' });
   const expected = await direct.square.history({ limit: 100 });
   assert.deepEqual(await terminal.square.history({ limit: 100 }), expected);
-  assert.deepEqual(await call('history', { limit: 100 }), expected);
+  await call('history', { limit: 100 });
+  assert.deepEqual(await json.square.history({ limit: 100 }), expected);
   const persisted = (await readSquareSnapshot(direct.path)).state;
   for (const options of [terminal, json]) {
     const actual = (await readSquareSnapshot(options.path)).state;
@@ -119,7 +121,8 @@ test('SDK, CLI and MCP bare expressions land without an audience and reach liste
   assert.match(cliCaught, /cli bare for listener/);
   assert.doesNotMatch(cliCaught, /cli bare without listener/);
   const mcpCaught = await call('catch', { as: 'Bob' });
-  assert.deepEqual(mcpCaught.activities.map((activity) => activity.body), ['mcp bare for listener']);
+  assert.match(mcpCaught, /mcp bare for listener/);
+  assert.doesNotMatch(mcpCaught, /mcp bare without listener/);
 
   for (const options of [direct, terminal, json]) {
     const bodies = (await options.square.history({ limit: 100 })).activities
@@ -136,7 +139,7 @@ test('all history callers default to ten; only explicit null reads the full arch
   const call = await mcp(t, options), before = (await readSquareSnapshot(options.path)).state;
   const recent = await square.history();
   assert.deepEqual(recent.activities.map((activity) => activity.id), Array.from({ length: 10 }, (_, index) => `act/${index + 3}`));
-  assert.deepEqual(await call('history'), recent);
+  assert.equal(await call('history'), renderHistoryResult(options.path, await square.history({ observe: true })));
   assert.deepEqual(await participant.history(), recent);
   assert.equal((await square.history({ limit: null })).activities.length, 13);
   const observed = await square.history({ observe: true });
@@ -161,7 +164,9 @@ test('a stale participant handle cannot speak after departure; rejoining establi
   const { observation, delivery, ...expressed } = await alice.express('back', { force: true, observe: true });
   assert.equal(expressed.activity.id, 'act/3');
   assert.equal(observation.reentry, undefined);
-  assert.deepEqual(await call('express', { as: 'Alice', body: 'back', force: true }), expressed);
+  const confirmation = await call('express', { as: 'Alice', body: 'back', force: true });
+  assert.ok(confirmation.includes(expressed.activity.id));
+  assert.match(confirmation, /your words land/);
   const never = await direct.square.participant('Never');
   await assert.rejects(never.express('unsent'), (error) => {
     assert.equal(error.facts.reason, 'never_joined');
@@ -174,8 +179,9 @@ test('a stale participant handle cannot speak after departure; rejoining establi
   t.after(async () => { await client.close(); await server.close(); });
   const refused = await client.callTool({ name: 'express', arguments: { as: 'Never', body: 'unsent' } });
   assert.equal(refused.isError, true);
-  assert.equal(refused.structuredContent.error.facts.reason, 'never_joined');
-  assert.deepEqual(refused.structuredContent.error.operation, { operation: 'express', participant: 'Never', subject: 'caller', expressEffect: 'unsent' });
+  assert.equal(refused.structuredContent, undefined);
+  assert.match(refused.content[0].text, /@Never has never stepped into this square/);
+  assert.match(refused.content[0].text, /join/);
   assert.deepEqual(await direct.square.history(), await json.square.history());
   assert.equal((await direct.square.participants()).participants.some((participant) => participant.name === 'Never'), false);
 });
@@ -209,8 +215,7 @@ test('optional observations add only requested reads; rendering transports pay f
   const plainJoin = await measure(() => square.join('Alice'));
   const fullJoin = await measure(() => square.join('Alice', { observe: true }));
   const dataJoin = await measure(() => call('join', { as: 'Alice' }));
-  const { participant, observation, ...receipt } = fullJoin.value;
-  assert.deepEqual(dataJoin.value, { ...receipt, participant: participant.name });
+  assert.equal(dataJoin.value, renderJoinResult(fullJoin.value));
   assert.equal(plainJoin.value.observation, undefined);
   assert.ok(dataJoin.hydrated > 0, 'join text hydrates the recent-activity feed it prints');
   assert.ok(fullJoin.hydrated > 0);
@@ -221,9 +226,9 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.ok(dataExpress.hydrated > 0, 'express text hydrates the pending feed it prints');
   assert.equal(plainExpress.value.observation, undefined);
   assert.equal(fullExpress.reads - plainExpress.reads, 1);
-  assert.deepEqual(fullExpress.value.observation.pendingPublic.map((act) => act.body), ['for Alice']);
+  assert.deepEqual(fullExpress.value.observation.context.activities.map((act) => act.preview), ['for Alice']);
   const caught = await measure(() => call('catch', { as: 'Alice' }));
-  assert.deepEqual(caught.value.activities.map((act) => act.body), ['for Alice']);
+  assert.match(caught.value, /for Alice/);
   assert.equal(caught.hydrated, 1, 'catch hydrates exactly its selected page');
   const plainEmpty = await measure(() => alice.catch()), fullEmpty = await measure(() => alice.catch({ observe: true }));
   const { observation: presence, ...empty } = fullEmpty.value;
@@ -232,8 +237,8 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.ok(presence.presence);
   const archive = await measure(() => call('history'));
   assert.ok(archive.hydrated > 0);
-  assert.deepEqual(archive.value, await square.history());
-  assert.deepEqual(await call('status'), await square.status());
+  assert.equal(archive.value, renderHistoryResult(options.path, await square.history({ observe: true })));
+  assert.equal(await call('status'), renderStatusResult(options.path, await square.status({ observe: true })));
 });
 
 test('catch resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {

@@ -110,9 +110,17 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
 
   const pending = await candidates(input.artifact, requested, input.now ?? Date.now());
   let attempted = 0, accepted = 0, failed = 0, unknown = 0, notCapable = 0;
-  for (const { seat, head } of pending) {
+  // Preserve order within a receiving session; unrelated receivers need not wait for each other.
+  const sessions = new Map<string, Candidate[]>();
+  for (const candidate of pending) {
+    const key = JSON.stringify([candidate.seat.body.channel, candidate.seat.body.session]);
+    const group = sessions.get(key) ?? [];
+    group.push(candidate);
+    sessions.set(key, group);
+  }
+  const dispatch = async ({ seat, head }: Candidate): Promise<void> => {
     const route = routeFor(location, seat, input.now ?? Date.now());
-    if (route === undefined) { notCapable += 1; continue; }
+    if (route === undefined) { notCapable += 1; return; }
     const request = {
       location, participant: seat.participant, activity: formatActivityId(head.index), actor: head.actor,
       seat: asSeatRef(seat), route,
@@ -121,15 +129,15 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     if (input.transport.probe !== undefined) {
       try {
         const probe = await input.transport.probe(route);
-        if (probe === false || typeof probe === 'object' && probe.outcome === 'not-capable') { notCapable += 1; continue; }
-      } catch { notCapable += 1; continue; }
+        if (probe === false || typeof probe === 'object' && probe.outcome === 'not-capable') { notCapable += 1; return; }
+      } catch { notCapable += 1; return; }
     }
 
     const claimToken = randomUUID();
     const leaseMs = input.timeoutMs ?? 5000;
     const claim = await input.artifact.claimDelivery({ seat: request.seat, activity: request.activity, kind: 'wake',
       route: seat.wakeAddress, at: input.now ?? Date.now(), leaseMs, claimToken }).catch(() => ({ status: 'stale' as const }));
-    if (claim.status !== 'acquired') continue;
+    if (claim.status !== 'acquired') return;
     const withClaim = { ...request, claimToken, attemptN: claim.attemptN };
     let final: Currentness | undefined;
     let suppressed = false;
@@ -146,7 +154,7 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     if (!before?.current) {
       await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
         before === undefined ? 'Square delivery state could not be verified.' : 'The notification is no longer current.', before);
-      continue;
+      return;
     }
 
     let outcome: import('./ports.js').WakeOutcome;
@@ -155,13 +163,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
     if (suppressed) {
       await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
         'The notification changed before the final send check.', final ?? { observationAvailable: false });
-      continue;
+      return;
     }
 
     if (outcome.outcome === 'not-capable') {
       await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'transport_not_capable', undefined, outcome.diagnostic);
       notCapable += 1;
-      continue;
+      return;
     }
 
     attempted += 1;
@@ -173,11 +181,17 @@ export async function deliverPending(input: DeliverPendingInput): Promise<Delive
       ...('message' in outcome && outcome.message !== undefined ? { message: outcome.message } : {}),
       ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: safeJson(outcome.diagnostic) } : {}),
     }).catch(() => false);
-    if (!completed) continue;
+    if (!completed) return;
     if (mapped === 'accepted') accepted += 1;
     else if (mapped === 'unknown') unknown += 1;
     else failed += 1;
-  }
+  };
+  const groups = sessions.values();
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(4, sessions.size) }, async () => {
+    for (const group of groups) for (const candidate of group) await dispatch(candidate);
+  }));
+  // Even an unexpected failure must drain siblings before the caller closes its artifact.
+  for (const result of settled) if (result.status === 'rejected') throw result.reason;
   return { attempted, accepted, failed, unknown, notCapable };
 }
 

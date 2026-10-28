@@ -26,7 +26,14 @@ async function fixture(t) {
   await square.close();
   const tools = registeredTools();
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
-  const call = (name, args = {}, ctx = context(), signal) => tools.get(`square_${name}`).execute('test', { location: 'test.square', ...args }, signal, undefined, ctx);
+  const call = async (name, args = {}, ctx = context(), signal) => {
+    const result = await tools.get(`square_${name}`).execute('test', { location: 'test.square', ...args }, signal, undefined, ctx);
+    assert.equal(result.structuredContent, undefined);
+    assert.equal(result.content.length, 1);
+    assert.equal(result.content[0].type, 'text');
+    assert.equal(typeof result.content[0].text, 'string');
+    return result;
+  };
   return { cwd, squarePath, tools, context, call };
 }
 
@@ -48,7 +55,7 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
     assert.equal('session' in tool.parameters.properties, false);
-    assert.equal(tool.outputSchema.type, 'object');
+    assert.equal(tool.outputSchema, undefined);
     for (const [name, schema] of Object.entries(tool.parameters.properties)) {
       assert.ok(schema.description?.length > 0, `${shared.name}.${name} explains its purpose`);
     }
@@ -56,24 +63,22 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
   assert.equal(tools.get('square_express').parameters.properties.noMention.type, 'boolean');
 });
 
-test('Pi calls use live context, preserve environment, and return structured data and errors', async (t) => {
+test('Pi calls use live context, preserve environment, and return human text and failures', async (t) => {
   const { cwd, squarePath, context, call } = await fixture(t);
   const before = { ...process.env };
   const ambient = await call('status');
   assert.equal(ambient.isError, undefined);
-  assert.equal('listening' in ambient.structuredContent, false, 'no name, no personal listening claim');
   assert.doesNotMatch(ambient.content[0].text, /you listen to/);
   const joined = await call('join', { as: 'rei' });
-  assert.equal(joined.structuredContent.participant, 'rei');
   assert.match(joined.content[0].text, /you stepped into the square/);
-  assert.doesNotMatch(joined.content[0].text, /"observation"/);
+  assert.match(joined.content[0].text, /Native tool scene/);
   const firstSeat = await readSeat(squarePath, 'rei');
   assert.deepEqual(firstSeat?.body, { channel: 'pi', session: 'pi-tools-first' });
 
   const refused = await call('join', { as: 'rei' }, context('pi-tools-second'));
   assert.equal(refused.isError, true);
-  assert.equal(refused.structuredContent.error.code, 'already_joined');
-  assert.equal((await call('join', { as: 'rei' })).structuredContent.kind, 'reconnected');
+  assert.match(refused.content[0].text, /rei/);
+  assert.match((await call('join', { as: 'rei' })).content[0].text, /already in the square/);
 
   // A fresh context's cwd, not startup state, resolves the relative location.
   const subdir = path.join(cwd, 'other');
@@ -81,43 +86,41 @@ test('Pi calls use live context, preserve environment, and return structured dat
   const secondSquarePath = path.join(subdir, 'test.square');
   const other = await Square.build({ path: secondSquarePath, markdown: 'Other square' });
   await other.close();
-  assert.equal((await call('join', { as: 'rei' }, context('pi-tools-second', subdir))).structuredContent.kind, 'joined');
+  assert.match((await call('join', { as: 'rei' }, context('pi-tools-second', subdir))).content[0].text, /you stepped into the square/);
   const secondSeat = await readSeat(secondSquarePath, 'rei');
   assert.deepEqual(secondSeat?.body, { channel: 'pi', session: 'pi-tools-second' });
 
   for (const args of [{ body: 7 }, { body: 'no', session: 'forged' }, { body: 'no', reply: 'act/01' }]) {
     const invalid = await call('express', args);
     assert.equal(invalid.isError, true);
-    assert.equal(invalid.structuredContent.error.code, 'invalid_args');
+    assert.ok(invalid.content[0].text.length > 0);
   }
   await call('join', { as: 'bob' });
   await call('attention', { as: 'bob', action: 'listen', target: 'rei' });
-  assert.deepEqual((await call('status', { as: 'BOB' })).structuredContent.listening, ['rei']);
+  assert.match((await call('status', { as: 'BOB' })).content[0].text, /you listen to\s+· @rei/);
   const ambiguous = await call('status');
   assert.equal(ambiguous.isError, undefined);
-  assert.equal('listening' in ambiguous.structuredContent, false, 'two names require a choice before showing personal listening');
   assert.doesNotMatch(ambiguous.content[0].text, /you listen to/);
-  assert.equal((await call('attention', { as: 'bob', action: 'unlisten', target: 'rei' })).structuredContent.activity.kind, 'unlisten');
-  assert.deepEqual((await call('status', { as: 'bob' })).structuredContent.listening, []);
-  assert.equal((await call('attention', { as: 'bob', action: 'deafen', target: 'rei' })).structuredContent.error.code, 'invalid_args');
+  assert.match((await call('attention', { as: 'bob', action: 'unlisten', target: 'rei' })).content[0].text, /stops listening to @rei/);
+  assert.match((await call('status', { as: 'bob' })).content[0].text, /not turned toward anyone/);
+  assert.equal((await call('attention', { as: 'bob', action: 'deafen', target: 'rei' })).isError, true);
   const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
-  assert.deepEqual(bare.structuredContent.activity.mentions, []);
-  assert.equal(typeof bare.structuredContent.hint, 'string', 'the first expression carries the shared hint');
+  assert.match(bare.content[0].text, /your words land.*act\/\d+/);
   const directed = await call('express', { as: 'rei', body: 'hello', noMention: true, mentions: ['bob'], force: true });
-  assert.deepEqual(directed.structuredContent.activity.mentions, ['bob']);
-  assert.equal(directed.structuredContent.hint, undefined);
+  assert.match(directed.content[0].text, /you walk over to @bob/);
   const caught = await call('catch', { as: 'bob' });
-  assert.equal(caught.structuredContent.activities.length, 1);
-  assert.equal(typeof caught.structuredContent.hint, 'string', 'the first catch carries the shared hint');
-  assert.equal((await call('catch', { as: 'bob' })).structuredContent.hint, undefined, 'an empty catch carries no hint');
+  assert.match(caught.content[0].text, /hello/);
+  assert.doesNotMatch(caught.content[0].text, /literal @bob/);
+  await call('catch', { as: 'bob' });
   const history = await call('history');
-  assert.deepEqual(history.structuredContent.activities.filter(a => a.kind === 'say').map(a => a.body), ['literal @bob', 'hello']);
+  assert.match(history.content[0].text, /literal @bob/);
+  assert.match(history.content[0].text, /hello/);
   const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', force: true });
-  assert.deepEqual(unmatched.structuredContent.activity.mentions, ['bob']);
-  assert.deepEqual(unmatched.structuredContent.unmatchedMentions, ['Eve']);
+  assert.match(unmatched.content[0].text, /you walk over to @bob/);
+  assert.match(unmatched.content[0].text, /@Eve isn't standing here/);
   const conflict = await call('express', { as: 'rei', body: '@bob', reach: 'bell', mentions: ['bob'], force: true });
   assert.equal(conflict.isError, true);
-  assert.equal(conflict.structuredContent.error.facts.reason, 'bell_mention_conflict');
+  assert.ok(conflict.content[0].text.length > 0);
   assert.deepEqual({ ...process.env }, before);
 });
 
@@ -131,8 +134,8 @@ test('Pi cancellation reaches a waiting operation without landing its body', asy
   t.after(() => clearTimeout(timer));
   const result = await pending;
   assert.equal(result.isError, true);
-  assert.equal(result.structuredContent.error.code, 'cancelled');
+  assert.match(result.content[0].text, /cancelled/i);
   const history = await call('history');
-  assert.equal(history.structuredContent.activities.some(a => a.body === 'must not land'), false);
+  assert.doesNotMatch(history.content[0].text, /must not land/);
   assert.equal((await call('hold', { as: 'rei', release: true })).isError, undefined);
 });

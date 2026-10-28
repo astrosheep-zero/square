@@ -342,11 +342,14 @@ export interface ExpressionObservation extends Pick<SquareObservation, 'standing
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
 }
+export interface ExpressContext {
+  readonly activities: readonly { readonly id: ActivityId; readonly actor: string; readonly preview: string; readonly truncated: boolean }[];
+  /** Unread activities outside this preview, not a consumption cursor. */
+  readonly remaining: number;
+}
 export interface ExpressObservation extends SquareObservation, ExpressionObservation {
   readonly participant: string;
-  readonly pendingPublic: readonly ArchiveRecord[];
-  readonly sayNumbers: Readonly<Record<number, number>>;
-  readonly perceptions: Readonly<Record<number, Perception>>;
+  readonly context: ExpressContext;
 }
 export interface CatchObservation extends SquareObservation, ExpressionObservation {
   readonly participant: string;

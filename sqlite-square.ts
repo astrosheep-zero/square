@@ -8,7 +8,7 @@ import { InternalSquareError, SquareError, isSquareError, nameKey, sameBody, val
 import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, coreUnlisten, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
-import { directedSuffix } from './activity-feed.js';
+import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
 import { asSeatRef, participantAuthority, requireBody, requireJoinName, requireSeat } from './seats.js';
 import { recoveryObservation, entryPresentation, snapshot, queryStatus, queryParticipants, catchPresence,
@@ -150,11 +150,8 @@ export class SqliteSquare {
         checkControl(control);
         name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
         const seat = requireSeat(this.seat, square.body, name);
-        const feed = !options.observe ? undefined : (await square.artifact.read(facts => {
-          const pendingPublic = directedSuffix(facts, name);
-          return { pendingPublic, sayNumbers: facts.sayOrdinals(pendingPublic.map(item => item.index)),
-            perceptions: Object.fromEntries(pendingPublic.map(item => [item.index, 'full' as const])) };
-        }, control?.signal)).value;
+        const context = !options.observe ? undefined : (await square.artifact.read(
+          facts => expressionContext(facts, name), control?.signal)).value;
         while (true) {
           checkControl(control);
           try {
@@ -195,8 +192,8 @@ export class SqliteSquare {
             const { stored, standingCount, held, ownActivityCount, hardCap, ...metadata } = committed;
             const hint = expressHint(ownActivityCount);
             return { activity: toPublicActivity(stored), delivery, waited, ...metadata,
-              ...(hint === undefined ? {} : { hint }), ...(feed === undefined ? {} : { observation: {
-                ...square.observation(standingCount, held, name, now), ownActivityCount, hardCap, ...feed, participant: name,
+              ...(hint === undefined ? {} : { hint }), ...(context === undefined ? {} : { observation: {
+                ...square.observation(standingCount, held, name, now), ownActivityCount, hardCap, context, participant: name,
               } }) };
           } catch (error) {
             if (effect !== 'landed' && isSquareError(error) && error.facts?.activityUnsent === true) effect = 'unsent';

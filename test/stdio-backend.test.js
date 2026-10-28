@@ -111,11 +111,12 @@ test('MCP location overrides the configured resource for read-only backend calls
   const call = async args => {
     const result = await client.callTool({ name: 'history', arguments: args, _meta: { threadId: 'mcp-call' } });
     assert.equal(result.isError, undefined, JSON.stringify(result));
-    return result.structuredContent;
+    assert.equal(result.structuredContent, undefined);
+    return result.content[0].text;
   };
   const remoteHistory = await call({ location: f.input.path });
-  assert.equal(remoteHistory.activities.some(activity => activity.body === 'activity in the backend artifact'), true);
-  assert.deepEqual((await call({})).activities, []);
+  assert.match(remoteHistory, /activity in the backend artifact/);
+  assert.doesNotMatch(await call({}), /activity in the backend artifact/);
   assert.deepEqual((await local.participants()).participants, []);
 });
 

@@ -10,7 +10,7 @@ import type {
 import {
   commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
   participantsRecoveryCommand, quoteShell, renderAmbientEvent, renderAmbientEventFacts,
-  renderEventCli, renderGrepActivitiesView, renderPendingFeed, renderPresenceAnchor,
+  renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
   renderRoomChangeText, renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
   takeoverRecoveryLines, withPathOutput,
 } from './presentation.js';
@@ -64,11 +64,13 @@ export function renderExpression(squarePath: string, data: ExpressResult): strin
   const projection = data.observation;
   if (projection === undefined) return undefined;
   const name = projection.participant;
-  const pendingSpeaker = projection.pendingPublic[0]?.actor;
-  const pendingLead = pendingSpeaker === undefined ? ''
-    : `▲ while you spoke, ${participantIdentity(pendingSpeaker)} said something behind you\n\n`;
-  const pending = projection.pendingPublic.length === 0 ? ''
-    : `\n\n${pendingLead}${renderPendingFeed(projection.pendingPublic, projection.sayNumbers, projection.perceptions, name)}`;
+  const context = projection.context;
+  const pending = context.activities.length === 0 ? '' : '\n\n' + [
+    'Unread context · preview only, not consumed',
+    ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
+    ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
+    `${participantCommandPrefix(projection.location, name)} catch`,
+  ].join('\n');
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
   const activity = data.activity;
