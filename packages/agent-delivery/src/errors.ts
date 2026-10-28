@@ -1,6 +1,6 @@
 export type DeliveryErrorCode =
   | 'invalid_arguments' | 'unsupported_platform' | 'unavailable' | 'authentication_failed'
-  | 'session_not_found' | 'rejected' | 'unsupported_version' | 'invalid_response'
+  | 'session_not_found' | 'session_inactive' | 'rejected' | 'unsupported_version' | 'invalid_response'
   | 'timeout' | 'aborted' | 'transport'
 
 const messages: Record<DeliveryErrorCode, string> = {
@@ -9,6 +9,7 @@ const messages: Record<DeliveryErrorCode, string> = {
   unavailable: 'The delivery endpoint is unavailable.',
   authentication_failed: 'Delivery authentication failed.',
   session_not_found: 'The requested session was not found.',
+  session_inactive: 'The session has no current delivery boundary.',
   rejected: 'The delivery was rejected.',
   unsupported_version: 'The receiving service version is unsupported.',
   invalid_response: 'The receiving service returned an invalid response.',

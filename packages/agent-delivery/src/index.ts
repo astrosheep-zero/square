@@ -1,7 +1,7 @@
 import { ConnectionError, DeliveryError, type DeliveryErrorCode } from './errors.js'
 import { isRecord } from './guards.js'
-import type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions, OpenCodeTarget, ClaudeTarget, PiTarget, PaseoTarget, OpenCodeSendTextOptions, ClaudeSendTextOptions, PiSendTextOptions, PaseoSendTextOptions } from './types.js'
-export type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions } from './types.js'
+import type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions, CodexConnectOptions, CodexAppServerConnectOptions, CodexCliConnectOptions, OpenCodeSendTextOptions, ClaudeSendTextOptions, PiSendTextOptions, PaseoSendTextOptions, CodexSendTextOptions } from './types.js'
+export type { OpenCodeConnectOptions, ClaudeConnectOptions, PiConnectOptions, PaseoConnectOptions, CodexConnectOptions, CodexAppServerConnectOptions, CodexCliConnectOptions } from './types.js'
 
 export interface SendOptions { readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface KeyedSendOptions extends SendOptions { readonly id?: string }
@@ -13,7 +13,10 @@ export type OpenCodeAgent = Steerable<KeyedSendOptions> & Queueable<KeyedSendOpt
 export type ClaudeAgent = Steerable & { readonly harness: 'claude'; readonly sessionId: string }
 export type PiAgent = Steerable & Queueable & { readonly harness: 'pi'; readonly sessionId: string }
 export type PaseoAgent = Steerable<KeyedSendOptions> & { readonly harness: 'paseo'; readonly agentId: string }
-export type Agent = OpenCodeAgent | ClaudeAgent | PiAgent | PaseoAgent
+export type CodexAppServerAgent = Steerable & Queueable & { readonly harness: 'codex'; readonly transport: 'app-server'; readonly sessionId: string }
+export type CodexCliAgent = Queueable & { readonly harness: 'codex'; readonly transport: 'cli'; readonly sessionId: string }
+export type CodexAgent = CodexAppServerAgent | CodexCliAgent
+export type Agent = OpenCodeAgent | ClaudeAgent | PiAgent | PaseoAgent | CodexAgent
 
 const codes: Record<string, DeliveryErrorCode> = {
   invalid_arguments: 'invalid_arguments', unsupported_platform: 'unsupported_platform',
@@ -39,7 +42,8 @@ function failure(error: unknown, phase: 'connect' | 'send', id?: string): Delive
   const code: DeliveryErrorCode = attempt.state === 'unavailable'
     ? attempt.code === 'aborted' ? 'aborted' : attempt.code === 'timeout' ? 'timeout'
       : attempt.code === 'authentication_failed' ? 'authentication_failed' : 'unavailable'
-    : attempt.state === 'rejected' ? attempt.code === 'not_found' ? 'session_not_found' : 'rejected'
+    : attempt.state === 'rejected' ? attempt.code === 'not_found' ? 'session_not_found'
+      : attempt.code === 'unsupported_version' ? 'unsupported_version' : 'rejected'
       : codes[attempt.code ?? 'transport'] ?? 'transport'
   return new DeliveryError(code, attempt.state === 'unknown', id ?? attempt.inputId, attempt.status)
 }
@@ -52,15 +56,17 @@ interface NativeSend {
   readonly messageId?: string
 }
 
-/** Everything that differs between the four native transports, as data. */
+/** Everything that differs between the native transports, as data. */
 interface Harness {
-  readonly harness: 'opencode' | 'claude' | 'pi' | 'paseo'
+  readonly harness: 'opencode' | 'claude' | 'pi' | 'paseo' | 'codex'
   readonly proof: Receipt['proof']
   readonly accepted: string
   readonly coordinate: 'sessionId' | 'agentId'
   /** Whether this transport claims a caller's own idempotency id. */
   readonly keyed: boolean
   readonly queue: boolean
+  readonly steer?: false
+  readonly transport?: 'cli' | 'app-server'
   readonly id: (result: NativeSend) => string
   /** Load one native module and address one existing target. */
   readonly open: (options: unknown) => Promise<{
@@ -70,6 +76,24 @@ interface Harness {
 }
 
 const harnesses: Record<string, Harness> = {
+  'codex-cli': {
+    harness: 'codex', transport: 'cli', proof: 'admitted', accepted: 'admitted', coordinate: 'sessionId', keyed: false, queue: true, steer: false,
+    id: (result) => result.inputId!,
+    open: async (options) => {
+      const { connectCodexCli } = await import('./codex-cli.js')
+      const target = await connectCodexCli(options as CodexCliConnectOptions)
+      return { coordinate: target.coordinate, send: (text, value) => target.send(text, value as CodexSendTextOptions) }
+    },
+  },
+  codex: {
+    harness: 'codex', transport: 'app-server', proof: 'admitted', accepted: 'admitted', coordinate: 'sessionId', keyed: false, queue: true,
+    id: (result) => result.inputId!,
+    open: async (options) => {
+      const { connectCodex, sendCodexText } = await import('./codex.js')
+      const target = await connectCodex(options as CodexAppServerConnectOptions)
+      return { coordinate: target.sessionId, send: (text, value) => sendCodexText(target, text, value as CodexSendTextOptions) }
+    },
+  },
   opencode: {
     harness: 'opencode', proof: 'admitted', accepted: 'accepted', coordinate: 'sessionId', keyed: true, queue: true,
     id: (result) => result.inputId!,
@@ -112,11 +136,15 @@ export function connect(options: OpenCodeConnectOptions): Promise<OpenCodeAgent>
 export function connect(options: ClaudeConnectOptions): Promise<ClaudeAgent>
 export function connect(options: PiConnectOptions): Promise<PiAgent>
 export function connect(options: PaseoConnectOptions): Promise<PaseoAgent>
-export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOptions | PiConnectOptions | PaseoConnectOptions): Promise<Agent> {
+export function connect(options: CodexCliConnectOptions): Promise<CodexCliAgent>
+export function connect(options: CodexAppServerConnectOptions): Promise<CodexAppServerAgent>
+export function connect(options: CodexConnectOptions): Promise<CodexAgent>
+export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOptions | PiConnectOptions | PaseoConnectOptions | CodexConnectOptions): Promise<Agent> {
   const harness = isRecord(options) && typeof options.harness === 'string' ? options.harness : undefined
   // An own-key check keeps Object.prototype names out of the transport table.
-  const spec = harness !== undefined && Object.hasOwn(harnesses, harness) ? harnesses[harness] : undefined
-  if (spec === undefined) throw new DeliveryError('invalid_arguments')
+  const key = harness === 'codex' && isRecord(options) && options.transport === 'cli' ? 'codex-cli' : harness
+  const spec = key !== undefined && Object.hasOwn(harnesses, key) ? harnesses[key] : undefined
+  if (spec === undefined || spec.harness !== harness) throw new DeliveryError('invalid_arguments')
   let opened
   try { opened = await spec.open(options) }
   catch (error) { throw failure(error, 'connect') }
@@ -125,6 +153,7 @@ export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOpt
     if (!isRecord(options)) throw new DeliveryError('invalid_arguments')
     // An unusable caller id is an argument precondition; the native sender rejects it.
     const id = options.id as string | undefined
+    if (!spec.keyed && id !== undefined) throw new DeliveryError('invalid_arguments')
     try {
       const result = await opened.send(text, spec.keyed
         ? { delivery, inputId: id, timeoutMs: options.timeoutMs, signal: options.signal }
@@ -136,8 +165,9 @@ export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOpt
   const agent: Record<string, unknown> = {
     harness: spec.harness,
     [spec.coordinate]: opened.coordinate,
-    steer: (text: string, value?: SendOptions) => send(text, value, 'steer'),
   }
+  if (spec.transport) agent.transport = spec.transport
+  if (spec.steer !== false) agent.steer = (text: string, value?: SendOptions) => send(text, value, 'steer')
   if (spec.queue) agent.queue = (text: string, value?: SendOptions) => send(text, value, 'queue')
   return Object.freeze(agent) as unknown as Agent
 }

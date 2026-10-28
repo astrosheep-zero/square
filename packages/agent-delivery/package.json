@@ -1,14 +1,15 @@
 {
   "name": "@astrosheep/agent-delivery",
   "version": "0.1.0",
-  "description": "Existing-only native text delivery to OpenCode, Claude and Pi sessions, independent of Square.",
+  "description": "Text delivery to Codex, OpenCode, Claude, Pi and Paseo agents, independent of Square.",
   "type": "module",
   "license": "MIT",
   "engines": { "node": "^22.16.0 || >=24.0.0" },
   "files": ["dist", "README.md", "VALIDATION.md", "LICENSE"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./pi-receiver": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" }
+    "./pi-receiver": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" },
+    "./codex-hook": { "types": "./dist/codex-hook.d.ts", "import": "./dist/codex-hook.js" }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 import net from 'node:net'
 import { once } from 'node:events'
+import { WebSocketServer } from 'ws'
 import { promisify } from 'node:util'
 import { sandbox } from './sandbox-env.js'
 import { fixture, sessionId, authorization } from './fixture.js'
@@ -20,7 +21,7 @@ test('packed package installs, typechecks its capability API and delivers from a
   const packed = JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', consumer], {
     ...options, cwd: packageRoot,
   })).stdout)[0]
-  for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/paseo.js', 'dist/pi.js', 'README.md', 'LICENSE', 'VALIDATION.md']) {
+  for (const file of ['dist/index.js', 'dist/index.d.ts', 'dist/paseo.js', 'dist/pi.js', 'dist/codex.js', 'dist/codex-cli.js', 'dist/codex-hook.js', 'README.md', 'LICENSE', 'VALIDATION.md']) {
     assert.ok(packed.files.some((entry) => entry.path === file), `missing ${file}`)
   }
   assert.ok(packed.files.every((file) => /^(dist\/|README\.md$|VALIDATION\.md$|LICENSE$|package\.json$)/.test(file.path)))
@@ -29,7 +30,7 @@ test('packed package installs, typechecks its capability API and delivers from a
     ...options, cwd: consumer,
   })
   const manifest = JSON.parse(await readFile(join(consumer, 'node_modules/@astrosheep/agent-delivery/package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['.', './pi-receiver'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './pi-receiver', './codex-hook'])
   assert.deepEqual(manifest.dependencies, { '@getpaseo/client': '0.11.2', '@opencode/client': '2.0.20', ws: '8.22.0' })
   const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'))
   assert.equal(lock.packages['node_modules/@opencode/client'].version, '2.0.20')
@@ -37,12 +38,17 @@ test('packed package installs, typechecks its capability API and delivers from a
   assert.match(lock.packages['node_modules/ws'].version, /^8\./)
   assert.ok(Object.keys(lock.packages).every((path) => !path.includes('@astrosheep/square')))
 
-  await writeFile(join(consumer, 'consumer.mts'), `import { connect, DeliveryError, type Agent, type ClaudeAgent, type OpenCodeAgent, type PaseoAgent, type PiAgent, type Receipt } from '@astrosheep/agent-delivery';
+  await writeFile(join(consumer, 'consumer.mts'), `import { connect, DeliveryError, type Agent, type ClaudeAgent, type OpenCodeAgent, type PaseoAgent, type PiAgent, type CodexAgent, type CodexAppServerAgent, type CodexCliAgent, type Receipt } from '@astrosheep/agent-delivery';
 const opencodeAgent = await connect({ harness: 'opencode', sessionId: 'ses_example' });
 const claudeAgent: ClaudeAgent = await connect({ harness: 'claude', sessionId: 'uuid', endpoint: '/tmp/explicit.sock' });
 const piAgent: PiAgent = await connect({ harness: 'pi', sessionId: 'native-id', endpoint: '/private/p.sock' });
 const paseoAgent: PaseoAgent = await connect({ harness: 'paseo', agentId: 'agent-uuid' });
-const agents: Agent[] = [opencodeAgent, claudeAgent, piAgent, paseoAgent];
+const codexAgent: CodexAppServerAgent = await connect({ harness: 'codex', sessionId: 'existing-thread', endpoint: '/private/codex.sock' });
+await codexAgent.steer('text');
+await codexAgent.queue('text', { timeoutMs: 1000 });
+// @ts-expect-error Codex message ids are not caller idempotency keys
+await codexAgent.queue('text', { id: 'not-idempotent' });
+const agents: Agent[] = [opencodeAgent, claudeAgent, piAgent, paseoAgent, codexAgent];
 const keyed: OpenCodeAgent = opencodeAgent;
 const admitted: Receipt = await keyed.steer('text', { id: 'msg_caller', timeoutMs: 1000 });
 const queued: Receipt = await opencodeAgent.queue('text');
@@ -71,6 +77,21 @@ import { createPiReceiver, sendPiMessage, type PiReceiverAPI } from '@astrosheep
 const pi = {} as PiReceiverAPI;
 createPiReceiver(pi, { endpoint: '/private/p.sock' });
 sendPiMessage(pi, { customType: 'caller', content: 'exact', display: false }, { deliverAs: 'nextTurn' });
+import { createCodexBoundaryStore, handleCodexHook } from '@astrosheep/agent-delivery/codex-hook';
+const boundaries = createCodexBoundaryStore('/private/host/codex-boundaries.json');
+await handleCodexHook({ session_id: 'existing-thread', hook_event_name: 'PostToolUse' }, {
+  boundaries, pull: async (id, signal) => 'host-owned pending input',
+  sweep: async (cwd, deadline, signal) => {},
+});
+const cli: CodexCliAgent = await connect({ harness: 'codex', transport: 'cli', sessionId: 'existing-thread', boundaries, codexHome: '/private/codex' });
+await cli.queue('text', { signal: AbortSignal.timeout(1000) });
+const either: CodexAgent = cli;
+// @ts-expect-error CLI has no steer capability
+await cli.steer('text');
+// @ts-expect-error CLI does not promise native idempotency
+await cli.queue('text', { id: 'caller-id' });
+// @ts-expect-error CLI must bind its lifecycle source at connect time
+await connect({ harness: 'codex', transport: 'cli', sessionId: 'existing-thread' });
 `)
   await exec(process.execPath, [join(packageRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2023',
@@ -134,6 +155,57 @@ console.log(JSON.stringify({ keys: Object.keys(agent), receipt: await agent.stee
   for (let i = 0; i < 200 && frames.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 5))
   assert.deepEqual(frames, [{ msgV: 1, msg_id: claude.receipt.id, uuid: claude.receipt.id, type: 'user', session_id: 'external-claude',
     message: { role: 'user', content: 'packed 字' }, priority: 'next' }])
+
+  const nativeRequests = []
+  const native = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  await once(native, 'listening')
+  t.after(async () => {
+    for (const socket of native.clients) socket.terminate()
+    await new Promise((resolve) => native.close(resolve))
+  })
+  native.on('connection', (socket) => socket.on('message', (raw) => {
+    const request = JSON.parse(raw.toString())
+    nativeRequests.push(request)
+    if (request.method === 'initialized') return
+    const result = request.method === 'initialize' ? { userAgent: 'codex/0.160.1', codexHome: '/fixture', platformFamily: 'unix', platformOs: 'darwin' }
+      : request.method === 'thread/read' ? { thread: { id: 'external-codex', turns: [{ id: 'active', status: 'inProgress' }] } }
+      : request.method === 'turn/steer' ? { turnId: request.params.expectedTurnId }
+      : { queuedSubmission: { id: 'queued', input: request.params.input, clientUserMessageId: request.params.clientUserMessageId } }
+    socket.send(JSON.stringify({ id: request.id, result }))
+  }))
+  await writeFile(join(consumer, 'queue.cjs'), "require('node:fs').writeFileSync('cli.json',JSON.stringify(process.argv.slice(2)))")
+  await writeFile(join(consumer, 'codex.mjs'), `import { connect } from '@astrosheep/agent-delivery';
+import { createCodexBoundaryStore, handleCodexHook } from '@astrosheep/agent-delivery/codex-hook';
+const agent = await connect({ harness: 'codex', sessionId: 'external-codex', endpoint: process.argv[2] });
+const steered = await agent.steer('/packed native 字');
+const queued = await agent.queue('packed queue');
+const boundaries = createCodexBoundaryStore('./boundaries.json');
+await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop' }, { boundaries });
+const eligible = await boundaries.queueEligible('external-codex');
+const hook = await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'PostToolUse' }, {
+  boundaries, pull: async () => 'packed host input',
+});
+await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop' }, { boundaries });
+const cli = await connect({ harness: 'codex', transport: 'cli', sessionId: 'external-codex', boundaries,
+  bin: process.execPath, args: ['./queue.cjs'], codexHome: process.cwd() });
+const cliReceipt = await cli.queue('packed CLI 字');
+await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'SessionEnd' }, { boundaries });
+let endCode;
+try { await cli.queue('must not send'); } catch(error) { endCode = error.code; }
+console.log(JSON.stringify({ steered, queued, eligible, hook, cliReceipt, endCode, cliHasSteer: 'steer' in cli }));`)
+  const codex = JSON.parse((await exec(process.execPath, ['--import', './register.mjs', 'codex.mjs',
+    `ws://127.0.0.1:${native.address().port}`], { ...options, cwd: consumer })).stdout)
+  assert.equal(codex.steered.proof, 'admitted')
+  assert.equal(codex.queued.proof, 'admitted')
+  assert.equal(codex.eligible, true)
+  assert.equal(codex.hook.hookSpecificOutput.additionalContext, 'packed host input')
+  assert.equal(codex.cliReceipt.proof, 'admitted')
+  assert.equal(codex.endCode, 'session_inactive')
+  assert.equal(codex.cliHasSteer, false)
+  assert.deepEqual(JSON.parse(await readFile(join(consumer, 'cli.json'), 'utf8')), ['queue', '--thread', 'external-codex', '--message', 'packed CLI 字'])
+  assert.equal(nativeRequests.find((r) => r.method === 'turn/steer').params.input[0].text, '/packed native 字')
+  assert.equal(nativeRequests.find((r) => r.method === 'thread/queue/add').params.input[0].text, 'packed queue')
+  assert.ok(nativeRequests.every((r) => !['thread/resume', 'turn/start', 'thread/queue/start'].includes(r.method)))
 
   // Core types must remain suitable for later leaf adapters without SDK dependencies.
   const types = await readFile(join(packageRoot, 'dist/types.d.ts'), 'utf8')

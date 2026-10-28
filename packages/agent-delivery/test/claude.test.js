@@ -123,7 +123,7 @@ test('send failures are DeliveryErrors: unavailable endpoint, invalid arguments,
 test('native I/O distinguishes known-unsent from connected uncertainty and never retries stalled writes', async (t) => {
   const f = await fixture(t, true)
   const target = { sessionId: 'session', endpoint: f.endpoint, claudeHome: f.home, env: {} }
-  for (const control of [{ deadline: NaN }, { deadline: Infinity }, { deadline: Date.now() + 2_147_483_648 }]) {
+  for (const control of [{ deadline: NaN }, { deadline: Infinity }, { deadline: Date.now() + 2_147_483_647 + 60_000 }]) {
     assert.equal((await writeClaudeNative(target, 'body', control)).code, 'invalid_arguments')
   }
   assert.equal((await writeClaudeNative(target, 'body', { deadline: deadline(), signal: AbortSignal.abort() })).code, 'aborted')
