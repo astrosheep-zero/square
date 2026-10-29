@@ -71,7 +71,7 @@ function squarePiExtension(pi) {
 function sampleInbox() {
   return [{
     location: '/tmp/SQUARE.square',
-    seat: { participant: 'Bob', body: { channel: 'pi', session: 'test' }, generation: 'act/0' },
+    seat: { participant: 'Bob', owner: ':', generation: 'act/0' },
     joinedAt: 1,
     notifications: [{ actIndex: 7, actor: 'Alice', at: 8, route: 'mention', body: 'hello @Bob' }],
   }];
@@ -438,12 +438,12 @@ test('Pi installation preserves a configured local Square source without adding 
 test('package facade participant verbs persist through shared actions', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-actions-api-'));
   const squarePath = path.join(dir, 'SQUARE.square');
-  const body = { channel: 'pi', session: 'alice-session' };
+  const body = "pi" + ":" + ('alice-session');
   const square = await Square.build({ path: squarePath, markdown: 'warmup' });
   const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
   process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
-    const alice = (await square.join('Alice', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
     await alice.hold('pause');
     await alice.resume();
@@ -699,18 +699,18 @@ async function piFixture(sessionId, pending = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-extension-'));
   const squarePath = path.join(root, 'SQUARE.square');
   const indexPath = path.join(root, 'index.ndjsonl');
-  const aliceBody = { channel: 'pi', session: `${sessionId}-author` };
-  const bobBody = { channel: 'pi', session: sessionId };
+  const aliceBody = `pi:${sessionId}-author`;
+  const bobBody = `pi:${sessionId}`;
   const env = { ...process.env, SQUARE_INDEX: indexPath };
   const aliceSquare = await Square.build({ path: squarePath, markdown: 'test', env });
-  try { await aliceSquare.join('Alice', { body: aliceBody }); }
+  try { await aliceSquare.join('Alice', { owner: aliceBody }); }
   finally { await aliceSquare.close(); }
   const bobSquare = await Square.at({ path: squarePath, env });
-  try { await bobSquare.join('Bob', { body: bobBody }); }
+  try { await bobSquare.join('Bob', { owner: bobBody }); }
   finally { await bobSquare.close(); }
   if (pending) {
     const author = await Square.at({ path: squarePath, env });
-    try { await (await author.participant('Alice', { body: aliceBody })).express('hello @Bob', { force: true, mentions: ['Bob'] }); }
+    try { await (await author.participant('Alice', { owner: aliceBody })).express('hello @Bob', { force: true, mentions: ['Bob'] }); }
     finally { await author.close(); }
   }
   return { root, squarePath, indexPath, env, aliceBody, bobBody, sessionId };
@@ -736,7 +736,7 @@ async function withPiFixture(sessionId, fn, pending = true) {
 async function expressToPi(item, text) {
   const square = await Square.at({ path: item.squarePath, env: item.env });
   try {
-    const alice = await square.participant('Alice', { body: item.aliceBody });
+    const alice = await square.participant('Alice', { owner: item.aliceBody });
     const result = await alice.express(text, { mentions: ['Bob'] });
     return Number(result.activity.id.slice('act/'.length));
   } finally { await square.close(); }
@@ -774,7 +774,7 @@ function piTurnEnd(handlers, stopReason = 'stop', ctx = {}) {
 
 function presentationBoundaryLockPath(sessionId) {
   const index = path.resolve(process.env.SQUARE_INDEX ?? path.join(os.homedir(), '.square', 'index.ndjsonl'));
-  return `${index}.boundary-${crypto.createHash('sha256').update(JSON.stringify({ channel: 'pi', session: sessionId })).digest('hex')}.lock`;
+  return `${index}.boundary-${crypto.createHash('sha256').update(JSON.stringify("pi" + ":" + (sessionId))).digest('hex')}.lock`;
 }
 
 /** Hold the per-session presentation boundary lock so the next boundary must wait for it. */
@@ -1136,12 +1136,12 @@ test('a failed Pi cancellation fences only its native session and does not repla
     assert.equal(sent.length, 0);
 
     const newId = 'pi-new-session-after-old-failure';
-    const newBody = { channel: 'pi', session: newId };
+    const newBody = "pi" + ":" + (newId);
     const recipient = await Square.at({ path: item.squarePath, env: item.env });
-    try { await recipient.join('NewBob', { body: newBody }); } finally { await recipient.close(); }
+    try { await recipient.join('NewBob', { owner: newBody }); } finally { await recipient.close(); }
     const author = await Square.at({ path: item.squarePath, env: item.env });
     let newIndex;
-    try { newIndex = Number((await (await author.participant('Alice', { body: item.aliceBody })).express('new session remains live @NewBob', { mentions: ['NewBob'] })).activity.id.slice(4)); }
+    try { newIndex = Number((await (await author.participant('Alice', { owner: item.aliceBody })).express('new session remains live @NewBob', { mentions: ['NewBob'] })).activity.id.slice(4)); }
     finally { await author.close(); }
 
     await handlers.get('session_start')({}, context(newId));
@@ -1152,7 +1152,7 @@ test('a failed Pi cancellation fences only its native session and does not repla
 
     const oldAuthor = await Square.at({ path: item.squarePath, env: item.env });
     let oldIndex;
-    try { oldIndex = Number((await (await oldAuthor.participant('Alice', { body: item.aliceBody })).express('old failed session must not replay @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
+    try { oldIndex = Number((await (await oldAuthor.participant('Alice', { owner: item.aliceBody })).express('old failed session must not replay @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
     finally { await oldAuthor.close(); }
     await handlers.get('session_start')({}, context(oldId));
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -1173,7 +1173,7 @@ test('a failed Pi cancellation fences only its native session and does not repla
     } finally { await artifact.close(); }
     const fresh = await Square.at({ path: item.squarePath, env: item.env });
     let freshIndex;
-    try { freshIndex = Number((await (await fresh.participant('Alice', { body: item.aliceBody })).express('fresh after suppression recovery @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
+    try { freshIndex = Number((await (await fresh.participant('Alice', { owner: item.aliceBody })).express('fresh after suppression recovery @Bob', { mentions: ['Bob'] })).activity.id.slice(4)); }
     finally { await fresh.close(); }
     await waitUntil(() => sent.length === 2, 'a successful retry did not restore the old session watcher');
     assert.match(sent[1].message.content, /fresh after suppression recovery/);
@@ -1396,7 +1396,7 @@ test('Pi defers a rejected native injection until the next Square change', async
 
       const square = await Square.at({ path: item.squarePath, env: item.env });
       try {
-        const alice = await square.participant('Alice', { body: item.aliceBody });
+        const alice = await square.participant('Alice', { owner: item.aliceBody });
         await alice.listen('Bob');
       } finally {
         await square.close();

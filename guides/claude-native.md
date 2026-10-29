@@ -96,16 +96,17 @@ Initial activation and hot reload use `session.start`. New conversations use
 `session_id` is already the resumed coordinate while `$.session.id()` still reads
 the ending one (observed in 2.1.295)**. The event coordinate is used at that boundary, with
 API cwd/version/socket. Modern `session.end` detaches only its pinned `e.sessionId`
-and captured Body/join generations, within the event budget. Late committed joins
+and captured owner/join generations, within the event budget. Late committed joins
 are discovered at the pinned end timestamp. A process crash can omit end.
 
 Host end is not a participant departure: no `done` lands, and membership, listens,
 read horizon and generation remain intact. Catch ownership, deferrals and wake readiness
 are cleared; the participant appears away and keeps accumulating unread audience without
-proactive delivery. Before arming a receiver, start/resume discovers the exact Body's
-standing seats through `seatsOf(body)` and restores only detached ones with
-`reattach(name, {body, wakeAddress?})`. One failed seat or location does not block the
-others. New/forked Bodies restore nothing. Neither a voluntary `done` nor a takeover is
+proactive delivery. Before arming a receiver, start/resume discovers the exact owner's
+standing seats through `seatsOf(owner)` and restores only detached ones with
+`reattach(name, {owner, wakeAddress?})`. The adapter obtains that owner with
+`harnessOwner({channel: 'claude-code', session, agent?})`. One failed seat or location does not block the
+others. New/forked harness owners restore nothing. Neither a voluntary `done` nor a takeover is
 revived; there is no completed-seat recovery path or timeout that turns away into done.
 See [participant-ownership.md](participant-ownership.md).
 

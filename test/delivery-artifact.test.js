@@ -15,12 +15,12 @@ const empty = () => ({ hardCap: null, preamble: [], warmup: [], acts: [], runtim
 
 async function fixture() {
   const artifact = createArtifactPort(':memory:', empty());
-  const alice = { channel: 'test', session: 'alice' }, bob = { channel: 'test', session: 'bob' };
-  const aliceSeat = (await artifact.transactAs({ kind: 'join', participant: 'Alice', body: alice, wakeAddress: { kind: 'paseo', address: { agentId: 'alice' } } }, facts => {
+  const alice = "test" + ":" + ('alice'), bob = "test" + ":" + ('bob');
+  const aliceSeat = (await artifact.transactAs({ kind: 'join', participant: 'Alice', owner: alice, wakeAddress: { kind: 'paseo', address: { agentId: 'alice' } } }, facts => {
     facts.land({ kind: 'join', actor: 'Alice', at: 1 });
     return facts.seat('Alice');
   })).value;
-  const bobSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bob', body: bob, wakeAddress: { kind: 'paseo', address: { agentId: 'bob' } } }, facts => {
+  const bobSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bob', owner: bob, wakeAddress: { kind: 'paseo', address: { agentId: 'bob' } } }, facts => {
     facts.land({ kind: 'join', actor: 'Bob', at: 2 });
     return facts.seat('Bob');
   })).value;
@@ -34,7 +34,7 @@ test('file-backed public build and at retain injected delivery transport and com
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const location = path.join(root, 'PUBLIC.square');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const body = { channel: 'test', session: 'alice' };
+  const body = "test" + ":" + ('alice');
   const calls = [];
   const wakeTransport = { async attempt(request, _timeout, beforeSend) {
     assert.equal(await beforeSend(), true);
@@ -46,15 +46,15 @@ test('file-backed public build and at retain injected delivery transport and com
   const bob = await Square.at({ path: location, env });
   let reopened;
   try {
-    await bob.join('Bob', { body: { channel: 'test', session: 'bob' },
+    await bob.join('Bob', { owner: ':',
       wakeAddress: { kind: 'paseo', address: { agentId: 'no-external-send' } } });
-    const alice = (await built.join('Alice', { body })).participant;
+    const alice = (await built.join('Alice', { owner: body })).participant;
     const first = await alice.express('from build', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 1, 'Square.build must retain the supplied transport');
     assert.deepEqual(Object.keys(calls[0].route).sort(), ['address', 'kind', 'location', 'participant', 'updatedAt']);
     assert.deepEqual(calls[0].route.address, { agentId: 'no-external-send' });
     reopened = await Square.at({ path: location, env, wakeTransport });
-    const second = await (await reopened.participant('Alice', { body })).express('from at', { mentions: ['Bob'], force: true });
+    const second = await (await reopened.participant('Alice', { owner: body })).express('from at', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 2, 'Square.at must retain the supplied transport');
     const artifact = createArtifactPort(location);
     try {
@@ -75,24 +75,24 @@ test('known-artifact participation survives an unavailable discovery home and ke
   const env = { ...process.env, HOME: unavailableHome,
     SQUARE_INDEX: path.join(unavailableHome, 'index.ndjsonl'), SQUARE_NOW_MS: '1000' };
   const location = path.join(root, 'KNOWN.square');
-  const body = { channel: 'test', session: 'known' };
+  const body = "test" + ":" + ('known');
   const wakeTransport = { async attempt() { assert.fail('no external sends'); } };
   const built = await Square.build({ path: location, markdown: 'known artifact', env, wakeTransport });
   try {
     // Neither discovery nor the clock may be resolved again during participant operations.
     env.SQUARE_INDEX = lateIndex;
     env.SQUARE_NOW_MS = 'not-a-clock';
-    const alice = (await built.join('Alice', { body })).participant;
+    const alice = (await built.join('Alice', { owner: body })).participant;
     const expressed = await alice.express('committed despite unavailable HOME', { force: true });
     assert.equal(expressed.activity.at, 1000);
-    assert.equal((await built.participant('Alice', { body })).name, 'Alice');
+    assert.equal((await built.participant('Alice', { owner: body })).name, 'Alice');
     await alice.done();
     assert.equal(fs.existsSync(lateIndex), false);
   } finally { await built.close(); }
   const reopened = await Square.at({ path: location, wakeTransport,
     env: { ...env, SQUARE_INDEX: path.join(unavailableHome, 'index.ndjsonl'), SQUARE_NOW_MS: '2000' } });
   try {
-    const alice = (await reopened.join('Alice', { body })).participant;
+    const alice = (await reopened.join('Alice', { owner: body })).participant;
     assert.equal((await alice.express('known artifact reconnect', { force: true })).activity.at, 2000);
     assert.deepEqual((await reopened.history()).activities.filter(row => row.kind === 'say').map(row => row.body),
       ['committed despite unavailable HOME', 'known artifact reconnect']);
@@ -270,7 +270,7 @@ test('wake revalidates the captured seat after asynchronous takeover and refuses
   await deliverPending({ artifact, location: '/tmp/one.square', activity, now: 4,
     transport: { async attempt(request, _timeout, beforeSend) {
       oldToken = request.claimToken;
-      await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: { ...bob.body, agent: 'replacement' }, expectedGeneration: bob.generation }, facts => {
+      await artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: 'test:bob-replacement', expectedGeneration: bob.generation }, facts => {
         facts.land({ kind: 'done', actor: 'Bob', at: 5 });
         facts.land({ kind: 'join', actor: 'Bob', at: 6 });
       });
@@ -289,7 +289,7 @@ test('presentation consumes only the captured seat generation', async t => {
   t.after(() => artifact.close());
   const result = await presentPending({ artifact, location: '/tmp/one.square', participant: 'Bob', activity,
     seat: bob, sink: { async present() {
-      await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: { channel: 'test', session: 'replacement' }, expectedGeneration: bob.generation }, facts => {
+      await artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: ':', expectedGeneration: bob.generation }, facts => {
         facts.land({ kind: 'done', actor: 'Bob', at: 4 });
         facts.land({ kind: 'join', actor: 'Bob', at: 5 });
       });
@@ -323,9 +323,9 @@ function countingArtifact(artifact) {
 test('one requested activity wakes its landed audience without hydrating other unread history', async t => {
   const artifact = createArtifactPort(':memory:', empty());
   t.after(() => artifact.close());
-  const bodyOf = (name) => ({ channel: 'test', session: name.toLowerCase() });
+  const bodyOf = (name) => ("test" + ":" + (name.toLowerCase()));
   const wake = (agentId) => ({ kind: 'paseo', address: { agentId } });
-  const join = (name, at, wakeAddress) => artifact.transactAs({ kind: 'join', participant: name, body: bodyOf(name), wakeAddress }, (facts) => {
+  const join = (name, at, wakeAddress) => artifact.transactAs({ kind: 'join', participant: name, owner: bodyOf(name), wakeAddress }, (facts) => {
     facts.land({ kind: 'join', actor: name, at });
     return facts.seat(name);
   }).then(({ value }) => value);
@@ -346,7 +346,7 @@ test('one requested activity wakes its landed audience without hydrating other u
   await artifact.transactAs({ kind: 'participant', seat: bob }, (facts) => facts.markSeen('Bob', [caught.value.index], 201));
   const beforeRejoin = await artifact.transactAs({ kind: 'participant', seat: alice }, (facts) =>
     facts.land({ kind: 'say', actor: 'Alice', at: 202, body: 'landed before the rejoin', mentions: ['Carol'] }));
-  await artifact.transactAs({ kind: 'takeover', participant: 'Carol', body: bodyOf('carol-rejoined'), expectedGeneration: carol.generation }, (facts) => {
+  await artifact.transactAs({ kind: 'takeover', participant: 'Carol', owner: bodyOf('carol-rejoined'), expectedGeneration: carol.generation }, (facts) => {
     facts.land({ kind: 'done', actor: 'Carol', at: 203 });
     facts.land({ kind: 'join', actor: 'Carol', at: 204 });
   });

@@ -45,9 +45,9 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
-    const body = { channel: 'test', session: 'consumer' };
+    const body = "test" + ":" + ('consumer');
     const square = Square.inMemory({ markdown: 'context' });
-    const joined: Promise<JoinResult> = square.join('Alice', { body });
+    const joined: Promise<JoinResult> = square.join('Alice', { owner: body });
     // @ts-expect-error caller identity is required on join, not the resource
     square.join('NoBody');
     // @ts-expect-error the resource never captures caller identity
@@ -77,9 +77,9 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { Square } from '@astrosheep/square';
-    const body = { channel: 'test', session: 'consumer' };
+    const body = "test" + ":" + ('consumer');
     const square = Square.inMemory({ markdown: 'context' });
-    const { participant: alice } = await square.join('Alice', { body });
+    const { participant: alice } = await square.join('Alice', { owner: body });
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
     // Pi renderer imports must resolve from the consumer's supplied TUI peer.

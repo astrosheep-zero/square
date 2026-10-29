@@ -14,15 +14,15 @@ import { observeClaudeDelivery, nativePayload, createClaudeWakeTransport } from 
 import { recordClaudeDeliveryStatus } from '../dist/claude-delivery-status.js';
 import { doctorDeliveryHealth } from '../dist/delivery-health.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { Square } from '../dist/square-api.js';
+import { Square, decodeHarnessOwner } from '../dist/square-api.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { projectSessionCandidates, sessionInbox } from '../dist/inbox.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 
 const supported = { skip: process.platform !== 'darwin' };
-const claudeBody = { channel: 'claude-code', session: 'claude-test' };
-const authorBody = { channel: 'claude-code', session: 'claude-author' };
+const claudeBody = "claude-code" + ":" + ('claude-test');
+const authorBody = "claude-code" + ":" + ('claude-author');
 const bodyHash = text => createHash('sha256').update(text).digest('hex');
 
 async function fixture(t, text = 'hello @Bob', envOverrides = {}) {
@@ -31,10 +31,10 @@ async function fixture(t, text = 'hello @Bob', envOverrides = {}) {
   const endpoint = path.join(root, 'in.sock');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_DISABLE_PASEO_WAKE: '1', ...envOverrides };
   const author = await Square.build({ path: squarePath, markdown: 'test', env });
-  try { await author.join('Alice', { body: authorBody }); }
+  try { await author.join('Alice', { owner: authorBody }); }
   finally { await author.close(); }
   const bob = await Square.at({ path: squarePath, env });
-  try { await bob.join('Bob', { body: claudeBody }); }
+  try { await bob.join('Bob', { owner: claudeBody }); }
   finally { await bob.close(); }
 
   const frames = [];
@@ -55,7 +55,7 @@ async function fixture(t, text = 'hello @Bob', envOverrides = {}) {
   await once(server, 'listening');
   t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
 
-  const coordinate = { sessionId: claudeBody.session, cwd: root, version: '2.1.999', endpoint };
+  const coordinate = { sessionId: 'claude-test', cwd: root, version: '2.1.999', endpoint };
   const bridge = async value => {
     const request = { ...coordinate, ...value };
     if (['start', 'reconcile'].includes(value.operation) && value.endpoint === undefined) request.endpoint = 'relative.sock';
@@ -90,8 +90,8 @@ async function setWakeAddress(f, wakeAddress, participant = 'Bob', location = f.
     const seat = await artifact.read(facts => facts.seat(participant));
     const current = seat.value;
     if (current === undefined) throw new Error(`Missing artifact seat for ${participant}`);
-    const ref = { participant: current.participant, body: current.body, generation: current.generation };
-    if (wakeAddress?.kind === 'claude-native') wakeAddress = { ...wakeAddress, address: { ...wakeAddress.address, sessionId: current.body.session } };
+    const ref = { participant: current.participant, owner: current.owner, generation: current.generation };
+    if (wakeAddress?.kind === 'claude-native') wakeAddress = { ...wakeAddress, address: { ...wakeAddress.address, sessionId: decodeHarnessOwner(current.owner).session } };
     await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.updateWakeAddress(ref, wakeAddress));
   } finally { await artifact.close(); }
 }
@@ -99,16 +99,16 @@ async function setWakeAddress(f, wakeAddress, participant = 'Bob', location = f.
 async function landSay(f, text, mentions = ['Bob'], location = f.squarePath) {
   const square = await Square.at({ path: location, env: f.env });
   try {
-    const result = await (await square.participant('Alice', { body: f.authorBody })).express(text, { force: true, mentions });
+    const result = await (await square.participant('Alice', { owner: f.authorBody })).express(text, { force: true, mentions });
     return Number(result.activity.id.slice('act/'.length));
   } finally { await square.close(); }
 }
 
 async function seedSquare(f, location, body, text, participant = 'Bob') {
   const author = await Square.build({ path: location, markdown: 'test', env: f.env });
-  try { await author.join('Alice', { body: f.authorBody }); } finally { await author.close(); }
+  try { await author.join('Alice', { owner: f.authorBody }); } finally { await author.close(); }
   const member = await Square.at({ path: location, env: f.env });
-  try { await member.join(participant, { body }); } finally { await member.close(); }
+  try { await member.join(participant, { owner: body }); } finally { await member.close(); }
   const index = await landSay(f, text, [participant], location);
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint } }, participant, location);
   return index;
@@ -126,7 +126,7 @@ async function seenIn(location, index = 2, participant = 'Bob') {
 async function seen(f, index = 2, participant = 'Bob') { return seenIn(f.squarePath, index, participant); }
 
 async function pendingPayload(f, request) {
-  const inbox = await sessionInbox(request.seat.body, f.env);
+  const inbox = await sessionInbox(request.seat.owner, f.env);
   const membership = inbox.find(item => canonicalPathSync(item.location) === canonicalPathSync(request.location)
     && item.seat.participant === request.participant);
   const notification = membership?.notifications.find(note => note.actIndex === Number(request.activity.slice(4)));
@@ -261,7 +261,7 @@ test('reconciliation preserves the native seat address and an unknown attempt is
     messageId: original.correlation.messageId, eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() }, f.env), true);
   const scoped = { ...f.env, CLAUDE_CODE_SESSION_ID: f.coordinate.sessionId };
   const square = await Square.at({ path: f.squarePath, env: scoped });
-  try { await (await square.participant('Bob', { body: claudeBody })).express('*waves*', { force: true, noMention: true }); }
+  try { await (await square.participant('Bob', { owner: claudeBody })).express('*waves*', { force: true, noMention: true }); }
   finally { await square.close(); }
   const reconciled = await f.bridge({ operation: 'reconcile', endpoint: f.coordinate.endpoint });
   assert.equal(reconciled.bindings.length, 1);
@@ -277,7 +277,7 @@ test('reconciliation preserves the native seat address and an unknown attempt is
   // Withdrawal may expose a fallback for future attention, never replay unknown bytes.
   await f.bridge({ operation: 'reconcile', endpoint: 'relative.sock' });
   const fallback = await Square.at({ path: f.squarePath, env: scoped });
-  try { await fallback.join('Bob', { body: claudeBody, wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }); }
+  try { await fallback.join('Bob', { owner: claudeBody, wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }); }
   finally { await fallback.close(); }
   assert.equal((await seatFor(f)).wakeAddress.kind, 'paseo');
   await dispatch(f);
@@ -426,7 +426,7 @@ test('a catch receipt committed before a late native append prevents presentatio
   const artifact = createArtifactPort(f.squarePath);
   try {
     const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
-    const ref = { participant: seat.participant, body: seat.body, generation: seat.generation };
+    const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
     await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.markSeen('Bob', [2], Date.now()));
   } finally { await artifact.close(); }
   await stored(f, text);
@@ -466,13 +466,13 @@ test('a stale native payload cannot present a replacement artifact seat', async 
   await dispatch(f);
   const text = await payload(f);
   const prior = await seatFor(f);
-  const replacementBody = { channel: 'claude-code', session: 'replacement-session' };
+  const replacementBody = "claude-code" + ":" + ('replacement-session');
   const replacement = await Square.at({ path: f.squarePath, env: f.env });
-  try { await replacement.join('Bob', { body: replacementBody, takeover: true }); }
+  try { await replacement.join('Bob', { owner: replacementBody, takeover: true }); }
   finally { await replacement.close(); }
   assert.deepEqual(await stored(f, text), { recognized: true, current: false });
   const current = await seatFor(f);
-  assert.equal(current.body.session, replacementBody.session);
+  assert.equal(current.owner, replacementBody);
   assert.notEqual(current.generation, prior.generation);
   assert.equal(await seen(f), undefined);
 });
@@ -483,7 +483,7 @@ test('done retains native token recognition without current authority or present
   const text = await payload(f);
   const prior = await seatFor(f);
   const square = await Square.at({ path: f.squarePath, env: f.env });
-  try { await (await square.participant('Bob', { body: claudeBody })).done(); }
+  try { await (await square.participant('Bob', { owner: claudeBody })).done(); }
   finally { await square.close(); }
   const before = await evidence(f, prior.generation);
   assert.equal(await seatFor(f), undefined);
@@ -518,14 +518,14 @@ test('a mixed current and inactive native frame vetoes every token before any si
 
 test('pinned session end cannot retire a replacement artifact seat', supported, async t => {
   const f = await fixture(t);
-  const replacementBody = { channel: 'claude-code', session: 'replacement-session' };
+  const replacementBody = "claude-code" + ":" + ('replacement-session');
   const replacement = await Square.at({ path: f.squarePath, env: f.env });
-  try { await replacement.join('Bob', { body: replacementBody, takeover: true }); }
+  try { await replacement.join('Bob', { owner: replacementBody, takeover: true }); }
   finally { await replacement.close(); }
   const result = await f.bridge({ operation: 'end', bindings: f.start.bindings, endedAt: Date.now() });
   assert.deepEqual(result.retired, []);
   const seat = await seatFor(f);
-  assert.equal(seat.body.session, replacementBody.session);
+  assert.equal(seat.owner, replacementBody);
   const acts = await artifactRead(f, facts => facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items);
   assert.deepEqual(acts.filter(activity => activity.actor === 'Bob').map(activity => activity.kind), ['join', 'done', 'join']);
 });
@@ -533,12 +533,12 @@ test('pinned session end cannot retire a replacement artifact seat', supported, 
 test('late Claude memberships reconcile, cancellation covers committed joins, and end is participant-scoped', supported, async t => {
   const f = await fixture(t);
   const late = await Square.at({ path: f.squarePath, env: f.env });
-  try { await late.join('Late', { body: claudeBody }); }
+  try { await late.join('Late', { owner: claudeBody }); }
   finally { await late.close(); }
   const reconciled = await f.bridge({ operation: 'reconcile' });
   assert.equal(reconciled.bindings.length, 2);
   const after = await Square.at({ path: f.squarePath, env: f.env });
-  try { await after.join('After', { body: claudeBody }); }
+  try { await after.join('After', { owner: claudeBody }); }
   finally { await after.close(); }
   const cancelled = await f.bridge({ operation: 'cancel', bindings: reconciled.bindings,
     cancelledBindings: reconciled.bindings, cancelAt: Date.now() });
@@ -548,7 +548,7 @@ test('late Claude memberships reconcile, cancellation covers committed joins, an
   const ended = await f.bridge({ operation: 'end', bindings: f.start.bindings, endedAt: Date.now() });
   assert.equal(ended.retired.length, 3);
   const state = await artifactRead(f, facts => ({
-    seats: facts.seatsForBody(claudeBody),
+    seats: facts.seatsForOwner(claudeBody),
     acts: facts.activityHeads({}, { edge: 'oldest', limit: 30 }).items,
   }));
   assert.deepEqual(state.seats.map(seat => [seat.participant, seat.attachment, seat.wakeAddress]),
@@ -562,7 +562,7 @@ test('a prior cancellation cutoff cannot suppress a replacement generation on re
   await f.bridge({ operation: 'cancel', bindings: f.start.bindings, cancelledBindings: f.start.bindings, cancelAt: cancelledAt });
   const prior = await seatFor(f);
   const replacement = await Square.at({ path: f.squarePath, env: f.env });
-  try { await replacement.join('Bob', { body: claudeBody, takeover: true }); }
+  try { await replacement.join('Bob', { owner: claudeBody, takeover: true }); }
   finally { await replacement.close(); }
   const current = await seatFor(f);
   assert.notEqual(current.generation, prior.generation);
@@ -591,7 +591,7 @@ test('an unavailable native endpoint clears only the wake address, not the artif
   assert.match(result.diagnostic, /unavailable/);
   const seat = await seatFor(f);
   assert.equal(seat.wakeAddress, undefined);
-  assert.equal(seat.body.session, f.coordinate.sessionId);
+  assert.equal(seat.owner, f.bobBody);
   assert.equal((await artifactRead(f, facts => facts.participant('Bob'))).joined, true);
 });
 
@@ -607,7 +607,7 @@ test('mixed native tokens across two candidate artifacts veto every ordering bef
   assert.notEqual(retired, current);
 
   const otherSeat = await seatIn(otherPath);
-  const otherRef = { participant: otherSeat.participant, body: otherSeat.body, generation: otherSeat.generation };
+  const otherRef = { participant: otherSeat.participant, owner: otherSeat.owner, generation: otherSeat.generation };
   const otherArtifact = createArtifactPort(otherPath);
   try { await otherArtifact.cancelDeliveries(otherRef, otherIndex); } finally { await otherArtifact.close(); }
   const beforeMain = await evidenceIn(f.squarePath, 'Bob');
@@ -635,7 +635,7 @@ test('mixed native tokens across two candidate artifacts veto every ordering bef
 
 test('a retired child-agent candidate is discovered by session and recognized without a current seat or inbox', async t => {
   const f = await fixture(t);
-  const childBody = { channel: 'claude-code', session: f.coordinate.sessionId, agent: 'child-agent' };
+  const childBody = "claude-code" + ":" + (f.coordinate.sessionId) + ":agent:child-agent";
   const childPath = path.join(f.root, 'child.square');
   await seedSquare(f, childPath, childBody, 'child @Bob');
   const childSeat = await seatIn(childPath);
@@ -644,13 +644,13 @@ test('a retired child-agent candidate is discovered by session and recognized wi
   const before = await evidenceIn(childPath, 'Bob', childSeat.generation);
 
   const child = await Square.at({ path: childPath, env: f.env });
-  try { await (await child.participant('Bob', { body: childBody })).done(); } finally { await child.close(); }
+  try { await (await child.participant('Bob', { owner: childBody })).done(); } finally { await child.close(); }
 
   assert.equal(await seatIn(childPath), undefined);
   assert.deepEqual(await sessionInbox(childBody, f.env), []);
-  const candidates = await projectSessionCandidates({ sessionId: f.coordinate.sessionId, channel: 'claude-code', env: f.env });
+  const candidates = await projectSessionCandidates({ owner: childBody, env: f.env });
   assert.ok(candidates.some(candidate => canonicalPathSync(candidate.location) === canonicalPathSync(childPath)));
-  assert.deepEqual(await projectSessionCandidates({ sessionId: f.coordinate.sessionId, channel: 'claude-code', agent: 'unrelated-agent', env: f.env }), []);
+  assert.deepEqual(await projectSessionCandidates({ owner: `claude-code:${f.coordinate.sessionId}:agent:unrelated-agent`, env: f.env }), []);
 
   for (const operation of ['guard', 'admitted', 'stored'])
     assert.deepEqual(await observeClaudeDelivery(f.coordinate.sessionId, text, operation, f.env), { recognized: true, current: false });

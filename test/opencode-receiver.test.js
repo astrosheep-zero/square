@@ -29,13 +29,13 @@ async function fixture(t) {
   state.runtime.nextActIndex = 0;
   await writeSquareFile(location, state);
   const artifact = createArtifactPort(location);
-  const body = { channel: 'opencode', session: 'native-session' };
-  const join = (participant, body, wakeAddress) => artifact.transactAs({ kind: 'join', participant, body, wakeAddress }, facts => {
+  const body = "opencode" + ":" + ('native-session');
+  const join = (participant, body, wakeAddress) => artifact.transactAs({ kind: 'join', participant, owner: body, wakeAddress }, facts => {
     facts.land({ kind: 'join', actor: participant, at: Date.now() });
     return facts.seat(participant);
   }).then(result => result.value);
-  const alice = await join('Alice', { channel: 'test', session: 'author' });
-  const bob = await join('Bob', body, { kind: 'opencode-server', address: { sessionId: body.session } });
+  const alice = await join('Alice', "test" + ":" + ('author'));
+  const bob = await join('Bob', body, { kind: 'opencode-server', address: { sessionId: 'native-session' } });
   const say = text => artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: text, mentions: ['Bob'] })).then(result => result.value.index);
   const bind = () => rememberSquarePath(location, body, env.SQUARE_INDEX);
@@ -44,7 +44,7 @@ async function fixture(t) {
   const receivers = [];
   const start = prompt => {
     const abort = new AbortController();
-    const running = receiveOpenCodePending({ sessionId: body.session, session: { get: async () => ({ id: body.session }), prompt } }, env, abort.signal);
+    const running = receiveOpenCodePending({ sessionId: 'native-session', session: { get: async () => ({ id: 'native-session' }), prompt } }, env, abort.signal);
     // Retain any unexpected receiver failure until cleanup asserts it.
     void running.catch(() => {});
     const receiver = { abort, running };
@@ -106,13 +106,13 @@ test('initial native acceptance is not receipt; exact prepared context confirms 
   assert.equal(await item.receipt(first), undefined);
   const context = (input, changes = {}) => ({ id: input.id, role: 'user', content: [{ type: 'text', text: input.text }], ...changes });
   const signal = new AbortController().signal;
-  await observeOpenCodeContext(item.body.session, [context(calls[0], { id: 'wrong-token' }), context(calls[0], { role: 'assistant' }),
+  await observeOpenCodeContext('native-session', [context(calls[0], { id: 'wrong-token' }), context(calls[0], { role: 'assistant' }),
     context(calls[0], { content: [{ type: 'text', text: calls[0].text + 'changed' }] })], item.env, signal);
   assert.equal(await item.receipt(first), undefined);
-  await observeOpenCodeContext(item.body.session, [context(calls[0])], item.env, signal);
+  await observeOpenCodeContext('native-session', [context(calls[0])], item.env, signal);
   const received = await item.receipt(first);
   assert.ok(received);
-  await observeOpenCodeContext(item.body.session, [context(calls[0])], item.env, signal);
+  await observeOpenCodeContext('native-session', [context(calls[0])], item.env, signal);
   assert.deepEqual(await item.receipt(first), received);
   assert.equal(await item.receipt(second), undefined);
   await sleep(100);
@@ -206,14 +206,14 @@ test('receipt and takeover during native I/O exclude stale batch/context while n
   });
   await until(() => calls.length === 1, 'first native I/O was not entered');
   await item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts => facts.markSeen('Bob', [caught], Date.now()));
-  await item.artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: { ...item.body, agent: 'other-agent' },
-    expectedGeneration: item.bob.generation, wakeAddress: { kind: 'opencode-server', address: { sessionId: item.body.session } } }, facts => {
+  await item.artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: 'opencode:native-session:agent:other-agent',
+    expectedGeneration: item.bob.generation, wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts => {
     facts.land({ kind: 'done', actor: 'Bob', at: Date.now() });
     facts.land({ kind: 'join', actor: 'Bob', at: Date.now() });
   });
   await item.say('belongs only to replacement agent');
-  await item.artifact.transactAs({ kind: 'join', participant: 'Cara', body: item.body,
-    wakeAddress: { kind: 'opencode-server', address: { sessionId: item.body.session } } }, facts =>
+  await item.artifact.transactAs({ kind: 'join', participant: 'Cara', owner: item.body,
+    wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts =>
     facts.land({ kind: 'join', actor: 'Cara', at: Date.now() }));
   const fresh = (await item.artifact.transactAs({ kind: 'participant', seat: item.alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new exact-body member', mentions: ['Cara', 'Bob'] }))).value.index;
@@ -225,7 +225,7 @@ test('receipt and takeover during native I/O exclude stale batch/context while n
   assert.equal(newMessageCalls.length, 2, 'both current seats with the exact native address receive the new activity');
   assert.deepEqual(newMessageCalls.map(call => call.text.match(/<square-activity[^>]* as="([^"]+)"/)?.[1]).sort(), ['Bob', 'Cara']);
   assert.match(calls[1].text, /new exact-body member/);
-  await observeOpenCodeContext(item.body.session, [{ id: calls[0].id, role: 'user', content: [{ type: 'text', text: calls[0].text }] }],
+  await observeOpenCodeContext('native-session', [{ id: calls[0].id, role: 'user', content: [{ type: 'text', text: calls[0].text }] }],
     item.env, new AbortController().signal);
   assert.equal(await item.receipt(first), undefined, 'old prepared context cannot consume under a new generation');
   assert.ok(await item.receipt(caught));

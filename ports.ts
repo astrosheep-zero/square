@@ -1,4 +1,4 @@
-import type { Act, ActivityId, Body, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
+import type { Act, ActivityId, Owner, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
 import type { MetadataMatch, DeliveryDeferralFact } from './delivery-deferral.js';
 
 export type ActivityIndex = number;
@@ -71,12 +71,12 @@ export interface DirectedHead {
 export interface LandedRecipient { readonly recipient: string; readonly route: DirectedHead['route'] }
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
-export type SeatRef = Pick<Seat, 'participant' | 'body' | 'generation'>;
+export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;
 export type ArtifactWriteAuthority =
   | { readonly kind: 'participant'; readonly seat: SeatRef }
   | { readonly kind: 'host-cleanup'; readonly seat: SeatRef }
-  | { readonly kind: 'join'; readonly participant: string; readonly body: Body; readonly wakeAddress?: WakeAddress }
-  | { readonly kind: 'takeover'; readonly participant: string; readonly body: Body; readonly expectedGeneration: ActivityId; readonly wakeAddress?: WakeAddress };
+  | { readonly kind: 'join'; readonly participant: string; readonly owner: Owner; readonly wakeAddress?: WakeAddress }
+  | { readonly kind: 'takeover'; readonly participant: string; readonly owner: Owner; readonly expectedGeneration: ActivityId; readonly wakeAddress?: WakeAddress };
 export interface DeliveryEvidence {
   readonly participant: string;
   readonly generation: ActivityId;
@@ -125,7 +125,7 @@ export interface DeliveryCompletion {
 /** Domain facts exist only during a synchronous artifact callback. Values are detached. */
 export interface SquareRead {
   seat(requestedName: string): Seat | undefined;
-  seatsForBody(body: Body): readonly Seat[];
+  seatsForOwner(owner: Owner): readonly Seat[];
   deliveryEvidence(participant: string, generation: ActivityId, activity?: ActivityId): readonly DeliveryEvidence[];
   deliveryByToken(claimToken: string): DeliveryEvidence | undefined;
   cancelledThrough(participant: string, generation: ActivityId): number | undefined;
@@ -181,7 +181,7 @@ export interface SquareCommitResult<R> extends SquareReadResult<R> { readonly ch
 /** Atomic artifact access; no framing, SQL or lazy transaction capability escapes. */
 export interface SquareArtifactPort {
   read<R>(select: (facts: SquareRead) => R, signal?: AbortSignal): Promise<SquareReadResult<R>>;
-  /** Participant/domain writes must carry an explicit authority; no body-less mutation path exists. */
+  /** Participant/domain writes must carry an explicit owner; no owner-less mutation path exists. */
   transactAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
   /** Bounded cleanup/evidence settlement on this same connection after custody was acquired.
    * Independent of request/lifetime cancellation; explicit close and authority fences still apply. */

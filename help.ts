@@ -64,9 +64,9 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
-    names: ['inbox'], usage: 'inbox --for-session <session-id> [--limit <N>]', hiddenFromIndex: true,
+    names: ['inbox'], usage: 'inbox --for-owner <owner> [--limit <N>]', hiddenFromIndex: true,
     summary: 'Inspect a bounded machine-local notification snapshot for a native session.',
-    details: ['Options:', '  --for-session <id>  Required harness session id.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).'],
+    details: ['Options:', '  --for-owner <id>    Required opaque owner.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).'],
   },
   { names: ['codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   { names: ['claude-mod'], usage: '{command}', summary: 'Receive a structured operation from the loaded Claude mod.', hiddenFromIndex: true },
@@ -105,7 +105,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
     summary: 'Convert a supported older square to the current format in place.',
-    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2, 3 and 4 are accepted; version 1, unrelated or unsupported artifacts are refused without a write. Names whose own owner and route evidence agrees may share a body; names with missing or conflicting ownership stay standing without write or delivery authority. Migration reports recovered seats, unowned standing names, shared-body seats and skipped evidence. There is no --check, --backup or --force.'],
+    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2–6 migrate explicitly to format 7; format 6 attachment is preserved and Body coordinates become opaque owners. Versions 4/5 first gain attached seats; 4 also gains empty deferrals. Version 1, unrelated or unsupported artifacts refuse without a write. Names whose legacy owner and routes agree may share an owner; ambiguous names stay standing without custody. Rejoin with the same owner after migration to republish discovery. There is no --check, --backup or --force.'],
   },
 ];
 
@@ -132,9 +132,9 @@ export function renderGlobalHelp(): string {
     '',
   ]);
   return [
-    'Usage: square [--location <square>] [--as <name>] <command> [args...]',
+    'Usage: square [--location <square>] [--as <name>] [--owner <id>] <command> [args...]',
     'Environment: SQUARE_LOCATION sets the CLI local artifact path; square-accessing commands require it or --location. Use --as to select a participant.',
-    'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
+    'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use catch --idle.',
     'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
@@ -168,7 +168,7 @@ export function helpRequest(rawArgs: string[]): { command?: string } | undefined
   const args: string[] = [];
   for (let index = 0; index < rawArgs.length; index++) {
     const arg = rawArgs[index];
-    if (arg === '--location' || arg === '--as') {
+    if (arg === '--location' || arg === '--as' || arg === '--owner') {
       const value = rawArgs[index + 1];
       if (value === undefined || value.startsWith('--')) return undefined;
       index++;

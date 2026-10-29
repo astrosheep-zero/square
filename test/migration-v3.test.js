@@ -129,7 +129,7 @@ test('format-3 conversion imports route-derived Claude correlation and retains u
       evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6')[0],
       unlisten: facts.activity(7),
     }));
-    assert.equal(value.seat.body.session, 'bob-session');
+    assert.equal(value.seat.owner, 'claude-code:bob-session');
     assert.equal(value.seat.wakeAddress.kind, 'claude-native');
     assert.equal(value.seat.wakeAddress.address.sessionId, 'bob-session');
     assert.deepEqual(value.evidence.correlation, {
@@ -144,7 +144,7 @@ test('format-3 conversion imports route-derived Claude correlation and retains u
   assert.equal(stored.length, 1);
   assert.deepEqual(Object.keys(JSON.parse(stored[0].payload_json)).sort(), ['correlation', 'route']);
 
-  await rememberSquarePath(location, { channel: 'claude-code', session: 'bob-session' }, env.SQUARE_INDEX);
+  await rememberSquarePath(location, "claude-code" + ":" + ('bob-session'), env.SQUARE_INDEX);
   const observed = await observeClaudeDelivery('bob-session', legacy.nativeDelivery.payload, 'guard', env);
   assert.deepEqual(observed, { recognized: true, current: true });
 
@@ -192,9 +192,9 @@ test('format-3 migration selects the latest owner by effectiveAt then seq withou
   try {
     const { value } = await artifact.read(facts => ({
       bob: facts.seat('Bob'),
-      stale: facts.seatsForBody({ channel: 'claude-code', session: 'bob-stale' }),
+      stale: facts.seatsForOwner("claude-code" + ":" + ('bob-stale')),
     }));
-    assert.deepEqual(value.bob.body, { channel: 'claude-code', session: 'bob-session' });
+    assert.deepEqual(value.bob.owner, "claude-code" + ":" + ('bob-session'));
     assert.equal(value.bob.generation, 'act/1');
     assert.deepEqual(value.stale, []);
   } finally { await artifact.close(); }
@@ -267,19 +267,19 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
     const { value } = await artifact.read(facts => ({
       alice: facts.seat('Alice'), cara: facts.seat('Cara'), dana: facts.seat('Dana'), bob: facts.seat('Bob'),
       eve: facts.seat('Eve'), finn: facts.seat('Finn'),
-      sharedSeats: facts.seatsForBody({ channel: 'codex', session: 'alice-session' }),
+      sharedSeats: facts.seatsForOwner("codex" + ":" + ('alice-session')),
       evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6'),
       danaEvidence: facts.deliveryEvidence('Dana', 'act/10', 'act/13'),
       pending: facts.directedAt('Bob', 6),
     }));
-    assert.deepEqual(value.alice.body, { channel: 'codex', session: 'alice-session' });
+    assert.deepEqual(value.alice.owner, "codex" + ":" + ('alice-session'));
     assert.equal(value.alice.generation, 'act/0');
-    assert.deepEqual(value.cara.body, value.alice.body);
+    assert.deepEqual(value.cara.owner, value.alice.owner);
     assert.equal(value.cara.generation, 'act/2');
     assert.equal(value.alice.wakeAddress.address.agentId, 'alice');
     assert.equal(value.cara.wakeAddress.address.agentId, 'cara');
     assert.deepEqual(value.sharedSeats.map(seat => seat.participant).sort(), ['Alice', 'Cara']);
-    assert.deepEqual(value.dana.body, { channel: 'paseo', session: 'dana-session' });
+    assert.deepEqual(value.dana.owner, "paseo" + ":" + ('dana-session'));
     assert.equal(value.dana.generation, 'act/10');
     assert.equal(value.bob, undefined);
     assert.equal(value.eve, undefined, 'owner/route disagreement grants neither side a seat');
@@ -295,13 +295,13 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
     assert.equal(sends, 0, 'unowned standing names cannot receive a delivery');
   } finally { await artifact.close(); }
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 6 });
-  const body = { channel: 'test', session: 'not-an-owner' };
+  const body = "test" + ":" + ('not-an-owner');
   const square = await Square.at({ path: location, env });
   try {
     assert.equal((await square.status({ viewer: undefined })).participants.filter(participant => participant.presence === 'active' || participant.presence === 'watching').length, 6);
     assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').presence, 'active');
     assert.equal((await square.history({ limit: null })).activities.length, 14);
-    await assert.rejects(square.participant('Bob', { body }), error => error.code === 'already_joined');
+    await assert.rejects(square.participant('Bob', { owner: body }), error => error.code === 'already_joined');
   } finally { await square.close(); }
   const current = digest(location);
   assert.deepEqual(await migrateSquareFile(location, undefined, env), { status: 'already-current', standing: 6 });
@@ -318,7 +318,7 @@ test('format-3 migration without a ledger recovers one body with different wake 
   const artifact = createArtifactPort(location);
   try {
     const { value } = await artifact.read(facts => facts.seat('Alice'));
-    assert.deepEqual(value.body, { channel: 'codex', session: 'alice-session' });
+    assert.deepEqual(value.owner, 'codex:alice-session');
     assert.equal(value.wakeAddress, undefined, 'one body with different addresses keeps its seat without a wake address');
   } finally { await artifact.close(); }
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
@@ -395,7 +395,7 @@ test('format-3 CLI reports all four counts from a large disposable ownership fix
   const output = execFileSync(process.execPath, ['dist/square.js', '--location', location, 'migrate'], { env, encoding: 'utf8' });
   assert.match(output, /660 recovered seats · 427 unowned standing · 212 shared-body seats · 1 skipped evidence/);
   assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM seats')[0].n, 660);
-  assert.equal(rows(location, 'SELECT COUNT(DISTINCT session_json) AS n FROM seats')[0].n, 466);
+  assert.equal(rows(location, 'SELECT COUNT(DISTINCT owner_json) AS n FROM seats')[0].n, 466);
   assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM participants WHERE joined=1 AND done=0')[0].n, 1087);
   assert.equal(rows(location, "SELECT COUNT(*) AS n FROM activities WHERE kind='done'")[0].n, 0);
   assert.equal(rows(location, 'SELECT next_act_index FROM square_meta')[0].next_act_index, 1092);
@@ -429,7 +429,7 @@ test('format-3 migration preserves both ledger-backed names sharing a body', asy
   assert.equal(result.counts.sharedBodySeats, 2);
   const artifact = createArtifactPort(location);
   try {
-    const { value } = await artifact.read(facts => facts.seatsForBody({ channel: 'paseo', session: 'shared-session' }));
+    const { value } = await artifact.read(facts => facts.seatsForOwner("paseo" + ":" + ('shared-session')));
     assert.deepEqual(value.map(seat => [seat.participant, seat.generation]).sort(), [['Alice', 'act/0'], ['Cara', 'act/2']]);
   } finally { await artifact.close(); }
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 3 });
@@ -457,7 +457,7 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   try {
     const { value } = await artifact.read(facts => ({
       seat: facts.seat('Dana'),
-      bodySeats: facts.seatsForBody({ channel: 'claude-code', session: 'dana-session' }),
+      bodySeats: facts.seatsForOwner("claude-code" + ":" + ('dana-session')),
       evidence: facts.deliveryEvidence('Dana', 'act/8', 'act/9'),
       receipt: facts.receipt('Dana', 9),
       dropped: facts.deliveryByToken('dropped-claude-token'),
@@ -483,7 +483,7 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM seats')[0].n, 3);
   assert.equal(rows(location, 'SELECT COUNT(*) AS n FROM receipts')[0].n, 1);
 
-  await rememberSquarePath(location, { channel: 'claude-code', session: 'dana-session' }, env.SQUARE_INDEX);
+  await rememberSquarePath(location, "claude-code" + ":" + ('dana-session'), env.SQUARE_INDEX);
   const beforeObservation = rows(location, 'SELECT * FROM delivery_evidence ORDER BY participant_key_json,act_index,attempt_n');
   for (const operation of ['guard', 'admitted', 'stored']) {
     assert.deepEqual(await observeClaudeDelivery('dana-session', legacy.nativeDelivery.payload, operation, env),
@@ -555,8 +555,8 @@ test('standing migration preserves a known agent and skips evidence for a differ
   assert.equal(result.counts.skippedEvidence, 3);
   const artifact = createArtifactPort(location);
   try {
-    const { value } = await artifact.read(facts => ({ body: facts.seat('Bob').body, evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6') }));
-    assert.deepEqual(value.body, { channel: 'claude-code', session: 'bob-session', agent: 'child' });
+    const { value } = await artifact.read(facts => ({ body: facts.seat('Bob').owner, evidence: facts.deliveryEvidence('Bob', 'act/1', 'act/6') }));
+    assert.deepEqual(value.body, "claude-code" + ":" + ('bob-session') + ":agent:child");
     assert.deepEqual(value.evidence.map(row => row.claimToken), ['child-token']);
   } finally { await artifact.close(); }
 });

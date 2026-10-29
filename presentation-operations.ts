@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { isSquareError, sameBody } from './model.js';
+import { isSquareError } from './model.js';
 import type { PresentationResult, PresentPendingInput, SquareRead } from './ports.js';
 import { pendingHead, sameJoin } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
@@ -14,7 +14,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
     const participant = facts.participant(input.participant);
     const seat = facts.seat(input.participant);
     if (!participant?.joined || seat === undefined || seat.attachment !== 'attached' || input.generation !== undefined && input.generation !== seat.generation
-      || input.seat !== undefined && (input.seat.generation !== seat.generation || !sameBody(input.seat.body, seat.body))
+      || input.seat !== undefined && (input.seat.generation !== seat.generation || input.seat.owner !== seat.owner)
       || input.current?.(facts) === false || !pendingHead(facts, participant.name, index)
       || deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) !== undefined) return undefined;
     const item = facts.activity(index);
@@ -25,7 +25,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
   const ref = asSeatRef(seat);
   const owns = (facts: SquareRead) => {
     const current = facts.seat(seat.participant);
-    return current !== undefined && current.attachment === 'attached' && sameBody(current.body, seat.body) && current.generation === seat.generation
+    return current !== undefined && current.attachment === 'attached' && current.owner === seat.owner && current.generation === seat.generation
       && sameJoin(facts, participant);
   };
   const claimToken = randomUUID();

@@ -14,9 +14,10 @@ import threading
 
 # Intercept only the process boundary; execute the actual candidate CLI unchanged.
 SHIM = '''#!PYTHON
-import json,os,pathlib,subprocess,sys,threading
+import json,os,pathlib,subprocess,sys,threading,urllib.parse
 R=pathlib.Path(ROOT)
-cmd=[NODE,"--import",SANDBOX,ENTRY]+sys.argv[1:]
+index_env='data:text/javascript,'+urllib.parse.quote('process.env.SQUARE_INDEX='+json.dumps(str(R/'index.ndjsonl')))
+cmd=[NODE,"--import",SANDBOX,"--import",index_env,ENTRY]+sys.argv[1:]
 def record(name,value):
  with (R/name).open('a') as f: f.write(json.dumps(value)+'\\n')
 if sys.argv[1:]==['mcp-server']:

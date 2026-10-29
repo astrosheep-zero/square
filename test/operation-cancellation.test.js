@@ -11,7 +11,7 @@ function aborted(message = 'cancelled') {
   return controller;
 }
 
-const body = (session) => ({ channel: 'test', session });
+const body = (session) => `test:${session}`;
 
 async function tempDirectory(prefix) {
   const fs = await import('node:fs/promises');
@@ -24,8 +24,8 @@ async function tempDirectory(prefix) {
 test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
   const square = Square.inMemory({ markdown: 'context' });
   const before = await square.snapshot();
-  await assert.rejects(() => square.join('Alice', { body: body('memory') }, { signal: aborted().signal }), /cancelled/);
-  await assert.rejects(() => square.reattach('Bob', { body: body('memory') }, { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.join('Alice', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.reattach('Bob', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
   assert.equal((await square.snapshot()).actCount, before.actCount);
   await square.close();
 });
@@ -37,13 +37,13 @@ test('request operations abort under an exclusive artifact lock without a deferr
   const writerBody = body('writer');
   const readerBody = body('reader');
   const built = await Square.build({ path: location, markdown: 'context', env });
-  const writer = (await built.join('Writer', { body: writerBody })).participant;
+  const writer = (await built.join('Writer', { owner: writerBody })).participant;
   await built.close();
   const readerSquare = await Square.at({ path: location, env });
-  await readerSquare.join('Reader', { body: readerBody });
+  await readerSquare.join('Reader', { owner: readerBody });
   await readerSquare.close();
   const writerSquare = await Square.at({ path: location, env });
-  await (await writerSquare.participant('Writer', { body: writerBody })).express('unread', { force: true, mentions: ['Reader'] });
+  await (await writerSquare.participant('Writer', { owner: writerBody })).express('unread', { force: true, mentions: ['Reader'] });
   await writerSquare.close();
 
   const before = await readSquareSnapshot(location);
@@ -51,9 +51,9 @@ test('request operations abort under an exclusive artifact lock without a deferr
   database.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
   const requests = [
-    async square => (await square.participant('Reader', { body: readerBody })).catch({}, { signal: controller.signal }),
-    async square => (await square.participant('Writer', { body: writerBody })).express('cancelled', { force: true }, { signal: controller.signal }),
-    async square => square.join('Newcomer', { body: body('newcomer') }),
+    async square => (await square.participant('Reader', { owner: readerBody })).catch({}, { signal: controller.signal }),
+    async square => (await square.participant('Writer', { owner: writerBody })).express('cancelled', { force: true }, { signal: controller.signal }),
+    async square => square.join('Newcomer', { owner: body('newcomer') }),
   ];
   const pending = requests.map(async operate => {
     const square = await Square.at({ cwd: root, env, path: location }, { signal: controller.signal });
@@ -128,8 +128,8 @@ test('a published build keeps its result when cancellation follows publication',
 
 test('idle catch aborts without consuming activity added later', async () => {
   const square = Square.inMemory({ markdown: 'context' });
-  const alice = (await square.join('Alice', { body: body('memory') })).participant;
-  const bob = (await square.join('Bob', { body: body('memory') })).participant;
+  const alice = (await square.join('Alice', { owner: body('memory') })).participant;
+  const bob = (await square.join('Bob', { owner: body('memory') })).participant;
   await bob.catch();
   const controller = new AbortController();
   const waiting = bob.catch({ idle: 60_000 }, { signal: controller.signal });
@@ -144,8 +144,8 @@ test('idle catch aborts without consuming activity added later', async () => {
 
 test('memory change wait removes abort listeners on normal settlement', async () => {
   const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, 'context'));
-  const body = { channel: 'test', session: 'watcher' };
-  await cell.transactAs({ kind: 'join', participant: 'Watcher', body }, facts => facts.land({ kind: 'join', actor: 'Watcher', at: 0 }));
+  const body = "test" + ":" + ('watcher');
+  await cell.transactAs({ kind: 'join', participant: 'Watcher', owner: body }, facts => facts.land({ kind: 'join', actor: 'Watcher', at: 0 }));
   const seat = (await cell.read(facts => facts.seat('Watcher'))).value;
   const baseline = await cell.revision();
   const controller = new AbortController();
@@ -159,7 +159,7 @@ test('memory change wait removes abort listeners on normal settlement', async ()
 test('abort inside a transition before commit rolls back the whole change', async () => {
   const cell = createArtifactPort(':memory:', prepareSquareBuild({ force: false, hardCap: null }, 'context'));
   const controller = new AbortController();
-  const authority = { kind: 'join', participant: 'Alice', body: body('alice') };
+  const authority = { kind: 'join', participant: 'Alice', owner: body('alice') };
   await assert.rejects(() => cell.transactAs(authority, facts => {
     facts.land({ kind: 'join', actor: 'Alice', at: 1 });
     controller.abort(new Error('response discarded'));
@@ -175,7 +175,7 @@ test('post-commit express preserves its result after response cancellation', asy
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
   const square = await resourceWithArtifact(t, artifact);
-  const writer = (await square.join('Writer', { body: body('memory') })).participant;
+  const writer = (await square.join('Writer', { owner: body('memory') })).participant;
   const controller = new AbortController();
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
@@ -192,8 +192,8 @@ test('post-commit catch preserves its receipt and result before return cancellat
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
   const square = await resourceWithArtifact(t, artifact);
-  const alice = (await square.join('Alice', { body: body('memory') })).participant;
-  const bob = (await square.join('Bob', { body: body('memory') })).participant;
+  const alice = (await square.join('Alice', { owner: body('memory') })).participant;
+  const bob = (await square.join('Bob', { owner: body('memory') })).participant;
   await bob.catch();
   await alice.express('boundary catch', { force: true, mentions: ['Bob'] });
   const controller = new AbortController();
@@ -213,7 +213,7 @@ test('a result-assembly failure after express commit retains landed certainty an
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
   const square = await resourceWithArtifact(t, artifact);
-  const writer = (await square.join('Writer', { body: body('memory') })).participant;
+  const writer = (await square.join('Writer', { owner: body('memory') })).participant;
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (...args) => {
     const result = await transactAs(...args);
@@ -237,10 +237,10 @@ test('concurrent joins from one body establish one artifact seat and one join ac
   const square = await Square.build({ path: location, markdown: 'context', env });
   const peer = await Square.at({ path: location, env });
   try {
-    await Promise.all([square.join('Same', { body: coordinate }), peer.join('Same', { body: coordinate })]);
+    await Promise.all([square.join('Same', { owner: coordinate }), peer.join('Same', { owner: coordinate })]);
     assert.equal((await square.history()).activities.filter(activity => activity.kind === 'join').length, 1);
     const artifact = createArtifactPort(location);
-    try { assert.deepEqual((await artifact.read(facts => facts.seatsForBody(coordinate))).value.map(seat => seat.participant), ['Same']); }
+    try { assert.deepEqual((await artifact.read(facts => facts.seatsForOwner(coordinate))).value.map(seat => seat.participant), ['Same']); }
     finally { await artifact.close(); }
   } finally { await Promise.all([square.close(), peer.close()]); }
 });

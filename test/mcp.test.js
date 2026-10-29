@@ -23,8 +23,8 @@ async function fixture(participant = 'rei') {
   const square = await Square.build({ path: squarePath, markdown: 'MCP scene' });
   await square.close();
   const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), CODEX_THREAD_ID: `mcp-${participant}` };
-  const body = { channel: 'codex', session: `mcp-${participant}` };
-  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, path: squarePath, body }) };
+  const body = "codex" + ":" + `mcp-${participant}`;
+  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, path: squarePath, owner: body }) };
 }
 
 async function connectedClient(server) {
@@ -92,7 +92,7 @@ test('one MCP server accepts per-call participants without a configured default'
   const baseEnv = { ...env };
   const beforeProcessEnv = { ...process.env };
   const beforeBaseEnv = { ...baseEnv };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, body }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, owner: body }));
   try {
     const tools = (await client.listTools()).tools;
     for (const name of ['join', 'express', 'catch', 'attention', 'hold', 'done', 'status']) {
@@ -140,16 +140,16 @@ test('MCP request metadata binds the participant seat to the live call body', as
     await t.test(channel, async (t) => {
       const { cwd, squarePath, env } = await fixture();
       t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-      const configuredBody = { channel: 'configured', session: `startup-${channel}` };
+      const configuredBody = "configured" + ":" + `startup-${channel}`;
       const beforeProcessEnv = { ...process.env };
       const beforeBaseEnv = { ...env };
-      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, body: configuredBody,
+      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, owner: configuredBody,
         wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }));
       const artifact = createArtifactPort(squarePath);
       const readSeats = () => artifact.read(facts => ({
         seat: facts.seat('rei'),
-        callBodySeats: facts.seatsForBody({ channel, session: `${channel}-first` }),
-        configuredBodySeats: facts.seatsForBody(configuredBody),
+        callBodySeats: facts.seatsForOwner(`${channel}:${channel}-first`),
+        configuredBodySeats: facts.seatsForOwner(configuredBody),
       }));
       try {
         const callJoin = (session) => client.callTool({ name: 'join', arguments: { as: 'rei' }, _meta: { [key]: session } });
@@ -157,7 +157,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         const joined = await callJoin(callBody.session);
         assert.match(joined.content[0].text, /you stepped into the square/);
         let seats = (await readSeats()).value;
-        assert.deepEqual(seats.seat.body, callBody);
+        assert.deepEqual(seats.seat.owner, `${channel}:${callBody.session}`);
         assert.deepEqual(seats.seat.wakeAddress, channel === 'codex'
           ? { kind: 'codex-queue', address: { threadId: callBody.session, codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock' } }
           : { kind: 'paseo', address: { agentId: 'managed-agent' } });
@@ -166,7 +166,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         const refused = await callJoin(`${channel}-second`);
         assert.equal(refused.isError, true);
         seats = (await readSeats()).value;
-        assert.deepEqual(seats.seat.body, callBody);
+        assert.deepEqual(seats.seat.owner, `${channel}:${callBody.session}`);
         assert.deepEqual(seats.callBodySeats.map(({ participant }) => participant), ['rei']);
 
         const reconnected = await callJoin(callBody.session);
@@ -177,7 +177,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         assert.match(startupJoin.content[0].text, /you stepped into the square/);
         seats = (await readSeats()).value;
         assert.deepEqual(seats.configuredBodySeats.map(({ participant }) => participant), ['Startup']);
-        assert.deepEqual(seats.seat.body, callBody);
+        assert.deepEqual(seats.seat.owner, `${channel}:${callBody.session}`);
 
         assert.deepEqual({ ...process.env }, beforeProcessEnv);
         assert.deepEqual(env, beforeBaseEnv);
@@ -192,11 +192,11 @@ test('MCP request metadata binds the participant seat to the live call body', as
 test('MCP call-local identities supply distinct bodies and keep configured body without a call identity', async (t) => {
   const { cwd, squarePath, env } = await fixture();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const configuredBody = { channel: 'configured', session: 'configured-session', agent: 'configured-agent' };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env, body: configuredBody }));
+  const configuredBody = "configured" + ":" + ('configured-session') + ":agent:configured-agent";
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env, owner: configuredBody }));
   const identities = [
-    { as: 'Codex', metadata: { threadId: 'call-codex' }, body: { channel: 'codex', session: 'call-codex' } },
-    { as: 'OpenCode', metadata: { 'ai.opencode/sessionID': 'call-opencode' }, body: { channel: 'opencode', session: 'call-opencode' } },
+    { as: 'Codex', metadata: { threadId: 'call-codex' }, owner: 'codex:call-codex' },
+    { as: 'OpenCode', metadata: { 'ai.opencode/sessionID': 'call-opencode' }, owner: 'opencode:call-opencode' },
   ];
   const recognizes = async (body, expectedName) => {
     const square = await Square.at({ cwd, path: squarePath, env });
@@ -211,7 +211,7 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
       assert.equal(joined.isError, undefined, JSON.stringify(joined));
       assert.match(joined.content[0].text, /you stepped into the square/);
     }
-    await Promise.all(identities.map(({ as, body }) => recognizes(body, as)));
+    await Promise.all(identities.map(({ as, owner }) => recognizes(owner, as)));
 
     const configured = await client.callTool({ name: 'join', arguments: { as: 'Configured' } });
     assert.equal(configured.isError, undefined, JSON.stringify(configured));
@@ -226,7 +226,7 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
   const call = { toolUseId: 'mcp-child-call', sessionId: 'claude-call-session', cwd, agentId: 'child-agent' };
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: claudeEnv }));
   let token;
-  const childBody = { channel: 'claude-code', session: call.sessionId, agent: call.agentId };
+  const childBody = `claude-code:${call.sessionId}:agent:${call.agentId}`;
   const recognizes = async (body) => {
     const square = await Square.at({ cwd, path: squarePath, env: claudeEnv });
     try { return await selectOwnSeat(square, body); }
@@ -239,7 +239,7 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
     });
     assert.equal(joined.isError, undefined, JSON.stringify(joined));
     assert.equal((await recognizes(childBody)).name, 'ClaudeChild');
-    await assert.rejects(recognizes({ channel: 'claude-code', session: call.sessionId }), (error) => error.code === 'invalid_args');
+    await assert.rejects(recognizes("claude-code" + ":" + (call.sessionId)), (error) => error.code === 'invalid_args');
   } finally {
     try { await close(); }
     finally { if (token !== undefined) await endClaudeMcpCall(call.toolUseId, token, claudeEnv); }
@@ -362,14 +362,14 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   const disconnected = once(child, 'exit', { signal: AbortSignal.timeout(3000) });
   child.stdin.end();
   assert.deepEqual(await disconnected, [0, null], stderr);
-  await (await app.participant('disconnected', { body })).resume();
+  await (await app.participant('disconnected', { owner: body })).resume();
   assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
-  const writerBody = { channel: 'codex', session: 'mcp-writer' };
+  const writerBody = "codex" + ":" + ('mcp-writer');
   const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' } });
   t.after(() => writer.close());
-  const { participant } = await writer.join('writer', { body: writerBody });
+  const { participant } = await writer.join('writer', { owner: writerBody });
   const expressed = await participant.express('after disconnect', { force: true, mentions: ['disconnected'] });
-  const caught = await (await app.participant('disconnected', { body })).catch();
+  const caught = await (await app.participant('disconnected', { owner: body })).catch();
   assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
 });
 

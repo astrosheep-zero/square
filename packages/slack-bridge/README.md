@@ -50,6 +50,10 @@ nonzero; running failures are logged and the bridge keeps going.
 - `square` is an existing artifact. The bridge opens it and never builds one.
 - `channel` is the Slack channel ID, not its name.
 - `state` is optional and defaults to `<square path>.slack-bridge.json`.
+- `owner` optionally supplies the bridge's stable opaque Square identity. It comes only from this
+  local configuration, never Slack payloads. By default the adapter encodes the state path and
+  channel as `slack-bridge:<escaped state path>:agent:<escaped channel>`; this matches migrated
+  bridge seats. Changing it requires an explicit custody decision, not an automatic takeover.
 - `bridge` and `personas` name environment variables; token values never go in
   the file, and error text never prints them.
 - Relative paths resolve against the config file's directory.

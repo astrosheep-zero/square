@@ -84,7 +84,7 @@ test('unavailable watches reconcile without loading history', async (t) => {
   t.mock.method(fs, 'watch', () => { throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' }); });
   const cell = createArtifactPort(file);
   t.after(() => cell.close());
-  await cell.transactAs({ kind: 'join', participant: 'Alice', body: { channel: 'test', session: 'alice' } },
+  await cell.transactAs({ kind: 'join', participant: 'Alice', owner: ':' },
     facts => facts.land({ kind: 'join', actor: 'Alice', at: 1 }));
   const baseline = await cell.revision();
   const waiting = cell.changed(baseline, 4_000);

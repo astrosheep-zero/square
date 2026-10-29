@@ -21,7 +21,7 @@ Ownership and delivery have the same limitation: cancellation can stop work that
 Presentation checks cancellation and eligibility before invoking its sink. A rejected sink is not
 success, including a native notification whose landing acknowledgement was cancelled. Once the sink
 succeeds, recording its evidence and seen receipts is mandatory settlement, not a new cancellable
-presentation attempt. It uses the same artifact connection and captured Body/join generation, without
+presentation attempt. It uses the same artifact connection and captured owner/join generation, without
 inheriting the pre-effect operation signal or a signal captured when opening that artifact. Claim
 release after a cancelled/failed attempt uses the same independent cleanup lifetime and writes no
 success receipt. Both settle through the normal authority gate, with a five-second storage budget;

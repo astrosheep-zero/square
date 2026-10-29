@@ -30,7 +30,7 @@ async function fixture(t) {
 
 async function joinAt(location, participant, body, env, options = {}) {
   const square = await Square.at({ path: location, env });
-  try { return await square.join(participant, { body, ...options }); }
+  try { return await square.join(participant, { owner: body, ...options }); }
   finally { await square.close(); }
 }
 
@@ -45,60 +45,60 @@ test('session end detaches every seat of the exact Body across indexed squares w
   const secondPath = path.join(f.root, 'second.square');
   const second = await Square.build({ path: secondPath, markdown: 'Second lifecycle fixture', env: f.env });
   await second.close();
-  const body = { channel: 'codex', session: 'multi-square-session' };
+  const body = "codex" + ":" + ('multi-square-session');
   await joinAt(f.squarePath, 'lead', body, f.env);
   await joinAt(f.squarePath, 'alice', body, f.env);
   await joinAt(secondPath, 'bob', body, f.env);
-  const otherBody = { channel: 'codex', session: 'other-session' };
+  const otherBody = "codex" + ":" + ('other-session');
   await joinAt(f.squarePath, 'carol', otherBody, f.env);
 
-  await detachSessionSeats('codex', body.session, f.env);
-  await detachSessionSeats('codex', body.session, f.env);
+  await detachSessionSeats('codex', 'multi-square-session', f.env);
+  await detachSessionSeats('codex', 'multi-square-session', f.env);
 
   const main = await artifactFacts(f.squarePath, facts => ({
     acts: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items,
-    seats: facts.seatsForBody(body),
+    seats: facts.seatsForOwner(body),
     otherSeat: facts.seat('carol'),
   }));
   const remote = await artifactFacts(secondPath, facts => ({
     acts: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items,
-    seats: facts.seatsForBody(body),
+    seats: facts.seatsForOwner(body),
   }));
   assert.equal(main.acts.filter(activity => activity.kind === 'done').length, 0);
   assert.equal(remote.acts.filter(activity => activity.kind === 'done').length, 0);
   assert.deepEqual(main.seats.map(seat => [seat.participant, seat.attachment]), [['alice', 'detached'], ['lead', 'detached']]);
-  assert.equal(main.otherSeat?.body.session, 'other-session');
+  assert.equal(main.otherSeat?.owner, 'codex:other-session');
   assert.equal(main.otherSeat?.attachment, 'attached');
   assert.deepEqual(remote.seats.map(seat => [seat.participant, seat.attachment]), [['bob', 'detached']]);
 });
 
 test('session end cannot retire a participant whose seat moved to another body', async t => {
   const f = await fixture(t);
-  const oldBody = { channel: 'pi', session: 'old-session' };
-  const replacementBody = { channel: 'pi', session: 'new-session' };
+  const oldBody = "pi" + ":" + ('old-session');
+  const replacementBody = "pi" + ":" + ('new-session');
   await joinAt(f.squarePath, 'shared', oldBody, f.env);
   await joinAt(f.squarePath, 'shared', replacementBody, f.env, { takeover: true });
 
-  await detachSessionSeats('pi', oldBody.session, f.env);
+  await detachSessionSeats('pi', 'old-session', f.env);
   const result = await artifactFacts(f.squarePath, facts => ({
     kinds: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items.map(activity => activity.kind),
     seat: facts.seat('shared'),
   }));
   assert.deepEqual(result.kinds, ['join', 'done', 'join']);
-  assert.equal(result.seat?.body.session, 'new-session');
+  assert.equal(result.seat?.owner, 'pi:new-session');
 });
 
 test('a stale captured seat generation cannot end a replacement rejoin', async t => {
   const f = await fixture(t);
-  const body = { channel: 'pi', session: 'same-session' };
+  const body = "pi" + ":" + ('same-session');
   const first = await joinAt(f.squarePath, 'shared', body, f.env);
   const captured = first.participant && await artifactFacts(f.squarePath, facts => facts.seat('shared'));
   assert.ok(captured);
   await joinAt(f.squarePath, 'shared', body, f.env, { takeover: true });
   const stale = await Square.at({ path: f.squarePath, env: f.env });
   try {
-    assert.equal(await stale.detach('shared', { body, generation: captured.generation }), null);
-    assert.equal(await stale.endHeld('shared', { body, generation: captured.generation }), null);
+    assert.equal(await stale.detach('shared', { owner: body, generation: captured.generation }), null);
+    assert.equal(await stale.endHeld('shared', { owner: body, generation: captured.generation }), null);
   } finally { await stale.close(); }
   const result = await artifactFacts(f.squarePath, facts => ({
     kinds: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items.map(activity => activity.kind),
@@ -110,11 +110,11 @@ test('a stale captured seat generation cannot end a replacement rejoin', async t
 
 test('Claude and Pi startup do not create artifact seats without an explicit join', async t => {
   const f = await fixture(t);
-  const claudeBody = { channel: 'claude-code', session: 'empty-claude-session' };
-  const piBody = { channel: 'pi', session: 'empty-pi-session' };
+  const claudeBody = "claude-code" + ":" + ('empty-claude-session');
+  const piBody = "pi" + ":" + ('empty-pi-session');
   await rememberSquarePath(f.squarePath, claudeBody, f.env.SQUARE_INDEX);
   await rememberSquarePath(f.squarePath, piBody, f.env.SQUARE_INDEX);
-  const claude = JSON.parse(await runClaudeMod(JSON.stringify({ operation: 'start', sessionId: claudeBody.session,
+  const claude = JSON.parse(await runClaudeMod(JSON.stringify({ operation: 'start', sessionId: 'empty-claude-session',
     cwd: f.root, version: 'test', endpoint: 'relative.sock' }), f.env));
   assert.deepEqual(claude.bindings, []);
 
@@ -125,13 +125,13 @@ test('Claude and Pi startup do not create artifact seats without an explicit joi
     on(event, handler) { handlers.set(event, handler); },
     sendMessage(message) { messages.push(message); },
   });
-  const context = { cwd: f.root, sessionManager: { getSessionId: () => piBody.session } };
+  const context = { cwd: f.root, sessionManager: { getSessionId: () => 'empty-pi-session' } };
   await handlers.get('session_start')({}, context);
   await handlers.get('session_shutdown')({}, context);
   assert.deepEqual(messages, []);
   const result = await artifactFacts(f.squarePath, facts => ({
     roster: facts.roster(),
-    seats: [...facts.seatsForBody(claudeBody), ...facts.seatsForBody(piBody)],
+    seats: [...facts.seatsForOwner(claudeBody), ...facts.seatsForOwner(piBody)],
     activities: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items,
   }));
   assert.deepEqual(result.roster, []);
@@ -145,7 +145,7 @@ test('Codex SessionEnd detaches and SessionResume restores without startup auto-
     hook_event_name: 'SessionStart', source: 'startup' }), f.env);
   assert.equal(start, '');
   assert.deepEqual(await artifactFacts(f.squarePath, facts => facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items), []);
-  await joinAt(f.squarePath, 'manual', { channel: 'codex', session: 'hook-session' }, f.env);
+  await joinAt(f.squarePath, 'manual', "codex" + ":" + ('hook-session'), f.env);
   const end = await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: f.root,
     hook_event_name: 'SessionEnd' }), f.env);
   assert.equal(end, '');
@@ -188,34 +188,34 @@ test('Codex boundary eligibility follows Stop, non-Stop, and SessionEnd', { conc
 
 test('Claude starts restore only detached seats of the exact Body, never a voluntary leave or takeover', async t => {
   const f = await fixture(t);
-  const body = { channel: 'claude-code', session: 'resume-session', agent: 'child' };
-  const parent = { channel: 'claude-code', session: body.session };
-  const other = { channel: 'pi', session: body.session, agent: body.agent };
-  const bridge = value => runClaudeMod(JSON.stringify({ sessionId: body.session, agentId: body.agent,
+  const body = "claude-code" + ":" + ('resume-session') + ":agent:child";
+  const parent = 'claude-code:resume-session';
+  const other = 'pi:resume-session:agent:child';
+  const bridge = value => runClaudeMod(JSON.stringify({ sessionId: 'resume-session', agentId: 'child',
     cwd: f.root, version: 'test', endpoint: 'relative.sock', ...value }), f.env).then(JSON.parse);
   for (const name of ['Resume', 'Replaced', 'Left']) await joinAt(f.squarePath, name, body, f.env);
   for (const [name, coordinate] of [['Parent', parent], ['Other', other], ['Left', body]]) {
     if (name !== 'Left') await joinAt(f.squarePath, name, coordinate, f.env);
     const square = await Square.at({ path: f.squarePath, env: f.env });
-    try { await (await square.participant(name, { body: coordinate })).done(); } finally { await square.close(); }
+    try { await (await square.participant(name, { owner: coordinate })).done(); } finally { await square.close(); }
   }
   const start = await bridge({ operation: 'start' });
   assert.deepEqual(start.bindings.map(row => row.participant), ['Replaced', 'Resume']);
   const original = start.bindings.find(row => row.participant === 'Resume');
   assert.equal((await bridge({ operation: 'end', bindings: start.bindings })).retired.length, 2);
   // A different agent on the same session cannot recover the child's detached seat.
-  await runClaudeMod(JSON.stringify({ operation: 'start', resume: true, sessionId: body.session,
+  await runClaudeMod(JSON.stringify({ operation: 'start', resume: true, sessionId: 'resume-session',
     cwd: f.root, version: 'test' }), f.env);
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('Resume').attachment), 'detached');
-  const replacementBody = { ...body, agent: 'replacement' };
+  const replacementBody = 'claude-code:resume-session:agent:replacement';
   await joinAt(f.squarePath, 'Replaced', replacementBody, f.env, { takeover: true });
   const replacement = await Square.at({ path: f.squarePath, env: f.env });
-  try { await (await replacement.participant('Replaced', { body: replacementBody })).done(); } finally { await replacement.close(); }
+  try { await (await replacement.participant('Replaced', { owner: replacementBody })).done(); } finally { await replacement.close(); }
   const resumed = await bridge({ operation: 'start', resume: true });
   assert.deepEqual(resumed.bindings.map(row => row.participant), ['Resume']);
   assert.equal(resumed.bindings[0].generation, original.generation);
   const state = await artifactFacts(f.squarePath, facts => ({
-    current: facts.seatsForBody(body), roster: facts.roster(),
+    current: facts.seatsForOwner(body), roster: facts.roster(),
   }));
   assert.deepEqual(state.current.map(seat => [seat.participant, seat.attachment]), [['Resume', 'attached']]);
   assert.deepEqual(state.roster.filter(p => p.done).map(p => p.name).sort(), ['Left', 'Other', 'Parent', 'Replaced']);
@@ -224,17 +224,17 @@ test('Claude starts restore only detached seats of the exact Body, never a volun
 
 test('binding time is the establishing join and fences late same-body joins at pinned cancel/end boundaries', async t => {
   const f = await fixture(t);
-  const body = { channel: 'claude-code', session: 'pinned-session' };
+  const body = "claude-code" + ":" + ('pinned-session');
   const join = async (participant, at, takeover = false) => {
     const square = await Square.at({ path: f.squarePath, env: f.env, clock: () => at });
-    try { await square.join(participant, { body, takeover }); } finally { await square.close(); }
+    try { await square.join(participant, { owner: body, takeover }); } finally { await square.close(); }
   };
-  const bridge = value => runClaudeMod(JSON.stringify({ sessionId: body.session, cwd: f.root,
+  const bridge = value => runClaudeMod(JSON.stringify({ sessionId: 'pinned-session', cwd: f.root,
     version: 'test', endpoint: 'relative.sock', ...value }), f.env).then(JSON.parse);
   await join('Before', 1000);
   await join('After', 2000);
   await join('Before', 2500); // reconnect is not a new generation or a new binding time
-  const bindings = await projectSessionSeats({ body, env: f.env });
+  const bindings = await projectSessionSeats({ owner: body, env: f.env });
   assert.deepEqual(bindings.map(row => [row.seat.participant, row.joinedAt]), [['After', 2000], ['Before', 1000]]);
   const cancelled = await bridge({ operation: 'cancel', bindings: [], cancelAt: 1500 });
   assert.deepEqual(cancelled.cancelledBindings.map(row => row.participant), ['Before']);
@@ -246,12 +246,12 @@ test('binding time is the establishing join and fences late same-body joins at p
   const ended = await bridge({ operation: 'end', bindings: [], endedAt: 1500 });
   assert.deepEqual(ended.retired.map(row => row.participant), ['Before']);
   await join('Before', 3000, true);
-  const current = await projectSessionSeats({ body, env: f.env });
+  const current = await projectSessionSeats({ owner: body, env: f.env });
   assert.equal(current.find(row => row.seat.participant === 'Before').joinedAt, 3000);
   await bridge({ operation: 'cancel', bindings: cancelled.cancelledBindings,
     cancelledBindings: cancelled.cancelledBindings, cancelAt: 1500 });
   assert.deepEqual((await bridge({ operation: 'end', bindings: ended.retired, endedAt: 1500 })).retired, []);
-  assert.deepEqual(await artifactFacts(f.squarePath, facts => facts.seatsForBody(body).map(seat =>
+  assert.deepEqual(await artifactFacts(f.squarePath, facts => facts.seatsForOwner(body).map(seat =>
     [seat.participant, facts.cancelledThrough(seat.participant, seat.generation)])), [['After', undefined], ['Before', undefined]]);
 });
 
@@ -259,16 +259,16 @@ test('Pi shutdown keeps listens and the read horizon; session_start restores bef
   const f = await fixture(t);
   const previous = process.env.SQUARE_INDEX;
   process.env.SQUARE_INDEX = f.env.SQUARE_INDEX;
-  const body = { channel: 'pi', session: 'pi-resume' };
+  const body = "pi" + ":" + ('pi-resume');
   const square = await Square.at({ path: f.squarePath, env: f.env });
-  const bob = (await square.join('Bob', { body })).participant;
-  const alice = (await square.join('Alice', { body: { channel: 'test', session: 'author' } })).participant;
+  const bob = (await square.join('Bob', { owner: body })).participant;
+  const alice = (await square.join('Alice', { owner: ':' })).participant;
   await bob.listen('Alice');
   const before = await artifactFacts(f.squarePath, facts => ({ member: facts.participant('Bob'), seat: facts.seat('Bob') }));
   const handlers = new Map();
   squarePiExtension({ registerTool() {}, registerFlag() {}, getFlag() {},
     on(event, handler) { handlers.set(event, handler); }, sendMessage() {} });
-  const context = { cwd: f.root, sessionManager: { getSessionId: () => body.session } };
+  const context = { cwd: f.root, sessionManager: { getSessionId: () => 'pi-resume' } };
   try {
     await handlers.get('session_start')({}, context);
     await handlers.get('session_shutdown')({}, context);
@@ -282,11 +282,11 @@ test('Pi shutdown keeps listens and the read horizon; session_start restores bef
     assert.equal(restored.seat.generation, before.seat.generation);
     assert.equal(restored.listening[0].target, 'Alice');
     assert.deepEqual(restored.kinds, ['join', 'listen']);
-    assert.deepEqual((await (await square.participant('Bob', { body })).catch()).activities.map(activity => activity.id), [unread]);
-    await (await square.participant('Bob', { body })).done();
+    assert.deepEqual((await (await square.participant('Bob', { owner: body })).catch()).activities.map(activity => activity.id), [unread]);
+    await (await square.participant('Bob', { owner: body })).done();
     await handlers.get('session_shutdown')({}, context);
     await handlers.get('session_start')({}, context);
-    assert.equal(await square.reattach('Bob', { body }), null);
+    assert.equal(await square.reattach('Bob', { owner: body }), null);
   } finally {
     await handlers.get('session_shutdown')({}, context);
     await square.close();
@@ -296,17 +296,17 @@ test('Pi shutdown keeps listens and the read horizon; session_start restores bef
 
 test('done retires only the completing participant seat when a body holds multiple seats', async t => {
   const f = await fixture(t);
-  const body = { channel: 'codex', session: 'dual-session' };
+  const body = "codex" + ":" + ('dual-session');
   await joinAt(f.squarePath, 'a', body, f.env);
   await joinAt(f.squarePath, 'b', body, f.env);
   const square = await Square.at({ path: f.squarePath, env: f.env });
-  try { await (await square.participant('a', { body })).done(); }
+  try { await (await square.participant('a', { owner: body })).done(); }
   finally { await square.close(); }
   const result = await artifactFacts(f.squarePath, facts => ({
     seatA: facts.seat('a'), seatB: facts.seat('b'),
     kinds: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items.map(activity => activity.kind),
   }));
   assert.equal(result.seatA, undefined);
-  assert.equal(result.seatB?.body.session, body.session);
+  assert.equal(result.seatB?.owner, body);
   assert.deepEqual(result.kinds, ['join', 'join', 'done']);
 });

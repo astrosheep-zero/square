@@ -293,10 +293,10 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
 });
 
 test('observed lifecycle renders its committed public activity and listener keeps only its target', async t => {
-  const body = { channel: 'test', session: 'one' };
+  const body = "test" + ":" + ('one');
   const square = Square.inMemory({ markdown: 'context', clock: () => 100 });
   t.after(() => square.close());
-  const alice = (await square.join('Alice', { body })).participant;
+  const alice = (await square.join('Alice', { owner: body })).participant;
   const listened = await alice.listen('Bob', { observe: true });
   assert.equal(listened.observation.target, 'Bob');
   assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);

@@ -168,11 +168,11 @@ test('body @names share the mention limit with --mention', async () => {
 });
 
 test('express through the library stores derived mention metadata', async () => {
-  const body = { channel: 'test', session: 'body-mentions' };
+  const body = "test" + ":" + ('body-mentions');
   const square = Square.inMemory({ markdown: 'context' });
   try {
-    const alice = (await square.join('Alice', { body })).participant;
-    const bob = (await square.join('Bob', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
+    const bob = (await square.join('Bob', { owner: body })).participant;
     const directed = await alice.express('hey @Bob and @Unknown', { force: true });
     assert.deepEqual(directed.activity.mentions, ['Bob']);
     assert.deepEqual(directed.unmatchedMentions, ['Unknown']);
@@ -202,8 +202,8 @@ test('activityRetryCommand preserves the caller reach instead of forcing --no-me
 
 test('the CLI lands matched and unmatched body @names without rewriting the body', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    await square.join('Bob', { body });
+    await square.join('Alice', { owner: body });
+    await square.join('Bob', { owner: body });
   }, { hardCap: null });
 
   const directed = run(withName(file, 'Alice', ['express', 'hey @Bob']));

@@ -11,11 +11,11 @@ app-server capability and its host-owned hook integration.
 
 - `SessionStart`, `SessionResume` and `UserPromptSubmit` invalidate the previous
   Stop observation. `SessionEnd` marks the host session ended and detaches its exact
-  Body's seats without landing `done`, ending membership, dropping listens or resetting
+  owner's seats without landing `done`, ending membership, dropping listens or resetting
   the read horizon. Later Stop/tool callbacks cannot re-enable queue until a new
   `SessionStart` or `SessionResume`. Before enabling delivery, those start paths use
-  `seatsOf(body)` and `reattach(name, {body, wakeAddress?})` to restore only detached
-  standing seats of that exact Body; voluntary departures and takeovers are never revived.
+  `seatsOf(owner)` and `reattach(name, {owner, wakeAddress?})` to restore only detached
+  standing seats of that exact owner; voluntary departures and takeovers are never revived.
   A new/forked session restores nothing.
 - `PostToolUse` asks Square for current pending activity and returns the existing
   bounded `additionalContext` presentation.
@@ -32,13 +32,13 @@ the internal budget, the hook waits for it and returns the associated context;
 it never abandons settlement that can mark activity seen without returning text.
 After expiry, no sweep starts, and a sweep timeout cannot erase successful pull
 output. Settlement must still finish within Codex's external hook timeout. Hook inbox lookup uses
-an exact Body (`{ channel: 'codex', session }`), not a bare session id. The shared
+an exact owner from `harnessOwner({ channel: 'codex', session })`, not a bare session id. The shared
 boundary store uses Square's caller-selected `SQUARE_CODEX_BOUNDARIES` file,
 defaulting to `~/.square/codex-boundaries.json`; its JSON observations are not
 conversation storage and are not proof of current native execution or consumption.
-Square's format-6 artifact remains authoritative for membership, attachment and delivery evidence.
+Square's format-7 artifact remains authoritative for membership, attachment and delivery evidence.
 Detached members appear away indefinitely and keep accumulating unread audience, but have no
-write or proactive delivery eligibility until same-Body reattachment. Only a host-confirmed
+write or proactive delivery eligibility until same-owner reattachment. Only a host-confirmed
 permanent deletion uses fenced membership-ending cleanup; Codex SessionEnd is not that proof.
 
 `CodexQueueTransport` implements the existing `WakeTransportPort` and uses the public

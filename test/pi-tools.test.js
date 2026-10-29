@@ -73,7 +73,7 @@ test('Pi calls use live context, preserve environment, and return human text and
   assert.match(joined.content[0].text, /you stepped into the square/);
   assert.match(joined.content[0].text, /Native tool scene/);
   const firstSeat = await readSeat(squarePath, 'rei');
-  assert.deepEqual(firstSeat?.body, { channel: 'pi', session: 'pi-tools-first' });
+  assert.deepEqual(firstSeat?.owner, "pi" + ":" + ('pi-tools-first'));
 
   const refused = await call('join', { as: 'rei' }, context('pi-tools-second'));
   assert.equal(refused.isError, true);
@@ -88,7 +88,7 @@ test('Pi calls use live context, preserve environment, and return human text and
   await other.close();
   assert.match((await call('join', { as: 'rei' }, context('pi-tools-second', subdir))).content[0].text, /you stepped into the square/);
   const secondSeat = await readSeat(secondSquarePath, 'rei');
-  assert.deepEqual(secondSeat?.body, { channel: 'pi', session: 'pi-tools-second' });
+  assert.deepEqual(secondSeat?.owner, "pi" + ":" + ('pi-tools-second'));
 
   for (const args of [{ body: 7 }, { body: 'no', session: 'forged' }, { body: 'no', reply: 'act/01' }]) {
     const invalid = await call('express', args);

@@ -42,12 +42,15 @@ test('shipped Claude mod real runtime scheduling and lifecycle', { skip: !enable
     if (mode === 'lifecycle') {
       const original = records.find((row) => row.kind === 'start');
       const resumed = records.findLast((row) => row.kind === 'start' && row.id === original.id);
-      assert.equal(resumed.bindings[0].epoch, 2);
+      const firstBinding = records.find(row => row.id === original.id && row.bindings?.length)?.bindings[0];
+      assert.ok(firstBinding);
+      assert.equal(resumed.bindings[0].generation, firstBinding.generation, 'resume preserves the standing join generation');
+      assert.equal(rows.seats.find(seat => seat.participant === 'fixture-receiver').generation, firstBinding.generation);
       assert.ok(summary.actions.includes('resumed receiver stored NEW Square activity'));
     }
     if (mode === 'fork') assert.ok(summary.actions.some((action) => action.startsWith('forked ')));
     if (mode === 'cancel') {
-      const owner = rows.presence[0];
+      const owner = rows.seats.find(seat => seat.participant === 'fixture-receiver');
       assert.equal(owner.cancelledThrough, 2);
       assert.equal(rows.state.runtime.observations[owner.participant]?.['act/2'], undefined);
       assert.equal(rows.evidence.some((row) => row.kind === 'presentation' && row.activity === 'act/2'), false);

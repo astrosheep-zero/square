@@ -1,4 +1,4 @@
-import { type Body, type LocatedSeat, type PendingMembership, type Seat, sameBody } from './model.js';
+import { type Owner, type LocatedSeat, type PendingMembership, type Seat } from './model.js';
 import type { SquareRead } from './ports.js';
 import { createArtifactPort, observeSquareDeliveryRevision, observeSquareRevision } from './artifact.js';
 import { indexedSquareEntries, observeSquareIndex } from './square-index.js';
@@ -36,7 +36,7 @@ export function pendingAtBoundary(inbox: readonly PendingMembership[]): PendingM
 function eligibleNotifications(facts: SquareRead, membership: PendingMembership, now = Date.now()): Pick<PendingMembership, 'notifications' | 'deliveryDeferralExpiry'> {
   const seat = facts.seat(membership.seat.participant);
   if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== membership.seat.generation
-    || !sameBody(seat.body, membership.seat.body)) return { notifications: [] };
+    || seat.owner !== membership.seat.owner) return { notifications: [] };
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
   let expiry = Infinity;
   const notifications = membership.notifications.filter(notification => {
@@ -77,37 +77,34 @@ export async function projectBoundaryEligibility(inbox: readonly PendingMembersh
 
 export interface SessionBindingCandidate {
   readonly location: string;
-  readonly body: Body;
+  readonly owner: Owner;
 }
 
 /** HOME is a candidate path index; current seats and delivery evidence live in the artifact. */
 export async function projectSessionCandidates(input: SessionSeatQuery): Promise<readonly SessionBindingCandidate[]> {
   const location = input.location === undefined ? undefined : await canonicalPath(input.location);
-  const entries = await indexedSquareEntries({ body: input.body, session: input.sessionId, channel: input.channel, agent: input.agent }, input.env ?? process.env);
+  const entries = await indexedSquareEntries({ owner: input.owner }, input.env ?? process.env);
   const candidates = new Map<string, SessionBindingCandidate>();
   for (const entry of entries) {
     if (location !== undefined && location !== entry.location) continue;
-    const key = JSON.stringify([entry.location, entry.body.channel, entry.body.session, entry.body.agent ?? null]);
-    candidates.set(key, { location: entry.location, body: entry.body });
+    const key = JSON.stringify([entry.location, entry.owner]);
+    candidates.set(key, { location: entry.location, owner: entry.owner });
   }
   return [...candidates.values()];
 }
 
 export interface SessionSeatQuery {
-  readonly body?: Body;
-  readonly sessionId?: string;
-  readonly channel?: string;
-  readonly agent?: string;
+  readonly owner?: Owner;
   readonly location?: string;
   readonly env?: NodeJS.ProcessEnv;
 }
 
-function groupCandidates(candidates: readonly SessionBindingCandidate[]): Map<string, Body[]> {
-  const grouped = new Map<string, Body[]>();
-  for (const { location, body } of candidates) {
-    const bodies = grouped.get(location) ?? [];
-    bodies.push(body);
-    grouped.set(location, bodies);
+function groupCandidates(candidates: readonly SessionBindingCandidate[]): Map<string, Owner[]> {
+  const grouped = new Map<string, Owner[]>();
+  for (const { location, owner } of candidates) {
+    const owners = grouped.get(location) ?? [];
+    owners.push(owner);
+    grouped.set(location, owners);
   }
   return grouped;
 }
@@ -123,11 +120,11 @@ function locatedSeats(facts: SquareRead, location: string, seats: readonly Seat[
 /** Lifecycle reads resolve seats and join times, never pending activity bodies. */
 export async function projectSessionSeats(input: SessionSeatQuery, signal?: AbortSignal): Promise<LocatedSeat[]> {
   const seats: LocatedSeat[] = [];
-  for (const [location, bodies] of groupCandidates(await projectSessionCandidates(input))) {
+  for (const [location, owners] of groupCandidates(await projectSessionCandidates(input))) {
     signal?.throwIfAborted();
     const artifact = createArtifactPort(location, undefined, signal);
     try {
-      seats.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body))), signal)).value);
+      seats.push(...(await artifact.read(facts => locatedSeats(facts, location, owners.flatMap(owner => facts.seatsForOwner(owner))), signal)).value);
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
     } finally { await artifact.close(); }
@@ -138,11 +135,11 @@ export async function projectSessionSeats(input: SessionSeatQuery, signal?: Abor
 /** Public count boundary: one coherent read per artifact, without pending body hydration. */
 export async function sessionInboxCounts(input: SessionSeatQuery, signal?: AbortSignal): Promise<import('./square-facade.js').InboxMembershipSummary[]> {
   const rows: import('./square-facade.js').InboxMembershipSummary[] = [];
-  for (const [location, bodies] of groupCandidates(await projectSessionCandidates(input))) {
+  for (const [location, owners] of groupCandidates(await projectSessionCandidates(input))) {
     signal?.throwIfAborted();
     const artifact = createArtifactPort(location, undefined, signal);
     try {
-      rows.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body).filter(seat => seat.attachment === 'attached'))).map(({ seat }) => ({
+      rows.push(...(await artifact.read(facts => locatedSeats(facts, location, owners.flatMap(owner => facts.seatsForOwner(owner).filter(seat => seat.attachment === 'attached'))).map(({ seat }) => ({
         name: seat.participant, squarePath: location, pending: facts.directedCount(seat.participant, { unseenOnly: true }),
       })), signal)).value);
     } catch (error) {
@@ -162,13 +159,13 @@ interface CachedInbox {
 async function projectPending(candidates: readonly SessionBindingCandidate[],
   cache?: Map<string, CachedInbox>, signal?: AbortSignal): Promise<PendingMembership[]> {
   const pending: PendingMembership[] = [];
-  for (const [location, bodies] of groupCandidates(candidates)) {
+  for (const [location, owners] of groupCandidates(candidates)) {
     signal?.throwIfAborted();
     const artifact = createArtifactPort(location, undefined, signal);
     try {
       const { value: current } = await artifact.read(facts => {
-        const seats = bodies.flatMap(body => facts.seatsForBody(body).filter(seat => seat.attachment === 'attached'));
-        const coordinate = JSON.stringify([bodies, seats.map(seat => [seat.participant, seat.body, seat.generation])]);
+        const seats = owners.flatMap(owner => facts.seatsForOwner(owner).filter(seat => seat.attachment === 'attached'));
+        const coordinate = JSON.stringify([owners, seats.map(seat => [seat.participant, seat.owner, seat.generation])]);
         const header = facts.header();
         let cached = cache?.get(location);
         if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
@@ -230,13 +227,8 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
     actor: item.actor, route: head.route, body: item.body ?? '(structured activity)' })]), clipped: attentionBodyIsClipped(item.body ?? '(structured activity)') };
 }
 
-export interface SessionIdentityQuery { readonly channel: string; readonly session: string; readonly allAgents?: true; }
-export type SessionIdentity = Body | SessionIdentityQuery;
-
-export async function sessionInbox(identity: SessionIdentity, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<PendingMembership[]> {
-  const query = 'allAgents' in identity ? { channel: identity.channel, sessionId: identity.session, env }
-    : { body: identity, env };
-  return projectPending(await projectSessionCandidates(query), undefined, signal);
+export async function sessionInbox(owner: Owner, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<PendingMembership[]> {
+  return projectPending(await projectSessionCandidates({ owner, env }), undefined, signal);
 }
 
 interface CapturedChange<T = unknown> {
@@ -273,10 +265,9 @@ export interface SessionPendingObserver {
 }
 
 /** Session-scoped projection over process-shared storage change detectors. */
-export async function observeSessionPending(identity: SessionIdentity, suppliedEnv: NodeJS.ProcessEnv = process.env): Promise<SessionPendingObserver> {
+export async function observeSessionPending(owner: Owner, suppliedEnv: NodeJS.ProcessEnv = process.env): Promise<SessionPendingObserver> {
   const env = { ...suppliedEnv };
-  const query = 'allAgents' in identity ? { channel: identity.channel, sessionId: identity.session, env }
-    : { body: identity, env };
+  const query = { owner, env };
   const index = await observeSquareIndex(env);
   const artifacts = new Map<string, {
     observer: VersionObserver<number | null>;

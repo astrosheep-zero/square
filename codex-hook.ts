@@ -1,7 +1,8 @@
 import { handleCodexHook } from './packages/agent-delivery/src/codex-hook.js';
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
-import type { Body, PendingMembership } from './model.js';
+import { harnessOwner, type Owner } from './owner.js';
+import type { PendingMembership } from './model.js';
 import { detachSessionSeats, restoreSessionSeats } from './session-lifecycle.js';
 import { codexBoundaryStore } from './codex-boundary-state.js';
 import { codexWakeAddress } from './codex-address.js';
@@ -15,7 +16,7 @@ const defaultTrace: HookTrace = (line) => { process.stderr.write(`${line}\n`); }
 
 export async function codexHookResponse(
   input: CodexHookInput,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
+  lookup: (identity: Owner, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   deliveryTransports?: WakeTransports,
   trace: HookTrace = defaultTrace,
@@ -27,14 +28,14 @@ export async function codexHookResponse(
   const signal = AbortSignal.timeout(timeoutMs);
   if ((input.hook_event_name === 'SessionStart' || input.hook_event_name === 'SessionResume')
     && typeof input.session_id === 'string' && input.session_id.trim()) {
-    await restoreSessionSeats({ channel: 'codex', session: input.session_id }, env, codexWakeAddress(input.session_id, env), signal);
+    await restoreSessionSeats(harnessOwner({ channel: 'codex', session: input.session_id }), env, codexWakeAddress(input.session_id, env), signal);
   }
   return handleCodexHook(input, {
     boundaries: codexBoundaryStore(env),
     timeoutMs,
     signal,
     sweepTimeoutMs: PRIVILEGED_HOOK_BUDGET_MS,
-    pull: (id, signal) => presentPendingAtBoundary({ channel: 'codex', session: id }, (context) => context, lookup, env, signal),
+    pull: (id, signal) => presentPendingAtBoundary(harnessOwner({ channel: 'codex', session: id }), (context) => context, lookup, env, signal),
     sweep: (cwd, deadline, signal) => sweepPrivilegedPending(cwd ?? process.cwd(), env, deliveryTransports, deadline, signal),
     end: async (id) => { await detachSessionSeats('codex', id, env); },
     trace: (name, detail = '') => {

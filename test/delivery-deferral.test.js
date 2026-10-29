@@ -31,11 +31,11 @@ async function fixture(t, extra = {}) {
   const square = await Square.build({ path: location, env, markdown: 'Deferral tests',
     wakeTransport: { probe: async () => false, attempt: () => assert.fail('fixture must never perform I/O') }, ...extra });
   resources.push(square);
-  const alice = (await square.join('Alice', { body: { channel: 'pi', session: 'Alice' } })).participant;
+  const alice = (await square.join('Alice', { owner: ':' })).participant;
   const receiver = await open(extra);
-  const bobBody = { channel: 'pi', session: 'Bob' };
+  const bobBody = "pi" + ":" + ('Bob');
   const bobWakeAddress = { kind: 'paseo', address: { agentId: 'bob' } };
-  const bob = (await receiver.join('Bob', { body: bobBody, wakeAddress: bobWakeAddress })).participant;
+  const bob = (await receiver.join('Bob', { owner: bobBody, wakeAddress: bobWakeAddress })).participant;
   const artifact = createArtifactPort(location);
   resources.push(artifact);
   const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
@@ -104,23 +104,23 @@ test('local leases are independent, operation-clock bounded, delivery-only state
 
 test('memory and persisted handles require captured current ownership, never a name or retired generation', async t => {
   const memory = Square.inMemory({ markdown: 'memory', clock: () => 1000 });
-  const body = { channel: 'test', session: 'one' };
+  const body = "test" + ":" + ('one');
   t.after(() => memory.close());
-  const old = (await memory.join('Local', { body })).participant;
+  const old = (await memory.join('Local', { owner: body })).participant;
   const lease = await old.deferDelivery({ match, durationMs: 100 });
   await old.done();
-  const fresh = (await memory.join('Local', { body })).participant;
+  const fresh = (await memory.join('Local', { owner: body })).participant;
   for (const work of [() => old.deferDelivery({ match, durationMs: 100 }), () => old.renewDeliveryDeferral(lease.id, 100), () => old.releaseDeliveryDeferral(lease.id)])
     await assert.rejects(work(), replaced);
   assert.equal(await fresh.renewDeliveryDeferral(lease.id, 100), null);
   const f = await fixture(t);
   const saved = await f.bob.deferDelivery({ match, durationMs: 10000 });
   const reconnected = await f.open();
-  assert.equal(await (await reconnected.participant('Bob', { body: f.seat.body })).renewDeliveryDeferral(saved.id, 10000) !== null, true);
+  assert.equal(await (await reconnected.participant('Bob', { owner: f.seat.owner })).renewDeliveryDeferral(saved.id, 10000) !== null, true);
   const foreign = await f.open();
-  const foreignBody = { channel: 'pi', session: 'Other' };
-  await assert.rejects(foreign.participant('Bob', { body: foreignBody }), replaced);
-  const thief = (await foreign.join('Bob', { body: foreignBody, takeover: true })).participant;
+  const foreignBody = "pi" + ":" + ('Other');
+  await assert.rejects(foreign.participant('Bob', { owner: foreignBody }), replaced);
+  const thief = (await foreign.join('Bob', { owner: foreignBody, takeover: true })).participant;
   await assert.rejects(f.bob.renewDeliveryDeferral(saved.id, 10000), replaced);
   assert.equal(await thief.releaseDeliveryDeferral(saved.id), false);
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryDeferrals('Bob', f.seat.generation))).value, []);
@@ -139,7 +139,7 @@ test('producer, sweep and session projection suppress OR leases without consumpt
   assert.equal(sends, 0);
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
   assert.deepEqual(await sweepPending({ ...input, now: Date.now(), graceMs: -1, limit: 10 }), []);
-  assert.deepEqual((await sessionInbox(f.seat.body, f.env)).flatMap(member => member.notifications), []);
+  assert.deepEqual((await sessionInbox(f.seat.owner, f.env)).flatMap(member => member.notifications), []);
   assert.equal((await f.receiver.status({ viewer: 'Bob' })).participants.find(person => person.name === 'Bob').unreadActivityCount, 1);
   assert.equal((await f.receiver.history()).activities.some(item => item.id === activity.id), true);
   assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
@@ -210,7 +210,7 @@ test('presentation suppresses before the sink but retains successful post-sink e
   let writes = 0;
   const input = { artifact: f.artifact, location: f.location, participant: 'Bob', activity: activity.id, seat: f.seat,
     sink: { present: () => { writes++; } } };
-  const batch = await sessionInbox(f.seat.body, f.env);
+  const batch = await sessionInbox(f.seat.owner, f.env);
   let lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
   assert.deepEqual(await projectBoundaryEligibility(batch), []);
   assert.equal((await presentPending(input)).presented, false);
@@ -245,12 +245,12 @@ test('presentation suppresses before the sink but retains successful post-sink e
 
 test('every item in a successful batch retains truthful receipts despite post-sink deferrals', async t => {
   const f = await fixture(t);
-  const cara = (await f.receiver.join('Cara', { body: f.seat.body, wakeAddress: f.bobWakeAddress })).participant;
+  const cara = (await f.receiver.join('Cara', { owner: f.seat.owner, wakeAddress: f.bobWakeAddress })).participant;
   const first = await f.say(metadata, ['Bob', 'Cara']);
   const second = await f.say(metadata, ['Bob', 'Cara']);
   let sends = 0;
   const leases = [];
-  const output = await presentPendingAtBoundary(f.seat.body, async context => {
+  const output = await presentPendingAtBoundary(f.seat.owner, async context => {
     sends++;
     for (const activity of [first, second]) assert.match(context, new RegExp(activity.id));
     leases.push(await f.bob.deferDelivery({ match, durationMs: 10000 }));
@@ -269,7 +269,7 @@ test('every item in a successful batch retains truthful receipts despite post-si
   }
   await f.bob.releaseDeliveryDeferral(leases[0].id);
   await cara.releaseDeliveryDeferral(leases[1].id);
-  assert.equal(await presentPendingAtBoundary(f.seat.body, () => { sends++; }, sessionInbox, f.env), undefined);
+  assert.equal(await presentPendingAtBoundary(f.seat.owner, () => { sends++; }, sessionInbox, f.env), undefined);
   assert.equal(sends, 1, 'post-sink deferral release never repeats the batch');
 });
 
@@ -328,11 +328,11 @@ test('pre-sink cancellation and rejected sinks release custody without a success
 
 test('a successful batch settles every rendered item after cancellation without replay', async t => {
   const f = await fixture(t);
-  await f.receiver.join('Cara', { body: f.seat.body, wakeAddress: f.bobWakeAddress });
+  await f.receiver.join('Cara', { owner: f.seat.owner, wakeAddress: f.bobWakeAddress });
   const activities = [await f.say(metadata, ['Bob', 'Cara']), await f.say(metadata, ['Bob', 'Cara'])];
   const controller = new AbortController();
   let effects = 0;
-  const result = await presentPendingAtBoundary(f.seat.body, context => {
+  const result = await presentPendingAtBoundary(f.seat.owner, context => {
     effects++;
     for (const activity of activities) assert.match(context, new RegExp(activity.id));
     controller.abort(new Error('cancel after batch success'));
@@ -348,7 +348,7 @@ test('a successful batch settles every rendered item after cancellation without 
     assert.equal(state.receipts.every(Boolean), true);
     assert.deepEqual(state.evidence, ['presented', 'presented']);
   }
-  assert.equal(await presentPendingAtBoundary(f.seat.body, () => assert.fail('batch must not replay'), sessionInbox, f.env), undefined);
+  assert.equal(await presentPendingAtBoundary(f.seat.owner, () => assert.fail('batch must not replay'), sessionInbox, f.env), undefined);
 });
 
 test('a rejected batch sink leaves every rendered item unconsumed, even when cancelled', async t => {
@@ -356,7 +356,7 @@ test('a rejected batch sink leaves every rendered item unconsumed, even when can
   const activities = [await f.say(), await f.say()];
   const controller = new AbortController();
   const rejected = new Error('batch did not land');
-  await assert.rejects(presentPendingAtBoundary(f.seat.body, () => {
+  await assert.rejects(presentPendingAtBoundary(f.seat.owner, () => {
     controller.abort(rejected);
     throw rejected;
   }, sessionInbox, f.env, controller.signal), error => error === rejected);
@@ -372,7 +372,7 @@ test('a final batch sink excludes a newly deferred peer item and receipts only t
   const f = await fixture(t);
   const ordinary = (await f.alice.express({ body: 'ordinary batch item', metadata: { job: { kind: 'other' } }, mentions: ['Bob'], force: true })).activity;
   const protectedItem = (await f.alice.express({ body: 'protected batch item', metadata, mentions: ['Bob'], force: true })).activity;
-  const batch = await sessionInbox(f.seat.body, f.env);
+  const batch = await sessionInbox(f.seat.owner, f.env);
   let acquiring;
   const first = batch[0].notifications[0];
   const body = first.body;
@@ -381,7 +381,7 @@ test('a final batch sink excludes a newly deferred peer item and receipts only t
     acquiring ??= f.bob.deferDelivery({ match, durationMs: 10000 });
     return body;
   } });
-  const rendered = await presentPendingAtBoundary(f.seat.body, async context => {
+  const rendered = await presentPendingAtBoundary(f.seat.owner, async context => {
     await acquiring;
     return context;
   }, () => batch, f.env);
@@ -397,7 +397,7 @@ test('a final batch sink excludes a newly deferred peer item and receipts only t
 test('a matching lease affects only its recipient, not other current recipients', async t => {
   const f = await fixture(t);
   const caraSquare = await f.open();
-  await caraSquare.join('Cara', { body: { channel: 'pi', session: 'Cara' },
+  await caraSquare.join('Cara', { owner: ':',
     wakeAddress: { kind: 'paseo', address: { agentId: 'cara' } } });
   await f.bob.deferDelivery({ match, durationMs: 10000 });
   await f.say(metadata, ['Bob', 'Cara']);
@@ -437,7 +437,7 @@ test('active observers restore eligibility on release without another conversati
   const f = await fixture(t);
   const lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
   const activity = await f.say();
-  const observer = await observeSessionPending(f.seat.body, f.env);
+  const observer = await observeSessionPending(f.seat.owner, f.env);
   t.after(() => observer.close());
   assert.deepEqual(await observer.read(), []);
   const waiting = armed(observer);
@@ -450,7 +450,7 @@ test('active observer expiry follows renewal while a one-shot producer never sle
   const f = await fixture(t);
   const lease = await f.bob.deferDelivery({ match, durationMs: 250 });
   const activity = await f.say();
-  const observer = await observeSessionPending(f.seat.body, f.env);
+  const observer = await observeSessionPending(f.seat.owner, f.env);
   t.after(() => observer.close());
   const waiting = armed(observer);
   assert.equal(await waiting.armed, true);

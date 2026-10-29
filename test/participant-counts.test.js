@@ -15,10 +15,10 @@ function fixture(t, hardCap = null) {
 }
 
 async function establishSeat(cell, participant, at) {
-  const body = { channel: 'test', session: participant.toLowerCase() };
-  return (await cell.transactAs({ kind: 'join', participant, body }, (facts) => {
+  const body = "test" + ":" + (participant.toLowerCase());
+  return (await cell.transactAs({ kind: 'join', participant, owner: body }, (facts) => {
     const joined = facts.land({ kind: 'join', actor: participant, at });
-    const seat = { participant, body, generation: `act/${joined.index}`, attachment: 'attached' };
+    const seat = { participant, owner: body, generation: `act/${joined.index}`, attachment: 'attached' };
     facts.storeSeat(seat);
     return seat;
   })).value;

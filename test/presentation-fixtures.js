@@ -1,5 +1,6 @@
 // Test-only read of the live artifact-owned presentation evidence.
 import { createArtifactPort } from '../dist/artifact.js';
+import { harnessOwner } from '../dist/owner.js';
 import { formatActivityId } from '../dist/square-core.js';
 
 export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex, _env = process.env, _now = Date.now()) {
@@ -7,7 +8,7 @@ export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex
   try {
     const { value: evidence } = await artifact.read((facts) => {
       const seat = facts.seat(name);
-      if (seat === undefined || seat.body.session !== sessionId) return [];
+      if (seat === undefined || seat.owner !== harnessOwner({ channel: 'pi', session: sessionId })) return [];
       return facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(actIndex))
         .filter((row) => row.kind === 'presentation');
     });

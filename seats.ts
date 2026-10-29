@@ -1,10 +1,10 @@
-import { SquareError, validateBody, validateName, type Body, type Seat } from './model.js';
+import { SquareError, validateOwner, validateName, type Owner, type Seat } from './model.js';
 import type { ArtifactWriteAuthority, SeatRef } from './ports.js';
 
-export function requireBody(body: Body | undefined): Body {
-  if (body === undefined) throw new SquareError('invalid_args', 'Participant writes require an explicit body: channel and session.');
-  validateBody(body);
-  return body;
+export function requireOwner(owner: Owner | undefined): Owner {
+  if (owner === undefined) throw new SquareError('invalid_args', 'Participant writes require an explicit owner.');
+  validateOwner(owner);
+  return owner;
 }
 
 export function requireJoinName(name: string | undefined): string {
@@ -14,7 +14,7 @@ export function requireJoinName(name: string | undefined): string {
 }
 
 export function asSeatRef(seat: Seat): SeatRef {
-  return { participant: seat.participant, body: seat.body, generation: seat.generation };
+  return { participant: seat.participant, owner: seat.owner, generation: seat.generation };
 }
 
 export function participantAuthority(seat: Seat): ArtifactWriteAuthority {

@@ -13,7 +13,7 @@ import { renderEventCli } from '../dist/presentation.js';
 import { renderExpression } from '../dist/operation-presentation.js';
 import { Square } from '../dist/square-api.js';
 
-const body = (session) => ({ channel: 'metadata-test', session });
+const body = (session) => `metadata-test:${session}`;
 
 async function localSquare() {
   return Square.inMemory({ markdown: 'metadata test', force: true });
@@ -22,8 +22,8 @@ async function localSquare() {
 test('activity metadata lands as an immutable fact through local reads and directed catch', async () => {
   const square = await localSquare();
   try {
-    const alice = (await square.join('Alice', { body: body('local') })).participant;
-    const bob = (await square.join('Bob', { body: body('local') })).participant;
+    const alice = (await square.join('Alice', { owner: body('local') })).participant;
+    const bob = (await square.join('Bob', { owner: body('local') })).participant;
     const metadata = { nested: { ok: true }, values: [null, 3, 'text'] };
     const sent = await alice.express({ body: 'with metadata', metadata }, { force: true });
     assert.deepEqual(sent.activity.metadata, metadata);
@@ -59,7 +59,7 @@ test('metadata survives reopen and stream without changing audience semantics', 
   try {
     const square = await Square.build({ path: location, markdown: 'metadata test', force: true });
     try {
-      const alice = (await square.join('Alice', { body: body('persist') })).participant;
+      const alice = (await square.join('Alice', { owner: body('persist') })).participant;
       await alice.express({ metadata, force: true });
     } finally { await square.close(); }
     const reopened = await Square.at({ path: location });
@@ -76,7 +76,7 @@ test('metadata survives reopen and stream without changing audience semantics', 
 test('metadata admission is bounded, lossless, and rejects unsupported content before landing', async () => {
   const square = await localSquare();
   try {
-    const alice = (await square.join('Alice', { body: body('local') })).participant;
+    const alice = (await square.join('Alice', { owner: body('local') })).participant;
     const before = (await square.history({ limit: null })).activities.length;
     const invalid = [
       {},
@@ -114,7 +114,7 @@ test('stored say validation rejects blank bodies with empty metadata', async () 
   try {
     const square = await Square.build({ path: location, markdown: 'corrupt metadata', force: true });
     try {
-      const alice = (await square.join('Alice', { body: body('corrupt') })).participant;
+      const alice = (await square.join('Alice', { owner: body('corrupt') })).participant;
       await alice.express({ body: 'valid', metadata: {}, force: true });
     } finally { await square.close(); }
     const database = new DatabaseSync(location);
@@ -131,7 +131,7 @@ test('CLI metadata input and retry keep the original JSON without a body redirec
   const env = { ...process.env, CODEX_THREAD_ID: 'metadata-cli', PI_SESSION_ID: '', CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', OPENCODE_SESSION_ID: '', PASEO_AGENT_ID: '' };
   try {
     const square = await Square.build({ path: location, markdown: 'cli metadata', force: true });
-    try { await square.join('Alice', { body: { channel: 'codex', session: 'metadata-cli' } }); } finally { await square.close(); }
+    try { await square.join('Alice', { owner: 'codex:metadata-cli' }); } finally { await square.close(); }
     const cli = spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', location, '--as', 'Alice', 'express', '--force', '--metadata', '{"cli":true}'], { env, encoding: 'utf8' });
     assert.equal(cli.status, 0, cli.stderr);
     assert.match(cli.stdout, /structured activity/);
@@ -157,20 +157,20 @@ test('the shared express tool requires a body and rejects metadata input', () =>
 test('shared history and directed catch render metadata-only activities without exposing metadata', async () => {
   const square = await localSquare();
   try {
-    const alice = (await square.join('Alice', { body: body('local') })).participant;
-    await square.join('Bob', { body: body('local') });
+    const alice = (await square.join('Alice', { owner: body('local') })).participant;
+    await square.join('Bob', { owner: body('local') });
     const metadata = { nested: { wake: true }, values: [1, null, 'text'] };
     const directed = await alice.express({ metadata, mentions: ['Bob'], force: true });
     assert.deepEqual(directed.activity.metadata, metadata);
     const shared = name => SQUARE_TOOLS.find(tool => tool.name === name);
 
-    const caught = await shared('catch').run(square, { as: 'Bob' }, {}, { body: body('local') });
+    const caught = await shared('catch').run(square, { as: 'Bob' }, {}, { owner: body('local') });
     assert.equal(typeof caught, 'string');
     assert.ok(caught.includes(directed.activity.id));
     assert.match(caught, /structured activity/);
     assert.doesNotMatch(caught, /"nested"|"wake"|"values"/);
 
-    const history = await shared('history').run(square, {}, {}, { body: body('local') });
+    const history = await shared('history').run(square, {}, {}, { owner: body('local') });
     assert.ok(history.includes(directed.activity.id));
     assert.match(history, /structured activity/);
     assert.doesNotMatch(history, /"nested"|"wake"|"values"/);

@@ -16,6 +16,7 @@ process.env.PASEO_HOME = paseoHome;
 process.env.PASEO_HOST = `unix://${path.join(paseoHome, 'daemon.sock')}`;
 delete process.env.PASEO_PASSWORD;
 
+delete process.env.SQUARE_OWNER;
 process.env.PI_SESSION_ID = '';
 process.env.CLAUDE_CODE_SESSION_ID = '';
 process.env.CLAUDE_CODE_CHILD_SESSION = '';

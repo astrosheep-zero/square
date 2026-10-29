@@ -6,19 +6,20 @@ import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
 import { Square, createSquareResourceOwner } from './square-api.js';
+import { harnessOwner, type Owner } from './square-api.js';
 import type { SquareAtInput } from './square-facade.js';
 
 type JsonObject = Record<string, unknown>;
 
 /** The server owns its artifact connection lifetime, so callers cannot lend one. */
 export interface SquareMcpOptions extends Omit<SquareAtInput, 'resources'> {
-  readonly body?: import('./model.js').Body;
+  readonly owner?: Owner;
   readonly wakeAddress?: import('./model.js').WakeAddress;
 }
 export type SquareMcpServer = McpServer;
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
-  const { body: configuredBody, wakeAddress, ...resourceOptions } = options;
+  const { owner: configuredOwner, wakeAddress, ...resourceOptions } = options;
   const baseEnv = { ...(resourceOptions.env ?? process.env) };
   const resources = createSquareResourceOwner();
   // Calls to the configured square borrow one server-owned connection.
@@ -38,14 +39,13 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
             ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
             : undefined;
-          const body = claude !== undefined
-            ? { channel: 'claude-code', session: claude.sessionId,
-              ...(claude.agentId === undefined ? {} : { agent: claude.agentId }) }
+          const owner = claude !== undefined
+            ? harnessOwner({ channel: 'claude-code', session: claude.sessionId, ...(claude.agentId === undefined ? {} : { agent: claude.agentId }) })
             : typeof threadId === 'string' && threadId.trim()
-              ? { channel: 'codex', session: threadId }
+              ? harnessOwner({ channel: 'codex', session: threadId })
               : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
-                ? { channel: 'opencode', session: opencodeSessionId }
-                : configuredBody;
+                ? harnessOwner({ channel: 'opencode', session: opencodeSessionId })
+                : configuredOwner;
           const env = claude !== undefined
             ? { ...operationEnv('claude', claude.sessionId, baseEnv),
               // Preserve Claude's session + child flag semantics; an agent loop ID is not a session ID.
@@ -61,10 +61,15 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             // The server owner is bound to its configured square; overrides close after each call.
             resources: location === undefined && claude === undefined ? resources : undefined,
           }, { signal: extra.signal });
+          const callWake = wakeAddress !== undefined && (owner === configuredOwner
+            || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
+            || wakeAddress.kind === 'claude-native' && wakeAddress.address.sessionId === claude?.sessionId
+            || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
+            ? wakeAddress : undefined;
           let text: string;
           try { text = await tool.run(square, args as JsonObject, { signal: extra.signal }, {
-            body, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-              ? codexWakeAddress(threadId, env) : wakeAddress,
+            owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
+              ? codexWakeAddress(threadId, env) : callWake,
           }); }
           finally { await square.close(); }
           return { content: [{ type: 'text' as const, text }] };

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
-const bodyFor = name => ({ channel: 'test', session: name.toLowerCase() });
+const bodyFor = name => ("test" + ":" + (name.toLowerCase()));
 async function fixture(t, extra = [], hardCap = null) {
   const cell = createArtifactPort(':memory:', {
     hardCap, preamble: [], warmup: ['test'], acts: [],
@@ -13,13 +13,13 @@ async function fixture(t, extra = [], hardCap = null) {
   const seats = new Map();
   for (const activity of [{ kind: 'join', actor: 'Alice', at: 0 }, { kind: 'join', actor: 'Bob', at: 1 }, ...extra]) {
     if (activity.kind === 'join') {
-      await cell.transactAs({ kind: 'join', participant: activity.actor, body: bodyFor(activity.actor) }, facts => facts.land(activity));
+      await cell.transactAs({ kind: 'join', participant: activity.actor, owner: bodyFor(activity.actor) }, facts => facts.land(activity));
       seats.set(activity.actor, (await cell.read(facts => facts.seat(activity.actor))).value);
     } else await cell.transactAs({ kind: 'participant', seat: seats.get(activity.actor) }, facts => facts.land(activity));
   }
   const bobSeat = seats.get('Bob'), artifact = { ...cell };
   const square = await resourceWithArtifact(t, artifact);
-  return { cell, artifact, square, bob: await square.participant('bOB', { body: bobSeat.body }), seats, bobSeat };
+  return { cell, artifact, square, bob: await square.participant('bOB', { owner: bobSeat.owner }), seats, bobSeat };
 }
 function withoutBodies(facts) {
   return { ...facts, activity() { assert.fail('catch probe must not hydrate a body'); }, activities() { assert.fail('catch probe must not hydrate bodies'); } };
@@ -96,14 +96,14 @@ test('exact-ID catches retain their repeatable receipt transaction and never use
 
 test('empty catch validates caller, filters, limits, and semantic time without a writer', async t => {
   const { cell, artifact, square } = await fixture(t);
-  await assert.rejects(square.participant('Missing', { body: bodyFor('Bob') }), { code: 'already_joined' });
+  await assert.rejects(square.participant('Missing', { owner: bodyFor('Bob') }), { code: 'already_joined' });
   artifact.transactAs = noWriter;
-  const bob = await square.participant('Bob', { body: bodyFor('Bob') });
+  const bob = await square.participant('Bob', { owner: bodyFor('Bob') });
   await assert.rejects(bob.catch({ from: ['Missing'] }), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
   for (const limit of [0, 101, 1.5]) await assert.rejects(bob.catch({ limit }), { code: 'invalid_args' });
   for (const at of [NaN, Infinity, '100', -0.5]) {
     const resource = await resourceWithArtifact(t, artifact, () => at);
-    const participant = await resource.participant('Bob', { body: bodyFor('Bob') });
+    const participant = await resource.participant('Bob', { owner: bodyFor('Bob') });
     if (at === -0.5) assert.equal((await participant.catch({ observe: true })).observation.now, at);
     else await assert.rejects(participant.catch(), { code: 'invalid_args' });
   }

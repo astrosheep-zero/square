@@ -1,7 +1,7 @@
 import './sandbox-env.js'
 import { mkdtemp } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { Square } from '@astrosheep/square'
+import { Square, harnessOwner } from '@astrosheep/square'
 import { sandbox } from './sandbox-env.js'
 
 export const CHANNEL = 'C0BRIDGE'
@@ -29,7 +29,9 @@ export async function opened(t, path, settings = settingsFor({ square: path })) 
 }
 
 export function settingsFor({ square, state, personas = {} }) {
+  const statePath = state ?? `${square}.slack-bridge.json`
   return {
+    owner: harnessOwner({ channel: 'slack-bridge', session: resolve(statePath), agent: CHANNEL }),
     square,
     channel: CHANNEL,
     state: state ?? `${square}.slack-bridge.json`,
@@ -39,7 +41,7 @@ export function settingsFor({ square, state, personas = {} }) {
 }
 
 export function bridgeBody(settings) {
-  return { channel: 'slack-bridge', session: resolve(settings.state), agent: settings.channel }
+  return settings.owner
 }
 
 /** A fake Slack carrying the bridge bot and, when configured, the faye persona bot. */

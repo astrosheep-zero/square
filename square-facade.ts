@@ -1,11 +1,11 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Body, StoredAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { Owner, StoredAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { Body, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 /** Indexed archive event, including read and historical actorless lifecycle records. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -158,7 +158,7 @@ export interface SquareBuildInput extends SquareAtInput {
   readonly force?: boolean;
 }
 export interface JoinOptions extends ObservationOptions {
-  readonly body: Body;
+  readonly owner: Owner;
   readonly wakeAddress?: WakeAddress;
   readonly takeover?: boolean;
   readonly last?: number;

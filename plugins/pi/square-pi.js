@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
-import { Square } from '../../dist/square-api.js';
+import { Square, harnessOwner } from '../../dist/square-api.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
@@ -158,7 +158,7 @@ export default function squarePiExtension(pi) {
             path: args.location,
           }, { signal });
           let text;
-          try { text = await tool.run(square, args, { signal }, { body: { channel: 'pi', session: sessionId } }); }
+          try { text = await tool.run(square, args, { signal }, { owner: harnessOwner({ channel: 'pi', session: sessionId }) }); }
           finally { await square.close(); }
           return { content: [{ type: 'text', text }] };
         } catch (error) {
@@ -253,13 +253,13 @@ export default function squarePiExtension(pi) {
     const previous = pendingCancellations.get(id) ?? Promise.resolve();
     let operation;
     operation = previous.then(async () => {
-      const body = { channel: 'pi', session: id };
+      const owner = harnessOwner({ channel: 'pi', session: id });
       const env = sessionEnv(id);
-      const seats = await projectSessionSeats({ body, env });
+      const seats = await projectSessionSeats({ owner, env });
       for (const { location, seat } of seats) {
         if (seat.attachment !== 'attached') continue;
         const square = await Square.at({ path: location, env });
-        try { await square.cancelDeliveries(seat.participant, { body, generation: seat.generation }); }
+        try { await square.cancelDeliveries(seat.participant, { owner, generation: seat.generation }); }
         finally { await square.close(); }
       }
     }).then(() => {
@@ -305,7 +305,7 @@ export default function squarePiExtension(pi) {
   const wake = async (token, signal) => {
     const boundSessionId = sessionId;
     const env = sessionEnv(boundSessionId);
-    const observer = await observeSessionPending({ channel: 'pi', session: boundSessionId }, env);
+    const observer = await observeSessionPending(harnessOwner({ channel: 'pi', session: boundSessionId }), env);
     try {
       if (signal.aborted || token !== generation) return;
       const armDeferredRetry = () => {
@@ -359,7 +359,7 @@ export default function squarePiExtension(pi) {
         let keepDeferred = false;
         try {
           await presentPendingAtBoundary(
-            { channel: 'pi', session: boundSessionId },
+            harnessOwner({ channel: 'pi', session: boundSessionId }),
             async (content) => {
               if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
               // One card for the human: a compact heading, expandable to the full body.
@@ -426,7 +426,7 @@ export default function squarePiExtension(pi) {
     if (token !== generation || cancellationFailures.has(sessionId)) return;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
-    await restoreSessionSeats({ channel: 'pi', session: sessionId }, sessionEnv(sessionId), undefined, signal).catch(() => undefined);
+    await restoreSessionSeats(harnessOwner({ channel: 'pi', session: sessionId }), sessionEnv(sessionId), undefined, signal).catch(() => undefined);
     if (token !== generation || signal.aborted) return;
     watcher = wake(token, signal).catch(() => undefined);
   });

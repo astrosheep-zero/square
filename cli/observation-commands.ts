@@ -222,7 +222,7 @@ export const catchCommand: CommandSpec<CatchOptions> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env).body, context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
+      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
         signal: controller.signal,
         onProgress(progress) {
           const line = renderCatchProgress(squarePath, progress);
@@ -233,7 +233,7 @@ export const catchCommand: CommandSpec<CatchOptions> = {
         process.stdout.write(jsonResult(outcome));
         process.exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
       } else {
-        const rendered = renderCatchOutcome(squarePath, outcome, intent);
+        const rendered = renderCatchOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER);
         process.stdout.write(rendered.stdout);
         process.exitCode = rendered.exitCode;
       }
@@ -443,7 +443,7 @@ export const statusCommand: CommandSpec<undefined, string> = {
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
     const result = await withSquare(context, async (square) => {
-      const viewer = (await selectOwnSeat(square, commandIdentity(context.env).body, context.name, { optional: true }))?.name;
+      const viewer = (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name, { optional: true }))?.name;
       return square.status({ viewer, ...(context.json ? {} : { observe: true }) });
     });
     return context.json ? jsonResult(result) : renderStatusResult(squarePath, result)!;
@@ -451,15 +451,15 @@ export const statusCommand: CommandSpec<undefined, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-interface InboxIntent { sessionId: string; limit: number; }
+interface InboxIntent { owner: string; limit: number; }
 export const inboxCommand: CommandSpec<InboxIntent, string> = {
   parse(argv, context) {
-    let sessionId: string | undefined;
+    let owner: string | undefined;
     let limitValue: string | undefined;
     let hasLimit = false;
     let duplicateLimit = false;
     for (let index = 0; index < argv.length; index++) {
-      if (argv[index] === '--for-session') { sessionId = requireValue(argv, index, argv[index]); index += 1; }
+      if (argv[index] === '--for-owner') { owner = requireValue(argv, index, argv[index]); index += 1; }
       else if (argv[index] === '--json') continue;
       else if (argv[index] === '--limit') {
         if (hasLimit) duplicateLimit = true;
@@ -469,16 +469,16 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
       }
       else usage(context.command);
     }
-    if (!sessionId) fail('inbox requires --for-session <session-id>.');
-    const retry = `square inbox --for-session ${quoteShell(sessionId)} --limit ${INBOX_MAX_LIMIT}${context.json ? ' --json' : ''}`;
+    if (!owner) fail('inbox requires --for-owner <owner>.');
+    const retry = `square inbox --for-owner ${quoteShell(owner)} --limit ${INBOX_MAX_LIMIT}${context.json ? ' --json' : ''}`;
     if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
     const limit = hasLimit
       ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)
       : INBOX_DEFAULT_LIMIT;
-    return { sessionId, limit };
+    return { owner, limit };
   },
   async execute(intent, context) {
-    const data = await inbox(squareInput(context), intent.sessionId, { limit: intent.limit });
+    const data = await inbox(squareInput(context), intent.owner, { limit: intent.limit });
     if (context.json) return jsonResult(data);
     return [
       ...data.rows.map((row) => `${inboxDisplay(row.name)}\t${inboxDisplay(row.squarePath)}\t${row.pending}\n`),

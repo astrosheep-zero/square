@@ -23,16 +23,16 @@ async function waitUntil(predicate, message) {
 async function pendingFixture(root, sessionId) {
   const squarePath = path.join(root, 'SQUARE.square');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const authorBody = { channel: 'pi', session: `${sessionId}-author` };
-  const recipientBody = { channel: 'pi', session: sessionId };
+  const authorBody = "pi" + ":" + `${sessionId}-author`;
+  const recipientBody = "pi" + ":" + (sessionId);
   const author = await Square.build({ path: squarePath, markdown: 'pending-cache', env });
-  try { await author.join('Alice', { body: authorBody }); }
+  try { await author.join('Alice', { owner: authorBody }); }
   finally { await author.close(); }
   const recipient = await Square.at({ path: squarePath, env });
-  try { await recipient.join('Bob', { body: recipientBody }); }
+  try { await recipient.join('Bob', { owner: recipientBody }); }
   finally { await recipient.close(); }
   const speaker = await Square.at({ path: squarePath, env });
-  try { await (await speaker.participant('Alice', { body: authorBody })).express('cached pending', { force: true, mentions: ['Bob'] }); }
+  try { await (await speaker.participant('Alice', { owner: authorBody })).express('cached pending', { force: true, mentions: ['Bob'] }); }
   finally { await speaker.close(); }
   return { squarePath, env, authorBody, recipientBody, sessionId };
 }
@@ -115,7 +115,7 @@ test('an explicit inbox read honors a new catch lease before filesystem hints ar
     assert.equal((await observer.wait(0))[0].notifications[0].actIndex, 2);
     const oldRevision = await versionObserver.read();
     const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
-    const ref = { participant: seat.participant, body: seat.body, generation: seat.generation };
+    const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
     await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.putLease('Bob', {
       leaseId: 'fresh-catch', heartbeatAt: Date.now(), expiresAt: Date.now() + 60_000, filter: { mention: 'Bob' },
     }, seat.generation));

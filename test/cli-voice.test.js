@@ -25,8 +25,8 @@ function printedCommands(output) {
 
 test('a held refusal without a reason names the holder and never prints an empty sensory line', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.hold();
   });
 
@@ -39,8 +39,8 @@ test('a held refusal without a reason names the holder and never prints an empty
 
 test('a bell ignores body @names, including unmatched names, with redundant no-mention allowed', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    await square.join('Bob', { body });
+    await square.join('Alice', { owner: body });
+    await square.join('Bob', { owner: body });
   });
 
   const result = run(withName(file, 'Alice', ['express', '--no-wait', '--bell', '--no-mention', '-']), { input: 'ringing for @Bob @Eve\n' });
@@ -51,8 +51,8 @@ test('a bell ignores body @names, including unmatched names, with redundant no-m
 
 test('unmatched body @names land; explicit --mention still offers a runnable repair', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    await square.join('Bob', { body });
+    await square.join('Alice', { owner: body });
+    await square.join('Bob', { owner: body });
   });
 
   const result = run(withName(file, 'Alice', ['express', '--no-wait', '-']), { input: 'hello @Nobody\n' });
@@ -74,8 +74,8 @@ test('unmatched body @names land; explicit --mention still offers a runnable rep
 
 test('catch --id refuses an activity that is not addressed to the caller with âœ• and a runnable read', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    const alice = (await square.join('Alice', { body })).participant;
-    await square.join('Bob', { body });
+    const alice = (await square.join('Alice', { owner: body })).participant;
+    await square.join('Bob', { owner: body });
     await alice.express('for nobody in particular', { force: true, noMention: true });
   });
 
@@ -98,8 +98,8 @@ test('catch --id refuses an activity that is not addressed to the caller with âœ
 
 test('express receipts name the act: words, gesture, walk-over, and the bell', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    await square.join('Bob', { body });
+    await square.join('Alice', { owner: body });
+    await square.join('Bob', { owner: body });
   });
 
   const words = run(withName(file, 'Alice', ['express', '--no-mention', 'a plain thought']));
@@ -122,8 +122,8 @@ test('express receipts name the act: words, gesture, walk-over, and the bell', a
 
 test('a reply to an author who stepped out says the reply did not reach them', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.express('question', { force: true, noMention: true });
     await bob.done();
   });
@@ -136,8 +136,8 @@ test('a reply to an author who stepped out says the reply did not reach them', a
 
 test('unread activity appended to a receipt is explicitly a nonconsuming preview', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.express('question for you @Alice', { force: true, mentions: ['Alice'] });
   });
 
@@ -153,7 +153,7 @@ test('unread activity appended to a receipt is explicitly a nonconsuming preview
 
 test('the throttle refusal names the lull and keeps a retry that runs later', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    const alice = (await square.join('Alice', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('first', { force: true });
   }, { throttlePerMinute: 1 });
 
@@ -168,7 +168,7 @@ test('the throttle refusal names the lull and keeps a retry that runs later', as
 
 test('a capped express counts what was spoken and keeps the draft and the done command', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    const alice = (await square.join('Alice', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('the one activity', { force: true });
   }, { hardCap: 1 });
 
@@ -182,8 +182,8 @@ test('a capped express counts what was spoken and keeps the draft and the done c
 
 test('done speaks in first person and keeps its own act id', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    await square.join('Bob', { body });
+    await square.join('Alice', { owner: body });
+    await square.join('Bob', { owner: body });
   });
 
   const result = run(withName(file, 'Alice', ['done']));
@@ -214,8 +214,8 @@ test('build stands ready, and the long scene belongs to a first join only', asyn
 
 test('history closes the page with one presence anchor line', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    const alice = (await square.join('Alice', { body })).participant;
-    await square.join('Bob', { body });
+    const alice = (await square.join('Alice', { owner: body })).participant;
+    await square.join('Bob', { owner: body });
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });
 

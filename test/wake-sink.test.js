@@ -109,7 +109,7 @@ test('a Square Paseo wake steers with one stable id per attempt', async (t) => {
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: emptyRuntimeState() });
   t.after(() => artifact.close());
   const join = async (name) => (await artifact.transactAs({ kind: 'join', participant: name,
-    body: { channel: 'test', session: name } }, facts => {
+    owner: `test:${name}` }, facts => {
     facts.land({ kind: 'join', actor: name, at: 1 });
     return facts.seat(name);
   })).value;

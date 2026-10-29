@@ -15,9 +15,9 @@ async function fixture(label, participant = 'rei') {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `square-reuse-${label}-`));
   const squarePath = path.join(cwd, 'square.square');
   const index = path.join(cwd, 'index.ndjsonl');
-  const body = { channel: 'codex', session: `mcp-${label}` };
+  const body = "codex" + ":" + `mcp-${label}`;
   const env = {
-    ...process.env, SQUARE_INDEX: index, CODEX_THREAD_ID: body.session, SQUARE_NOW_MS: '1000',
+    ...process.env, SQUARE_INDEX: index, CODEX_THREAD_ID: `mcp-${label}`, SQUARE_NOW_MS: '1000',
     SQUARE_DISABLE_PASEO_WAKE: '1',
   };
   const built = await Square.build({ path: squarePath, markdown: 'reuse scene', env });
@@ -50,7 +50,7 @@ function countCloses(t, squarePath) {
 }
 
 function serverFor({ cwd, squarePath, env, body }) {
-  return createSquareMcpServer({ cwd, env, path: squarePath, body });
+  return createSquareMcpServer({ cwd, env, path: squarePath, owner: body });
 }
 
 async function connect(server) {
@@ -82,7 +82,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   await server.close();
   assert.equal(opened(), 1);
   const fresh = await Square.at({ cwd, env: { ...env }, path: squarePath });
-  await fresh.join('other', { body });
+  await fresh.join('other', { owner: body });
   await fresh.close();
   assert.equal(opened(), 2);
 });
@@ -185,7 +185,7 @@ test('a cancelled borrowed request never closes or poisons the owner connection'
   controller.abort(new Error('request cancelled, owner remains'));
   await assert.rejects(Square.at({ path: squarePath, env, resources }, { signal: controller.signal }), /request cancelled/);
   const next = await Square.at({ path: squarePath, env, resources });
-  await next.join('Alive', { body });
+  await next.join('Alive', { owner: body });
   await next.close();
   assert.equal((await artifact.read(facts => facts.participant('Alive').joined)).value, true);
 });

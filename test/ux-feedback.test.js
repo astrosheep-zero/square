@@ -20,7 +20,7 @@ test('join guidance follows delivery capability, not a blanket instruction to wa
 test('expanding a clipped history page keeps its activity coordinates', async () => {
   const square = Square.inMemory({ markdown: 'Conversation' });
   try {
-    const rei = (await square.join('rei', { body: { channel: 'test', session: 'ux-feedback' } })).participant;
+    const rei = (await square.join('rei', { owner: ':' })).participant;
     const a = await rei.express('a'.repeat(220), { force: true });
     const b = await rei.express('b'.repeat(220), { force: true });
     const c = await rei.express('newer words', { force: true });

@@ -64,13 +64,13 @@ test('extracted Codex hook pulls by exact Body and preserves artifact-owned pres
   await square.close();
   const artifact = createArtifactPort(location);
   t.after(() => artifact.close());
-  const body = { channel: 'codex', session: 'same-id' };
-  const otherBody = { channel: 'pi', session: 'same-id' };
-  const join = async (participant, coordinate) => (await artifact.transactAs({ kind: 'join', participant, body: coordinate }, facts => {
+  const body = "codex" + ":" + ('same-id');
+  const otherBody = "pi" + ":" + ('same-id');
+  const join = async (participant, coordinate) => (await artifact.transactAs({ kind: 'join', participant, owner: coordinate }, facts => {
     facts.land({ kind: 'join', actor: participant, at: 1 });
     return facts.seat(participant);
   })).value;
-  const alice = await join('Alice', { channel: 'test', session: 'sender' });
+  const alice = await join('Alice', "test" + ":" + ('sender'));
   const bob = await join('Bob', body);
   const other = await join('Other', otherBody);
   const { value: act } = await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
@@ -85,7 +85,7 @@ test('extracted Codex hook pulls by exact Body and preserves artifact-owned pres
     assert.ok(signal instanceof AbortSignal);
     return sessionInbox(identity, receivedEnv, signal);
   };
-  const input = { session_id: body.session, hook_event_name: 'PostToolUse', cwd: root };
+  const input = { session_id: 'same-id', hook_event_name: 'PostToolUse', cwd: root };
   const response = await codexHookResponse(input, lookup, env, {}, () => {});
   assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolUse');
   assert.match(response.hookSpecificOutput.additionalContext, /Codex pending 字/);
@@ -112,12 +112,12 @@ test('Codex hook retains presented output while artifact settlement outlives the
   await square.close();
   const artifact = createArtifactPort(location);
   t.after(() => artifact.close());
-  const body = { channel: 'codex', session: 'settlement-thread' };
-  const join = async (participant, coordinate) => (await artifact.transactAs({ kind: 'join', participant, body: coordinate }, facts => {
+  const body = "codex" + ":" + ('settlement-thread');
+  const join = async (participant, coordinate) => (await artifact.transactAs({ kind: 'join', participant, owner: coordinate }, facts => {
     facts.land({ kind: 'join', actor: participant, at: 1 });
     return facts.seat(participant);
   })).value;
-  const alice = await join('Alice', { channel: 'test', session: 'sender' });
+  const alice = await join('Alice', "test" + ":" + ('sender'));
   const bob = await join('Bob', body);
   const { value: act } = await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'settled Codex preview 字', mentions: ['Bob'] }));
@@ -140,7 +140,7 @@ test('Codex hook retains presented output while artifact settlement outlives the
     if (this === settlingConnection && sql === 'COMMIT') committed.resolve();
     return result;
   });
-  const input = { session_id: body.session, hook_event_name: 'PostToolUse', cwd: root };
+  const input = { session_id: 'settlement-thread', hook_event_name: 'PostToolUse', cwd: root };
   const hook = codexHookResponse(input, (identity, receivedEnv, signal) => {
     signal.addEventListener('abort', () => aborted.resolve(), { once: true });
     return sessionInbox(identity, receivedEnv, signal);

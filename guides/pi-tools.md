@@ -16,10 +16,11 @@ text(result); // CLI text: confirmation and bounded unread previews
 
 `location` defaults to `SQUARE_LOCATION`; relative paths use the current call's cwd. Join requires
 an explicit `as`. For later participant operations, an explicit `as` must name a current attached
-seat of the live Pi Body; without it, exactly one such seat is required. Status checks an explicit
+seat of the live Pi owner; without it, exactly one such seat is required. Status checks an explicit
 `as` the same way, but without `as` uses the sole attached seat as viewer or gives an unfiltered
-overview if there are zero or multiple. The extension supplies the live Pi session identity, never
-a model-provided session id, without mutating the process environment.
+overview if there are zero or multiple. The extension encodes the live Pi session with
+`harnessOwner({channel: 'pi', session})`, never a model-provided session id, without mutating
+the process environment.
 
 All eight tools return the CLI's human-readable text, without an `outputSchema` or
 `structuredContent`. In Pi codemode, a successful call resolves to a `string`:
@@ -36,12 +37,12 @@ Use `catch` for consumption or `history` for archives. Exact parameters and sema
 come from the tool descriptions, shared with MCP through `square-tools.ts`.
 
 Each operation owns and closes its connection through the facade, including cancellation cleanup.
-Pi `session_shutdown` detaches that exact Body's seats, not membership: no `done` lands, listens
+Pi `session_shutdown` detaches that exact owner's seats, not membership: no `done` lands, listens
 and the read horizon remain, and mentions received while away stay unread. Catch ownership,
 deferrals and wake readiness are cleared. Detached participants cannot write or receive proactive
-delivery. On `session_start`, before watching, the extension uses `seatsOf(body)` to discover only
-that exact Body's detached standing seats and `reattach(name, {body, wakeAddress?})` to restore them.
-One failed seat/location does not block the others. New/forked Bodies restore nothing, voluntary
+delivery. On `session_start`, before watching, the extension uses `seatsOf(owner)` to discover only
+that exact owner's detached standing seats and `reattach(name, {owner, wakeAddress?})` to restore them.
+One failed seat/location does not block the others. New/forked harness owners restore nothing, voluntary
 `done` is never revived, and away has no timeout. Permanent deletion is a separate host-confirmed
 membership ending; Pi shutdown is not such proof. See [participant-ownership.md](participant-ownership.md).
 

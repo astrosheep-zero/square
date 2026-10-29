@@ -81,11 +81,8 @@ export function activityMetadataHasContent(metadata: ActivityMetadata | undefine
   return metadata !== undefined && Object.keys(metadata).length > 0;
 }
 
-export interface Body {
-  readonly channel: string;
-  readonly session: string;
-  readonly agent?: string;
-}
+/** Opaque custody identity. Harness coordinates are adapter-owned. */
+export type Owner = string;
 
 export interface WakeAddress {
   readonly kind: WakeRouteKind;
@@ -95,7 +92,7 @@ export interface WakeAddress {
 /** Artifact-owned custody binding. Generation is the join activity that established it. */
 export interface Seat {
   readonly participant: string;
-  readonly body: Body;
+  readonly owner: Owner;
   readonly generation: ActivityId;
   readonly attachment: 'attached' | 'detached';
   readonly wakeAddress?: WakeAddress;
@@ -106,15 +103,11 @@ export interface SeatWatchLease {
   readonly lease: WatchLease;
 }
 
-export function sameBody(left: Body, right: Body): boolean {
-  return left.channel === right.channel && left.session === right.session && left.agent === right.agent;
-}
-
-export function validateBody(body: Body): void {
-  if (!body || typeof body.channel !== 'string' || !body.channel || typeof body.session !== 'string' || !body.session
-    || (body.agent !== undefined && (typeof body.agent !== 'string' || !body.agent))) {
-    throw new SquareError('invalid_args', 'A participant write requires an explicit channel and session body.');
+export function validateOwner(owner: Owner): Owner {
+  if (typeof owner !== 'string' || !owner || Buffer.byteLength(owner, 'utf8') > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(owner)) {
+    throw new SquareError('invalid_args', 'A participant write requires a non-empty owner without control characters (at most 512 UTF-8 bytes).');
   }
+  return owner;
 }
 
 export function isWakeRouteKind(value: unknown): value is WakeRouteKind {

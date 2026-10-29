@@ -12,11 +12,11 @@ function rejectsDoneBody(error) {
 }
 
 test('done rejects supplied bodies without changing participation or history', async () => {
-  const body = { channel: 'test', session: 'done-bodies' };
+  const body = "test" + ":" + ('done-bodies');
   const square = Square.inMemory({ markdown: 'context' });
   try {
-    const alice = (await square.join('Alice', { body })).participant;
-    await square.join('Bob', { body });
+    const alice = (await square.join('Alice', { owner: body })).participant;
+    await square.join('Bob', { owner: body });
     await alice.listen('Bob');
     const before = (await square.history({ limit: 100 })).activities;
     for (const body of ['a message', ' \r\n', null, 0, {}]) {
@@ -37,8 +37,8 @@ test('done rejects supplied bodies without changing participation or history', a
 
 test('done remains bodyless after reaching the cap and while a hand is raised', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    const alice = (await square.join('Alice', { body })).participant;
-    const bob = (await square.join('Bob', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await alice.express('the one activity');
     await bob.hold('pause');
     await alice.done('');
@@ -52,12 +52,12 @@ test('participant done rejects bodies before joining or rejoining', async () => 
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   const square = await Square.at({ path: file, env: { ...process.env } });
-  const body = { channel: 'test', session: 'done-before-join' };
-  await assert.rejects(square.participant('Alice', { body }),
+  const body = "test" + ":" + ('done-before-join');
+  await assert.rejects(square.participant('Alice', { owner: body }),
     error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
   assert.deepEqual((await readSquareSnapshot(file)).state.acts, []);
-  await square.join('Alice', { body });
-  const joined = await square.participant('Alice', { body });
+  await square.join('Alice', { owner: body });
+  const joined = await square.participant('Alice', { owner: body });
   await joined.done();
   const before = (await readSquareSnapshot(file)).state.acts;
   await assert.rejects(() => joined.done('another message'), rejectsDoneBody);
@@ -67,7 +67,7 @@ test('participant done rejects bodies before joining or rejoining', async () => 
 
 test('CLI done rejects argument and stdin payloads without leaving or posting', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
+    await square.join('Alice', { owner: body });
   });
   const before = (await readSquareSnapshot(file)).state.acts;
   const attempts = [

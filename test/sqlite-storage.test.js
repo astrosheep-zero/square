@@ -20,8 +20,8 @@ async function fixture(t) {
   return { file, port };
 }
 async function join(port, participant, at) {
-  const body = { channel: 'test', session: participant.toLowerCase() };
-  const result = await port.transactAs({ kind: 'join', participant, body }, facts => facts.land({ kind: 'join', actor: participant, at }));
+  const body = "test" + ":" + (participant.toLowerCase());
+  const result = await port.transactAs({ kind: 'join', participant, owner: body }, facts => facts.land({ kind: 'join', actor: participant, at }));
   return (await port.read(facts => facts.seat(participant))).value;
 }
 function child(script, file) {
@@ -43,8 +43,8 @@ test('a blocked COMMIT retries the same callback/result and releases the event l
   t.after(() => reader.close());
   reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
   let calls = 0, finished = false;
-  const body = { channel: 'test', session: 'alice' };
-  const pending = port.transactAs({ kind: 'join', participant: 'Alice', body }, w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
+  const body = "test" + ":" + ('alice');
+  const pending = port.transactAs({ kind: 'join', participant: 'Alice', owner: body }, w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
   await until(() => calls === 1);
   await sleep(40);
   assert.equal(finished, false);
@@ -62,8 +62,8 @@ test('abort while COMMIT is busy rolls back all landing effects and preserves th
   reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
   const abort = new AbortController(), reason = new Error('stop commit');
   let calls = 0;
-  const body = { channel: 'test', session: 'alice' };
-  const pending = assert.rejects(port.transactAs({ kind: 'join', participant: 'Alice', body }, w => { calls++; w.land({ kind: 'join', actor: 'Alice', at: 0 }); }, abort.signal), e => e === reason);
+  const body = "test" + ":" + ('alice');
+  const pending = assert.rejects(port.transactAs({ kind: 'join', participant: 'Alice', owner: body }, w => { calls++; w.land({ kind: 'join', actor: 'Alice', at: 0 }); }, abort.signal), e => e === reason);
   await until(() => calls === 1);
   abort.abort(reason);
   await pending;
@@ -101,9 +101,9 @@ test('busy writer acquisition can be cancelled and a later writer still runs exa
   writer.exec('BEGIN IMMEDIATE');
   const abort = new AbortController(), reason = new Error('stop writer acquisition');
   let calls = 0;
-  const body = { channel: 'test', session: 'alice' };
+  const body = "test" + ":" + ('alice');
   const change = w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); };
-  const authority = { kind: 'join', participant: 'Alice', body };
+  const authority = { kind: 'join', participant: 'Alice', owner: body };
   const cancelled = assert.rejects(port.transactAs(authority, change, abort.signal), e => e === reason);
   await sleep(40);
   abort.abort(reason);
@@ -167,6 +167,6 @@ test('idle revision discovery has a positive control and never selects historica
   assert.equal(queries.some(sql => /payload_json|SELECT \* FROM activities/i.test(sql)), false);
   const writer = createArtifactPort(file);
   t.after(() => writer.close());
-  await writer.transactAs({ kind: 'join', participant: 'Bob', body: { channel: 'test', session: 'bob' } }, w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
+  await writer.transactAs({ kind: 'join', participant: 'Bob', owner: ':' }, w => w.land({ kind: 'join', actor: 'Bob', at: 200 }));
   assert.equal(await port.changed(baseline, 1000), true);
 });

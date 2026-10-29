@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { harnessOwner, requireOwner } from '@astrosheep/square';
 import { isParticipantName } from './names.js';
 
 export class ConfigError extends Error {
@@ -10,6 +11,7 @@ export class ConfigError extends Error {
 }
 
 export interface BridgeSettings {
+  readonly owner: string;
   readonly square: string;
   readonly channel: string;
   readonly state: string;
@@ -18,7 +20,7 @@ export interface BridgeSettings {
   readonly personas: ReadonlyMap<string, string>;
 }
 
-const TOP_LEVEL = new Set(['square', 'channel', 'state', 'bridge', 'personas']);
+const TOP_LEVEL = new Set(['square', 'channel', 'state', 'owner', 'bridge', 'personas']);
 const BRIDGE_FIELDS = new Set(['appTokenEnv', 'botTokenEnv']);
 const PERSONA_FIELDS = new Set(['botTokenEnv']);
 
@@ -49,6 +51,9 @@ export async function loadConfig(file: string, env: NodeJS.ProcessEnv = process.
   const channel = text(config.channel, 'channel');
   if (!/^[A-Z0-9]{2,}$/.test(channel)) throw new ConfigError('channel must be a Slack channel ID such as C0123456789');
   const state = config.state === undefined ? `${square}.slack-bridge.json` : resolve(base, text(config.state, 'state'));
+  const owner = config.owner ?? harnessOwner({ channel: 'slack-bridge', session: state, agent: channel });
+  try { requireOwner(owner as string); }
+  catch { throw new ConfigError('owner must be a non-empty identifier without control characters, at most 512 UTF-8 bytes'); }
   const bridge = fields(config.bridge, 'bridge');
   only(bridge, BRIDGE_FIELDS, 'bridge');
   const appTokenEnv = text(bridge.appTokenEnv, 'bridge.appTokenEnv');
@@ -66,7 +71,7 @@ export async function loadConfig(file: string, env: NodeJS.ProcessEnv = process.
   }
   if (!(await stat(square).catch(() => undefined))?.isFile()) throw new ConfigError(`square does not exist: ${square}`);
   return {
-    square, channel, state,
+    square, channel, state, owner: owner as string,
     bridge: { appToken: secret(env, appTokenEnv, 'bridge'), botToken: secret(env, botTokenEnv, 'bridge') },
     personas,
   };

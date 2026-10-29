@@ -34,10 +34,10 @@ function memorySquare(overrides = {}, clock = () => 0) {
 
 /** Seeded fixtures write through the same seats a real caller would hold. */
 async function establishSeat(cell, name, at) {
-  const body = { channel: 'test', session: name.toLowerCase() };
-  return (await cell.transactAs({ kind: 'join', participant: name, body }, facts => {
+  const body = "test" + ":" + (name.toLowerCase());
+  return (await cell.transactAs({ kind: 'join', participant: name, owner: body }, facts => {
     const joined = facts.land({ kind: 'join', actor: name, at });
-    return facts.seat(name) ?? { participant: name, body, generation: `act/${joined.index}` };
+    return facts.seat(name) ?? { participant: name, owner: body, generation: `act/${joined.index}` };
   })).value;
 }
 
@@ -219,10 +219,10 @@ test('host controls preserve the requesting actor and body', async () => {
 
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
-  const body = { channel: 'test', session: 'cursor' };
+  const body = "test" + ":" + ('cursor');
   const square = Square.inMemory({ markdown: '', clock: () => ++now });
   try {
-    const alice = (await square.join('Alice', { body })).participant;
+    const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await alice.done();
     const history = (await square.history()).activities;
@@ -346,12 +346,12 @@ test('mention and listening caps reject without enumerating the roster', async (
 
 test('listener landings append only real edge changes', async () => {
   let now = 10;
-  const body = { channel: 'test', session: 'listener' };
+  const body = "test" + ":" + ('listener');
   const square = Square.inMemory({ markdown: '', clock: () => ++now });
   try {
-    const caller = (await square.join('Caller', { body })).participant;
+    const caller = (await square.join('Caller', { owner: body })).participant;
     const first = await caller.listen('aku/riko');
-    const repeated = await (await square.participant('caller', { body })).listen('AKU/RIKO');
+    const repeated = await (await square.participant('caller', { owner: body })).listen('AKU/RIKO');
     assert.equal(first.activity.kind, 'listen');
     assert.equal(first.activity.target, 'aku/riko');
     assert.equal(repeated.activity, null);

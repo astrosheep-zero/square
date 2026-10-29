@@ -135,7 +135,7 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
-    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForBody',
+    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForOwner',
     'deliveryEvidence', 'deliveryByToken', 'cancelledThrough', 'deliveryDeferrals',
 ];
 const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'reattachSeat', 'detachSeat', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery', 'putDeliveryDeferral', 'renewDeliveryDeferral', 'releaseDeliveryDeferral'];

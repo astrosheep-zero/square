@@ -26,7 +26,7 @@ export type JoinPresentation = Omit<JoinResult, 'participant'> & {
   readonly participant: { readonly name: string } | string;
 };
 
-export function renderJoinResult(data: JoinPresentation): string | undefined {
+export function renderJoinResult(data: JoinPresentation, owner?: string): string | undefined {
   const after = data.observation;
   if (after === undefined) return undefined;
   const entry = after.entry;
@@ -35,7 +35,7 @@ export function renderJoinResult(data: JoinPresentation): string | undefined {
     now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
+    '', `${participantCommandPrefix(after.location, name, owner)} catch --idle 30m`,
     '  · stay within earshot — keep this catch open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
@@ -58,7 +58,7 @@ function isGestureOnly(body: string): boolean {
   return /\*[^*]*\*/.test(body) && body.replace(/\*[^*]*\*/g, '').trim() === '';
 }
 
-export function renderExpression(squarePath: string, data: ExpressResult): string | undefined {
+export function renderExpression(squarePath: string, data: ExpressResult, owner?: string): string | undefined {
   const projection = data.observation;
   if (projection === undefined) return undefined;
   const name = projection.participant;
@@ -67,7 +67,7 @@ export function renderExpression(squarePath: string, data: ExpressResult): strin
     'Unread context · preview only, not consumed',
     ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
     ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
-    `${participantCommandPrefix(projection.location, name)} catch`,
+    `${participantCommandPrefix(projection.location, name, owner)} catch`,
   ].join('\n');
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
@@ -86,12 +86,12 @@ export function renderExpression(squarePath: string, data: ExpressResult): strin
     { participantCount: projection.standingCount, held: projection.held });
 }
 
-function continuationCommand(squarePath: string, name: string, options: CatchOptions): string {
+function continuationCommand(squarePath: string, name: string, options: CatchOptions, owner?: string): string {
   const args = ['--now'];
   if (options.from?.length) args.push('--from', options.from.join(','));
   if (options.mention) args.push('--mention');
   if (options.limit !== undefined) args.push('--limit', String(options.limit));
-  return `${participantCommandPrefix(squarePath, name)} catch ${args.join(' ')}`;
+  return `${participantCommandPrefix(squarePath, name, owner)} catch ${args.join(' ')}`;
 }
 
 /** Render settled catch facts; no selection, terminal decisions, receipts or wait machinery. */
@@ -99,6 +99,7 @@ export function renderCatchOutcome(
   squarePath: string,
   data: CatchResult,
   options: CatchOptions = {},
+  owner?: string,
 ): { stdout: string; exitCode: number } {
   const projection = data.observation;
   if (projection === undefined) return { stdout: '', exitCode: 0 };
@@ -107,7 +108,7 @@ export function renderCatchOutcome(
   const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
   const header = { participantCount: projection.standingCount, held: projection.held };
   const statusOptions = {
-    squarePath: location, name, presence: projection.presence,
+    squarePath: location, name, owner, presence: projection.presence,
     showCatchHint: !projection.deliveryAvailable,
     ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
   };
@@ -122,13 +123,13 @@ export function renderCatchOutcome(
     now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
   })).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
-    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options)}`;
+    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${continuationCommand(location, name, options, owner)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
     ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${participantCommandPrefix(location, name)} catch --idle 30m\n  stay available for new activity` : '';
+    ? `${participantCommandPrefix(location, name, owner)} catch --idle 30m\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return {
     stdout: withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header),
@@ -378,8 +379,8 @@ export interface FailureReport {
 }
 
 /** Refusal lines with the same recovery commands the CLI prints. */
-export function renderFailureLines(failure: FailureReport, options: { squarePath?: string; name?: string } = {}): string[] {
-  const { squarePath, name } = options;
+export function renderFailureLines(failure: FailureReport, options: { squarePath?: string; name?: string; owner?: string } = {}): string[] {
+  const { squarePath, name, owner } = options;
   const facts = failure.facts;
   const reason = facts?.reason;
   const marked = reason === 'never_joined' || reason === 'not_standing';
@@ -389,14 +390,14 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
     else if (squarePath !== undefined) lines.push(`${commandPrefix(squarePath)} migrate`);
   } else if (squarePath !== undefined && name !== undefined && reason === 'needs_seat') {
     lines.splice(0, 1, `✕ ${failure.message}`);
-    lines.push(joinRecoveryCommand(squarePath, name));
+    lines.push(joinRecoveryCommand(squarePath, name, owner));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);
-    lines.push(...takeoverRecoveryLines(squarePath, name));
+    lines.push(...takeoverRecoveryLines(squarePath, name, owner));
   } else if (squarePath !== undefined && reason === 'never_joined') {
     lines.push(failure.operation?.subject !== 'filter' && name !== undefined
-      ? joinRecoveryCommand(squarePath, name) : participantsRecoveryCommand(squarePath));
+      ? joinRecoveryCommand(squarePath, name, owner) : participantsRecoveryCommand(squarePath));
   } else if (squarePath !== undefined && reason === 'not_standing') {
     lines.push(participantsRecoveryCommand(squarePath));
   } else if (squarePath !== undefined && reason === 'not_addressed' && facts?.activityId !== undefined) {

@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { Square } from '@astrosheep/square';
 import type { Activity, ActivityId, Participant, StreamRecord } from '@astrosheep/square';
 import type { BridgeSettings } from './config.js';
@@ -10,7 +9,7 @@ import { slackText, squareBody } from './text.js';
 export interface BridgeOptions {
   readonly settings: BridgeSettings;
   readonly port: SlackPort;
-  /** A caller-owned square must be opened with the bridge-derived body coordinate. */
+  /** A caller-owned identity-free resource; the configured bridge owner controls its names. */
   readonly square?: Square;
   readonly log?: (line: string) => void;
   readonly pollIntervalMs?: number;
@@ -19,12 +18,6 @@ export interface BridgeOptions {
 const PAGE = 100;
 const STOP_GRACE_MS = 2000;
 const HANDLED_SUBTYPES = new Set(['thread_broadcast', 'file_share']);
-const BODY_CHANNEL = 'slack-bridge';
-
-/** Stable custody identity from the bridge's existing state path and Slack channel. */
-function bridgeBody(settings: BridgeSettings) {
-  return { channel: BODY_CHANNEL, session: resolve(settings.state), agent: settings.channel };
-}
 
 /**
  * One configured Slack channel and one local square, mirrored in both
@@ -152,7 +145,7 @@ export class Bridge {
   }
 
   private async participantFor(name: string): Promise<Participant> {
-    return (await this.square.join(name, { body: bridgeBody(this.settings) })).participant;
+    return (await this.square.join(name, { owner: this.settings.owner })).participant;
   }
 
   private async mirror(activity: Activity): Promise<void> {

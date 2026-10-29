@@ -5,12 +5,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalPath } from './canonical-path.js';
 import { inSqliteTransaction } from './sqlite-transaction.js';
-import { nameKey, validateBody, type Body } from './model.js';
+import { harnessOwner, type HarnessCoordinate } from './owner.js';
+import { nameKey } from './model.js';
 
 /** Offline conversion input only; never a runtime ownership or evidence reader. */
 export interface LegacyOwner {
   readonly participant: string;
-  readonly body: Body;
+  readonly coordinate: HarnessCoordinate;
 }
 export interface LegacyHostData {
   readonly owners: readonly LegacyOwner[];
@@ -152,11 +153,11 @@ export async function readLegacyHostData(location: string, env: NodeJS.ProcessEn
         const at = value.at ?? value.updatedAt;
         if (value.v !== 1 || value.location !== canonical || typeof value.participant !== 'string'
           || !finite(at)) throw invalid('owner fields are malformed.');
-        const body = { channel: value.channel, session: value.session, ...(value.agent === undefined ? {} : { agent: value.agent }) } as Body;
-        validateBody(body);
+        const coordinate = { channel: value.channel, session: value.session, ...(value.agent === undefined ? {} : { agent: value.agent }) } as HarnessCoordinate;
+        harnessOwner(coordinate);
         projections(row, { location_key: recordKey(canonical), participant_key: recordKey(nameKey(value.participant)),
-          channel_key: recordKey(body.channel), session_key: recordKey(body.session), effective_at: at });
-        return { participant: value.participant, body };
+          channel_key: recordKey(coordinate.channel), session_key: recordKey(coordinate.session), effective_at: at });
+        return { participant: value.participant, coordinate };
       });
       const evidence = (database.prepare("SELECT * FROM host_evidence WHERE location_key=? AND kind IN ('wake','presentation') ORDER BY seq").all(recordKey(canonical)) as Record<string, unknown>[]).map(row => {
         const value = decodeEvidence(record(row));

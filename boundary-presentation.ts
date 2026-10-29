@@ -5,7 +5,7 @@ import { withFileLock } from './file-lock.js';
 import { createArtifactPort } from './artifact.js';
 import { preparePendingPresentation } from './presentation-operations.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
-import type { Body, PendingMembership } from './model.js';
+import type { Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 export { pendingAtBoundary };
@@ -69,9 +69,9 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
 }
 
 async function presentPendingAtBoundaryUnlocked<T>(
-  identity: Body,
+  identity: Owner,
   present: (context: string) => T | Promise<T>,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
+  lookup: (identity: Owner, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ): Promise<T | undefined> {
@@ -134,9 +134,9 @@ async function presentPendingAtBoundaryUnlocked<T>(
  * A source that cannot verify its reuse must read the inbox again.
  */
 export async function presentPendingAtBoundary<T>(
-  identity: Body,
+  identity: Owner,
   present: (context: string) => T | Promise<T>,
-  lookup: (identity: Body, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
+  lookup: (identity: Owner, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {

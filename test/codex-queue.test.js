@@ -19,7 +19,7 @@ async function pending(t, env, address = { threadId: 'thread-a' }) {
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: emptyRuntimeState() });
   t.after(() => artifact.close());
   const join = async (name, wakeAddress) => (await artifact.transactAs({ kind: 'join', participant: name,
-    body: { channel: 'test', session: name }, wakeAddress }, facts => {
+    owner: `test:${name}`, wakeAddress }, facts => {
     facts.land({ kind: 'join', actor: name, at: 1 });
     return facts.seat(name);
   })).value;

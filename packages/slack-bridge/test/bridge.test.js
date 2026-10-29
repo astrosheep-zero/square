@@ -59,14 +59,10 @@ test('the bridge opens an identity-free square and joins inbound with stable cus
       assert.equal(Object.hasOwn(input, key), false, `${key} must not be captured on open`)
     }
     const body = bridgeBody(settings)
-    assert.deepEqual(body, {
-      channel: 'slack-bridge',
-      session: resolve(settings.state),
-      agent: settings.channel,
-    })
+    assert.equal(body, settings.owner)
 
     await bridge.handleInbound(message({ ts: '1700.0001', text: 'hello from the bridge' }))
-    assert.deepEqual(joins, [['slack/Alice', { body }]])
+    assert.deepEqual(joins, [['slack/Alice', { owner: body }]])
     assert.deepEqual((await square.seatsOf(body)).map((seat) => seat.name), ['slack/Alice'])
     const landed = (await archive(square)).at(-1)
     assert.equal(landed.kind, 'say')
@@ -83,10 +79,10 @@ test('the bridge opens an identity-free square and joins inbound with stable cus
 test('a caller-owned square uses bridge custody per operation and stays caller-owned', async (t) => {
   const path = await buildSquare()
   const settings = settingsFor({ square: path, personas })
-  const callerBody = { channel: 'caller-owned', session: 'caller-resource' }
+  const callerBody = 'caller-owned:caller-resource'
   const square = await Square.at({ path })
   t.after(() => square.close())
-  await square.join('caller', { body: callerBody })
+  await square.join('caller', { owner: callerBody })
   const joins = recordJoins(square)
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
   const originalAt = Square.at
@@ -108,8 +104,8 @@ test('a caller-owned square uses bridge custody per operation and stays caller-o
 
   assert.equal(openCalls, 0)
   assert.deepEqual(joins, [
-    ['slack/Alice', { body: bridgeBody(settings) }],
-    ['slack/Alice', { body: bridgeBody(settings) }],
+    ['slack/Alice', { owner: bridgeBody(settings) }],
+    ['slack/Alice', { owner: bridgeBody(settings) }],
   ])
   assert.deepEqual((await square.seatsOf(callerBody)).map((seat) => seat.name), ['caller'])
   assert.deepEqual((await square.seatsOf(bridgeBody(settings))).map((seat) => seat.name), ['slack/Alice'])
@@ -129,8 +125,8 @@ test('inbound messages reacquire a participant handle after a seat is replaced',
   const bridge = await Bridge.open({ settings, port: slack, square })
   try {
     await bridge.handleInbound(message({ ts: '1700.0003', text: 'before replacement' }))
-    await (await replacement.participant('slack/Alice', { body })).done()
-    assert.equal((await replacement.join('slack/Alice', { body })).kind, 'joined')
+    await (await replacement.participant('slack/Alice', { owner: body })).done()
+    assert.equal((await replacement.join('slack/Alice', { owner: body })).kind, 'joined')
 
     await bridge.handleInbound(message({ ts: '1700.0004', text: 'after replacement' }))
     assert.equal((await archive(square)).at(-1).body, 'after replacement')
@@ -144,7 +140,7 @@ test('inbound messages reacquire a participant handle after a seat is replaced',
 test('Slack messages land as say activities from slack participants', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  await square.join('faye', { body })
+  await square.join('faye', { owner: body })
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
   const { bridge } = await start(t, { path, slack })
 
@@ -197,8 +193,8 @@ test('a threaded Slack reply answers the mapped square activity', async (t) => {
 test('agent activities post once, in order, each in its own voice', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
-  const faye = (await square.join('faye', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
+  const faye = (await square.join('faye', { owner: body })).participant
   const slack = slackWith()
   const { bridge } = await start(t, { path, slack })
 
@@ -222,7 +218,7 @@ test('agent activities post once, in order, each in its own voice', async (t) =>
 test('mentions become Slack IDs and replies thread under the Slack message', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const faye = (await square.join('faye', { body })).participant
+  const faye = (await square.join('faye', { owner: body })).participant
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
   const { bridge } = await start(t, { path, slack })
 
@@ -240,7 +236,7 @@ test('mentions become Slack IDs and replies thread under the Slack message', asy
 test('a Slack failure is logged, skipped, and never blocks later activities', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
   const logs = []
   const slack = slackWith().failWhen((post) => post.text === 'second')
   const { bridge } = await start(t, { path, slack, log: (line) => logs.push(line) })
@@ -259,7 +255,7 @@ test('a Slack failure is logged, skipped, and never blocks later activities', as
 test('a restart resumes both directions without duplicates', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
   const settings = settingsFor({ square: path, personas })
 
@@ -285,7 +281,7 @@ test('a restart resumes both directions without duplicates', async (t) => {
 test('a first start does not replay old history', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
   await rei.express('old')
   const slack = slackWith()
   const { bridge } = await start(t, { path, slack })
@@ -306,7 +302,7 @@ test('a bridge first started on an empty square posts what landed while it was s
   await first.stop()
 
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
   await rei.express('late')
 
   const restarted = await Bridge.open({ settings, port: slack })
@@ -318,7 +314,7 @@ test('a bridge first started on an empty square posts what landed while it was s
 test('the running bridge mirrors both directions until stopped', async (t) => {
   const path = await buildSquare()
   const { square, body } = await opened(t, path)
-  const rei = (await square.join('rei', { body })).participant
+  const rei = (await square.join('rei', { owner: body })).participant
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
   const { bridge } = await start(t, { path, slack })
 

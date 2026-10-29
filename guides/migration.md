@@ -3,8 +3,8 @@
 Square stores its authority in one versioned SQLite artifact. Format 1 kept a snapshot;
 format 2 introduced typed facts; format 3 added `unlisten`; format 4 moved participant custody
 and delivery evidence into the artifact; format 5 added independent delivery deferrals.
-**Format 6 separates participant membership from host attachment.** Existing artifacts are
-never converted implicitly.
+**Format 6 separates participant membership from host attachment; format 7 replaces harness Body
+coordinates with opaque owners.** Existing artifacts are never converted implicitly.
 
 Stop all processes using the artifact, make an offline backup, then run:
 
@@ -13,7 +13,7 @@ square --location /path/to/SQUARE.square migrate
 square --location /path/to/SQUARE.square doctor
 ```
 
-The command handles supported formats 2–5 in place and publishes only final format 6, in one
+The command handles supported formats 2–6 in place and publishes only final format 7, in one
 transaction. It does not make a backup, stop processes, install a runtime or update another
 artifact. For formats 2/3, also freeze and back up the legacy HostLedger used for owner/evidence
 import. A legacy ledger needing its own conversion must be prepared separately with its old
@@ -22,7 +22,7 @@ runtime's offline tooling. Snapshot format 1 is not accepted by this conversion.
 ## Membership and attachment after conversion
 
 Membership owns a participant's join/done history, read horizon and outgoing listens. Attachment
-says whether its exact Body is currently executing for it. Format 6 makes three endings distinct:
+says whether its exact owner is currently executing for it. There are three distinct endings:
 
 - A participant's voluntary `done` ends membership. A later explicit participant join is required
   to return; no host start/resume revives it.
@@ -31,26 +31,29 @@ says whether its exact Body is currently executing for it. Format 6 makes three 
   and delivery deferrals are cleared. Away participants still receive landed audience and accumulate
   unread activity, but cannot write or receive proactive delivery. Away has no timeout.
 - Host-confirmed permanent deletion ends membership through fenced
-  `endHeld(name, {body, generation})`, including for a detached seat. OpenCode `session.deleted`
+  `endHeld(name, {owner, generation})`, including for a detached seat. OpenCode `session.deleted`
   uses this path.
 
-On start/resume, hosts discover only their exact Body's standing seats with `seatsOf(body)` and
-restore the detached ones with `reattach(name, {body, wakeAddress?})` before arming delivery.
-Same-Body `join` or `reattach` preserves the generation, read horizon and listens, so mentions
+On start/resume, hosts discover only their exact owner's standing seats with `seatsOf(owner)` and
+restore the detached ones with `reattach(name, {owner, wakeAddress?})` before arming delivery.
+Same-owner `join` or `reattach` preserves the generation, read horizon and listens, so mentions
 received while away remain unread. Reattachment returns `null` for absent, foreign or done seats;
 it never creates membership. Explicit takeover still performs `done -> join` with a fresh
 generation, even when taking over an away participant; old cleanup/recovery cannot reclaim it.
-The identity-free Square SDK refactor itself does not change the format or require artifact
-migration; see the [SDK breaking migration](square-api.md#sdk-breaking-migration-identity-free-square).
+The owner API requires this explicit format migration; see the
+[SDK breaking migration](square-api.md#sdk-breaking-migration-opaque-owners).
 
-## Additive conversion from formats 5 and 4
+## Conversion from formats 6, 5 and 4
 
-Read-only preflight checks the exact supported framing and stored facts. Format 5 -> 6 adds only
-the attachment distinction: **every existing seat becomes attached**. No detached seat is
-manufactured. Conversation, audience, receipts, membership, listens, custody generations, catch
-ownership, delivery deferrals/evidence, cancellation boundaries and both revision meanings are
-preserved. Format 4 also gains empty independent deferral support. Neither conversion consults or
-mutates HostLedger. Any failure rolls back the additive changes and format publication together.
+Format 6 -> 7 maps each seat's `channel`, `session` and optional `agent` through the adapter codec
+into one owner string, preserving its generation, attachment and wake. Evidence, deferrals, catch
+leases, cancellations, conversation facts and both revisions stay unchanged. Unmappable legacy
+coordinates (for example an encoded owner exceeding 512 UTF-8 bytes) refuse without changing the
+source; they are never truncated or reassigned. Keep the source backup for offline resolution.
+
+Formats 4/5 first acquire format 6 semantics in that same transaction: every existing seat becomes
+attached. Format 4 also gains empty deferral support. No detached seat is invented. Formats 4–6
+never consult HostLedger; any failure rolls back schema changes and final publication together.
 
 Existing done participants stay done. Before format 6, a host-cleanup `done` was indistinguishable
 from a voluntary leave; migration conservatively treats both as voluntary. It does not infer
@@ -99,7 +102,7 @@ read-only legacy ledger remains available for offline diagnosis; an absent ledge
 derived custody, but an unreadable or unsupported ledger refuses before changing the square.
 
 One transaction imports verified authority/evidence, adds deferral and attachment support and
-publishes format 6. Existing conversation and membership facts are preserved; no intermediate
+publishes format 7. Existing conversation and membership facts are preserved; no intermediate
 format is published. Legacy catch ownership is generation-bound only for exact standing owner
 spellings; otherwise it stays unbound. Legacy routes are consumed only during migration and are
 not a live authority source. The new delivery revision starts at zero. Format 2 first adds support
@@ -134,9 +137,12 @@ or use SQLite backup facilities rather than copying a live database. Migration c
 in-flight remote delivery. Writes use ordinary SQLite `DELETE` journals: the artifact and its
 containing directory must permit writing and journal creation/removal. A legacy ledger needs read
 access only. Losing the rebuildable HOME discovery index may delay restoration/delivery but cannot
-transfer custody or erase evidence.
+transfer custody or erase evidence. The disposable index changes to `{location, owner}`; old index
+rows are ignored. Rejoin with the exact migrated owner to republish discovery (or let that same
+harness reconnect). This preserves generation, listens and unread activity; do not use takeover
+merely to rebuild the index.
 
-Upgrade all attached runtimes before reopening format 6; older runtimes must not be mixed with it.
+Upgrade all attached runtimes before reopening format 7; older runtimes must not be mixed with it.
 Updating a package does not migrate an artifact, and migration does not install upgraded runtimes.
 After conversion, run read-only `doctor` before restarting clients. To roll back a committed
 conversion, stop all clients and restore the offline backup with its compatible older runtime;

@@ -4,11 +4,12 @@ import { createHash } from 'node:crypto';
 import { openExistingSquareDatabase } from './artifact.js';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 import { canonicalPath, canonicalPathSync } from './canonical-path.js';
-import { formatActivityId, isWakeRouteKind, nameKey, sameBody, validateBody, type Seat, type StoredAct, type WakeAddress } from './model.js';
+import { harnessOwner, decodeHarnessOwner, type HarnessCoordinate } from './owner.js';
+import { formatActivityId, isWakeRouteKind, nameKey, type Seat, type StoredAct, type WakeAddress } from './model.js';
 import { parseActivityId } from './square-core.js';
 import { readLegacyHostData, type LegacyDeliveryEvidence, type LegacyHostData } from './square-migration-host-ledger.js';
 import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS } from './square-legacy-framing.js';
-import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, SEAT_ATTACHMENT_SQL, validateRowFraming, inspectPreAttachmentSqlite, createSqliteDriver, invalidArtifact,
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, V6_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
   validateStoredActivity,
   type SquareRuntimeState, type SquareState } from './square-sqlite.js';
 
@@ -31,6 +32,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function sameCoordinate(left: HarnessCoordinate, right: HarnessCoordinate): boolean {
+  return left.channel === right.channel && left.session === right.session && left.agent === right.agent;
 }
 
 function validateRecord(value: unknown, item: (candidate: unknown) => boolean): value is Record<string, unknown> {
@@ -158,7 +163,7 @@ function rebuildV2Activities(database: DatabaseSync): void {
 
 function validateCurrentFraming(database: DatabaseSync, location: string): void {
   validateRowFraming(database, CURRENT_USER_VERSION, location);
-  createSqliteDriver(database).header();
+  inspectSqlite(database);
 }
 
 function assertSource(condition: unknown, detail = 'row is malformed.'): asserts condition {
@@ -211,7 +216,7 @@ interface RowMigrationPlan {
 interface LegacyRoute {
   readonly location: string;
   readonly participant: string;
-  readonly body: Seat['body'];
+  readonly coordinate: HarnessCoordinate;
   readonly wakeAddress: WakeAddress;
 }
 function decodeLegacyRoute(row: Record<string, unknown>): LegacyRoute {
@@ -228,11 +233,11 @@ function decodeLegacyRoute(row: Record<string, unknown>): LegacyRoute {
   assertSource(row.participant_key_json === JSON.stringify(nameKey(participant)), 'route participant key is malformed.');
   const sessionId = decodeJsonString(row.session_json);
   sourceFinite(row.updated_at);
-  const body = { channel: parsed.channel, session: sessionId, ...(parsed.extra.agent === undefined ? {} : { agent: parsed.extra.agent }) } as Seat['body'];
-  validateBody(body);
+  const coordinate = { channel: parsed.channel, session: sessionId, ...(parsed.extra.agent === undefined ? {} : { agent: parsed.extra.agent }) } as HarnessCoordinate;
+  harnessOwner(coordinate);
   const address = parsed.address as Record<string, string>;
   if (row.kind === 'claude-native') assertSource(address.sessionId === undefined || address.sessionId === sessionId, 'native route session conflicts with its body.');
-  return { location: parsed.location, participant, body,
+  return { location: parsed.location, participant, coordinate,
     wakeAddress: { kind: row.kind, address: { ...address, ...(row.kind === 'claude-native' ? { sessionId } : {}) } } };
 }
 function validateLegacyLease(value: unknown): void {
@@ -277,12 +282,12 @@ function planSeats(
     const joined = establishingJoin(driver, participant);
     const candidates = localRoutes.filter((route) => nameKey(route.participant) === nameKey(participant.name));
     const owner = owners.find(row => nameKey(row.participant) === nameKey(participant.name));
-    const body = owner?.body ?? candidates[0]?.body;
-    if (body === undefined || !candidates.every(route => sameBody(route.body, body))) continue;
+    const coordinates = [...candidates.map(route => route.coordinate), ...(owner === undefined ? [] : [owner.coordinate])];
+    if (coordinates.length === 0 || !coordinates.every(coordinate => sameCoordinate(coordinate, coordinates[0]))) continue;
     const address = uniqueSeatAddress(candidates);
     seats.push({
       participant: participant.name,
-      body,
+      owner: harnessOwner(coordinates[0]),
       generation: formatActivityId(joined),
       attachment: 'attached',
       ...(address === undefined ? {} : { wakeAddress: address }),
@@ -364,7 +369,7 @@ function inspectLegacyRowArtifact(database: DatabaseSync, location: string, host
     routes: routes.length,
     recoveredSeats: seats.length,
     unownedStanding: standingCount - seats.length,
-    sharedBodySeats: seats.filter(seat => seats.some(other => other !== seat && sameBody(other.body, seat.body))).length,
+    sharedBodySeats: seats.filter(seat => seats.some(other => other !== seat && other.owner === seat.owner)).length,
     skippedEvidence: host.evidence.length - deliveries.length,
   };
   const sourceToken = legacySourceToken(database);
@@ -416,21 +421,21 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
     const payload = legacyDeliveryPayload(source, seat?.wakeAddress);
     const native = source.kind === 'wake' && source.nativeDelivery !== undefined;
     if (!participant?.joined && !(participant?.done && native)) continue;
-    if (participant.joined && (seat === undefined || seat.body.session !== source.session
-      || source.agent !== seat.body.agent || source.channel !== undefined && source.channel !== seat.body.channel)) continue;
+    const seatCoordinate = seat === undefined ? undefined : decodeHarnessOwner(seat.owner);
+    if (participant.joined && (seatCoordinate === undefined || seatCoordinate.session !== source.session
+      || seatCoordinate.agent !== source.agent || source.channel !== undefined && seatCoordinate.channel !== source.channel)) continue;
     const harness = (source.nativeDelivery as Record<string, unknown> | undefined)?.harness;
-    if (native && seat !== undefined && harness !==
-      (seat.body.channel === 'claude-code' ? 'claude' : seat.body.channel === 'opencode' ? 'opencode' : undefined)) continue;
+    if (native && source.channel !== undefined && source.channel !== (harness === 'claude' ? 'claude-code' : 'opencode')) continue;
+    if (native && seat !== undefined && harness !== undefined && seat.owner !== harnessOwner({ channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session, ...(source.agent === undefined ? {} : { agent: source.agent }) })) continue;
     const joined = establishingJoin(driver, participant);
     const generation = formatActivityId(joined);
     if (index <= joined || driver.activity(index)?.kind !== 'say' || driver.directedAt(participant.name, index) === undefined) continue;
     if (participant.done) {
       const done = driver.activityHeads({ actors: [participant.name], kinds: ['done'] }, { edge: 'newest', limit: 1 }).items[0];
       if (done === undefined || index >= done.index) continue;
-      const body = { channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session,
-        ...(source.agent === undefined ? {} : { agent: source.agent }) } as Seat['body'];
-      if (source.channel !== undefined && source.channel !== body.channel) continue;
-      const coordinate = JSON.stringify([body.channel, body.session, body.agent]);
+      const owner = harnessOwner({ channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session,
+        ...(source.agent === undefined ? {} : { agent: source.agent }) });
+      const coordinate = JSON.stringify([owner]);
       const key = nameKey(participant.name), previous = completedBodies.get(key);
       completedBodies.set(key, previous === undefined || previous === coordinate ? coordinate : null);
     }
@@ -465,8 +470,7 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
   return deliveries.filter(row => row.claimToken === undefined || tokens.get(row.claimToken) === 1);
 }
 
-const V4_REBUILT_TABLES = ['square_meta', 'catch_leases'] as const;
-function tableDefinition(name: typeof V4_REBUILT_TABLES[number]): string {
+function tableDefinition(name: 'square_meta' | 'catch_leases' | 'seats'): string {
   const definition = SCHEMA_SQL.split(';').map((statement) => statement.trim()).find((statement) => statement.startsWith(`CREATE TABLE ${name} (`));
   if (definition === undefined) throw new Error(`Missing current table definition for ${name}.`);
   return `${definition};`;
@@ -474,16 +478,32 @@ function tableDefinition(name: typeof V4_REBUILT_TABLES[number]): string {
 function currentAdditionStatements(): string[] {
   return SCHEMA_SQL.split(';').map((statement) => statement.trim()).filter((statement) => {
     const match = /^(?:CREATE (?:UNIQUE )?TABLE|CREATE (?:UNIQUE )?INDEX)\s+([a-z_]+)/i.exec(statement);
-    return match !== null && FORMAT4_ADDED_OBJECTS.has(match[1]);
+    return match !== null && (FORMAT4_ADDED_OBJECTS.has(match[1]) || match[1] === 'seat_owner');
   }).map((statement) => `${statement};`);
+}
+function migrateSeatOwnership(database: DatabaseSync, source: 4 | 5 | 6): void {
+  const rows = database.prepare('SELECT * FROM seats ORDER BY participant_key_json').all() as Record<string, unknown>[];
+  database.exec('ALTER TABLE seats RENAME TO seats_legacy;');
+  database.exec(tableDefinition('seats'));
+  database.exec('CREATE INDEX seat_owner ON seats(owner_json);');
+  const insert = database.prepare('INSERT INTO seats(participant_key_json,participant_json,owner_json,generation_json,wake_address_json,attachment) VALUES(?,?,?,?,?,?)');
+  for (const row of rows) {
+    const channel = decodeJsonString(row.channel_json, true), session = decodeJsonString(row.session_json, true);
+    const agent = row.agent_json === null ? undefined : decodeJsonString(row.agent_json, true);
+    const owner = harnessOwner({ channel, session, ...(agent === undefined ? {} : { agent }) });
+    const attachment = source === 6 ? row.attachment : 'attached';
+    assertSource(attachment === 'attached' || attachment === 'detached', 'seat attachment is malformed.');
+    insert.run(row.participant_key_json as string, row.participant_json as string, JSON.stringify(owner), row.generation_json as string, row.wake_address_json as string | null, attachment);
+  }
+  database.exec('DROP TABLE seats_legacy;');
 }
 function importOwnershipAndEvidence(database: DatabaseSync, plan: RowMigrationPlan): void {
   for (const generation of plan.leaseGenerations) {
     database.prepare('UPDATE catch_leases SET generation_json=? WHERE owner_json=?').run(JSON.stringify(generation.generation), generation.ownerJson);
   }
-  const insertSeat = database.prepare('INSERT INTO seats(participant_key_json,participant_json,channel_json,session_json,agent_json,generation_json,wake_address_json) VALUES(?,?,?,?,?,?,?)');
+  const insertSeat = database.prepare('INSERT INTO seats(participant_key_json,participant_json,owner_json,generation_json,wake_address_json,attachment) VALUES(?,?,?,?,?,?)');
   for (const seat of plan.seats) {
-    insertSeat.run(JSON.stringify(nameKey(seat.participant)), JSON.stringify(seat.participant), JSON.stringify(seat.body.channel), JSON.stringify(seat.body.session), seat.body.agent === undefined ? null : JSON.stringify(seat.body.agent), JSON.stringify(seat.generation), seat.wakeAddress === undefined ? null : JSON.stringify(seat.wakeAddress));
+    insertSeat.run(JSON.stringify(nameKey(seat.participant)), JSON.stringify(seat.participant), JSON.stringify(seat.owner), JSON.stringify(seat.generation), seat.wakeAddress === undefined ? null : JSON.stringify(seat.wakeAddress), seat.attachment);
   }
   const insertDelivery = database.prepare('INSERT INTO delivery_evidence(participant_key_json,participant_json,generation_json,act_index,kind,attempt_n,outcome,at,expires_at,claim_token_json,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
   for (const evidence of plan.deliveries) {
@@ -508,7 +528,7 @@ function upgradeRowArtifact(database: DatabaseSync, location: string, plan: RowM
   validateCurrentFraming(database, location);
 }
 
-function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | undefined {
+function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | 6 | undefined {
   const before = identity(database);
   if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
   if (before.userVersion === V2_USER_VERSION || before.userVersion === V3_USER_VERSION) {
@@ -516,9 +536,8 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
     if (issue !== undefined) throw invalidArtifact(issue);
     return before.userVersion;
   }
-  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION) {
+  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION || before.userVersion === V6_USER_VERSION) {
     validateRowFraming(database, before.userVersion, location);
-    inspectPreAttachmentSqlite(database);
     return before.userVersion;
   }
   if (before.userVersion === CURRENT_USER_VERSION) {
@@ -531,7 +550,8 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
 /**
  * Explicit conversion of the supported legacy formats. Row-backed versions 2 and 3 are
  * preflighted read-only, then receive ownership/evidence and deferral storage in one
- * format-6 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
+ * format-7 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
+ * All legacy seats are encoded as opaque owners, preserving format-6 attachment.
  * Legacy delivery evidence is copied from HostLedger only when its owner/session mapping is
  * unique; no source record is retired. Version 1 is not a supported source for this format transition.
  */
@@ -541,12 +561,12 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
   try {
     const source = await inSqliteTransaction(database, false, () => validateMigrationSource(database, squarePath), value => value, signal);
     if (source === undefined) return { status: 'already-current', standing: standing(database) };
-    if (source === V4_USER_VERSION || source === V5_USER_VERSION) {
+    if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION) {
       return await inSqliteTransaction(database, true, () => {
         assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');
       }, () => {
         if (source === V4_USER_VERSION) database.exec(DELIVERY_DEFERRALS_SQL);
-        database.exec(SEAT_ATTACHMENT_SQL);
+        migrateSeatOwnership(database, source);
         database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
         validateCurrentFraming(database, squarePath);
         return { status: 'migrated' as const, standing: standing(database) };

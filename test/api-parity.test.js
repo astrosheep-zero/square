@@ -19,13 +19,13 @@ async function fixture(t, label) {
     CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: `${label}-session`, OPENCODE_SESSION_ID: '', PI_SESSION_ID: '', PASEO_AGENT_ID: '',
     SQUARE_PARTICIPANT_NAME: undefined, SQUARE_DISABLE_PASEO_WAKE: '1', NO_COLOR: '1' };
   delete env.FORCE_COLOR;
-  const body = { channel: 'codex', session: `${label}-session` };
+  const body = "codex" + ":" + `${label}-session`;
   const square = await Square.build({ path: squarePath, markdown: 'parity context', env });
   t.after(async () => { await square.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
   return { cwd, path: squarePath, env, body, square };
 }
 async function mcp(t, options) {
-  const server = createSquareMcpServer({ cwd: options.cwd, path: options.path, env: options.env, body: options.body });
+  const server = createSquareMcpServer({ cwd: options.cwd, path: options.path, env: options.env, owner: options.body });
   const client = new Client({ name: 'square-parity-test', version: '1' });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);
@@ -52,11 +52,11 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   const direct = await fixture(t, 'sdk'), terminal = await fixture(t, 'cli'), json = await fixture(t, 'mcp');
   const call = await mcp(t, json);
   for (const name of ['Alice', 'Bob']) {
-    await direct.square.join(name, { body: direct.body });
+    await direct.square.join(name, { owner: direct.body });
     cli(terminal, name, ['join']);
     await call('join', { as: name });
   }
-  const alice = await direct.square.participant('Alice', { body: direct.body }), bob = await direct.square.participant('Bob', { body: direct.body });
+  const alice = await direct.square.participant('Alice', { owner: direct.body }), bob = await direct.square.participant('Bob', { owner: direct.body });
   await alice.express('first @Bob', { force: true });
   cli(terminal, 'Alice', ['express', '--force', 'first @Bob']);
   await call('express', { as: 'Alice', body: 'first @Bob', force: true });
@@ -98,24 +98,24 @@ test('SDK, CLI and MCP bare expressions land without an audience and reach liste
   const direct = await fixture(t, 'bare-sdk'), terminal = await fixture(t, 'bare-cli'), json = await fixture(t, 'bare-mcp');
   const call = await mcp(t, json);
   for (const name of ['Alice', 'Bob']) {
-    await direct.square.join(name, { body: direct.body });
+    await direct.square.join(name, { owner: direct.body });
     cli(terminal, name, ['join']);
     await call('join', { as: name });
   }
 
-  await (await direct.square.participant('Alice', { body: direct.body })).express('sdk bare without listener', { force: true });
+  await (await direct.square.participant('Alice', { owner: direct.body })).express('sdk bare without listener', { force: true });
   cli(terminal, 'Alice', ['express', '--force', 'cli bare without listener']);
   await call('express', { as: 'Alice', body: 'mcp bare without listener', force: true });
 
-  await (await direct.square.participant('Bob', { body: direct.body })).listen('Alice');
+  await (await direct.square.participant('Bob', { owner: direct.body })).listen('Alice');
   cli(terminal, 'Bob', ['listen', 'Alice']);
   await call('attention', { as: 'Bob', action: 'listen', target: 'Alice' });
 
-  await (await direct.square.participant('Alice', { body: direct.body })).express('sdk bare for listener', { force: true });
+  await (await direct.square.participant('Alice', { owner: direct.body })).express('sdk bare for listener', { force: true });
   cli(terminal, 'Alice', ['express', '--force', 'cli bare for listener']);
   await call('express', { as: 'Alice', body: 'mcp bare for listener', force: true });
 
-  const sdkCaught = await (await direct.square.participant('Bob', { body: direct.body })).catch();
+  const sdkCaught = await (await direct.square.participant('Bob', { owner: direct.body })).catch();
   assert.deepEqual(sdkCaught.activities.map((activity) => activity.body), ['sdk bare for listener']);
   const cliCaught = cli(terminal, 'Bob', ['catch', '--now']);
   assert.match(cliCaught, /cli bare for listener/);
@@ -134,7 +134,7 @@ test('SDK, CLI and MCP bare expressions land without an audience and reach liste
 
 test('all history callers default to ten; only explicit null reads the full archive, without receipts', async (t) => {
   const options = await fixture(t, 'archive'), { square } = options;
-  const { participant } = await square.join('Alice', { body: options.body });
+  const { participant } = await square.join('Alice', { owner: options.body });
   for (let index = 0; index < 12; index++) await participant.express(`message ${index}`, { force: true });
   const call = await mcp(t, options), before = (await readSquareSnapshot(options.path)).state;
   const recent = await square.history();
@@ -149,11 +149,11 @@ test('all history callers default to ten; only explicit null reads the full arch
 
 test('a stale participant handle cannot speak after departure; rejoining establishes a fresh seat for SDK and MCP', async (t) => {
   const direct = await fixture(t, 'reentry-sdk'), json = await fixture(t, 'reentry-mcp'), call = await mcp(t, json);
-  const { participant: departedAlice } = await direct.square.join('Alice', { body: direct.body });
+  const { participant: departedAlice } = await direct.square.join('Alice', { owner: direct.body });
   await departedAlice.done();
   const staleAuthority = (error) => error.code === 'already_joined';
   await assert.rejects(departedAlice.express('stale handle'), staleAuthority);
-  const rejoined = await direct.square.join('Alice', { body: direct.body });
+  const rejoined = await direct.square.join('Alice', { owner: direct.body });
   assert.equal(rejoined.activity.id, 'act/2');
   await assert.rejects(departedAlice.express('old generation after rejoin'), staleAuthority);
   const alice = rejoined.participant;
@@ -166,8 +166,8 @@ test('a stale participant handle cannot speak after departure; rejoining establi
   const confirmation = await call('express', { as: 'Alice', body: 'back', force: true });
   assert.ok(confirmation.includes(expressed.activity.id));
   assert.match(confirmation, /your words land/);
-  await assert.rejects(direct.square.participant('Never', { body: direct.body }), error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat');
-  const client = new Client({ name: 'square-parity-error', version: '1' }), server = createSquareMcpServer({ cwd: json.cwd, path: json.path, env: json.env, body: json.body });
+  await assert.rejects(direct.square.participant('Never', { owner: direct.body }), error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat');
+  const client = new Client({ name: 'square-parity-error', version: '1' }), server = createSquareMcpServer({ cwd: json.cwd, path: json.path, env: json.env, owner: json.body });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);
   t.after(async () => { await client.close(); await server.close(); });
@@ -203,11 +203,11 @@ function measureArtifact(t, squarePath) {
 
 test('optional observations add only requested reads; rendering transports pay for the feed they show', async (t) => {
   const options = await fixture(t, 'observations'), { square } = options;
-  const { participant: alice } = await square.join('Alice', { body: options.body }), { participant: bob } = await square.join('Bob', { body: options.body });
+  const { participant: alice } = await square.join('Alice', { owner: options.body }), { participant: bob } = await square.join('Bob', { owner: options.body });
   await bob.express('for Alice', { force: true, mentions: ['Alice'] });
   const call = await mcp(t, options), measure = measureArtifact(t, options.path);
-  const plainJoin = await measure(() => square.join('Alice', { body: options.body }));
-  const fullJoin = await measure(() => square.join('Alice', { body: options.body, observe: true }));
+  const plainJoin = await measure(() => square.join('Alice', { owner: options.body }));
+  const fullJoin = await measure(() => square.join('Alice', { owner: options.body, observe: true }));
   const dataJoin = await measure(() => call('join', { as: 'Alice' }));
   assert.equal(dataJoin.value, renderJoinResult(fullJoin.value));
   assert.equal(plainJoin.value.observation, undefined);
@@ -237,18 +237,18 @@ test('optional observations add only requested reads; rendering transports pay f
 
 test('catch resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {
   const options = await fixture(t, 'catch-names'), { square } = options;
-  for (const name of ['Alice', 'Bob', 'Cara', 'Dan']) await square.join(name, { body: options.body });
-  await (await square.participant('Dan', { body: options.body })).done();
-  const alice = await square.participant('aLiCe', { body: options.body }), measure = measureArtifact(t, options.path);
+  for (const name of ['Alice', 'Bob', 'Cara', 'Dan']) await square.join(name, { owner: options.body });
+  await (await square.participant('Dan', { owner: options.body })).done();
+  const alice = await square.participant('aLiCe', { owner: options.body }), measure = measureArtifact(t, options.path);
   const one = await measure(() => alice.catch({ from: ['BOB'] }));
   const many = await measure(() => alice.catch({ from: ['BOB', 'cara', 'Dan', 'BOB'] }));
   assert.equal(one.reads, many.reads);
   assert.deepEqual(one.value, many.value);
   assert.equal(many.value.observation, undefined);
-  await assert.rejects(square.participant('Nobody', { body: options.body }), error => error.code === 'already_joined'
+  await assert.rejects(square.participant('Nobody', { owner: options.body }), error => error.code === 'already_joined'
     && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
   for (const [name, from, subject, canonical] of [['aLiCe', ['Unknown'], 'filter', 'Alice']]) {
-    const participant = await square.participant(name, { body: options.body });
+    const participant = await square.participant(name, { owner: options.body });
     await assert.rejects(participant.catch({ from }), (error) => {
       assert.equal(error.code, 'invalid_args');
       assert.equal(error.facts.reason, 'never_joined');
@@ -263,15 +263,15 @@ test('join refuses an omitted or blank name before and after a seat is held', as
   const square = await Square.at({ path: options.path, env: options.env });
   t.after(() => square.close());
   const before = (await square.history({ limit: null })).activities.length;
-  await assert.rejects(square.join(undefined, { body: options.body }), { code: 'invalid_args' });
-  await assert.rejects(square.join('', { body: options.body }), { code: 'invalid_name' });
-  await assert.rejects(square.join('   ', { body: options.body }), { code: 'invalid_name' });
+  await assert.rejects(square.join(undefined, { owner: options.body }), { code: 'invalid_args' });
+  await assert.rejects(square.join('', { owner: options.body }), { code: 'invalid_name' });
+  await assert.rejects(square.join('   ', { owner: options.body }), { code: 'invalid_name' });
   assert.equal((await square.history({ limit: null })).activities.length, before, 'refused joins leave no activity');
-  assert.equal((await square.join('Defaulted', { body: options.body })).kind, 'joined');
+  assert.equal((await square.join('Defaulted', { owner: options.body })).kind, 'joined');
 
   const unbound = await Square.at({ path: options.path, env: options.env });
   t.after(() => unbound.close());
   assert.equal((await selectOwnSeat(unbound, options.body)).name, 'Defaulted', 'adapter seat selection still finds the one held seat');
-  await assert.rejects(unbound.join(undefined, { body: options.body }), { code: 'invalid_args' });
+  await assert.rejects(unbound.join(undefined, { owner: options.body }), { code: 'invalid_args' });
   assert.equal((await unbound.history({ limit: null })).activities.filter((activity) => activity.kind === 'join').length, 1);
 });

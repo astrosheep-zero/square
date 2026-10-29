@@ -9,7 +9,8 @@ import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { asSeatRef } from './seats.js';
 import { projectSessionSeats } from './inbox.js';
 import { restoreSessionSeats } from './session-lifecycle.js';
-import { InternalSquareError, SquareError, sameBody, type LocatedSeat } from './model.js';
+import { harnessOwner } from './owner.js';
+import { InternalSquareError, SquareError, type LocatedSeat } from './model.js';
 
 /** Persisted hook state keeps its wire coordinate; internal consumers keep the located seat. */
 function claudeBinding({ location, seat }: LocatedSeat, sessionId: string): ClaudeBinding {
@@ -49,14 +50,14 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   }
   const scoped = operationEnv('claude', input.sessionId, env);
   const signal = AbortSignal.timeout(2500);
-  const body = { channel: 'claude-code', session: input.sessionId, ...(input.agentId === undefined ? {} : { agent: input.agentId }) };
+  const owner = harnessOwner({ channel: 'claude-code', session: input.sessionId, ...(input.agentId === undefined ? {} : { agent: input.agentId }) });
   const supported = process.platform === 'darwin' && typeof input.endpoint === 'string' && input.endpoint.startsWith('/');
-  const sessionSeats = async () => (await projectSessionSeats({ body, env }, signal)).filter(member => member.seat.attachment === 'attached');
+  const sessionSeats = async () => (await projectSessionSeats({ owner, env }, signal)).filter(member => member.seat.attachment === 'attached');
   if (input.operation === 'end') {
     const retired: ClaudeBinding[] = [];
     const captured = [...input.bindings ?? []];
     // Discover committed late joins at the pinned end boundary, never later owners.
-    if (input.endedAt !== undefined) for (const member of await projectSessionSeats({ body, env }, signal)) {
+    if (input.endedAt !== undefined) for (const member of await projectSessionSeats({ owner, env }, signal)) {
       if (member.joinedAt > input.endedAt || captured.some((item) => item.location === member.location
         && item.participant === member.seat.participant && item.generation === member.seat.generation)) continue;
       captured.push(claudeBinding(member, input.sessionId));
@@ -66,7 +67,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       const square = await Square.at({ path: binding.location, env: scoped });
       try {
         const detached = binding.generation === undefined ? null
-          : await square.detach(binding.participant, { body, generation: binding.generation });
+          : await square.detach(binding.participant, { owner, generation: binding.generation });
         if (detached) retired.push(binding);
       } finally { await square.close(); }
       if (signal.aborted) break;
@@ -76,7 +77,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   const recovery = new Set<string>();
   const cancelledBindings = [...input.cancelledBindings ?? []];
   if (input.operation === 'start') {
-    await restoreSessionSeats(body, scoped, supported ? {
+    await restoreSessionSeats(owner, scoped, supported ? {
       kind: 'claude-native', address: { sessionId: input.sessionId, endpoint: input.endpoint!, version: input.version, platform: 'darwin', loaded: 'true' },
     } : undefined, signal);
   }
@@ -97,7 +98,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       try {
         const { value: currentSeat } = await artifact.read((facts) => facts.seat(capturedSeat.participant), signal);
         if (currentSeat === undefined || currentSeat.attachment !== 'attached' || currentSeat.generation !== capturedSeat.generation
-          || !sameBody(currentSeat.body, capturedSeat.body)) continue;
+          || currentSeat.owner !== capturedSeat.owner) continue;
         const seat = asSeatRef(currentSeat);
         const existing = currentSeat.wakeAddress?.kind === 'claude-native' ? currentSeat.wakeAddress : undefined;
         const cutoff = input.cancelAt !== undefined && (cancelled !== undefined || lateCancelledJoin) ? input.cancelAt : undefined;

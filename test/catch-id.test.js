@@ -8,11 +8,11 @@ import { run, tempSquare, withName } from './square-cli-helpers.js';
 
 async function setup(t, file) {
   // The CLI acts through the Codex body, so the SDK fixture joins both seats through it.
-  const sessionBody = { channel: 'codex', session: file === undefined ? 'catch-id-memory' : path.resolve(file) };
+  const sessionBody = `codex:${file === undefined ? 'catch-id-memory' : encodeURIComponent(path.resolve(file))}`;
   const square = file ? await Square.build({ path: file, markdown: 'test' }) : Square.inMemory({ markdown: 'test' });
   t.after(() => square.close());
-  const alice = (await square.join('Alice', { body: sessionBody })).participant;
-  const bob = (await square.join('Bob', { body: sessionBody })).participant;
+  const alice = (await square.join('Alice', { owner: sessionBody })).participant;
+  const bob = (await square.join('Bob', { owner: sessionBody })).participant;
   const first = await alice.express('first', { force: true, mentions: ['Bob'] });
   const body = 'complete-body-'.repeat(500) + 'END-OF-BODY';
   const second = await alice.express(body, { force: true, mentions: ['Bob'] });

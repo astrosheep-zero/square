@@ -4,21 +4,21 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Square } from '../dist/square-api.js';
+import { Square, harnessOwner } from '../dist/square-api.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
 async function fixture(t, transport, receivers) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-concurrency-'));
   const base = { path: path.join(dir, 'test.square'), env: { ...process.env, SQUARE_INDEX: path.join(dir, 'index') }, wakeTransport: transport };
   const root = await Square.build({ ...base, markdown: '' });
-  const alice = (await root.join('Alice', { body: { channel: 'test', session: 'sender' } })).participant;
+  const alice = (await root.join('Alice', { owner: ':' })).participant;
   const resources = [root];
   t.after(async () => { await Promise.all(resources.map(r => r.close())); fs.rmSync(dir, { recursive: true, force: true }); });
   for (const [i, receiver] of receivers.entries()) {
     const identity = typeof receiver === 'string' ? { session: receiver } : receiver;
     const resource = await Square.at(base);
     resources.push(resource);
-    await resource.join(`R${i}`, { body: { channel: 'test', ...identity }, wakeAddress: { kind: 'paseo', address: { agentId: identity.session } } });
+    await resource.join(`R${i}`, { owner: harnessOwner({ channel: 'test', ...identity }), wakeAddress: { kind: 'paseo', address: { agentId: identity.session } } });
   }
   return { alice, names: receivers.map((_, i) => `R${i}`) };
 }
@@ -29,7 +29,7 @@ test('express overlaps four receiver identities, keeps same-Body order, and drai
   const gate = new Promise(r => { release = r; });
   const wave = new Promise(r => { firstWave = r; });
   const transport = { async attempt(request, _budget, beforeSend) {
-    const receiver = JSON.stringify(request.seat.body);
+    const receiver = JSON.stringify(request.seat);
     assert.equal(activeReceivers.has(receiver), false, 'same-Body notifications must not overlap');
     activeReceivers.add(receiver); starts.push(request.participant); peak = Math.max(peak, ++active);
     if (active === 4) firstWave();

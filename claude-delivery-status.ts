@@ -1,4 +1,5 @@
 import { createArtifactPort } from './artifact.js';
+import { decodeHarnessOwner } from './owner.js';
 import { indexedSquareEntries } from './square-index.js';
 
 export interface ClaudeDeliveryObservation {
@@ -27,8 +28,12 @@ export async function recordClaudeDeliveryStatus(input: ClaudeDeliveryStatus, en
     || !['held', 'released', 'dropped'].includes(input.state)
     || (input.state === 'held' ? !holdReasons.has(input.reason ?? '')
       : input.state === 'dropped' ? !dropReasons.has(input.reason ?? '') : input.reason !== undefined)) return false;
-  for (const entry of await indexedSquareEntries({ channel: 'claude-code', session: input.sessionId }, env)) {
-    const artifact = createArtifactPort(entry.location);
+  const paths = new Set((await indexedSquareEntries({}, env)).filter(entry => {
+    const coordinate = decodeHarnessOwner(entry.owner);
+    return coordinate?.channel === 'claude-code' && coordinate.session === input.sessionId;
+  }).map(entry => entry.location));
+  for (const location of paths) {
+    const artifact = createArtifactPort(location);
     try {
       const { value: match } = await artifact.read((facts) => facts.roster().flatMap((participant) => {
         const seat = facts.seat(participant.name);
@@ -40,7 +45,7 @@ export async function recordClaudeDeliveryStatus(input: ClaudeDeliveryStatus, en
       }));
       if (match.length === 0) continue;
       const { seat, evidence } = match[0];
-      const ref = { participant: seat.participant, body: seat.body, generation: seat.generation };
+      const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
       return (await artifact.transactAs({ kind: 'participant', seat: ref }, (facts) =>
         facts.observeNativeDelivery({ seat: ref, claimToken: evidence.claimToken!, observation: {
           eventId: input.eventId, messageId: input.messageId, state: input.state,

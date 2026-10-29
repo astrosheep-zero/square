@@ -137,7 +137,7 @@ export function tickingClock(start = 0, step = 1000) {
 export async function persistSquare(fill, options = {}) {
   const file = tempSquare();
   const time = tickingClock(options.start ?? 0);
-  const body = options.body ?? { channel: 'codex', session: path.resolve(file) };
+  const body = options.body ?? `codex:${encodeURIComponent(path.resolve(file))}`;
   const wakeAddress = options.wakeAddress;
   const square = await Square.build({
     path: file,

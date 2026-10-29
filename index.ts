@@ -1,6 +1,6 @@
 export { Square, squareLocation, squareClock, createSquareResourceOwner, discover, inbox, diagnoseSquare, migrateSquare } from './square-api.js';
 export { SquareError, ACTIVITY_METADATA_MAX_BYTES } from './model.js';
-export { selectOwnSeat } from './square-api.js';
+export { selectOwnSeat, requireOwner, localUserOwner, harnessOwner, decodeHarnessOwner } from './square-api.js';
 export type { WakeTransportPort, WakeRequest, WakeOutcome } from './ports.js';
 export type { WakeTransports } from './notifications.js';
 export { createDefaultWakeTransport } from './notifications.js';

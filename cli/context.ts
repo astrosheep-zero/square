@@ -1,17 +1,19 @@
 import os from 'node:os';
+import { harnessOwner, localUserOwner, type Owner } from '../square-api.js';
+import { harnessSessionSources } from '../participant-identity.js';
 import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
 import { Square, squareClock } from '../square-api.js';
-import { harnessSessionSources } from '../participant-identity.js';
-import type { Body, OperationControl } from '../square-facade.js';
+import type { OperationControl } from '../square-facade.js';
 
 export interface CommandContext {
   cwd: string;
   env: NodeJS.ProcessEnv;
   squarePath?: string;
   name?: string;
+  owner?: Owner;
   homeDir: string;
   command: string;
   json?: boolean;
@@ -127,6 +129,7 @@ export interface ParsedGlobalArgs {
   explicitSquarePath: boolean;
   multipleSquares: boolean;
   name?: string;
+  owner?: Owner;
   args: string[];
 }
 
@@ -134,9 +137,14 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   const args = [...rawArgs];
   let requestedPath: string | undefined;
   let name: string | undefined;
+  let owner: Owner | undefined;
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--location') {
       requestedPath = requireValue(args, index, args[index]);
+      args.splice(index, 2);
+      index -= 1;
+    } else if (args[index] === '--owner') {
+      owner = requireValue(args, index, args[index]);
       args.splice(index, 2);
       index -= 1;
     } else if (args[index] === '--as') {
@@ -154,7 +162,7 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
     fail(`✕ ${command} needs a square location\nsquare ls`);
   }
   const squarePath = requestedPath ?? configured;
-  return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, args };
+  return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, owner, args };
 }
 
 export function locationIsRequired(command: string): boolean {
@@ -162,30 +170,28 @@ export function locationIsRequired(command: string): boolean {
 }
 
 export function defaultContext(command: string, squarePath?: string, name?: string): CommandContext {
-  return { command, cwd: process.cwd(), env: { ...process.env }, squarePath, name, homeDir: os.homedir() };
+  return { command, cwd: process.cwd(), env: { ...process.env }, squarePath, name, owner: undefined, homeDir: os.homedir() };
 }
 
 export function squareInput(context: CommandContext) {
   return { cwd: context.cwd, env: context.env, path: context.squarePath };
 }
 
-export function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: import('../model.js').WakeAddress } {
-  const coordinates = harnessSessionSources.flatMap(({ variable, channel, provider }) => {
-    const session = env[variable]?.trim();
-    return session === undefined || session === '' ? [] : [{ channel, session, native: provider !== undefined }];
-  });
-  const native = coordinates.filter((coordinate) => coordinate.native);
-  if (native.length > 1) throw new Error('Multiple harness execution coordinates are present; select one explicit body.');
-  const paseo = coordinates.find((coordinate) => coordinate.channel === 'paseo');
-  // A child marker without a reliable agent id must never inherit the parent or Paseo identity.
-  if (env.CLAUDE_CODE_CHILD_SESSION === '1') return {};
-  const selected = native[0] ?? paseo;
-  if (selected === undefined) return {};
-  const body: Body = { channel: selected.channel, session: selected.session };
-  const wakeAddress: import('../model.js').WakeAddress | undefined = selected.channel === 'codex'
-    ? codexWakeAddress(selected.session, env)
+export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: import('../model.js').WakeAddress } {
+  if (explicit !== undefined) return { owner: explicit };
+  const configured = env.SQUARE_OWNER;
+  if (configured !== undefined) return { owner: configured };
+  const selected = harnessSessionSources.flatMap(({ variable, channel }) => env[variable]?.trim() ? [{ channel, session: env[variable]!.trim() }] : []);
+  const native = selected.filter(source => source.channel !== 'paseo');
+  if (env.CLAUDE_CODE_CHILD_SESSION === '1') throw new Error('Harness identity is incomplete; provide --owner explicitly.');
+  if (native.length > 1) throw new Error('Multiple harness execution coordinates are present; select one explicit owner.');
+  const paseo = selected.find(source => source.channel === 'paseo');
+  const coordinate = native[0] ?? paseo;
+  if (coordinate === undefined) return { owner: localUserOwner() };
+  const owner = harnessOwner({ channel: coordinate.channel, session: coordinate.session });
+  const wakeAddress = coordinate.channel === 'codex' ? codexWakeAddress(coordinate.session, env)
     : paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
-  return { body, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
+  return { owner, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }
 
 /** Adapter lifetime only; each callback uses the actual public resource API. */

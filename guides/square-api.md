@@ -9,16 +9,19 @@ dispatcher or `{data, projection}` envelope.
 
 Membership is explicit: no harness joins a square based on its filename or working directory.
 `PUBLIC.square` has exactly the same behavior as any other square file. Membership (join/done,
-read horizon and listens) is separate from host attachment (whether an exact Body is currently
+read horizon and listens) is separate from host attachment (whether an exact owner is currently
 executing for that participant). Host shutdown detaches; it does not make the participant leave.
+An owner is an opaque, non-secret string compared only for equality. It is not a participant name
+or authentication credential: one owner may control several names. The SDK requires it explicitly;
+`localUserOwner()` supplies `user:<OS username>@<hostname>` when that is the intended actor.
 
 ```ts
 import { Square } from '@astrosheep/square';
 
-const body = { channel: 'example', session: 'alice-process' };
+const owner = 'example:alice-process';
 const square = await Square.at({ path: './discussion.square' });
 try {
-  const joined = await square.join('Alice', { body });
+  const joined = await square.join('Alice', { owner });
   const alice = joined.participant;
   const sent = await alice.express('Hello @Bob', { force: true });
   const page = await square.history();
@@ -36,34 +39,34 @@ try {
 - `Square.at` accepts `path`, optional `cwd`, `env`, `clock`, `wakeTransport` and a caller-owned
   connection via `resources`. At entry, `env` resolves the path, clock, concrete transport and
   discovery index path once. `Square.at`, `Square.build` and `Square.inMemory` do not capture a
-  `body`, `wakeAddress` or default `participant`. The same resource can serve multiple Bodies;
+  `owner`, `wakeAddress` or default `participant`. The same resource can serve multiple owners;
   identity is supplied at each join or participant selection. `wakeTransport` injection is retained
   for both file-backed build/open and memory resources.
 - Local artifact paths resolve against `cwd`; an omitted path uses `SQUARE_LOCATION` at entry.
-- `await square.participant(name, {body})` selects an **attached, standing** seat held by that exact
-  Body without joining, claiming or reentering. It never manufactures a ghost handle: a never-joined,
+- `await square.participant(name, {owner})` selects an **attached, standing** seat held by that exact
+  owner without joining, claiming or reentering. It never manufactures a ghost handle: a never-joined,
   done, foreign or detached seat is refused with `already_joined`, `reason: 'needs_seat'` and a `join`
   recovery fact.
-  Foreign custody still requires explicit takeover. The returned handle captures the current Body
+  Foreign custody still requires explicit takeover. The returned handle captures the current owner
   and generation; subsequent mutations recheck custody. A name alone never authorizes writes.
-- `await square.seatsOf(body)` returns the Body's standing seats as
+- `await square.seatsOf(owner)` returns the owner's standing seats as
   `[{name, generation, attachment}]`, including attached and detached seats but not done participants.
-  It is read-only and neither joins nor restores a seat. `selectOwnSeat(square, body, name?)` is the
+  It is read-only and neither joins nor restores a seat. `selectOwnSeat(square, owner, name?)` is the
   adapter helper: an explicit name is checked through `participant`; otherwise exactly one attached
   seat is required. For an overview-capable call,
-  `selectOwnSeat(square, body, undefined, {optional: true})` instead returns `undefined` for a missing
-  Body or zero/multiple attached seats. Selection does not change membership.
-- Join with an explicit name and Body: `square.join('Alice', {body, wakeAddress?, ...options}, control?)`
+  `selectOwnSeat(square, owner, undefined, {optional: true})` instead returns `undefined` for a missing
+  owner or zero/multiple attached seats. Selection does not change membership.
+- Join with an explicit name and owner: `square.join('Alice', {owner, wakeAddress?, ...options}, control?)`
   returns one `JoinResult`: `{participant, kind, activity, observation?}`. The name is required even
-  when the Body holds exactly one seat. `participant` is a handle, not a string. `takeover: true`
+  when the owner holds exactly one seat. `participant` is a handle, not a string. `takeover: true`
   atomically replaces a standing seat; a rejoin after done establishes a new join generation.
-  Same-Body reconnection retains its generation. A detached seat reattaches with kind `reconnected`,
+  Same-owner reconnection retains its generation. A detached seat reattaches with kind `reconnected`,
   no activity and no change to its read horizon or listens; the operation supplies any wake address.
-  A foreign Body still needs explicit takeover, including for an away participant. Old handles remain
-  fenced after takeover or rejoin, including when the same Body reacquires the name. There is no
+  A foreign owner still needs explicit takeover, including for an away participant. Old handles remain
+  fenced after takeover or rejoin, including when the same owner reacquires the name. There is no
   separate `Participant.join()` or public `takeover()` API.
-- Body selection is a trusted SDK operation, not authentication; never let an untrusted client
-  choose another caller's Body. A Square owns its connection unless
+- Owner selection prevents accidental custody reuse, not malicious impersonation; never let untrusted
+  input choose another caller's owner. A Square owns its connection unless
   `resources: createSquareResourceOwner()` lends it one. Closing a borrowing resource leaves that
   owner open. Request signals never become the borrowed connection's lifetime. The MCP server drains
   cancelled/in-flight work before closing its owner; explicit location overrides get independent
@@ -71,36 +74,51 @@ try {
 
 The rebuildable HOME discovery index is only a source of candidate paths, never custody authority.
 File-backed successful joins and non-null reattachments attempt best-effort publication of their
-Body and path; opening, building, selecting a participant or expressing does not publish. Memory
+owner and path; opening, building, selecting a participant or expressing does not publish. Memory
 resources are not indexed. Losing the index may delay discovery, but cannot transfer a seat.
 
-### Host attachment lifecycle
+## Adapter owner resolution
 
-`square.detach(name, {body, generation})` checks the exact Body and generation inside the artifact
+Owners are nonempty strings without control characters, at most 512 UTF-8 bytes. The core stores
+and compares them without interpreting harnesses. One adapter codec, `harnessOwner`, escapes each
+coordinate segment with `encodeURIComponent`: `<channel>:<session>[:agent:<agent>]`.
+`decodeHarnessOwner` is for adapters only; custom owner strings need no harness spelling.
+
+CLI uses `--owner` or `SQUARE_OWNER` exactly when supplied, then one complete native harness
+coordinate (Paseo is auxiliary), otherwise `localUserOwner()`. Multiple native identities or an
+incomplete Claude-child identity refuse rather than using the human's owner. Plain terminal owners
+have no automatic host lifecycle or wake address: join explicitly and use `catch --idle`.
+MCP uses the call-local harness coordinate, else its configured owner, never tool arguments. Pi and
+native adapters encode their own coordinate; the Slack bridge uses its local configured owner.
+`inbox(input, owner)` and `square inbox --for-owner <owner>` select exact opaque equality.
+
+## Host attachment lifecycle
+
+`square.detach(name, {owner, generation})` checks the exact owner and generation inside the artifact
 transaction. It returns `true` when it detaches, or `null` for stale, replaced, foreign, done or
 already-detached custody. It lands no activity, preserves membership/read horizon/listens, and
 clears wake readiness, catch ownership and delivery deferrals. Detached handles cannot write,
-including an empty catch; reattachment or same-Body rejoin restores access. Proactive claims,
+including an empty catch; reattachment or same-owner rejoin restores access. Proactive claims,
 observers and final send/presentation checks exclude detached seats. Existing receipts and delivery
 evidence survive. A detached participant stays away indefinitely; no timer manufactures a departure.
 
-`square.reattach(name, {body, wakeAddress?}, control?)` restores a standing seat of that exact Body
+`square.reattach(name, {owner, wakeAddress?}, control?)` restores a standing seat of that exact owner
 and returns a `Participant`, or `null` if the seat is absent, foreign or done; it never creates
 membership. It preserves the generation, read horizon and listens. On an already attached seat it
 returns a handle and can refresh the supplied wake address, subject to native-route preference.
-Host start/resume restores detached seats found with `seatsOf(body)` before arming delivery,
+Host start/resume restores detached seats found with `seatsOf(owner)` before arming delivery,
 independently across seats and locations. Concurrent departure or takeover remains fenced; a foreign
 takeover between the initial seat read and transaction can refuse instead of returning `null`.
-New/forked Bodies restore nothing, and hosts do not recover from historical done coordinates.
+New/forked owners restore nothing, and hosts do not recover from historical done coordinates.
 
 There are three endings: participant `done` ends membership; Pi shutdown, Codex SessionEnd and
 Claude session end detach only; host-confirmed permanent deletion uses
-`square.endHeld(name, {body, generation})` to land a fenced `done` on an attached or detached seat,
+`square.endHeld(name, {owner, generation})` to land a fenced `done` on an attached or detached seat,
 returning its lifecycle result or `null` when custody no longer matches. OpenCode `session.deleted`
 is permanent deletion. Takeover replaces either attachment state with `done -> join`; late cleanup
-or restoration by the old Body cannot reclaim it.
+or restoration by the old owner cannot reclaim it.
 
-`square.cancelDeliveries(name, {body, generation})` is also generation-fenced: for an attached
+`square.cancelDeliveries(name, {owner, generation})` is also generation-fenced: for an attached
 current seat it advances the suppression boundary through the current activity head, returning
 whether it changed. A mismatched seat returns `false`; a detached or concurrently replaced seat may
 be refused. It does not consume activity or recall an external send already past its final check.
@@ -162,8 +180,8 @@ Square; there is no `Participant.history`.
   participant counts. Core `square.status({viewer})` uses only the explicitly supplied viewer; with
   no viewer it returns an unfiltered overview without viewer-specific `listening`. Core status does
   not select or authorize a seat. CLI and tools check an explicit `--as`/`as` with `selectOwnSeat`;
-  otherwise exactly one attached seat of the caller's Body becomes the viewer, while zero or multiple
-  seats (or no Body) produce the overview. Snapshot participants use the same `name`, `presence` and
+  otherwise exactly one attached seat of the caller's owner becomes the viewer, while zero or multiple
+  seats (or no owner) produce the overview. Snapshot participants use the same `name`, `presence` and
   `listening` facts, excluding never-joined people; its detached `delivered(name, id)` predicate
   remains available.
 - `unlisten(target)` removes only that participant's current listen edge to the target, without
@@ -173,7 +191,7 @@ Square; there is no `Participant.history`.
 - Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate;
   observations do not repeat the activity. Join entry uses public activities with settled perception,
   and status observations use public join activities. Done accepts no message and retires only its
-  attached, captured Body/join generation; it never implicitly rejoins. A done participant is not
+  attached, captured owner/join generation; it never implicitly rejoins. A done participant is not
   recoverable authority for any host path.
 - Recovery summarizes unread directed activity with per-sender count, latest age and the single
   greatest-index preview. Age uses the greatest timestamp, which may belong to another activity.
@@ -215,7 +233,7 @@ try {
   24 hours. Invalid matches, durations and IDs refuse with `invalid_args` before mutation.
 - Renewal extends that same live lease from the renewal operation's clock; expired/missing IDs
   return `null`, and release returns `false`. Independent overlapping leases are never merged;
-  releasing one cannot end another. A captured current Body/join generation is required for every
+  releasing one cannot end another. A captured current owner/join generation is required for every
   mutation. Stale handles retain the ownership refusal; done/takeover/rejoin retire old leases.
 - Lease writes change delivery revision, not conversation history. They do not create a receipt,
   change audience or unread counts, hide an archive record, or prohibit explicit catch. Catch alone
@@ -231,7 +249,7 @@ try {
   with acquisition and remain dispatched; a sink effect already written cannot be withdrawn.
   Presentation eligibility is checked before the effect, not again as a veto after success. A batch
   claims and filters its items before its one sink call, then records exactly the successfully rendered
-  set under each captured Body/join generation. A lease acquired while the sink returns or before a
+  set under each captured owner/join generation. A lease acquired while the sink returns or before a
   later item's evidence commit does not erase success or allow replay after release. Cancellation
   likewise stops pre-effect work, not truthful completion after a successful sink: evidence settles
   on the original connection with an independent bounded storage lifetime and the same seat fences.
@@ -294,23 +312,23 @@ uncertain-delivery suppression remain unchanged. Paseo inventory discovery is as
 overlapping attempts share only the in-flight inventory read, never a cached idle status.
 The standalone `discoverPaseoAgents` export now returns a promise.
 
-`discover(input, options?, control?)`, `inbox(input, sessionIdOrBody, options?, control?)`,
+`discover(input, options?, control?)`, `inbox(input, owner, options?, control?)`,
 `diagnoseSquare(input, control?)`, and `migrateSquare(input, control?)` are ordinary public exports.
 They are not methods on a synthetic cross-square object. Diagnose/migrate resolve a path without
 opening a valid current-format Square first.
 
 ## Artifact format and explicit migration
 
-The current artifact format is 6. It distinguishes membership from attached/detached custody,
-and owns seats, delivery evidence, cancellation and independent delivery deferrals separately from
-conversation activities and catch ownership. Ordinary opens refuse older formats with migration
-guidance and never convert them implicitly.
+The current artifact format is 7. It stores opaque owners rather than harness coordinates and
+preserves format 6's attached/detached distinction. Seats, delivery evidence, cancellation and
+independent delivery deferrals remain separate from conversation activities and catch ownership.
+Ordinary opens refuse older formats with migration guidance and never convert them implicitly.
 
 Stop all sessions and services using the artifact, make an offline backup, then run
 `square --location <path.square> migrate` and `doctor` before reopening with upgraded runtimes.
-Supported formats 2–5 convert directly to 6 in one transaction. Format 5 conversion is additive:
-every existing seat starts attached, no detached seat is manufactured, and all facts/revisions
-are preserved. Format 4 also gains empty deferral support. Neither consults HostLedger.
+Supported formats 2–6 convert to 7 in one transaction. Format 6's Body coordinates become encoded
+owners while attachment, generations, wakes, evidence and revisions survive. Formats 4/5 first gain
+attached seats; format 4 also gains empty deferral support. Formats 4–6 never consult HostLedger.
 Historic host-cleanup departures cannot be distinguished from voluntary `done` and stay done.
 For formats 2/3, also freeze and back up the legacy HostLedger used for verified owner/evidence
 import; no authority is manufactured for done participants. Replay-critical native ambiguity
@@ -319,25 +337,25 @@ Current-format migration is a byte-preserving no-op. See [migration.md](migratio
 narrow metadata policy, source-preserving refusal and filesystem requirements. Updating a package
 does not migrate files or install a new runtime.
 
-## SDK breaking migration: identity-free Square
+## SDK breaking migration: opaque owners
 
-This API refactor does **not** change the artifact format: the current format remains 6. Existing
-format-6 artifacts need no migration for this change. SDK consumers must move identity from resource
-construction to each identity-bearing operation:
+Artifact format 7 requires explicit migration of existing format-6 artifacts before opening.
+`Body`, `sameBody` and `validateBody` are removed from the core and public API. Replace identity
+objects with an explicit owner at each identity-bearing operation; do not put identity on a resource:
 
 ```ts
 import { Square } from '@astrosheep/square';
 
-const aliceBody = { channel: 'example', session: 'alice-process' };
-const bobBody = { channel: 'example', session: 'bob-process' };
+const aliceOwner = 'example:alice-process';
+const bobOwner = 'example:bob-process';
 const square = await Square.at({ path: './discussion.square' });
 try {
   // Previously: pass body/wakeAddress/participant to Square.at and join(name).
-  const { participant: alice } = await square.join('Alice', { body: aliceBody }); // wakeAddress is optional
-  const { participant: bob } = await square.join('Bob', { body: bobBody }); // same Square, another Body
+  const { participant: alice } = await square.join('Alice', { owner: aliceOwner }); // wakeAddress is optional
+  const { participant: bob } = await square.join('Bob', { owner: bobOwner }); // same resource, another owner
   // For an already attached seat, select it without joining:
-  const selected = await square.participant('Alice', { body: aliceBody });
-  const seats = await square.seatsOf(aliceBody);
+  const selected = await square.participant('Alice', { owner: aliceOwner });
+  const seats = await square.seatsOf(aliceOwner);
   const { activities } = await square.history(); // not alice.history()
   const status = await square.status({ viewer: selected.name });
   console.log(alice.name, bob.name, seats, activities, status);
@@ -346,10 +364,10 @@ try {
 }
 ```
 
-Replace `recognize()`/`bodySeats()` with `seatsOf(body)`, followed by explicit attached-seat
-selection as needed; replace `implicitJoin` with `reattach(name, {body, wakeAddress?})`. Replace
+Replace `recognize()`/`bodySeats()` with `seatsOf(owner)`, followed by explicit attached-seat
+selection as needed; replace `implicitJoin` with `reattach(name, {owner, wakeAddress?})`. Replace
 `detachOwnedSession`/`endOwnedSession` with the generation-fenced `detach`/`endHeld` methods above.
-`forBody` is removed: use the same Square with operation-local Bodies. Read readiness from
+`forBody` is removed: use the same Square with operation-local owners. Read readiness from
 participant summaries or join/catch observations, not the removed resource-level
 `automaticDeliveryAvailable`. Core status no longer infers a viewer. Participant selection no longer
 returns a handle for a missing, done, foreign or detached seat.
@@ -358,7 +376,7 @@ returns a handle for a missing, done, foreign or detached seat.
 
 The independent `createSquareApplication` API, its options/results/aliases, and `square-application.ts`
 are deleted. Consumers must open/close an actual Square and select a Participant. SDK joins return
-`(await square.join(name, {body})).participant`; history callers must use `.activities` and opt into
+`(await square.join(name, {owner})).participant`; history callers must use `.activities` and opt into
 full archive reads with `limit: null`. SDK express now waits by default. MCP constructor configuration
 uses `path`, consistent with `Square.at`, rather than `squarePath`.
 

@@ -19,12 +19,12 @@ function tempDir(t) {
 }
 
 function bodyFor(squarePath) {
-  return { channel: 'codex', session: path.resolve(squarePath) };
+  return `codex:${encodeURIComponent(path.resolve(squarePath))}`;
 }
 
 function envFor(squarePath) {
   const body = bodyFor(squarePath);
-  return testEnv({ CODEX_THREAD_ID: body.session }, squarePath);
+  return testEnv({ CODEX_THREAD_ID: path.resolve(squarePath) }, squarePath);
 }
 
 async function buildSquare(t) {
@@ -43,8 +43,8 @@ async function seed(squarePath, setup) {
 async function openMcp(t, squarePath) {
   const body = bodyFor(squarePath);
   const server = createSquareMcpServer({
-    cwd: path.dirname(squarePath), env: envFor(squarePath), path: squarePath, body,
-    wakeAddress: { kind: 'codex-queue', address: { threadId: body.session, codexHome: path.join(os.homedir(), '.codex') } },
+    cwd: path.dirname(squarePath), env: envFor(squarePath), path: squarePath, owner: body,
+    wakeAddress: { kind: 'codex-queue', address: { threadId: path.resolve(squarePath), codexHome: path.join(os.homedir(), '.codex') } },
   });
   const client = new Client({ name: 'square-mcp-presentation-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -79,16 +79,16 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
 }
 
 const joinReiAndBob = async (square, body) => {
-  await square.join('rei', { body });
-  await square.join('bob', { body });
+  await square.join('rei', { owner: body });
+  await square.join('bob', { owner: body });
 };
 
 test('read-only tools print the same page as the CLI', async (t) => {
   const squarePath = await buildSquare(t);
   await seed(squarePath, async (square, body) => {
     await joinReiAndBob(square, body);
-    const rei = await square.participant('rei', { body });
-    const bob = await square.participant('bob', { body });
+    const rei = await square.participant('rei', { owner: body });
+    const bob = await square.participant('bob', { owner: body });
     await rei.express('first words @bob', { force: true });
     await rei.express('*waves*', { force: true, noMention: true });
     await bob.listen('rei');
@@ -122,7 +122,7 @@ test('mutating tools print the same result as the CLI', async (t) => {
   await t.test('catch', async (t) => {
     await assertTextParity(t, async (square, body) => {
       await joinReiAndBob(square, body);
-      await (await square.participant('bob', { body })).express('@rei ping', { force: true });
+      await (await square.participant('bob', { owner: body })).express('@rei ping', { force: true });
     }, ['--as', 'rei', 'catch'], 'catch', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
@@ -134,21 +134,21 @@ test('mutating tools print the same result as the CLI', async (t) => {
   await t.test('unlisten', async (t) => {
     await assertTextParity(t, async (square, body) => {
       await joinReiAndBob(square, body);
-      await (await square.participant('rei', { body })).listen('bob');
+      await (await square.participant('rei', { owner: body })).listen('bob');
     }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
   });
   await t.test('hold', async (t) => {
-    await assertTextParity(t, async (square, body) => { await square.join('rei', { body }); },
+    await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
       ['--as', 'rei', 'hold', 'deep work'], 'hold', { as: 'rei', reason: 'deep work' });
   });
   await t.test('resume', async (t) => {
     await assertTextParity(t, async (square, body) => {
-      await square.join('rei', { body });
-      await (await square.participant('rei', { body })).hold('deep work');
+      await square.join('rei', { owner: body });
+      await (await square.participant('rei', { owner: body })).hold('deep work');
     }, ['--as', 'rei', 'resume'], 'hold', { as: 'rei', release: true });
   });
   await t.test('done', async (t) => {
-    await assertTextParity(t, async (square, body) => { await square.join('rei', { body }); },
+    await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
       ['--as', 'rei', 'done'], 'done', { as: 'rei' });
   });
 });

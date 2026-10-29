@@ -5,23 +5,18 @@ import { randomUUID } from 'node:crypto';
 import { withFileLock } from './file-lock.js';
 import { canonicalPath } from './canonical-path.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
-import { sameBody, validateBody, type Body } from './model.js';
+import { validateOwner, type Owner } from './model.js';
 
-/** A rebuildable discovery hint: the body that may have used an artifact and its path.
- * It is deliberately not a participant, generation, ownership, suppression, or evidence row. */
+/** A rebuildable discovery hint: the owner that may have used an artifact and its path. */
 export interface SquareIndexEntry {
   readonly location: string;
-  readonly body: Body;
+  readonly owner: Owner;
 }
 
 export interface SquareIndexQuery {
-  readonly body?: Body;
-  readonly channel?: string;
-  readonly session?: string;
-  readonly agent?: string;
+  readonly owner?: Owner;
 }
 
-/** The index is the only host-side Square state. Its path is test/configuration plumbing, not authority. */
 export function squareIndexPath(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.SQUARE_INDEX?.trim();
   return path.resolve(configured ?? path.join(os.homedir(), '.square', 'index.ndjsonl'));
@@ -34,17 +29,10 @@ function lockPath(index: string): string {
 function validEntry(value: unknown): SquareIndexEntry | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
-  if (typeof row.location !== 'string' || !path.isAbsolute(row.location)
-    || row.body === null || typeof row.body !== 'object' || Array.isArray(row.body)) return undefined;
-  const raw = row.body as Record<string, unknown>;
-  const body = {
-    channel: raw.channel,
-    session: raw.session,
-    ...(raw.agent === undefined ? {} : { agent: raw.agent }),
-  } as Body;
-  try { validateBody(body); } catch { return undefined; }
-  if (Object.keys(raw).some((key) => !['channel', 'session', 'agent'].includes(key))) return undefined;
-  return { location: row.location, body };
+  if (typeof row.location !== 'string' || !path.isAbsolute(row.location) || typeof row.owner !== 'string') return undefined;
+  try { validateOwner(row.owner); } catch { return undefined; }
+  if (Object.keys(row).some((key) => !['location', 'owner'].includes(key))) return undefined;
+  return { location: row.location, owner: row.owner };
 }
 
 async function readEntries(index: string): Promise<SquareIndexEntry[]> {
@@ -60,23 +48,15 @@ async function readEntries(index: string): Promise<SquareIndexEntry[]> {
     try {
       const entry = validEntry(JSON.parse(line));
       if (entry !== undefined) entries.push(entry);
-    } catch {
-      // The index is disposable discovery input. A malformed line is ignored rather than
-      // becoming a second authority or preventing access to valid entries beside it.
-    }
+    } catch { /* Disposable discovery input. */ }
   }
   return entries;
 }
 
 function matches(entry: SquareIndexEntry, query: SquareIndexQuery): boolean {
-  if (query.body !== undefined && !sameBody(entry.body, query.body)) return false;
-  if (query.channel !== undefined && entry.body.channel !== query.channel) return false;
-  if (query.session !== undefined && entry.body.session !== query.session) return false;
-  if (query.agent !== undefined && entry.body.agent !== query.agent) return false;
-  return true;
+  return query.owner === undefined || entry.owner === query.owner;
 }
 
-/** Read and verify the disposable index. Paths are canonicalized on access and duplicates collapse. */
 export async function indexedSquareEntries(query: SquareIndexQuery = {}, env: NodeJS.ProcessEnv = process.env): Promise<readonly SquareIndexEntry[]> {
   const entries = await readEntries(squareIndexPath(env));
   const result: SquareIndexEntry[] = [];
@@ -85,10 +65,10 @@ export async function indexedSquareEntries(query: SquareIndexQuery = {}, env: No
     if (!matches(entry, query)) continue;
     let location: string;
     try { location = await canonicalPath(entry.location); } catch { continue; }
-    const key = JSON.stringify([location, entry.body.channel, entry.body.session, entry.body.agent ?? null]);
+    const key = JSON.stringify([location, entry.owner]);
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push({ location, body: entry.body });
+    result.push({ location, owner: entry.owner });
   }
   return result;
 }
@@ -98,14 +78,14 @@ export async function indexedSquarePaths(query: SquareIndexQuery = {}, env: Node
 }
 
 /** Best-effort discovery only: a busy index skips publication, never queues or delays artifact work. */
-export async function rememberSquarePath(location: string, body: Body, index: string): Promise<boolean> {
-  validateBody(body);
+export async function rememberSquarePath(location: string, owner: Owner, index: string): Promise<boolean> {
+  validateOwner(owner);
   const canonical = await canonicalPath(location);
   await fs.mkdir(path.dirname(index), { recursive: true });
   return await withFileLock(lockPath(index), { retryMs: 10, skipIfBusy: true }, async () => {
     const entries = await readEntries(index);
-    if (entries.some((entry) => entry.location === canonical && sameBody(entry.body, body))) return false;
-    const next = [...entries, { location: canonical, body }];
+    if (entries.some((entry) => entry.location === canonical && entry.owner === owner)) return false;
+    const next = [...entries, { location: canonical, owner }];
     const temporary = `${index}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fs.writeFile(temporary, next.map((entry) => JSON.stringify(entry)).join('\n') + '\n', { flag: 'wx', mode: 0o600 });
@@ -115,12 +95,6 @@ export async function rememberSquarePath(location: string, body: Body, index: st
   }) ?? false;
 }
 
-/** Index loss is tolerated by every caller; this observer is only a wake hint for rediscovery. */
 export function observeSquareIndex(env: NodeJS.ProcessEnv = process.env): Promise<VersionObserver<string>> {
   return observeFileMetadata(squareIndexPath(env));
-}
-
-export function bodyKey(body: Body): string {
-  validateBody(body);
-  return JSON.stringify([body.channel, body.session, body.agent ?? null]);
 }

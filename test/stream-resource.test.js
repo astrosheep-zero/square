@@ -13,11 +13,11 @@ import { runClaudeMod } from '../dist/claude-mod.js';
 async function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-stream-resource-')));
   const env = { SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_DISABLE_PASEO_WAKE: '1' };
-  const body = { channel: 'claude-code', session: 'stream-resource' };
+  const body = "claude-code" + ":" + ('stream-resource');
   const location = path.join(root, 'original.square');
   const square = await Square.build({ path: location, markdown: '', env });
   t.after(async () => { await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const alice = (await square.join('Alice', { body })).participant;
+  const alice = (await square.join('Alice', { owner: body })).participant;
   await alice.express('original');
   return { root, env, body, location, square, alice };
 }
@@ -31,7 +31,7 @@ test('public path stream follows atomic replacement independently of the open re
   const pending = iterator.next();
   const replacement = await Square.build({ path: replacementPath, markdown: '', env: f.env });
   try {
-    const alice = (await replacement.join('Alice', { body: f.body })).participant;
+    const alice = (await replacement.join('Alice', { owner: f.body })).participant;
     await alice.express('same coordinate');
     await alice.express('after replacement');
   } finally { await replacement.close(); }
@@ -51,7 +51,7 @@ test('closing the resource does not strand its path stream; iterator disposal re
   await f.square.close();
   const pending = iterator.next();
   const writer = await Square.at({ path: f.location, env: f.env });
-  try { await (await writer.participant('Alice', { body: f.body })).express('after owner close'); }
+  try { await (await writer.participant('Alice', { owner: f.body })).express('after owner close'); }
   finally { await writer.close(); }
   const timer = setTimeout(() => controller.abort(new Error('closed owner stranded path stream')), 2000);
   try { assert.equal((await pending).value.body, 'after owner close'); }
@@ -91,6 +91,6 @@ test('direct diagnostics preserve unavailable errors while host resume skips mis
     () => doctorDeliveryHealth(f.location, 0, Date.now(), f.env),
   ]) await assert.rejects(operation, error => error.code === 'unavailable' && error.message === `Square is unavailable at ${f.location}`);
   const resumed = JSON.parse(await runClaudeMod(JSON.stringify({ operation: 'start', resume: true,
-    sessionId: f.body.session, cwd: f.root, version: 'test' }), f.env));
+    sessionId: 'stream-resource', cwd: f.root, version: 'test' }), f.env));
   assert.deepEqual(resumed.bindings, []);
 });

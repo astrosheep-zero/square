@@ -3,7 +3,8 @@ import { createArtifactPort } from '../../artifact.js';
 import { deliverPending } from '../../delivery-operations.js';
 import { nativePendingPreview, observeSessionPending, projectSessionSeats } from '../../inbox.js';
 import { automaticWakeEligible, presentationBlocksWake } from '../../delivery.js';
-import { sameBody, type Seat } from '../../model.js';
+import { type Seat } from '../../model.js';
+import { harnessOwner, decodeHarnessOwner } from '../../owner.js';
 import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
 import { formatActivityId, parseActivityId } from '../../square-core.js';
 import { indexedSquareEntries } from '../../square-index.js';
@@ -13,13 +14,13 @@ import { presentPending } from '../../presentation-operations.js';
 import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
 
 const routeKind = 'opencode-server' as const;
-const bodyFor = (sessionId: string) => ({ channel: 'opencode', session: sessionId });
+const ownerFor = (sessionId: string) => harnessOwner({ channel: 'opencode', session: sessionId });
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
 
-function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'participant' | 'body' | 'generation'>, index: number) {
+function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'participant' | 'owner' | 'generation'>, index: number) {
   const seat = facts.seat(captured.participant);
-  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== captured.generation || !sameBody(seat.body, captured.body)) return undefined;
+  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== captured.generation || seat.owner !== captured.owner) return undefined;
   const wake = seat.wakeAddress;
   if (wake?.kind !== routeKind) return undefined;
   return nativePendingPreview(facts, {
@@ -29,15 +30,18 @@ function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'part
 }
 
 export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
-  return [...new Set((await indexedSquareEntries({ channel: 'opencode' }, env)).map((entry) => entry.body.session))];
+  return [...new Set((await indexedSquareEntries({ }, env)).flatMap((entry) => {
+    const coordinate = decodeHarnessOwner(entry.owner);
+    return coordinate?.channel === 'opencode' ? [coordinate.session] : [];
+  }))];
 }
 
 export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.ProcessEnv, signal?: AbortSignal) {
-  return projectSessionSeats({ body: bodyFor(sessionId), env }, signal);
+  return projectSessionSeats({ owner: ownerFor(sessionId), env }, signal);
 }
 
 function sameSeat(left: Seat | undefined, right: Seat): boolean {
-  return left !== undefined && left.attachment === 'attached' && left.generation === right.generation && sameBody(left.body, right.body);
+  return left !== undefined && left.attachment === 'attached' && left.generation === right.generation && left.owner === right.owner;
 }
 
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
@@ -128,7 +132,7 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
 
 /** The native receiver owns no claims outside the artifact; HOME is used only for discovery. */
 export async function receiveOpenCodePending(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  const observer = await observeSessionPending(bodyFor(target.sessionId), env);
+  const observer = await observeSessionPending(ownerFor(target.sessionId), env);
   const transport = createOpenCodeWakeTransport(target, signal);
   let waiting: ReturnType<typeof observer.wait> | undefined;
   try {
@@ -171,7 +175,7 @@ export async function receiveOpenCodePending(target: OpenCodeNativeSession, env:
 
 /** Publish the native address into current artifact seats; the legacy route projection is not read. */
 export async function publishOpenCodeAddress(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<boolean> {
-  await restoreSessionSeats(bodyFor(sessionId), env, { kind: routeKind, address: { sessionId } }, signal);
+  await restoreSessionSeats(ownerFor(sessionId), env, { kind: routeKind, address: { sessionId } }, signal);
   const seats = (await discoverOpenCodeSeats(sessionId, env, signal)).filter(({ seat }) => seat.attachment === 'attached');
   for (const { location, seat } of seats) {
     if (signal.aborted) return false;
@@ -201,7 +205,7 @@ export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessE
     if (signal.aborted) return;
     const { Square } = await import('../../square-api.js');
     const square = await Square.at({ path: location, env });
-    try { await square.endHeld(seat.participant, { body: seat.body, generation: seat.generation }); }
+    try { await square.endHeld(seat.participant, { owner: seat.owner, generation: seat.generation }); }
     finally { await square.close(); }
   }
 }

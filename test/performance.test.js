@@ -28,13 +28,13 @@ function instrumentCell(cell) {
   };
 }
 
-function bodyFor(name) { return { channel: 'test', session: name.toLowerCase() }; }
+function bodyFor(name) { return "test" + ":" + (name.toLowerCase()); }
 
 async function establishSeat(cell, participant, at) {
   const body = bodyFor(participant);
-  return (await cell.transactAs({ kind: 'join', participant, body }, (facts) => {
+  return (await cell.transactAs({ kind: 'join', participant, owner: body }, (facts) => {
     const joined = facts.land({ kind: 'join', actor: participant, at });
-    const seat = { participant, body, generation: `act/${joined.index}`, attachment: 'attached' };
+    const seat = { participant, owner: body, generation: `act/${joined.index}`, attachment: 'attached' };
     facts.storeSeat(seat);
     return seat;
   })).value;
@@ -62,7 +62,7 @@ test('catch hydrates only its page while the remaining count is a bounded fact r
   const { counters, artifact } = instrumentCell(cell);
   const square = await resourceWithArtifact(t, artifact, () => 2_000);
   try {
-    const caught = await (await square.participant('P0', { body: p0.body })).catch();
+    const caught = await (await square.participant('P0', { owner: p0.owner })).catch();
     assert.equal(caught.activities.length, 10);
     assert.equal(caught.remaining, 890);
     assert.deepEqual(counters.hydrated.flat(), Array.from({ length: 10 }, (_value, index) => index + 97));
@@ -83,7 +83,7 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
     const { counters, artifact } = instrumentCell(cell);
     try {
       const square = await resourceWithArtifact(t, artifact, () => 2_000);
-      const caught = await (await square.participant('P0', { body: p0.body })).catch();
+      const caught = await (await square.participant('P0', { owner: p0.owner })).catch();
       measurements.push({
         delivered: caught.activities.length,
         remaining: caught.remaining,
@@ -108,7 +108,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
   const square = await resourceWithArtifact(t, artifact, () => 100_000);
   const measurements = () => structuredClone(counters);
   try {
-    const participant = await square.participant('P0', { body: p0.body });
+    const participant = await square.participant('P0', { owner: p0.owner });
     const outcome = await participant.catch({ observe: true });
     const caught = outcome.observation;
     const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
@@ -151,8 +151,8 @@ test('catch fences selection and captures the page facts in its receipt transact
   const artifact = { ...cell };
   const body = bodyFor('owner');
   const resource = await resourceWithArtifact(t, artifact);
-  const alice = (await resource.join('Alice', { body })).participant;
-  const bob = (await resource.join('Bob', { body })).participant;
+  const alice = (await resource.join('Alice', { owner: body })).participant;
+  const bob = (await resource.join('Bob', { owner: body })).participant;
   await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
   await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
   const bobSeat = (await cell.read(facts => facts.seat('Bob'))).value;
@@ -207,8 +207,8 @@ test('a capped idle catch through the shared SDK owner hydrates no bodies and wr
   const { counters, artifact } = instrumentCell(cell);
   const body = bodyFor('p0');
   const resource = await resourceWithArtifact(t, artifact);
-  await resource.join('Alice', { body });
-  const participant = (await resource.join('P0', { body })).participant;
+  await resource.join('Alice', { owner: body });
+  const participant = (await resource.join('P0', { owner: body })).participant;
   await participant.express('only say', { force: true });
   const before = (await cell.read(facts => facts.receiptAssignments())).value;
   counters.hydrated = [];

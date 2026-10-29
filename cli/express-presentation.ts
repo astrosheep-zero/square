@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSquareError } from '../model.js';
 import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../square-api.js';
-import type { Body } from '../model.js';
+import type { Owner } from '../square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
 import {
   formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
@@ -18,6 +18,7 @@ import { jsonResult } from './json.js';
 export { renderExpression } from '../operation-presentation.js';
 
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {
+  readonly recoveryOwner?: Owner;
   readonly reply?: string;
   readonly metadataJson?: string;
   readonly bodyProvided?: boolean;
@@ -50,11 +51,12 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
     + (opts.noMention === true ? ' --no-mention' : '');
   const metadata = opts.metadataJson === undefined ? '' : ` --metadata ${quoteShell(opts.metadataJson)}`;
   const body = opts.bodyProvided === false ? '' : ' -';
-  return `${participantCommandPrefix(squarePath, name)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${metadata}${replyArgument(opts.reply)}${body}`;
+  return `${participantCommandPrefix(squarePath, name, opts.recoveryOwner)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${metadata}${replyArgument(opts.reply)}${body}`;
 }
 
 /** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
-export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false, body?: Body): Promise<void> {
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false, resolveOwner?: Owner | (() => Owner)): Promise<void> {
+  let owner: Owner | undefined;
   let square: Square | undefined;
   let attempted = false;
   let announcedWait: 'held' | 'throttled' | undefined;
@@ -64,11 +66,12 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
   const interrupt = () => controller.abort();
   process.once('SIGINT', interrupt);
   try {
+    owner = typeof resolveOwner === 'function' ? resolveOwner() : resolveOwner;
     square = await open({ signal: controller.signal });
-    const participant = await selectOwnSeat(square, body, requestedName);
+    const participant = await selectOwnSeat(square, owner, requestedName);
     name = participant.name;
     attempted = true;
-    const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, ...expressOptions } = opts;
+    const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, recoveryOwner: _owner, ...expressOptions } = opts;
     const outcome = await participant.express(rawInput === undefined ? undefined : rawInput.replace(/\r\n/g, '\n').trim(), {
       ...expressOptions, reply: opts.reply as ActivityId | undefined, ...(json ? {} : { observe: true }),
     }, {
@@ -81,7 +84,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     });
     landedId = outcome.activity.id;
     if (!json) name = outcome.observation!.participant;
-    const rendered = json ? jsonResult(outcome) : renderExpression(squarePath, outcome);
+    const rendered = json ? jsonResult(outcome) : renderExpression(squarePath, outcome, opts.recoveryOwner);
     if (rendered !== undefined) process.stdout.write(rendered);
   } catch (error) {
     const detail = (error as OperationError | undefined)?.operation;
@@ -89,10 +92,10 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     // This MUST precede recovery: even an unreadable artifact cannot eat the raw body.
     const draftPath = saveActivityDraft(squarePath, name, rawInput ?? '');
     if (square === undefined) square = await open().catch(() => undefined);
-    const selected = square === undefined ? undefined : await selectOwnSeat(square, body, name).catch(() => undefined);
+    const selected = square === undefined ? undefined : await selectOwnSeat(square, owner, name).catch(() => undefined);
     const fresh = await square?.recovery(selected?.name ?? name).catch(() => undefined);
     name = fresh?.participant ?? name;
-    const output = { squarePath, name, draftPath, participantCount: fresh?.standingCount, held: fresh?.held };
+    const output = { squarePath, name, owner: opts.recoveryOwner, draftPath, participantCount: fresh?.standingCount, held: fresh?.held };
     const confirmedUnsent = landedId === undefined && detail?.landedId === undefined
       && detail?.expressEffect !== 'landed' && detail?.expressEffect !== 'unknown'
       && (!attempted || detail?.expressEffect === 'unsent' || (isSquareError(error) && error.facts?.activityUnsent === true));
@@ -144,16 +147,16 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     const lines = [message, `· draft kept: ${draftPath}`];
     if (reason === 'needs_seat') {
       lines[0] = `✕ ${message}`;
-      lines.push(joinRecoveryCommand(squarePath, name));
+      lines.push(joinRecoveryCommand(squarePath, name, opts.recoveryOwner));
       process.stderr.write(formatRefusal(squarePath, lines, output));
       exitCode(2); return;
     }
     const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
     if (isSquareError(error)) {
       if ((reason === 'never_joined' && detail?.subject === 'caller') || error.code === 'unknown_participant' || error.code === 'not_joined') {
-        lines.push(joinRecoveryCommand(squarePath, name));
+        lines.push(joinRecoveryCommand(squarePath, name, opts.recoveryOwner));
       }
-      if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name));
+      if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name, opts.recoveryOwner));
       if (repair) {
         lines.push(participantsRecoveryCommand(squarePath), reason === 'bell_mention_conflict'
           ? '  · ring the bell without explicit mentions:'

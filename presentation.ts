@@ -20,6 +20,7 @@ interface HeaderOptions {
 }
 
 interface ParticipantOutputOptions {
+  owner?: string;
   squarePath: string;
   name: string;
   participantCount?: number;
@@ -111,20 +112,20 @@ export function commandPrefix(squarePath: string): string {
   return `square --location ${quoteShell(squarePath)}`;
 }
 
-export function participantCommandPrefix(squarePath: string, name: string): string {
-  return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}`;
+export function participantCommandPrefix(squarePath: string, name: string, owner?: string): string {
+  return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}${owner === undefined ? '' : ` --owner ${quoteShell(owner)}`}`;
 }
 
 /** Blocked actions end with a full copy-pasteable recovery command. */
-export function joinRecoveryCommand(squarePath: string, name: string): string {
-  return `${participantCommandPrefix(squarePath, name)} join`;
+export function joinRecoveryCommand(squarePath: string, name: string, owner?: string): string {
+  return `${participantCommandPrefix(squarePath, name, owner)} join`;
 }
 
 /** Taking a name is an explicit recovery choice, never an automatic retry. */
-export function takeoverRecoveryLines(squarePath: string, name: string): string[] {
+export function takeoverRecoveryLines(squarePath: string, name: string, owner?: string): string[] {
   return [
     'If this is your name to reclaim, --kick banishes the one standing here so you can step in:',
-    `${participantCommandPrefix(squarePath, name)} join --kick`,
+    `${participantCommandPrefix(squarePath, name, owner)} join --kick`,
   ];
 }
 
@@ -347,7 +348,7 @@ function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]
 }
 
 export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
-  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} catch`;
+  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} catch`;
   return withPathOutput(
     opts.squarePath,
     [
@@ -487,7 +488,7 @@ export function renderGrepActivitiesView(
 export function renderActivityLimit(opts: ActivityLimitOptions): string {
   // The cap wording lives inside the count: the speaker is simply spent.
   const spoken = opts.count !== undefined && opts.hardCap !== undefined ? ` — ${opts.count}/${opts.hardCap} spoken` : '';
-  const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name)} done`;
+  const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`;
   return withPathOutput(opts.squarePath, [
     `${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`,
     ...draftSavedLines(opts.draftPath),
@@ -501,7 +502,7 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
     `${style('blocked', '✕')} you are already catching`,
     `  · an active catch is already running for ${participantIdentity(opts.name)}`,
     '  · --replace lets a new catch take over',
-    `${participantCommandPrefix(opts.squarePath, opts.name)} catch --idle 30m --replace`,
+    `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} catch --idle 30m --replace`,
   ].join('\n');
 }
 
@@ -529,7 +530,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
   switch (opts.status) {
     case 'idle':
     case 'drained': {
-      const prefix = participantCommandPrefix(opts.squarePath, opts.name);
+      const prefix = participantCommandPrefix(opts.squarePath, opts.name, opts.owner);
       // Quiet graduates with the idle length; an empty catch has no idle budget to report.
       const idleMs = opts.idleMs;
       const quiet = idleMs !== undefined && idleMs >= 60 * 60 * 1000
@@ -546,12 +547,12 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ].join('\n');
     }
     case 'quorum':
-      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
+      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
     case 'capped': {
       const spoken = opts.hardCap === undefined || opts.hardCap === null
         ? ''
         : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
-      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name)} done`].join('\n');
+      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
     }
   }
 }

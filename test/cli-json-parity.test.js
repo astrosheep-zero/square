@@ -11,7 +11,7 @@ import { CLI, run, testEnv, withName, withPath } from './square-cli-helpers.js';
 
 const traceModule = path.resolve(import.meta.dirname, 'fixtures/cli-json-trace.js');
 const session = 'cli-json-parity';
-const body = { channel: 'codex', session };
+const body = `codex:${session}`;
 
 function serializable(result) {
   const { observation, ...data } = result;
@@ -30,7 +30,7 @@ async function fixture(t, hardCap = null) {
     SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), SQUARE_NOW_MS: '90000',
     NODE_OPTIONS: `--import=${traceModule}`, SQUARE_JSON_TRACE: trace });
   const identity = commandIdentity(env);
-  assert.deepEqual(identity.body, body);
+  assert.deepEqual(identity.owner, body);
   const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, env });
   await square.close();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
@@ -67,35 +67,35 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.deepEqual(await f.parity(undefined, ['history'], square => square.history()), { activities: [] });
   });
   await t.test('join and reconnect', async () => {
-    const joined = await f.parity('Alice', ['join', '--json', '--last', '4'], square => square.join('Alice', { body, wakeAddress: f.wakeAddress, last: 4, takeover: false }));
+    const joined = await f.parity('Alice', ['join', '--json', '--last', '4'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, last: 4, takeover: false }));
     assert.deepEqual(joined.participant, { name: 'Alice' });
-    const reconnected = await f.parity('Alice', ['join'], square => square.join('Alice', { body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
+    const reconnected = await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
     assert.equal(reconnected.kind, 'reconnected');
     assert.equal(reconnected.activity, null);
-    await f.parity('Bob', ['join'], square => square.join('Bob', { body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
+    await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
   });
   await t.test('listen and listening', async () => {
-    const listened = await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { body })).listen('Bob'));
+    const listened = await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'));
     assert.equal(listened.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { body })).listen('Bob'))).activity, null);
-    assert.deepEqual((await f.parity('Alice', ['listening'], async square => (await square.participant('Alice', { body })).listening())).listening, ['Bob']);
+    assert.equal((await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'))).activity, null);
+    assert.deepEqual((await f.parity('Alice', ['listening'], async square => (await square.participant('Alice', { owner: body })).listening())).listening, ['Bob']);
   });
   let sent;
   await t.test('express preserves SDK warnings, hint, metadata and reply', async () => {
     const metadata = { observation: { nested: true }, participant: { name: 'not a handle', express: 'literal' } };
     sent = await f.parity('Alice', ['express', '--force', '--reply', 'act/1', '--metadata', JSON.stringify(metadata), 'Hello @Bob @Nobody'],
-      async square => (await square.participant('Alice', { body })).express('Hello @Bob @Nobody', { force: true, reply: 'act/1', metadata }));
+      async square => (await square.participant('Alice', { owner: body })).express('Hello @Bob @Nobody', { force: true, reply: 'act/1', metadata }));
     assert.deepEqual(sent.activity.metadata, metadata);
     assert.deepEqual(sent.unmatchedMentions, ['Nobody']);
     assert.equal(sent.activity.reply, 'act/1');
     assert.ok(sent.hint);
   });
   await t.test('catch retains perception, route and consumption receipt', async () => {
-    const caught = await f.parity('Bob', ['catch', '--now', '--limit', '2'], async square => (await square.participant('Bob', { body })).catch({ limit: 2 }));
+    const caught = await f.parity('Bob', ['catch', '--now', '--limit', '2'], async square => (await square.participant('Bob', { owner: body })).catch({ limit: 2 }));
     assert.equal(caught.activities[0].id, sent.activity.id);
     assert.equal(caught.activities[0].perception, 'full');
     assert.equal(caught.activities[0].via, 'mention');
-    const exact = await f.parity('Bob', ['catch', '--id', sent.activity.id], async square => (await square.participant('Bob', { body })).catch({ id: sent.activity.id }));
+    const exact = await f.parity('Bob', ['catch', '--id', sent.activity.id], async square => (await square.participant('Bob', { owner: body })).catch({ id: sent.activity.id }));
     assert.equal(exact.activities[0].id, sent.activity.id);
   });
   await t.test('history includes listener target and all canonical fields', async () => {
@@ -104,25 +104,25 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.deepEqual(history.activities.find(activity => activity.id === sent.activity.id).metadata, sent.activity.metadata);
   });
   await t.test('unlisten and ignore include null for unchanged relations', async () => {
-    const removed = await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { body })).unlisten('Bob'));
+    const removed = await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { owner: body })).unlisten('Bob'));
     assert.equal(removed.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { body })).unlisten('Bob'))).activity, null);
-    const ignored = await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { body })).ignore('Bob'));
+    assert.equal((await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { owner: body })).unlisten('Bob'))).activity, null);
+    const ignored = await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'));
     assert.equal(ignored.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { body })).ignore('Bob'))).activity, null);
+    assert.equal((await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'))).activity, null);
   });
   await t.test('hold, status, participants, resume and done', async () => {
-    await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { body })).hold('pause'));
+    await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { owner: body })).hold('pause'));
     const status = await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }));
     assert.equal(status.held.by, 'Bob');
     const roster = await f.parity(undefined, ['participants', '--limit', '1'], square => square.participants());
     assert.equal(roster.participants.length, 2, '--limit affects human text only');
-    await f.parity('Bob', ['resume'], async square => (await square.participant('Bob', { body })).resume());
-    await f.parity('Bob', ['done'], async square => (await square.participant('Bob', { body })).done());
+    await f.parity('Bob', ['resume'], async square => (await square.participant('Bob', { owner: body })).resume());
+    await f.parity('Bob', ['done'], async square => (await square.participant('Bob', { owner: body })).done());
   });
   await t.test('inbox is the standalone SDK result on the same discovery and artifact state', async () => {
-    const expected = serializable(await inbox({ cwd: f.cwd, env: f.env }, session, { limit: 1 }));
-    const result = run(['inbox', '--for-session', session, '--limit', '1', '--json'], { cwd: f.cwd, env: f.env });
+    const expected = serializable(await inbox({ cwd: f.cwd, env: f.env }, body, { limit: 1 }));
+    const result = run(['inbox', '--for-owner', body, '--limit', '1', '--json'], { cwd: f.cwd, env: f.env });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), expected);
     assert.equal(result.stdout, `${JSON.stringify(expected)}\n`);
@@ -131,18 +131,18 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
 
 test('catch --json retains the terminal failure exit code and the SDK result', async t => {
   const f = await fixture(t, 1);
-  await f.parity('Alice', ['join'], square => square.join('Alice', { body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['join'], square => square.join('Bob', { body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Alice', ['express', '--force', 'one'], async square => (await square.participant('Alice', { body })).express('one', { force: true }));
-  const result = await f.parity('Alice', ['catch'], async square => (await square.participant('Alice', { body })).catch({ limit: 10 }), 1);
+  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.parity('Alice', ['express', '--force', 'one'], async square => (await square.participant('Alice', { owner: body })).express('one', { force: true }));
+  const result = await f.parity('Alice', ['catch'], async square => (await square.participant('Alice', { owner: body })).catch({ limit: 10 }), 1);
   assert.equal(result.reason, 'capped');
 });
 
 test('an active catch keeps its exit code and JSON receipt without disrupting the waiter', async t => {
   const f = await fixture(t);
-  await f.parity('Alice', ['join'], square => square.join('Alice', { body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   const square = await Square.at({ path: f.file, env: f.env });
-  const alice = await square.participant('Alice', { body }), controller = new AbortController();
+  const alice = await square.participant('Alice', { owner: body }), controller = new AbortController();
   let started;
   const ready = new Promise(resolve => { started = resolve; });
   const waiting = alice.catch({ idle: 60_000 }, { signal: controller.signal, onProgress: started });
@@ -163,9 +163,9 @@ test('an active catch keeps its exit code and JSON receipt without disrupting th
 
 test('a successful waiting express leaves stdout as one JSON document', { timeout: 15000 }, async t => {
   const f = await fixture(t);
-  await f.parity('Alice', ['join'], square => square.join('Alice', { body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['join'], square => square.join('Bob', { body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { body })).hold('pause'));
+  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { owner: body })).hold('pause'));
   const child = spawn(process.execPath, [CLI, ...withName(f.file, 'Alice', ['express', '--force', '--json', 'patient'])], {
     cwd: f.cwd, env: { ...f.env, SQUARE_HELD_WAIT_BUDGET_MS: '30000' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -179,7 +179,7 @@ test('a successful waiting express leaves stdout as one JSON document', { timeou
   const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   await progress;
   const square = await Square.at({ path: f.file, env: f.env });
-  try { await (await square.participant('Bob', { body })).resume(); }
+  try { await (await square.participant('Bob', { owner: body })).resume(); }
   finally { await square.close(); }
   assert.equal(await exited, 0, stderr);
   const receipt = JSON.parse(stdout);
@@ -202,7 +202,7 @@ test('JSON mode retains human argument errors and exit codes', async t => {
   for (const args of [
     ['join', '--last', '--json', '10'], ['express', '--metadata', '--json', '{}'],
     ['catch', '--limit', '--json', '2'], ['history', '--limit', '--json', '2'],
-    ['participants', '--limit', '--json', '2'], ['inbox', '--for-session', session, '--limit', '--json', '2'],
+    ['participants', '--limit', '--json', '2'], ['inbox', '--for-owner', body, '--limit', '--json', '2'],
   ]) {
     const result = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`);

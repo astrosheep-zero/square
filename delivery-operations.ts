@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
-import { sameBody, type Seat, type WakeRoute } from './model.js';
+import { type Seat, type WakeRoute } from './model.js';
 import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
 import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
-import { bodyKey } from './square-index.js';
 import { freshWatchLease } from './runtime.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
@@ -30,7 +29,7 @@ async function currentness(artifact: SquareArtifactPort, request: WakeRequest, n
   const { value } = await artifact.read((facts) => {
     const currentSeat = facts.seat(request.participant);
     const seatCurrent = currentSeat !== undefined && currentSeat.attachment === 'attached' && currentSeat.generation === request.seat.generation
-      && sameBody(currentSeat.body, request.seat.body)
+      && currentSeat.owner === request.seat.owner
       && currentSeat.wakeAddress?.kind === request.route.kind
       && Object.keys(currentSeat.wakeAddress.address).length === Object.keys(request.route.address).length
       && Object.entries(currentSeat.wakeAddress.address).every(([key, val]) => request.route.address[key] === val);
@@ -109,10 +108,10 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
   if (input.activity !== undefined && requested === undefined) return;
 
   const pending = await candidates(input.artifact, requested, input.now ?? Date.now());
-  // Preserve order within a receiving session; unrelated receivers need not wait for each other.
+  // Preserve order within a receiving owner; unrelated receivers need not wait for each other.
   const receivers = new Map<string, Candidate[]>();
   for (const candidate of pending) {
-    const key = bodyKey(candidate.seat.body);
+    const key = candidate.seat.owner;
     const group = receivers.get(key) ?? [];
     group.push(candidate);
     receivers.set(key, group);

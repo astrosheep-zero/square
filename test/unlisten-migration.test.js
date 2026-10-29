@@ -69,7 +69,7 @@ test('explicit v2 migration establishes artifact seats and removes legacy routes
 
   const square = await Square.at({ path: location });
   try {
-    const bob = await square.participant('Bob', { body: { channel: 'codex', session: 'bob-session' } });
+    const bob = await square.participant('Bob', { owner: 'codex:bob-session' });
     assert.equal((await bob.unlisten('Alice')).activity.kind, 'unlisten');
     assert.deepEqual((await bob.catch()).activities.map(activity => activity.body), ['v2 pending bare']);
   } finally { await square.close(); }
@@ -87,7 +87,7 @@ test('v2 migration recovers an owner-backed seat without routes or a fabricated 
   const artifact = createArtifactPort(location);
   try {
     const { value } = await artifact.read(facts => facts.seat('Alice'));
-    assert.deepEqual(value.body, { channel: 'codex', session: 'alice-session' });
+    assert.deepEqual(value.owner, 'codex:alice-session');
     assert.equal(value.generation, 'act/0');
     assert.equal(value.wakeAddress, undefined);
   } finally { await artifact.close(); }

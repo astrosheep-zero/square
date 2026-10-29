@@ -40,12 +40,18 @@ test('relative paths resolve against the config file and secrets come from the e
   assert.equal(settings.state, join(root, 'squares/team.square.slack-bridge.json'))
   assert.equal(settings.channel, 'C0123456789')
   assert.deepEqual(settings.bridge, { appToken: 'xapp-secret', botToken: 'xoxb-secret' })
+  assert.equal(settings.owner, `slack-bridge:${encodeURIComponent(settings.state)}:agent:${encodeURIComponent(settings.channel)}`)
   assert.deepEqual([...settings.personas], [['faye', 'xoxp-secret']])
 })
 
 test('an explicit state path resolves against the config file', async () => {
   const { root, file } = await prepared({ ...valid, state: 'state/bridge.json' })
   assert.equal((await loadConfig(file, env)).state, join(root, 'state/bridge.json'))
+})
+
+test('a configured opaque owner is preserved exactly', async () => {
+  const { file } = await prepared({ ...valid, owner: '  service:桥/1  ' })
+  assert.equal((await loadConfig(file, env)).owner, '  service:桥/1  ')
 })
 
 test('a missing environment variable is named, and no token value is printed', async () => {
@@ -57,6 +63,8 @@ test('a missing environment variable is named, and no token value is printed', a
 
 test('invalid configuration refuses with the offending field', async () => {
   const cases = [
+    [{ ...valid, owner: '' }, /owner/i],
+    [{ ...valid, owner: 'bad\u0000owner' }, /owner/i],
     [{ ...valid, channel: 'general' }, /channel must be a Slack channel ID/],
     [{ ...valid, extra: true }, /unknown field "extra"/],
     [{ ...valid, bridge: { ...valid.bridge, appTokenEnv: '' } }, /bridge\.appTokenEnv must be a non-empty string/],

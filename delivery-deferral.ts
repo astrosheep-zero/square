@@ -1,4 +1,4 @@
-import { SquareError, sameBody, type ActivityMetadata, type JsonValue, type ActivityId } from './model.js';
+import { SquareError, type ActivityMetadata, type JsonValue, type ActivityId } from './model.js';
 import type { SeatRef, SquareRead } from './ports.js';
 
 export type MetadataScalar = null | boolean | number | string;
@@ -85,7 +85,7 @@ export function matchingDeferrals(
 
 export function deliveryDeferralExpiry(facts: SquareRead, captured: SeatRef, index: number, now: number): number | undefined {
   const seat = facts.seat(captured.participant);
-  if (seat === undefined || seat.generation !== captured.generation || !sameBody(seat.body, captured.body)) return undefined;
+  if (seat === undefined || seat.generation !== captured.generation || seat.owner !== captured.owner) return undefined;
   const leases = facts.deliveryDeferrals(seat.participant, seat.generation);
   if (!leases.some(lease => lease.expiresAt > now)) return undefined;
   const activity = facts.activity(index);

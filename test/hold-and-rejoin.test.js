@@ -8,8 +8,8 @@ const HELD_BUDGET_ENV = { SQUARE_HELD_WAIT_BUDGET_MS: '300' };
 
 test('a held express announces the holder, waits within a budget, then keeps a draft', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.hold('pause for thought');
   });
 
@@ -32,8 +32,8 @@ test('a held express announces the holder, waits within a budget, then keeps a d
 
 test('a held express lands as soon as the hand lowers mid-wait', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.hold();
   });
 
@@ -50,8 +50,8 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
 
 test('a departed participant steps back in before speaking, and only the return announces itself', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.done();
   });
 
@@ -81,12 +81,12 @@ test('a departed participant steps back in before speaking, and only the return 
 
 test('history pairs holds with lowerings and departures with returns', async () => {
   const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { body });
-    const bob = (await square.join('Bob', { body })).participant;
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: body })).participant;
     await bob.hold('pause');
     await bob.resume();
     await bob.done();
-    await square.join('Bob', { body });
+    await square.join('Bob', { owner: body });
   });
 
   const history = run(withPath(file, ['history']));

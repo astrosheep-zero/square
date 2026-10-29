@@ -258,7 +258,7 @@ const pureBindings = new Map([
 ]);
 const pureTypeBindings = new Map([
   ['square-core.ts', ['ActivityId', 'Perception', 'Reach']],
-  ['model.ts', ['HardCap', 'BuildOptions', 'RoomChangeAct', 'StoredAct', 'PublicAct', 'Body', 'WakeAddress']],
+  ['model.ts', ['HardCap', 'BuildOptions', 'RoomChangeAct', 'StoredAct', 'PublicAct', 'Owner', 'WakeAddress']],
 ]);
 const integrationTypeBindings = new Map([
   ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],

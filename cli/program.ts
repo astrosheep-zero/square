@@ -13,7 +13,7 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   const recovery = error.facts?.reason === 'migration_required' || context === undefined || squarePath === undefined ? undefined
     : await withSquare({ ...context, name: detail?.participant ?? context.name }, (square) => square.recovery(detail?.participant ?? context.name)).catch(() => undefined);
   const name = detail?.participant ?? recovery?.participant ?? context?.name;
-  const lines = renderFailureLines(error, { squarePath, name });
+  const lines = renderFailureLines(error, { squarePath, name, owner: context?.owner ?? context?.env.SQUARE_OWNER });
   if (squarePath === undefined) process.stderr.write(`${lines.join('\n')}\n`);
   else process.stderr.write(formatRefusal(squarePath, lines, {
     participantCount: recovery?.standingCount, held: recovery?.held,
@@ -32,7 +32,7 @@ export async function runCli(rawArgs = process.argv.slice(2)): Promise<void> {
     }
     const parsed = await parseGlobalArgs(rawArgs);
     const command = parsed.args[0];
-    context = defaultContext(command ?? 'help', parsed.squarePath, parsed.name);
+    context = { ...defaultContext(command ?? 'help', parsed.squarePath, parsed.name), owner: parsed.owner };
     if (command === undefined || command === '--help' || command === '-h') {
       await executeRegisteredCommand('help', [], context);
       return;

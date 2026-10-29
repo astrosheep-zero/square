@@ -9,6 +9,7 @@ import { createArtifactPort, prepareSquareBuild, writeSquareFile, readSquareRevi
 import { observeSessionPending, projectSessionSeats, sessionInbox, pendingKey, projectBoundaryEligibility } from '../dist/inbox.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { inbox as publicInbox } from '../dist/square-api.js';
+import { harnessOwner } from '../dist/owner.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 
 async function fixture(t, leaseMs, hasPending = true) {
@@ -21,15 +22,15 @@ async function fixture(t, leaseMs, hasPending = true) {
   state.runtime.nextActIndex = 0;
   await writeSquareFile(file, state);
   const artifact = createArtifactPort(file);
-  const aliceBody = { channel: 'pi', session: 'author' };
-  const bobBody = { channel: 'pi', session: 'one' };
+  const aliceBody = "pi" + ":" + ('author');
+  const bobBody = "pi" + ":" + ('one');
   let aliceSeat, bobSeat;
   try {
-    aliceSeat = (await artifact.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, facts => {
+    aliceSeat = (await artifact.transactAs({ kind: 'join', participant: 'Alice', owner: aliceBody }, facts => {
       facts.land({ kind: 'join', actor: 'Alice', at: 1 });
       return facts.seat('Alice');
     })).value;
-    bobSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bob', body: bobBody }, facts => {
+    bobSeat = (await artifact.transactAs({ kind: 'join', participant: 'Bob', owner: bobBody }, facts => {
       facts.land({ kind: 'join', actor: 'Bob', at: 2 });
       return facts.seat('Bob');
     })).value;
@@ -43,7 +44,7 @@ async function fixture(t, leaseMs, hasPending = true) {
   await rememberSquarePath(file, aliceBody, env.SQUARE_INDEX);
   const observer = await observeSessionPending(bobBody, env);
   t.after(() => observer.close());
-  const bind = (session = 'one') => rememberSquarePath(file, { channel: 'pi', session }, env.SQUARE_INDEX);
+  const bind = (session = 'one') => rememberSquarePath(file, harnessOwner({ channel: 'pi', session }), env.SQUARE_INDEX);
   return { file, root, env, observer, bind };
 }
 
@@ -51,10 +52,10 @@ async function markPresentation(item, activity, outcome) {
   const artifact = createArtifactPort(item.file);
   try {
     const { value: seat } = await artifact.read((facts) => facts.seat('Bob'));
-    const claim = await artifact.claimDelivery({ seat: { participant: seat.participant, body: seat.body, generation: seat.generation },
+    const claim = await artifact.claimDelivery({ seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation },
       activity: `act/${activity}`, kind: 'presentation', at: Date.now(), leaseMs: 1000, claimToken: `presentation-${activity}` });
     assert.equal(claim.status, 'acquired');
-    assert.equal(await artifact.completeDelivery({ seat: { participant: seat.participant, body: seat.body, generation: seat.generation },
+    assert.equal(await artifact.completeDelivery({ seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation },
       activity: `act/${activity}`, claimToken: claim.claimToken, outcome, at: Date.now() }), true);
   } finally { await artifact.close(); }
 }
@@ -66,15 +67,13 @@ function armedWait(observer, options = {}, timeoutMs = 4_000) {
   return { ready, pending };
 }
 
-test('several exact bodies on one canonical artifact share one coherent projection transaction', async t => {
+test('several names owned by one owner share one coherent projection transaction', async t => {
   const item = await fixture(t);
   await item.bind();
   const writer = createArtifactPort(item.file);
   try {
-    for (const [participant, agent] of [['Cara', 'child-a'], ['Dana', 'child-b']]) {
-      const body = { channel: 'pi', session: 'one', agent };
-      await writer.transactAs({ kind: 'join', participant, body }, facts => facts.land({ kind: 'join', actor: participant, at: 4 }));
-      await rememberSquarePath(item.file, body, item.env.SQUARE_INDEX);
+    for (const participant of ['Cara', 'Dana']) {
+      await writer.transactAs({ kind: 'join', participant, owner: 'pi:one' }, facts => facts.land({ kind: 'join', actor: participant, at: 4 }));
     }
     const alice = (await writer.read(facts => facts.seat('Alice'))).value;
     await writer.transactAs({ kind: 'participant', seat: alice }, facts =>
@@ -82,7 +81,7 @@ test('several exact bodies on one canonical artifact share one coherent projecti
   } finally { await writer.close(); }
   const alias = path.join(item.root, 'alias.square');
   fs.symlinkSync(item.file, alias);
-  fs.appendFileSync(item.env.SQUARE_INDEX, `${JSON.stringify({ location: alias, body: { channel: 'pi', session: 'one' } })}\n`);
+  fs.appendFileSync(item.env.SQUARE_INDEX, `${JSON.stringify({ location: alias, owner: 'pi:one' })}\n`);
 
   // Count connections AND transactions, not notification hydration alone: the old path
   // hydrated each recipient once while still reopening the same artifact in several stages.
@@ -98,19 +97,19 @@ test('several exact bodies on one canonical artifact share one coherent projecti
     return prepare.call(this, sql, ...args);
   });
   const reset = () => { connections = new Set(); selecting = new Set(); transactions = 0; sayHydrations = 0; };
-  const query = { channel: 'pi', session: 'one', allAgents: true };
-  const inbox = await sessionInbox(query, item.env);
+  const owner = 'pi:one';
+  const inbox = await sessionInbox(owner, item.env);
   assert.deepEqual(inbox.map(member => member.seat.participant), ['Bob', 'Cara', 'Dana']);
-  assert.deepEqual(inbox.map(member => member.seat.body.agent), [undefined, 'child-a', 'child-b']);
+  assert.ok(inbox.every(member => member.seat.owner === owner));
   assert.ok(inbox.every(member => member.notifications.at(-1).body === 'all exact bodies'));
   assert.equal(connections.size, 1);
   assert.equal(transactions, 1);
   reset();
-  assert.equal((await projectSessionSeats({ channel: 'pi', sessionId: 'one', env: item.env })).length, 3);
+  assert.equal((await projectSessionSeats({ owner, env: item.env })).length, 3);
   assert.equal(transactions, 1, 'lifecycle consumers resolve all located seats in one transaction');
   assert.equal(sayHydrations, 0, 'lifecycle does not load pending say bodies');
   reset();
-  const summary = await publicInbox({ env: item.env }, 'one', { limit: 2 });
+  const summary = await publicInbox({ env: item.env }, owner, { limit: 2 });
   assert.equal(transactions, 1, 'count-only public inbox does not reopen per seat');
   assert.equal(sayHydrations, 0, 'public counts do not load pending say bodies');
   assert.deepEqual(summary, { rows: [
@@ -118,7 +117,7 @@ test('several exact bodies on one canonical artifact share one coherent projecti
     { name: 'Cara', squarePath: fs.realpathSync(item.file), pending: 1 },
   ], total: 3 });
   reset();
-  const observer = await observeSessionPending(query, item.env);
+  const observer = await observeSessionPending(owner, item.env);
   t.after(() => observer.close());
   assert.equal((await observer.read()).length, 3);
   assert.equal(transactions, 1, 'explicit current reads combine binding, pending and eligibility');
@@ -136,8 +135,8 @@ test('boundary batch rendering excludes cancelled and replaced seats before any 
   await item.bind();
   const writer = createArtifactPort(item.file);
   t.after(() => writer.close());
-  const body = { channel: 'pi', session: 'one' };
-  for (const participant of ['Cara', 'Dana']) await writer.transactAs({ kind: 'join', participant, body }, facts =>
+  const body = "pi" + ":" + ('one');
+  for (const participant of ['Cara', 'Dana']) await writer.transactAs({ kind: 'join', participant, owner: body }, facts =>
     facts.land({ kind: 'join', actor: participant, at: 4 }));
   const alice = (await writer.read(facts => facts.seat('Alice'))).value;
   const landed = await writer.transactAs({ kind: 'participant', seat: alice }, facts =>
@@ -147,9 +146,9 @@ test('boundary batch rendering excludes cancelled and replaced seats before any 
   assert.ok(batch.every(member => member.joinedAt > 0 && member.seat.generation));
   const bob = batch[0];
   assert.deepEqual(await projectBoundaryEligibility([{ ...bob, seat: { ...bob.seat,
-    body: { ...body, agent: 'not-this-body' } } }]), [], 'same generation never substitutes for exact Body');
+    owner: 'not-this-owner' } }]), [], 'same generation never substitutes for exact owner');
   await writer.cancelDeliveries(batch[1].seat);
-  await writer.transactAs({ kind: 'takeover', participant: 'Dana', body, expectedGeneration: batch[2].seat.generation }, facts => {
+  await writer.transactAs({ kind: 'takeover', participant: 'Dana', owner: body, expectedGeneration: batch[2].seat.generation }, facts => {
     facts.land({ kind: 'done', actor: 'Dana', at: 6 });
     facts.land({ kind: 'join', actor: 'Dana', at: 7 });
   });
@@ -264,7 +263,7 @@ test('an unrelated index entry leaves projections cold while activity in a candi
   });
   const otherFile = path.join(item.root, 'unrelated.square');
   fs.copyFileSync(item.file, otherFile);
-  await rememberSquarePath(otherFile, { channel: 'pi', session: 'unrelated' }, item.env.SQUARE_INDEX);
+  await rememberSquarePath(otherFile, "pi" + ":" + ('unrelated'), item.env.SQUARE_INDEX);
   assert.deepEqual(await waiting.pending, []);
   assert.equal(activitySnapshots, 0, 'an unrelated body must not hydrate activity history');
 
@@ -366,7 +365,7 @@ test('an unreadable candidate stays quiet across reconciliation and repair resto
   const corruptFile = path.join(item.root, 'CORRUPT.square');
   fs.writeFileSync(corruptFile, 'not a SQLite artifact');
   await item.bind();
-  await rememberSquarePath(corruptFile, { channel: 'pi', session: 'one' }, item.env.SQUARE_INDEX);
+  await rememberSquarePath(corruptFile, "pi" + ":" + ('one'), item.env.SQUARE_INDEX);
   await assert.rejects(readSquareRevision(corruptFile), { code: 'invalid_args' });
   let snapshotReads = 0;
   const prepare = DatabaseSync.prototype.prepare;
@@ -392,8 +391,8 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   const item = await fixture(t, undefined, false);
   const cell = createArtifactPort(item.file);
   t.after(() => cell.close());
-  const caraBody = { channel: 'test', session: 'cara' };
-  const cara = (await cell.transactAs({ kind: 'join', participant: 'Cara', body: caraBody }, facts => {
+  const caraBody = "test" + ":" + ('cara');
+  const cara = (await cell.transactAs({ kind: 'join', participant: 'Cara', owner: caraBody }, facts => {
     facts.land({ kind: 'join', actor: 'Cara', at: now });
     return facts.seat('Cara');
   })).value;
@@ -405,7 +404,7 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   const bob = (await cell.read(facts => facts.seat('Bob'))).value;
   await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.putLease('Bob', { leaseId: 'alice-catch', heartbeatAt: now, expiresAt: now + 400, filter: { participants: ['Alice'] } }, bob.generation));
   await item.bind();
-  const complete = await sessionInbox({ channel: 'pi', session: 'one' }, item.env);
+  const complete = await sessionInbox("pi" + ":" + ('one'), item.env);
   assert.equal(complete[0].notifications.length, 106, 'storage pages must not shrink the initial boundary key set');
   const eligible = await item.observer.wait(1000);
   assert.deepEqual(eligible[0].notifications.map((note) => note.body), ['later eligible']);
@@ -435,7 +434,7 @@ test('an unrepaired candidate respects timeout and cancellation', async (t) => {
 
 test('a takeover between revision capture and projection uses the new exact-body seat', async t => {
   const item = await fixture(t, undefined, false);
-  const body = { channel: 'pi', session: 'two', agent: 'new-child' };
+  const body = "pi" + ":" + ('two') + ":agent:new-child";
   await rememberSquarePath(item.file, body, item.env.SQUARE_INDEX);
   const observer = await observeSessionPending(body, item.env);
   const writer = createArtifactPort(item.file);
@@ -452,7 +451,7 @@ test('a takeover between revision capture and projection uses the new exact-body
     if (++captured === 2) {
       assert.equal(selections, 0, 'both revision baselines must be captured before authoritative selection');
       transition = (async () => {
-        await writer.transactAs({ kind: 'takeover', participant: 'Bob', body, expectedGeneration: seats.bob.generation }, facts => {
+        await writer.transactAs({ kind: 'takeover', participant: 'Bob', owner: body, expectedGeneration: seats.bob.generation }, facts => {
           facts.land({ kind: 'done', actor: 'Bob', at: 4 });
           facts.land({ kind: 'join', actor: 'Bob', at: 5 });
         });
@@ -470,20 +469,20 @@ test('a takeover between revision capture and projection uses the new exact-body
   assert.ok(transition);
   await transition;
   assert.equal(pending[0].seat.generation, 'act/3');
-  assert.deepEqual(pending[0].seat.body, body);
+  assert.deepEqual(pending[0].seat.owner, body);
   assert.deepEqual(pending[0].notifications.map(note => note.body), ['new generation pending']);
 });
 
 test('a takeover after empty binding selection cannot be hidden behind a newer revision baseline', async t => {
   const item = await fixture(t, undefined, false);
-  const body = { channel: 'pi', session: 'two' };
-  await item.bind(body.session);
+  const body = "pi" + ":" + ('two');
+  await item.bind('two');
   const observer = await observeSessionPending(body, item.env);
   const writer = createArtifactPort(item.file);
   t.after(async () => { observer.close(); await writer.close(); });
   const { value: seats } = await writer.read(facts => ({ bob: facts.seat('Bob'), alice: facts.seat('Alice') }));
   const transfer = async () => {
-    await writer.transactAs({ kind: 'takeover', participant: 'Bob', body, expectedGeneration: seats.bob.generation }, facts => {
+    await writer.transactAs({ kind: 'takeover', participant: 'Bob', owner: body, expectedGeneration: seats.bob.generation }, facts => {
       facts.land({ kind: 'done', actor: 'Bob', at: 4 });
       facts.land({ kind: 'join', actor: 'Bob', at: 5 });
     });
@@ -498,7 +497,7 @@ test('a takeover after empty binding selection cannot be hidden behind a newer r
       const all = statement.all;
       t.mock.method(statement, 'all', function (...values) {
         const rows = all.apply(this, values);
-        if (transition === undefined && values[1] === JSON.stringify(body.session) && rows.length === 0)
+        if (transition === undefined && values.includes(JSON.stringify(body)) && rows.length === 0)
           transition = transfer();
         return rows;
       });
@@ -518,7 +517,7 @@ test('a takeover after empty binding selection cannot be hidden behind a newer r
 
 test('cancellation leaves another observer alive and an index candidate cannot transfer custody', async (t) => {
   const item = await fixture(t);
-  const otherBody = { channel: 'pi', session: 'two' };
+  const otherBody = "pi" + ":" + ('two');
   const other = await observeSessionPending(otherBody, item.env);
   t.after(() => other.close());
   const cancelled = new AbortController();
@@ -536,7 +535,7 @@ test('cancellation leaves another observer alive and an index candidate cannot t
   const artifact = createArtifactPort(item.file);
   try {
     const prior = (await artifact.read((facts) => facts.seat('Bob'))).value;
-    await artifact.transactAs({ kind: 'takeover', participant: 'Bob', body: otherBody, expectedGeneration: prior.generation }, facts => {
+    await artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: otherBody, expectedGeneration: prior.generation }, facts => {
       facts.land({ kind: 'done', actor: 'Bob', at: Date.now() });
       facts.land({ kind: 'join', actor: 'Bob', at: Date.now() });
     });

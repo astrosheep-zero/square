@@ -51,9 +51,9 @@ test('new artifacts own only the closed current schema, preserve explicit import
 
 test('memory and file callbacks are synchronous, atomic, ordered, detached and expire after completion', async t => {
   for (const port of await cells(t)) {
-    const body = { channel: 'test', session: 'alice' };
+    const body = "test" + ":" + ('alice');
     let escaped;
-    const joined = await port.transactAs({ kind: 'join', participant: 'Alice', body }, facts => {
+    const joined = await port.transactAs({ kind: 'join', participant: 'Alice', owner: body }, facts => {
       escaped = facts;
       return facts.land({ kind: 'join', actor: 'Alice', at: 1 });
     });
@@ -87,7 +87,7 @@ test('settlement has a bounded independent lifetime without losing authority or 
   const controller = new AbortController();
   const port = createArtifactPort(file, undefined, controller.signal), peer = createArtifactPort(file);
   t.after(() => Promise.all([port.close(), peer.close()]));
-  await port.transactAs({ kind: 'join', participant: 'Alice', body: { channel: 'test', session: 'alice' } },
+  await port.transactAs({ kind: 'join', participant: 'Alice', owner: ':' },
     facts => facts.land({ kind: 'join', actor: 'Alice', at: 1 }));
   const seat = (await port.read(facts => facts.seat('Alice'))).value;
   const authority = { kind: 'participant', seat };
@@ -110,9 +110,9 @@ test('settlement has a bounded independent lifetime without losing authority or 
 
 test('exact canonical receipts, immutable first timestamps and small-value no-op writes preserve revision', async t => {
   for (const port of await cells(t)) {
-    const aliceBody = { channel: 'test', session: 'alice' }, bobBody = { channel: 'test', session: 'bob' };
-    await port.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, facts => facts.land({ kind: 'join', actor: 'Alice', at: 0 }));
-    await port.transactAs({ kind: 'join', participant: 'Bob', body: bobBody }, facts => facts.land({ kind: 'join', actor: 'Bob', at: 1 }));
+    const aliceBody = "test" + ":" + ('alice'), bobBody = "test" + ":" + ('bob');
+    await port.transactAs({ kind: 'join', participant: 'Alice', owner: aliceBody }, facts => facts.land({ kind: 'join', actor: 'Alice', at: 0 }));
+    await port.transactAs({ kind: 'join', participant: 'Bob', owner: bobBody }, facts => facts.land({ kind: 'join', actor: 'Bob', at: 1 }));
     const alice = (await port.read(facts => facts.seat('Alice'))).value;
     const l = { leaseId: 'one', heartbeatAt: 2, expiresAt: 3, filter: { participants: ['Bob'], mention: 'Alice' } };
     await port.transactAs({ kind: 'participant', seat: alice }, w => { assert.equal(w.markSeen('ALICE', [0, 1], 1.5), 2); assert.equal(w.putLease('alice', l), true); });
@@ -153,7 +153,7 @@ test('known legacy and unsupported framing refuse writes without changing bytes;
   const missing = location(t), absent = createArtifactPort(missing);
   t.after(() => absent.close());
   let called = false;
-  await assert.rejects(absent.transactAs({ kind: 'join', participant: 'Alice', body: { channel: 'test', session: 'alice' } }, () => { called = true; }), e => e.code === 'not_found');
+  await assert.rejects(absent.transactAs({ kind: 'join', participant: 'Alice', owner: ':' }, () => { called = true; }), e => e.code === 'not_found');
   assert.equal(called, false);
   assert.equal(fs.existsSync(missing), false);
 });
@@ -173,8 +173,8 @@ test('selected-row corruption is isolated from header reads, while doctor inspec
   await assert.rejects(port.read(r => r.activity(0)), /malformed/);
   assert.match((await diagnoseSquareFile(file)).unfixable, /malformed/);
   await writeSquareFile(file, empty());
-  const aliceBody = { channel: 'test', session: 'alice' };
-  await port.transactAs({ kind: 'join', participant: 'Alice', body: aliceBody }, w => w.land({ kind: 'join', actor: 'Alice', at: 1 }));
+  const aliceBody = "test" + ":" + ('alice');
+  await port.transactAs({ kind: 'join', participant: 'Alice', owner: aliceBody }, w => w.land({ kind: 'join', actor: 'Alice', at: 1 }));
   const corrupt = new DatabaseSync(file);
   try { corrupt.exec('UPDATE participants SET say_count=3'); } finally { corrupt.close(); }
   assert.match((await diagnoseSquareFile(file)).unfixable, /participants.*inconsistent/);

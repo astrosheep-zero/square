@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { squareInput, commandIdentity } from '../dist/cli/context.js';
-import { Square } from '../dist/square-api.js';
+import { Square, localUserOwner, harnessOwner } from '../dist/square-api.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
 import {
   ROOT,
@@ -33,24 +33,22 @@ test('CLI passes harness identity to operations rather than the resource', () =>
 
   for (const [variable, channel, session] of coordinates) {
     const input = inputFor({ [variable]: ` ${session} ` });
-    assert.deepEqual(input.body, { channel, session }, variable);
+    assert.deepEqual(input.owner, `${channel}:${session}`, variable);
     if (channel === 'paseo') assert.deepEqual(input.wakeAddress, { kind: 'paseo', address: { agentId: session } }, variable);
     if (channel === 'codex') assert.deepEqual(input.wakeAddress, { kind: 'codex-queue', address: { threadId: session, codexHome: path.join(os.homedir(), '.codex') } }, variable);
   }
   const nativeWithPaseo = inputFor({ CODEX_THREAD_ID: 'codex-session', PASEO_AGENT_ID: 'paseo-agent',
     CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' });
-  assert.deepEqual(nativeWithPaseo.body, { channel: 'codex', session: 'codex-session' });
+  assert.deepEqual(nativeWithPaseo.owner, 'codex:codex-session');
   assert.deepEqual(nativeWithPaseo.wakeAddress, { kind: 'codex-queue', address: {
     threadId: 'codex-session', codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock',
   } });
   assert.equal(inputFor({ CODEX_THREAD_ID: 'home-default', HOME: '/recipient' }).wakeAddress.address.codexHome, '/recipient/.codex');
   const withoutCoordinate = inputFor({ SQUARE_PARTICIPANT_NAME: 'Alice' });
-  assert.equal(Object.hasOwn(withoutCoordinate, 'body'), false);
+  assert.equal(withoutCoordinate.owner, localUserOwner());
   assert.equal(Object.hasOwn(withoutCoordinate, 'wakeAddress'), false);
   assert.throws(() => inputFor({ CLAUDE_CODE_SESSION_ID: 'claude', CODEX_THREAD_ID: 'codex' }), /Multiple harness execution coordinates/);
-  const childWithoutAgent = inputFor({ CLAUDE_CODE_SESSION_ID: 'claude', CLAUDE_CODE_CHILD_SESSION: '1', PASEO_AGENT_ID: 'top-level-paseo' });
-  assert.equal(Object.hasOwn(childWithoutAgent, 'body'), false);
-  assert.equal(Object.hasOwn(childWithoutAgent, 'wakeAddress'), false);
+  assert.throws(() => inputFor({ CLAUDE_CODE_SESSION_ID: 'claude', CLAUDE_CODE_CHILD_SESSION: '1', PASEO_AGENT_ID: 'top-level-paseo' }), /incomplete/);
 });
 
 test('CLI read-only opens need no identity; participant writes do', async () => {
@@ -61,7 +59,7 @@ test('CLI read-only opens need no identity; participant writes do', async () => 
   }));
   try {
     assert.equal((await square.snapshot()).participants.length, 0);
-    await assert.rejects(square.join('Alice', {}), /explicit body: channel and session/);
+    await assert.rejects(square.join('Alice', {}), /explicit owner/);
   } finally { await square.close(); }
 });
 
@@ -77,7 +75,7 @@ test('CLI test runner does not inherit the parent execution identity', async () 
     const artifact = createArtifactPort(file);
     try {
       const seat = (await artifact.read((facts) => facts.seat('Alice'))).value;
-      assert.deepEqual(seat?.body, { channel: 'codex', session: path.resolve(file) });
+      assert.deepEqual(seat?.owner, harnessOwner({ channel: 'codex', session: path.resolve(file) }));
     } finally { await artifact.close(); }
   } finally {
     if (previous === undefined) delete process.env.CODEX_THREAD_ID;
@@ -98,8 +96,8 @@ test('participants renders roster names without mention syntax', () => {
 
 test('bare activities land without an audience and listeners receive later bare activity', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { body, wakeAddress });
-    await square.join('Bob', { body, wakeAddress });
+    await square.join('Alice', { owner: body, wakeAddress });
+    await square.join('Bob', { owner: body, wakeAddress });
   });
   const bareWithoutListener = run(withName(file, 'Alice', ['express', 'bare thought']));
   assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);
@@ -152,7 +150,7 @@ test('catch limit is bounded and mention is boolean', () => {
 
 test('listener commands do not rejoin a participant who already left', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const bob = (await square.join('Bob', { body, wakeAddress })).participant;
+    const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
     await bob.done();
   });
   const before = run(withPath(file, ['history', '--no-truncate']));
@@ -348,7 +346,7 @@ test('CLI flags override Square location and participant environment values', as
   const artifact = createArtifactPort(explicit);
   try {
     const seat = (await artifact.read((facts) => facts.seat('Explicit'))).value;
-    assert.deepEqual(seat?.body, { channel: 'codex', session: path.resolve(explicit) });
+    assert.deepEqual(seat?.owner, harnessOwner({ channel: 'codex', session: path.resolve(explicit) }));
   } finally { await artifact.close(); }
 });
 
@@ -426,11 +424,11 @@ test('join and catch preserve CLI behavior while seat ownership follows the acti
   try {
     const seats = (await artifact.read((facts) => ({
       current: facts.seat('Bob'),
-      oldBody: facts.seatsForBody({ channel: 'codex', session: 'codex-bob' }),
-      newBody: facts.seatsForBody({ channel: 'codex', session: 'codex-other' }),
+      oldBody: facts.seatsForOwner("codex" + ":" + ('codex-bob')),
+      newBody: facts.seatsForOwner("codex" + ":" + ('codex-other')),
     }))).value;
     assert.equal(seats.oldBody.length, 0);
-    assert.deepEqual(seats.current?.body, { channel: 'codex', session: 'codex-other' });
+    assert.deepEqual(seats.current?.owner, "codex" + ":" + ('codex-other'));
     assert.equal(seats.newBody.length, 1);
     assert.equal(seats.newBody[0].participant, 'Bob');
   } finally { await artifact.close(); }
@@ -448,7 +446,7 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   assert.deepEqual(fs.readFileSync(file), before, 'archive reading must not claim or consume');
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
   assert.equal(caught.status, 2, caught.stdout);
-  assert.match(caught.stderr, /not held by this body/);
+  assert.match(caught.stderr, /not held by this owner/);
   assert.doesNotMatch(caught.stderr, /error/i);
   assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join`));
   assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
@@ -456,9 +454,9 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   try {
     const seats = (await artifact.read((facts) => ({
       current: facts.seat('Alice'),
-      worker: facts.seatsForBody({ channel: 'codex', session: 'worker' }),
+      worker: facts.seatsForOwner("codex" + ":" + ('worker')),
     }))).value;
-    assert.deepEqual(seats.current?.body, { channel: 'codex', session: 'coordinator' });
+    assert.deepEqual(seats.current?.owner, "codex" + ":" + ('coordinator'));
     assert.equal(seats.worker.length, 0);
   } finally { await artifact.close(); }
   const foreign = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'wrong speaker']), { env: worker });
@@ -481,7 +479,7 @@ test('join --kick replaces a participant seat after a different body is refused'
 
   const rejected = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'before']), { env: caller });
   assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /not held by this body/);
+  assert.match(rejected.stderr, /not held by this owner/);
   const reconnect = run(withName(file, 'Alice', ['join']), { env: caller });
   assert.equal(reconnect.status, 2);
   assert.match(reconnect.stderr, /join --kick/);
@@ -495,12 +493,12 @@ test('join --kick replaces a participant seat after a different body is refused'
   try {
     const seats = (await currentArtifact.read((facts) => ({
       current: facts.seat('Alice'),
-      oldBody: facts.seatsForBody({ channel: 'pi', session: 'standing-pi' }),
-      newBody: facts.seatsForBody({ channel: 'codex', session: 'new-codex' }),
+      oldBody: facts.seatsForOwner("pi" + ":" + ('standing-pi')),
+      newBody: facts.seatsForOwner("codex" + ":" + ('new-codex')),
     }))).value;
     takeoverSeat = seats.current;
     assert.equal(seats.oldBody.length, 0);
-    assert.deepEqual(takeoverSeat?.body, { channel: 'codex', session: 'new-codex' });
+    assert.deepEqual(takeoverSeat?.owner, "codex" + ":" + ('new-codex'));
     assert.notEqual(takeoverSeat?.generation, originalSeat?.generation);
     assert.equal(seats.newBody.length, 1);
   } finally { await currentArtifact.close(); }
@@ -519,7 +517,7 @@ test('join --kick replaces a participant seat after a different body is refused'
   const finalArtifact = createArtifactPort(file);
   try {
     const seat = (await finalArtifact.read((facts) => facts.seat('Alice'))).value;
-    assert.deepEqual(seat?.body, { channel: 'codex', session: 'new-codex' });
+    assert.deepEqual(seat?.owner, 'codex:new-codex');
     assert.notEqual(seat?.generation, takeoverSeat?.generation);
   } finally { await finalArtifact.close(); }
 });
@@ -542,7 +540,7 @@ test('unknown participant errors end with the join recovery command', () => {
 
 test('an unknown recipient errors with the roster command instead of a join', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { body, wakeAddress });
+    await square.join('Alice', { owner: body, wakeAddress });
   });
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
@@ -554,7 +552,7 @@ test('an unknown recipient errors with the roster command instead of a join', as
 
 test('status offers the full history read only when the latest body is clipped', async () => {
   const short = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
+    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.express('short words', { force: true });
   }, { hardCap: 10 });
   const unclipped = run(withName(short, 'Alice', ['status']));
@@ -564,7 +562,7 @@ test('status offers the full history read only when the latest body is clipped',
 
   // A short body that merely says "more chars" must not look clipped.
   const literal = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
+    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.express('the phrase more chars fits without clipping', { force: true });
   }, { hardCap: 10 });
   const literalStatus = run(withName(literal, 'Alice', ['status']));
@@ -573,7 +571,7 @@ test('status offers the full history read only when the latest body is clipped',
   assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
 
   const clipped = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
+    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.express('x'.repeat(260), { force: true });
   }, { hardCap: 10 });
   const clippedStatus = run(withName(clipped, 'Alice', ['status']));
@@ -605,7 +603,7 @@ test('doctor --fix is not a command', async () => {
 
 test('catch conflicts and removed modes are refused while bare catch is the default now', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { body, wakeAddress });
+    await square.join('Alice', { owner: body, wakeAddress });
   });
   const rejected = [
     ['catch', '--now', '--idle', '1s'],
@@ -626,8 +624,8 @@ test('catch conflicts and removed modes are refused while bare catch is the defa
 
 test('bare catch takes pending activity now and consumes it', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { body, wakeAddress });
-    const bob = (await square.join('Bob', { body, wakeAddress })).participant;
+    await square.join('Alice', { owner: body, wakeAddress });
+    const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
     await bob.express('hello Alice', { mentions: ['Alice'] });
   });
   const caught = run(withName(file, 'Alice', ['catch']));
@@ -700,7 +698,7 @@ test('join rejects removed exhaustive history and bounds --last', async () => {
 
 test('CLI activity selectors accept only canonical textual ids', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
+    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.express('anchor', { force: true, reach: 'bell' });
   });
 

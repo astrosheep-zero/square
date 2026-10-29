@@ -2,10 +2,12 @@ import { stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { createArtifactPort } from './artifact.js';
 import { presentPending } from './presentation-operations.js';
-import { projectSessionCandidates, nativePendingPreview } from './inbox.js';
-import { sameBody, type WakeRoute } from './model.js';
+import { nativePendingPreview } from './inbox.js';
+import { type WakeRoute } from './model.js';
 import { parseActivityId } from './square-core.js';
 import type { DeliveryEvidence, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
+import { decodeHarnessOwner } from './owner.js';
+import { indexedSquareEntries } from './square-index.js';
 import { asSeatRef } from './seats.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
@@ -87,7 +89,7 @@ interface NativeRow {
 function currentPayload(facts: SquareRead, request: WakeRequest): string | undefined {
   const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
   if (seat === undefined || seat.attachment !== 'attached' || evidence === undefined || seat.generation !== evidence.generation
-    || seat.generation !== request.seat.generation || !sameBody(seat.body, request.seat.body)
+    || seat.generation !== request.seat.generation || seat.owner !== request.seat.owner
     || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
     || seat.wakeAddress?.kind !== 'claude-native' || !sameAddress(seat.wakeAddress.address, request.route.address)) return undefined;
   const native = previewFacts(facts, request);
@@ -98,7 +100,11 @@ function currentPayload(facts: SquareRead, request: WakeRequest): string | undef
 
 async function rowsForSession(sessionId: string, env: NodeJS.ProcessEnv, tokens: readonly string[]): Promise<NativeRow[]> {
   const rows: NativeRow[] = [];
-  const paths = new Set((await projectSessionCandidates({ sessionId, channel: 'claude-code', env })).map(candidate => candidate.location));
+  const candidates = (await indexedSquareEntries({}, env)).filter(entry => {
+    const coordinate = decodeHarnessOwner(entry.owner);
+    return coordinate?.channel === 'claude-code' && coordinate.session === sessionId;
+  });
+  const paths = new Set(candidates.map(candidate => candidate.location));
   for (const location of paths) {
     const artifact = createArtifactPort(location);
     try {
