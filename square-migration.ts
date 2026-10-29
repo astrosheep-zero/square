@@ -1,4 +1,4 @@
-import type { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 
 import { openExistingSquareDatabase } from './artifact.js';
@@ -9,8 +9,8 @@ import { formatActivityId, isWakeRouteKind, nameKey, type Seat, type StoredAct, 
 import { parseActivityId } from './square-core.js';
 import { readLegacyHostData, type LegacyDeliveryEvidence, type LegacyHostData } from './square-migration-host-ledger.js';
 import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS } from './square-legacy-framing.js';
-import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, V6_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
-  validateStoredActivity,
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, V6_USER_VERSION, V7_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
+  validateStoredActivity, exportSqliteState, initializeSqlite,
   type SquareRuntimeState, type SquareState } from './square-sqlite.js';
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -150,15 +150,41 @@ function standing(database: DatabaseSync): number {
 }
 
 const ACTIVITY_INDEX_NAMES = ['activity_kind_index', 'activity_actor_index', 'activity_say_actor_index', 'activity_say_time', 'activity_bell_actor_time'] as const;
-function rebuildV2Activities(database: DatabaseSync): void {
+function migrateActivities(database: DatabaseSync): void {
+  // Only activity identity references are deleted. Range watermarks (read.through and
+  // delivery cancellation boundaries) remain meaningful even when their endpoint is gone.
+  for (const table of ['landed_audience', 'receipts', 'delivery_evidence']) {
+    database.exec(`DELETE FROM ${table} WHERE act_index IN (SELECT act_index FROM activities WHERE kind IN ('hold','resume'));`);
+  }
   database.exec([
+    "UPDATE activities SET reply_index=NULL WHERE reply_index IN (SELECT act_index FROM activities WHERE kind IN ('hold','resume'));",
     ...ACTIVITY_INDEX_NAMES.map((name) => `DROP INDEX ${name};`),
-    'ALTER TABLE activities RENAME TO activities_v2;',
+    'ALTER TABLE activities RENAME TO activities_legacy;',
     ACTIVITIES_TABLE_SQL,
-    'INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) SELECT act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json FROM activities_v2 ORDER BY act_index;',
-    'DROP TABLE activities_v2;',
+    "INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) SELECT act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json FROM activities_legacy WHERE kind NOT IN ('hold','resume') ORDER BY act_index;",
+    'DROP TABLE activities_legacy;',
     ...ACTIVITY_INDEXES_SQL.map((sql) => `${sql};`),
   ].join('\n'));
+
+  // Actor-bearing deleted activities and cleared replies can change maintained indices.
+  // Replay surviving facts only, without lowering the authoritative next allocator.
+  const names = database.prepare('SELECT name_key_json,name_json FROM participants').all();
+  const rebuilt = new DatabaseSync(':memory:');
+  try {
+    initializeSqlite(rebuilt, exportSqliteState(database));
+    // Canonical spelling is an established identity fact, not the spelling of
+    // whichever actor activity happens to survive this migration first.
+    const retainName = rebuilt.prepare('UPDATE participants SET name_json=? WHERE name_key_json=?');
+    for (const row of names) retainName.run(row.name_json, row.name_key_json);
+    for (const table of ['participants', 'attention', 'landed_audience']) {
+      database.exec(`DELETE FROM ${table};`);
+      for (const row of rebuilt.prepare(`SELECT * FROM ${table}`).all()) {
+        const columns = Object.keys(row);
+        database.prepare(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`)
+          .run(...Object.values(row));
+      }
+    }
+  } finally { rebuilt.close(); }
 }
 
 function validateCurrentFraming(database: DatabaseSync, location: string): void {
@@ -326,7 +352,7 @@ function inspectLegacyRowArtifact(database: DatabaseSync, location: string, host
   const driver = createSqliteDriver(database);
   let activityCount = 0;
   let previous = -1;
-  for (const row of database.prepare('SELECT act_index FROM activities ORDER BY act_index').iterate() as Iterable<Record<string, unknown>>) {
+  for (const row of database.prepare("SELECT act_index FROM activities WHERE kind NOT IN ('hold','resume') ORDER BY act_index").iterate() as Iterable<Record<string, unknown>>) {
     const index = sourceInteger(row.act_index);
     assertSource(index > previous && index < nextActIndex, 'activity index is malformed or unassigned.');
     const activity = driver.activity(index);
@@ -429,7 +455,7 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
     if (native && seat !== undefined && harness !== undefined && seat.owner !== harnessOwner({ channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session, ...(source.agent === undefined ? {} : { agent: source.agent }) })) continue;
     const joined = establishingJoin(driver, participant);
     const generation = formatActivityId(joined);
-    if (index <= joined || driver.activity(index)?.kind !== 'say' || driver.directedAt(participant.name, index) === undefined) continue;
+    if (index <= joined || driver.activityHeads({ indexes: [index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items.length === 0 || driver.directedAt(participant.name, index) === undefined) continue;
     if (participant.done) {
       const done = driver.activityHeads({ actors: [participant.name], kinds: ['done'] }, { edge: 'newest', limit: 1 }).items[0];
       if (done === undefined || index >= done.index) continue;
@@ -524,11 +550,12 @@ function upgradeRowArtifact(database: DatabaseSync, location: string, plan: RowM
   importOwnershipAndEvidence(database, plan);
   database.exec('DROP TABLE routes;');
   database.exec(DELIVERY_DEFERRALS_SQL);
+  migrateActivities(database);
   database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
   validateCurrentFraming(database, location);
 }
 
-function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | 6 | undefined {
+function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | 6 | 7 | undefined {
   const before = identity(database);
   if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
   if (before.userVersion === V2_USER_VERSION || before.userVersion === V3_USER_VERSION) {
@@ -536,7 +563,7 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
     if (issue !== undefined) throw invalidArtifact(issue);
     return before.userVersion;
   }
-  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION || before.userVersion === V6_USER_VERSION) {
+  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION || before.userVersion === V6_USER_VERSION || before.userVersion === V7_USER_VERSION) {
     validateRowFraming(database, before.userVersion, location);
     return before.userVersion;
   }
@@ -550,8 +577,10 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
 /**
  * Explicit conversion of the supported legacy formats. Row-backed versions 2 and 3 are
  * preflighted read-only, then receive ownership/evidence and deferral storage in one
- * format-7 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
+ * format-8 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
  * All legacy seats are encoded as opaque owners, preserving format-6 attachment.
+ * Every source drops obsolete activities and their identity references, clears dangling
+ * replies and rebuilds derived indices; surviving ids and allocation watermarks remain stable.
  * Legacy delivery evidence is copied from HostLedger only when its owner/session mapping is
  * unique; no source record is retired. Version 1 is not a supported source for this format transition.
  */
@@ -561,12 +590,13 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
   try {
     const source = await inSqliteTransaction(database, false, () => validateMigrationSource(database, squarePath), value => value, signal);
     if (source === undefined) return { status: 'already-current', standing: standing(database) };
-    if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION) {
+    if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION || source === V7_USER_VERSION) {
       return await inSqliteTransaction(database, true, () => {
         assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');
       }, () => {
         if (source === V4_USER_VERSION) database.exec(DELIVERY_DEFERRALS_SQL);
-        migrateSeatOwnership(database, source);
+        if (source !== V7_USER_VERSION) migrateSeatOwnership(database, source);
+        migrateActivities(database);
         database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
         validateCurrentFraming(database, squarePath);
         return { status: 'migrated' as const, standing: standing(database) };
@@ -587,7 +617,6 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
       assertSource(lockedPlan.sourceToken === plan.sourceToken, 'source changed during migration preflight.');
       result.plan = lockedPlan;
     }, () => {
-      if (source === 2) rebuildV2Activities(database);
       const migratedPlan = result.plan!;
       upgradeRowArtifact(database, squarePath, migratedPlan);
       result.outcome = { status: 'migrated', standing: migratedPlan.standing, counts: migratedPlan.counts };

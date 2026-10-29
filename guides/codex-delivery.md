@@ -40,7 +40,7 @@ an exact owner from `harnessOwner({ channel: 'codex', session })`, not a bare se
 boundary store uses Square's caller-selected `SQUARE_CODEX_BOUNDARIES` file,
 defaulting to `~/.square/codex-boundaries.json`; its JSON observations are not
 conversation storage and are not proof of current native execution or consumption.
-Square's format-7 artifact remains authoritative for membership, attachment and delivery evidence.
+Square's format-8 artifact remains authoritative for membership, attachment and delivery evidence.
 Detached members appear away indefinitely and keep accumulating unread audience, but have no
 write or proactive delivery eligibility until same-owner reattachment. Only a host-confirmed
 permanent deletion uses fenced membership-ending cleanup; Codex SessionEnd is not that proof.

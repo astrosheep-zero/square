@@ -51,7 +51,7 @@ export function renderJoinResult(data: JoinPresentation, owner?: string): string
     ...(after.enrichmentUnavailable ? ['  · joined; recent activity and context are unavailable right now'] : []),
     ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
     ...fallback,
-  ].join('\n'), { participantCount: after.standingCount, held: after.held });
+  ].join('\n'), { participantCount: after.standingCount });
 }
 
 function isGestureOnly(body: string): boolean {
@@ -83,7 +83,7 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     ? `\n  · ${data.unmatchedMentions.map((token) => `@${token} isn't standing here`).join('; ')} — ${activity.mentions.length === 0 && activity.reply === undefined ? 'activity landed bare' : 'left as literal text'}` : '';
   return withPathOutput(projection.location ?? squarePath,
     confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + replyNotice + unmatchedNotice + pending,
-    { participantCount: projection.standingCount, held: projection.held });
+    { participantCount: projection.standingCount });
 }
 
 function continuationCommand(squarePath: string, name: string, options: CatchOptions, owner?: string): string {
@@ -106,7 +106,7 @@ export function renderCatchOutcome(
   const location = projection.location ?? squarePath;
   const name = projection.participant;
   const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
-  const header = { participantCount: projection.standingCount, held: projection.held };
+  const header = { participantCount: projection.standingCount };
   const statusOptions = {
     squarePath: location, name, owner, presence: projection.presence,
     showCatchHint: !projection.deliveryAvailable,
@@ -279,11 +279,6 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
     }
   }
   const cap = data.hardCap === null ? 'unlimited' : `${data.hardCap} each`;
-  const held = data.held;
-  const holdTime = held?.at === undefined ? 'just now' : formatRelativeTime(held.at, data.now);
-  const hold = held !== null
-    ? `· ${held.by === undefined ? 'someone' : participantIdentity(held.by)} raised a hand${held.reason ? ` — ${held.reason}` : ''}${style('dim', ` · ${holdTime}`)}`
-    : undefined;
   const visible = data.latestActivity === undefined
     ? { text: '', bodyClipped: false }
     : renderAmbientEventFacts(data.latestActivity, presentation.viewer, {
@@ -315,13 +310,13 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   ].join(' · ');
   const output = [
     style('dim', counts),
-    ...(hold === undefined ? [] : ['', hold]), '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
+    '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
     ...(data.listening === undefined ? [] : [
       '', style('dim', 'you listen to'),
       ...(data.listening.length === 0 ? ['  ○ not turned toward anyone'] : data.listening.map((name) => `  · ${participantIdentity(name)}`)),
     ]),
   ].join('\n');
-  return withPathOutput(squarePath, output, { participantCount: presentation.standingCount, held: data.held !== null });
+  return withPathOutput(squarePath, output, { participantCount: presentation.standingCount });
 }
 
 export function renderListeningResult(squarePath: string, data: ListeningResult): string | undefined {
@@ -330,7 +325,7 @@ export function renderListeningResult(squarePath: string, data: ListeningResult)
   const body = data.listening.length === 0
     ? `○ ${participantIdentity(projection.participant)} is not turned toward anyone`
     : ['listening', ...data.listening.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
-  return withPathOutput(squarePath, body, { participantCount: projection.standingCount, held: projection.held });
+  return withPathOutput(squarePath, body, { participantCount: projection.standingCount });
 }
 
 export type ListenerVerb = 'listen' | 'ignore' | 'unlisten';
@@ -348,21 +343,16 @@ export function renderListenerChange(squarePath: string, verb: ListenerVerb, dat
       : verb === 'ignore' ? `${actor} already ignores ${target} — only bells will reach you from them`
         : `${actor} is not listening to ${target}`;
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
-    participantCount: projection.standingCount, held: projection.held,
+    participantCount: projection.standingCount,
   });
 }
 
-export type LifecycleVerb = 'hold' | 'resume' | 'done';
-
-export function renderLifecycleResult(squarePath: string, verb: LifecycleVerb, data: LifecycleResult): string | undefined {
+export function renderLifecycleResult(squarePath: string, data: LifecycleResult): string | undefined {
   const projection = data.observation;
   if (projection === undefined) return undefined;
-  const header = { participantCount: projection.standingCount, held: projection.held };
-  if (verb === 'done') {
-    return withPathOutput(projection.location ?? squarePath, `○ you stepped out — your footsteps fade · ${data.activity.id}`, header);
-  }
-  const line = `${renderRoomChangeText(data.activity)} · ${data.activity.id} · just now`;
-  return withPathOutput(projection.location ?? squarePath, verb === 'hold' ? `· ${line}` : `✓ ${line}`, header);
+  return withPathOutput(projection.location ?? squarePath, `○ you stepped out — your footsteps fade · ${data.activity.id}`, {
+    participantCount: projection.standingCount,
+  });
 }
 
 /** The refusal facts a transport has after normalizing a failure, without the live error. */

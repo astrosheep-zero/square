@@ -17,10 +17,10 @@ import { legacyFixtureState, writeV1Artifact } from './fixtures/v1-artifact.js';
 
 const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-async function fixture(participant = 'rei') {
+async function fixture(participant = 'rei', options = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-'));
   const squarePath = path.join(cwd, 'square.square');
-  const square = await Square.build({ path: squarePath, markdown: 'MCP scene' });
+  const square = await Square.build({ path: squarePath, markdown: 'MCP scene', ...options });
   await square.close();
   const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), CODEX_THREAD_ID: `mcp-${participant}` };
   const body = "codex" + ":" + `mcp-${participant}`;
@@ -41,7 +41,7 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name), [
-      'join', 'express', 'catch', 'history', 'attention', 'hold', 'done', 'status',
+      'join', 'express', 'catch', 'history', 'attention', 'done', 'status',
     ]);
     for (const tool of tools) assert.equal(tool.outputSchema, undefined);
     const invalid = await client.callTool({ name: 'express', arguments: { body: 7 } });
@@ -95,7 +95,7 @@ test('one MCP server accepts per-call participants without a configured default'
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, owner: body }));
   try {
     const tools = (await client.listTools()).tools;
-    for (const name of ['join', 'express', 'catch', 'attention', 'hold', 'done', 'status']) {
+    for (const name of ['join', 'express', 'catch', 'attention', 'done', 'status']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
       assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square. Give it explicitly when joining.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
@@ -125,7 +125,7 @@ test('one MCP server accepts per-call participants without a configured default'
     assert.match(listening.content[0].text, /you listen to\n  · @bob/);
     await client.callTool({ name: 'attention', arguments: { as: 'alice', action: 'ignore', target: 'bob' } });
     assert.match((await client.callTool({ name: 'status', arguments: { as: 'alice' } })).content[0].text, /not turned toward anyone/);
-    for (const [name, args] of [['catch', {}], ['hold', {}], ['hold', { release: true }], ['done', {}]]) {
+    for (const [name, args] of [['catch', {}], ['done', {}]]) {
       const result = await client.callTool({ name, arguments: { as: 'alice', ...args } });
       assert.equal(result.isError, undefined, JSON.stringify(result));
       assert.equal(result.structuredContent, undefined);
@@ -305,11 +305,11 @@ test('MCP shares location and noMention parameters with native tools', async (t)
 });
 
 test('MCP cancellation reaches an in-progress application operation', async () => {
-  const { server } = await fixture('aoi');
+  const { server } = await fixture('aoi', { throttlePerMinute: 1 });
   const { client, close } = await connectedClient(server);
   try {
     await client.callTool({ name: 'join', arguments: { as: 'aoi' } });
-    await client.callTool({ name: 'hold', arguments: { reason: 'test cancellation' } });
+    await client.callTool({ name: 'express', arguments: { body: 'first word' } });
     const controller = new AbortController();
     const pending = client.callTool({ name: 'express', arguments: { body: 'waiting' } }, undefined, { signal: controller.signal });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -320,8 +320,8 @@ test('MCP cancellation reaches an in-progress application operation', async () =
   } finally { await close(); }
 });
 
-test('stdio disconnect aborts held express and idle catch without later mutation or consumption', async (t) => {
-  const { cwd, squarePath, env, body } = await fixture('disconnected');
+test('stdio disconnect aborts throttled express and idle catch without later mutation or consumption', async (t) => {
+  const { cwd, squarePath, env, body } = await fixture('disconnected', { throttlePerMinute: 1 });
   const app = await Square.at({ cwd, path: squarePath, env });
   t.after(() => app.close());
   const child = spawn(process.execPath, [path.resolve('dist/square.js'), '--as', 'disconnected', 'mcp-server'], {
@@ -352,9 +352,9 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   await request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'disconnect-test', version: '1' } });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   await request('tools/call', { name: 'join', arguments: { as: 'disconnected' } });
-  await request('tools/call', { name: 'hold', arguments: {} });
+  await request('tools/call', { name: 'express', arguments: { body: 'first word' } });
   await request('tools/call', { name: 'catch', arguments: {} });
-  send('tools/call', { name: 'express', arguments: { body: 'orphan expression', force: true } });
+  send('tools/call', { name: 'express', arguments: { body: 'orphan expression' } });
   send('tools/call', { name: 'catch', arguments: { idle: 60_000 } });
   await request('ping');
   await sleep(100);
@@ -362,7 +362,6 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   const disconnected = once(child, 'exit', { signal: AbortSignal.timeout(3000) });
   child.stdin.end();
   assert.deepEqual(await disconnected, [0, null], stderr);
-  await (await app.participant('disconnected', { owner: body })).resume();
   assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
   const writerBody = "codex" + ":" + ('mcp-writer');
   const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' } });

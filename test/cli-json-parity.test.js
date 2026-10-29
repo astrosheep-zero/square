@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import test from 'node:test';
 
+import { createArtifactPort } from '../dist/artifact.js';
 import { Square, inbox } from '../dist/square-api.js';
 import { commandIdentity } from '../dist/cli/context.js';
-import { CLI, run, testEnv, withName, withPath } from './square-cli-helpers.js';
+import { run, testEnv, withName, withPath } from './square-cli-helpers.js';
 
 const traceModule = path.resolve(import.meta.dirname, 'fixtures/cli-json-trace.js');
 const session = 'cli-json-parity';
@@ -22,7 +22,7 @@ function serializable(result) {
   return JSON.parse(JSON.stringify(data));
 }
 
-async function fixture(t, hardCap = null) {
+async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-json-'));
   const file = path.join(cwd, 'SQUARE.square');
   const trace = path.join(cwd, 'trace.ndjson');
@@ -31,7 +31,7 @@ async function fixture(t, hardCap = null) {
     NODE_OPTIONS: `--import=${traceModule}`, SQUARE_JSON_TRACE: trace });
   const identity = commandIdentity(env);
   assert.deepEqual(identity.owner, body);
-  const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, env });
+  const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, ...(throttlePerMinute === undefined ? {} : { throttlePerMinute }), env });
   await square.close();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
 
@@ -111,13 +111,11 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.equal(ignored.activity.target, 'Bob');
     assert.equal((await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'))).activity, null);
   });
-  await t.test('hold, status, participants, resume and done', async () => {
-    await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { owner: body })).hold('pause'));
+  await t.test('status, participants and done', async () => {
     const status = await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }));
-    assert.equal(status.held.by, 'Bob');
+    assert.equal(status.participants.length, 2);
     const roster = await f.parity(undefined, ['participants', '--limit', '1'], square => square.participants());
     assert.equal(roster.participants.length, 2, '--limit affects human text only');
-    await f.parity('Bob', ['resume'], async square => (await square.participant('Bob', { owner: body })).resume());
     await f.parity('Bob', ['done'], async square => (await square.participant('Bob', { owner: body })).done());
   });
   await t.test('inbox is the standalone SDK result on the same discovery and artifact state', async () => {
@@ -130,12 +128,31 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
 });
 
 test('catch --json retains the terminal failure exit code and the SDK result', async t => {
-  const f = await fixture(t, 1);
+  const f = await fixture(t, { hardCap: 1 });
   await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   await f.parity('Alice', ['express', '--force', 'one'], async square => (await square.participant('Alice', { owner: body })).express('one', { force: true }));
   const result = await f.parity('Alice', ['catch'], async square => (await square.participant('Alice', { owner: body })).catch({ limit: 10 }), 1);
   assert.equal(result.reason, 'capped');
+});
+
+test('a throttled waiting express leaves stdout as one JSON document', async t => {
+  const f = await fixture(t, { throttlePerMinute: 1 });
+  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  const artifact = createArtifactPort(f.file);
+  try {
+    const seat = (await artifact.read(facts => facts.seat('Alice'))).value;
+    await artifact.transactAs({ kind: 'participant', seat }, facts =>
+      facts.land({ kind: 'say', actor: 'Alice', at: Date.now() - 58_000, body: 'first', mentions: [] }));
+  } finally { await artifact.close(); }
+  const env = { ...f.env };
+  delete env.SQUARE_NOW_MS;
+  const result = run(withName(f.file, 'Alice', ['express', '--json', 'patient']), { cwd: f.cwd, env });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const receipt = JSON.parse(result.stdout);
+  assert.equal(receipt.activity.body, 'patient');
+  assert.equal(result.stdout, `${JSON.stringify(receipt)}\n`);
+  assert.match(result.stderr, /your activity is waiting/, 'throttle progress stays off JSON stdout');
 });
 
 test('an active catch keeps its exit code and JSON receipt without disrupting the waiter', async t => {
@@ -159,33 +176,6 @@ test('an active catch keeps its exit code and JSON receipt without disrupting th
     await assert.rejects(waiting, /test finished/);
     await square.close();
   }
-});
-
-test('a successful waiting express leaves stdout as one JSON document', { timeout: 15000 }, async t => {
-  const f = await fixture(t);
-  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['hold', 'pause'], async square => (await square.participant('Bob', { owner: body })).hold('pause'));
-  const child = spawn(process.execPath, [CLI, ...withName(f.file, 'Alice', ['express', '--force', '--json', 'patient'])], {
-    cwd: f.cwd, env: { ...f.env, SQUARE_HELD_WAIT_BUDGET_MS: '30000' }, stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
-  let stdout = '', stderr = '';
-  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  let ready;
-  const progress = new Promise(resolve => { ready = resolve; });
-  child.stderr.on('data', chunk => { stderr += chunk; if (stderr.includes('your activity is waiting')) ready(); });
-  const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  await progress;
-  const square = await Square.at({ path: f.file, env: f.env });
-  try { await (await square.participant('Bob', { owner: body })).resume(); }
-  finally { await square.close(); }
-  assert.equal(await exited, 0, stderr);
-  const receipt = JSON.parse(stdout);
-  assert.equal(receipt.activity.body, 'patient');
-  assert.equal(stdout, `${JSON.stringify(receipt)}\n`);
-  assert.match(stderr, /your activity is waiting/);
 });
 
 test('JSON mode retains human argument errors and exit codes', async t => {

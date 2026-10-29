@@ -23,20 +23,6 @@ function printedCommands(output) {
   return output.split('\n').filter((line) => /^square .* express /.test(line));
 }
 
-test('a held refusal without a reason names the holder and never prints an empty sensory line', async () => {
-  const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { owner: body });
-    const bob = (await square.join('Bob', { owner: body })).participant;
-    await bob.hold();
-  });
-
-  const held = run(withName(file, 'Alice', ['express', '--no-wait', '--no-mention', 'a thought']));
-  assert.equal(held.status, 1, held.stdout + held.stderr);
-  assert.match(held.stdout, /✕ @Bob has a hand raised — voices drop, yours too/);
-  assert.doesNotMatch(held.stdout, /^\s*·\s*$/m);
-  assert.doesNotMatch(held.stdout, /holds its breath/);
-});
-
 test('a bell ignores body @names, including unmatched names, with redundant no-mention allowed', async () => {
   const file = await persistSquare(async ({ square, body }) => {
     await square.join('Alice', { owner: body });

@@ -73,7 +73,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     joined.then(result => result.participantCount);
     // @ts-expect-error old stream fields are not public facts
     ({} as Activity).seq;
-    const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'held', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
+    const codes: SquareError['code'][] = ['invalid_args', 'invalid_name', 'unknown_participant', 'not_joined', 'already_joined', 'already_done', 'capped', 'throttled', 'bell_quota', 'behind', 'io', 'unavailable'];
     void participant; void history; void stream; void directed; void codes;
   `);
   const typecheck = run(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),

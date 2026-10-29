@@ -23,17 +23,6 @@ import {
   testEnv,
 } from '../square-cli-helpers.js';
 
-test('status renders hold duration from the real actor', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const host = (await square.join('Host', { owner: body, wakeAddress })).participant;
-    await host.hold('pause');
-  }, { manualClock: true });
-  const held = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '42000' } });
-  assert.equal(held.status, 0, held.stderr);
-  assert.match(held.stdout, /@Host raised a hand — pause · 42s ago/);
-  assert.doesNotMatch(held.stdout, /12m/);
-});
-
 test('status stays compact and focuses on the current square', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
@@ -835,15 +824,11 @@ test('status header counts only participants still in the square', async () => {
 test('historical body-bearing done events remain readable without becoming catch messages', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
-    const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
-    await bob.hold('pause');
-    await bob.resume();
+    await square.join('Bob', { owner: body, wakeAddress });
   });
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caught.status, 0, caught.stderr);
   assert.doesNotMatch(caught.stdout, /@Bob stepped into the square/);
-  assert.doesNotMatch(caught.stdout, /@Bob raised a hand — pause/);
-  assert.doesNotMatch(caught.stdout, /@Bob lowered the hand/);
 
   // Old artifacts can contain a done body even though new departures are bodyless.
   const artifact = createArtifactPort(file);
@@ -857,26 +842,8 @@ test('historical body-bearing done events remain readable without becoming catch
   assert.match(afterDone.stdout, /✓ everyone else has left — the square is yours alone/);
   assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 0);
   const history = run(withPath(file, ['history', '--no-truncate']));
-  assert.match(history.stdout, /pause/);
   assert.match(history.stdout, /final note/);
   assert.match(run(withName(file, 'Alice', ['status'])).stdout, /final note/);
-});
-
-test('status attention and express blocker agree on unread square changes', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { owner: body, wakeAddress });
-    const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
-    await bob.hold('pause');
-  });
-  const status = run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '200000' } });
-  assert.match(status.stdout, /@Alice.*caught up/);
-  const noWaitAct = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'late body @Bob']), { env: { SQUARE_NOW_MS: '200000' } });
-  assert.match(noWaitAct.stdout, /has a hand raised/);
-  assert.match(noWaitAct.stdout, /draft kept/);
-  assert.equal(run(withName(file, 'Bob', ['resume']), { env: { SQUARE_NOW_MS: '210000' } }).status, 0);
-  const unheld = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', 'after resume @Bob']), { env: { SQUARE_NOW_MS: '220000' } });
-  assert.match(unheld.stdout, /you walk over to @Bob/);
-  assert.doesNotMatch(unheld.stdout, /catch --now/);
 });
 
 test('an unread join alone does not block express', async () => {
@@ -894,14 +861,7 @@ test('an unread join alone does not block express', async () => {
   assert.doesNotMatch(expressed.stdout, /catch --now/);
 });
 
-test('held, throttled, blocked, and capped activities preserve executable drafts', async () => {
-  const heldFile = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { owner: body, wakeAddress });
-    const host = (await square.join('Host', { owner: body, wakeAddress })).participant;
-    await host.hold('pause');
-  }, { hardCap: 10 });
-  assertDraftRecovery(run(withName(heldFile, 'Alice', ['express', '--no-wait', '--mention', 'Host', '-']), { input: 'held body @Host\n' }), heldFile, 'Alice', 'held body @Host\n', "express --no-wait --mention 'Host' -");
-
+test('throttled, blocked, and capped activities preserve executable drafts', async () => {
   const throttleFile = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.express('first @Alice', { force: true, mentions: ['Alice'] });

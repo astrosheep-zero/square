@@ -5,7 +5,7 @@ import type { SquareArtifactPort } from './ports.js';
 import type { Seat } from './model.js';
 
 export type WatchLeaseStart = { readonly type: 'started'; readonly leaseId: string; readonly replaced: boolean; readonly heartbeatAt: number } | { readonly type: 'active' };
-export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'held'; readonly heartbeatAt?: number } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
+export type WatchLeasePulse = { readonly type: 'replaced' } | { readonly type: 'terminal'; readonly status: 'capped' | 'quorum' } | { readonly type: 'sleep'; readonly heartbeatAt?: number };
 
 function newLease(leaseId: string, at: number, options: WatchOptions): WatchLease {
   const filter = { ...(options.participants === undefined ? {} : { participants: [...options.participants] }), ...(options.mention === undefined ? {} : { mention: options.mention }) };
@@ -28,13 +28,11 @@ export async function pulseWatchLease(artifact: SquareArtifactPort, seat: Seat, 
   const { value } = await artifact.transactAs({ kind: 'participant', seat }, facts => {
     const known = resolveKnownName(facts, name), lease = freshWatchLease(facts, known, at);
     if (lease?.leaseId !== leaseId) return { type: 'replaced' } as const;
-    const held = facts.hold().active;
-    const terminal = held ? undefined : watchTerminalStatus(facts, known);
+    const terminal = watchTerminalStatus(facts, known);
     if (terminal !== undefined) return { type: 'terminal', status: terminal } as const;
-    const type = held ? 'held' as const : 'sleep' as const;
-    if (!heartbeatDue) return { type };
+    if (!heartbeatDue) return { type: 'sleep' } as const;
     facts.putLease(known, newLease(leaseId, at, options), seat.generation);
-    return { type, heartbeatAt: at };
+    return { type: 'sleep', heartbeatAt: at } as const;
   }, signal);
   return value;
 }

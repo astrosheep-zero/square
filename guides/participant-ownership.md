@@ -53,7 +53,7 @@ for resource lifetimes and adapter selection.
   failed reattachment does not block the others. A new or forked session has a different owner and
   restores nothing. Hosts never infer restoration from a historical departure.
 - Participant mutations require both the captured generation and an attached current seat.
-  Detach suspends existing handles; they cannot express, catch, listen, hold, leave or change
+  Detach suspends existing handles; they cannot express, catch, listen, leave or change
   deferrals until reattachment. Rejoin/takeover fences old handles permanently, even if the same
   owner later reacquires the name. Host cleanup checks owner and generation inside its transaction;
   stale, foreign, done or already-detached detach changes nothing. Host `cancelDeliveries` also

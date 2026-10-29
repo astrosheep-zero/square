@@ -52,7 +52,6 @@ export type ActDecision =
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped'; count: number; hardCap: number }
   | { type: 'throttled'; delayMs: number }
-  | { type: 'held'; reason: string | undefined }
   | { type: 'bell_quota'; nextAt: number };
 
 /** Count the directed suffix and hydrate only its last activity by index per spelling. */
@@ -124,8 +123,6 @@ export function decideAct(facts: SquareRead, input: { name: string; body?: strin
   // Preserve admission priority after metadata validation.
   if (current.done) throw activityRefusal('already_done', `${name} is already done`);
   if (!current.joined) throw activityRefusal('not_joined', `${name} has not joined this square`);
-  const hold = facts.hold();
-  if (hold.active) return { type: 'held', reason: hold.reason };
   if (header.hardCap !== null && current.sayCount >= header.hardCap) return { type: 'capped', count: current.sayCount, hardCap: header.hardCap };
   if (reach === 'bell') {
     const recent = facts.recentSayTimes(now - 3600000, 1, name, true);
@@ -172,16 +169,6 @@ export function coreUnlisten(facts: SquareRead, actor: string, target: string, n
 export function coreListening(facts: SquareRead, actor: string): readonly string[] {
   const current = resolveStanding(facts, actor);
   return facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target);
-}
-export function coreHold(facts: SquareRead, actor: string, body: string, now: number): TimedAct<'hold'> {
-  const current = resolveStanding(facts, actor);
-  requireStanding(current);
-  return { kind: 'hold', actor: current.name, at: now, body: body.replace(/\r\n/g, '\n').trim() };
-}
-export function coreResume(facts: SquareRead, actor: string, now: number): TimedAct<'resume'> {
-  const current = resolveStanding(facts, actor);
-  requireStanding(current);
-  return { kind: 'resume', actor: current.name, at: now };
 }
 
 export function compareParticipantActivity(a: Pick<ParticipantSummary, 'name' | 'lastActiveAt'>, b: Pick<ParticipantSummary, 'name' | 'lastActiveAt'>): number {

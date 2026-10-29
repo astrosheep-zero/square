@@ -26,8 +26,8 @@ test('new artifacts own only the closed current schema, preserve explicit import
   const weird = 'A\u0000\ud800';
   state.acts = [
     { kind: 'say', actor: weird, body: '\udfff\u0000', at: 0.5, index: 2 },
-    { kind: 'hold', at: -2.5, index: 4 },
-    { kind: 'resume', at: 7, index: 6 },
+    { kind: 'read', actor: weird, through: 2, at: -2.5, index: 4 },
+    { kind: 'done', actor: weird, at: 7, index: 6 },
   ];
   state.runtime.nextActIndex = 10;
   state.runtime.observations = { [weird]: { 'act/8': { state: 'seen', at: 0.25 } }, dormant: { 'act/1': { state: 'seen', at: -0.5 } } };

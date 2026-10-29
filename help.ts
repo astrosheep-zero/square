@@ -43,7 +43,7 @@ const COMMANDS: readonly CommandHelp[] = [
       '',
       'Options:',
       '  -f, --force       Express without first catching unread activity or satisfying attention etiquette.',
-      '  --no-wait         If held or throttled, save a draft and return instead of waiting. A held wait gives up on its own after 10 minutes.',
+      '  --no-wait         If throttled, save a draft and return instead of waiting.',
       '  --metadata <json> Attach a bounded JSON object (at most 16 KiB UTF-8 and 256 nesting levels); it may be the only content.',
       '                    Metadata is returned in structured activity results but is not shown in human text or searchable.',
     ],
@@ -81,8 +81,6 @@ const COMMANDS: readonly CommandHelp[] = [
     summary: 'Show the participant roster and current states.',
     details: ['Options:', '  --limit <count>  Show the first count names in human text (default 20, maximum 100).'],
   },
-  { names: ['hold'], usage: '--as <name> hold [reason | -]', usesSquare: true, group: 'participant', summary: 'Raise a hand and pause participant activity.' },
-  { names: ['resume'], usage: '--as <name> resume', usesSquare: true, group: 'participant', summary: 'Lower the raised hand and resume activity.' },
   {
     names: ['install'], usage: 'install (--all | <target>...) [-f]', group: 'maintenance',
     summary: 'Install Square support for one or more agent hosts.',
@@ -105,7 +103,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
     summary: 'Convert a supported older square to the current format in place.',
-    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2–6 migrate explicitly to format 7; format 6 attachment is preserved and Body coordinates become opaque owners. Versions 4/5 first gain attached seats; 4 also gains empty deferrals. Version 1, unrelated or unsupported artifacts refuse without a write. Names whose legacy owner and routes agree may share an owner; ambiguous names stay standing without custody. Rejoin with the same owner after migration to republish discovery. There is no --check, --backup or --force.'],
+    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2–7 migrate explicitly to format 8. Format 7 migration deletes hold/resume activities and their keyed rows, clears replies to those activities, and preserves surviving activity ids with gaps. Format 6 attachment and opaque-owner conversion are preserved; versions 4/5 first gain attached seats, and 4 also gains empty deferrals. Version 1, unrelated or unsupported artifacts refuse without a write. Names whose legacy owner and routes agree may share an owner; ambiguous names stay standing without custody. Rejoin with the same owner after migration to republish discovery. There is no --check, --backup or --force.'],
   },
 ];
 
@@ -119,7 +117,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'hold', 'resume', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
   ];
@@ -135,7 +133,7 @@ export function renderGlobalHelp(): string {
     'Usage: square [--location <square>] [--as <name>] [--owner <id>] <command> [args...]',
     'Environment: SQUARE_LOCATION sets the CLI local artifact path; square-accessing commands require it or --location. Use --as to select a participant.',
     'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use catch --idle.',
-    'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
+    'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
     ...commandLines,

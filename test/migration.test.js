@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { Square, migrateSquare, diagnoseSquare } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { CURRENT_USER_VERSION, FORMAT6_SCHEMA_SQL } from '../dist/square-sqlite.js';
+import { CURRENT_USER_VERSION, FORMAT6_SCHEMA_SQL, FORMAT7_SCHEMA_SQL } from '../dist/square-sqlite.js';
 import { harnessOwner } from '../dist/owner.js';
 
 const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -18,6 +18,14 @@ function inspect(file, callback) {
 function tables(file) {
   return inspect(file, db => Object.fromEntries(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name").all()
     .map(({ name }) => [name, db.prepare(`SELECT * FROM ${name} ORDER BY 1,2`).all().map(row => ({ ...row }))])));
+}
+function legacyActivities(db) {
+  const rows = db.prepare('SELECT * FROM activities ORDER BY act_index').all();
+  db.exec('DROP TABLE activities;');
+  db.exec(FORMAT7_SCHEMA_SQL.split(';').find(sql => sql.trim().startsWith('CREATE TABLE activities (')) + ';');
+  for (const sql of FORMAT7_SCHEMA_SQL.split(';').filter(sql => /CREATE INDEX activity_/.test(sql))) db.exec(sql + ';');
+  const insert = db.prepare('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)');
+  for (const row of rows) insert.run(...Object.values(row));
 }
 async function preAttachment(t, version) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `square-format${version}-`));
@@ -56,6 +64,7 @@ async function preAttachment(t, version) {
   } finally { await artifact.close(); }
   // Construct a disposable exact older source, never alter a live artifact.
   inspect(file, db => {
+    legacyActivities(db);
     const seats = db.prepare('SELECT * FROM seats').all();
     db.exec('DROP TABLE seats;');
     const definition = FORMAT6_SCHEMA_SQL.split(';').find(sql => sql.trim().startsWith('CREATE TABLE seats ('));
@@ -72,7 +81,7 @@ async function preAttachment(t, version) {
   return { file, input, body };
 }
 
-for (const version of [6, 5, 4]) test(`explicit format ${version} -> 7 preserves every fact, revision and attachment`, async t => {
+for (const version of [6, 5, 4]) test(`explicit format ${version} -> 8 preserves every surviving fact, revision and attachment`, async t => {
   const { file, input, body } = await preAttachment(t, version);
   const before = digest(file), previous = tables(file);
   await assert.rejects(Square.at(input), error => error.facts?.reason === 'migration_required');

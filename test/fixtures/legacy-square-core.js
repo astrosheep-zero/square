@@ -1,8 +1,8 @@
-// Frozen test-only copy of the v1 fold/landed-audience replay semantics from
-// square-core.ts at baseline 99679eb. This is the differential oracle the
-// row-backed landing transition is compared against: do NOT "fix" behavior
-// here, do not import it from production, and do not re-derive the row
-// implementation from it. It is deliberately a plain JS copy so the oracle
+// Test-only copy of the surviving v1 fold/landed-audience replay semantics from
+// square-core.ts at baseline 99679eb, with obsolete activity handling removed.
+// This is the differential oracle the row-backed landing transition is compared
+// against: do NOT "fix" surviving behavior here, import it from production, or
+// re-derive the row implementation from it. It stays a plain JS copy so the oracle
 // survives square-core.ts being replaced by the row-backed runtime.
 //
 // `landingGroups` is the frozen `recipientsAtLanding` algorithm kept as
@@ -142,7 +142,6 @@ function createAccumulator() {
     ordered,
     state: {
       participants: ordered,
-      hold: { active: false },
       joined: [],
       done: [],
       throttleActivityAts: [],
@@ -202,18 +201,6 @@ function applyActivity(accumulator, act) {
         state.bellSayAtsByActor.set(key, current);
       }
       break;
-    case 'hold':
-      state.hold.active = true;
-      state.hold.at = act.at;
-      state.hold.reason = act.body;
-      state.hold.actor = act.actor;
-      break;
-    case 'resume':
-      state.hold.active = false;
-      delete state.hold.at;
-      delete state.hold.reason;
-      delete state.hold.actor;
-      break;
     case 'read':
       if (snapshot !== undefined) {
         snapshot.lastReadThrough = Math.max(snapshot.lastReadThrough, act.through);
@@ -229,7 +216,7 @@ function finishFold(accumulator) {
   return state;
 }
 
-/** Frozen v1 `fold`: participant lifecycle, listening/ignored relations, hold. */
+/** Surviving v1 `fold`: participant lifecycle and listening/ignored relations. */
 export function fold(acts) {
   const accumulator = createAccumulator();
   for (const act of acts) applyActivity(accumulator, act);
@@ -263,7 +250,6 @@ export function replayLandedAudiences(acts) {
     done: state.done,
     listening: state.listening,
     ignored: state.ignored,
-    hold: state.hold,
     sayCount: (name) => state.participants.find((participant) => sameName(participant.name, name))?.activityCount ?? 0,
     lastActiveAt: (name) => state.participants.find((participant) => sameName(participant.name, name))?.lastActiveAt,
     lastJoinIndex: (name) => lastJoinByKey.get(nameKey(name)),

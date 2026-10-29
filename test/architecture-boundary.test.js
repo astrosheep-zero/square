@@ -258,7 +258,6 @@ const integrationEdges = new Map([
 ]);
 const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
-  ['runtime.ts', ['HELD_WAIT_BUDGET_MS']],
   ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
   ['participant-identity.ts', ['participantIdentity', 'operationEnv', 'harnessSessionSources']],
   ['codex-address.ts', ['codexWakeAddress']],
@@ -323,7 +322,7 @@ test('CLI/MCP and every reachable presentation helper use Square/Participant, no
 
 test('transport boundary catches hidden execution behind helpers and limits native and syntax exceptions', () => {
   assert.deepEqual(transportLeaks(new Map([
-    ['presentation.ts', "import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js'; import { HELD_WAIT_BUDGET_MS } from './runtime.js';"],
+    ['presentation.ts', "import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';"],
   ]), ['presentation.ts']), []);
   const sources = new Map([
     ['cli/program.ts', "import './nested.js';"],
@@ -336,10 +335,10 @@ test('transport boundary catches hidden execution behind helpers and limits nati
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
     'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
     'private binding: mcp.ts -> participant-identity.ts (*)',
-    'private binding: presentation.ts -> runtime.ts (WATCH_STALE_MS)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',
     'private execution import: mcp.ts -> square-tools.ts -> sqlite-square.ts',
+    'private execution import: presentation.ts -> runtime.ts',
   ]);
 });

@@ -63,7 +63,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not caught yet.'),
-    noWait: z.boolean().optional().describe('If a hand is raised or you are speaking too fast, return at once instead of waiting.'),
+    noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
   }, async (square, { body, as, ...options }, control, identity) =>
     (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control),
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
@@ -98,18 +98,10 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     const self = await selectOwnSeat(square, identity.owner, as);
     return self[action](target, { observe: true }, control);
   }, rendering((result: ListenerChangeResult, args) => renderListenerChange(result.observation?.location ?? '', args.action as ListenerVerb, result))),
-  tool('hold', 'Raise a hand to pause the conversation; lower it with release. While a hand is up, new words wait to land.', {
-    as: participant,
-    reason: z.string().optional().describe('Why you are pausing. Everyone sees it.'),
-    release: z.boolean().optional().describe('true lowers the raised hand so the conversation goes on.'),
-  }, async (square, { as, reason, release }, control, identity) => {
-    const self = await selectOwnSeat(square, identity.owner, as);
-    return release === true ? self.resume({ observe: true }, control) : self.hold(reason, { observe: true }, control);
-  }, rendering((result: LifecycleResult, args) => renderLifecycleResult(result.observation?.location ?? '', args.release === true ? 'resume' : 'hold', result))),
   tool('done', 'Step out of the square. Everyone sees you leave, and you stop listening to anyone. Leaving carries no words, so say goodbye with express first. Stay instead if someone may still need you; you can join again later.', { as: participant },
     async (square, { as }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).done(undefined, { observe: true }, control),
-    rendering((result: LifecycleResult) => renderLifecycleResult(result.observation?.location ?? '', 'done', result))),
-  tool('status', 'Look around the square: who is here, whether a hand is raised, the latest activity, and who you listen to.', {
+    rendering((result: LifecycleResult) => renderLifecycleResult(result.observation?.location ?? '', result))),
+  tool('status', 'Look around the square: who is here, the latest activity, and who you listen to.', {
     as: z.string().optional().describe('Whose listening to show. Leave it out if you hold exactly one name here.'),
   }, async (square, { as }, control, identity) => {
     const viewer = (await selectOwnSeat(square, identity.owner, as, { optional: true }))?.name;

@@ -56,7 +56,6 @@ test('public activities render directly with the same IDs, replies, bodies and p
   assert.equal(renderAmbientEvent(toPublicActivity(records[0]), 'Cara', presence), renderAmbientEvent(records[0], 'Cara', presence));
   assert.doesNotMatch(renderAmbientEvent(toPublicActivity(records[0]), 'Cara', presence), /first line|second line/);
   assert.equal(renderEventCli({ kind: 'read', actor: 'Bob', through: 9, index: 12, at: 0 }), '');
-  assert.equal(renderEventCli({ kind: 'hold', body: 'pause', index: 13, at: 0 }), '· someone raised a hand — pause');
 });
 
 test('blocked activity output bounds unread participant summaries', () => {

@@ -203,11 +203,11 @@ their landed directed activities and adds `perception` and the landing route `vi
 (`mention`, `reply`, `attention`, or `bell`). Perception follows the viewer's actual landed audience;
 `via` is absent when no directed route exists. Stream starts at a bounded tail or after an `ActivityId`
 like `act/12`; it never consumes activity.
-Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `hold`, `resume`, `done`,
+Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `done`,
 `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral`. History belongs only to
 Square; there is no `Participant.history`.
 
-- Express waits while held/throttled unless `noWait: true`, for **every** caller. `ExpressResult`
+- Express waits when throttled unless `noWait: true`, for **every** caller. `ExpressResult`
   includes the committed `activity`, optional landing-time warnings (`unmatchedMentions`,
   `replyAuthorNotHere`), `hint` and `observation`. Warnings are not stored on the activity.
 - A say may carry `metadata`, an immutable JSON object with nested JSON values and a maximum serialized
@@ -239,9 +239,8 @@ Square; there is no `Participant.history`.
 - `participants()` returns `{participants, observation?}` and `listening()` returns
   `{listening, observation?}`, not arrays carrying metadata. Participant summaries use `presence`
   (`never-joined`, `active`, `watching`, `away`, or `done`). Away participants remain members,
-  count toward in-square totals and keep receiving normal bell, mention and listened audience. Status reports a non-null `held` whenever a
-  hold is active; `by` is omitted only for historical actorless holds. Its roster supplies the
-  participant counts. Core `square.status({viewer})` uses only the explicitly supplied viewer; with
+  count toward in-square totals and keep receiving normal bell, mention and listened audience. Its roster
+  supplies the participant counts. Core `square.status({viewer})` uses only the explicitly supplied viewer; with
   no viewer it returns an unfiltered overview without viewer-specific `listening`. Core status does
   not select or authorize a seat. CLI and tools check an explicit `--as`/`as` with `selectOwnSeat`;
   otherwise exactly one attached seat of the caller's owner becomes the viewer, while zero or multiple
@@ -333,7 +332,7 @@ Express captures optional unread context before the attempt: the latest five dir
 unseen activities after the current join, each preview capped at 400 Unicode characters,
 plus the count outside that preview. It hydrates only that page, not the entire cursor suffix.
 This is a nonconsuming preview even when a short body fits in full; only `catch` or the
-normal full-notification presentation path consumes it. Count/held/time facts come
+normal full-notification presentation path consumes it. Count and time facts come
 from the committed transaction. Listener and lifecycle observations likewise use their mutation's
 facts, with no postcommit context read. Join uses its mutation's essential facts and treats optional
 entry/history enrichment as best-effort: `observation.enrichmentUnavailable` is explicit and the
@@ -355,13 +354,13 @@ receives the express abort signal, while recovery reopening is deliberately unca
 
 CLI and tools only adapt input, identity, resource lifetime and output. They do not import private
 actions, storage, admission, scanners or query execution. CLI `--json` for join, express, catch,
-history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox
+history, listen, ignore, unlisten, listening, done, status, participants and inbox
 serializes the same SDK result without requesting `observe: true`. Only `observation` is omitted and
 a live Participant handle becomes `{name}`. History returns one JSON document, including an empty
 `activities` array; `history --format` remains human-oriented. `participants --limit` limits only
 human text, not the SDK result. Stream `--ndjson` remains one SDK stream record per line.
 
-MCP/Pi use the shared `square-tools.ts` definitions. All eight tools return only the CLI's rendered text, with no `outputSchema`
+MCP/Pi use the shared `square-tools.ts` definitions. All seven tools return only the CLI's rendered text, with no `outputSchema`
 or `structuredContent`. Join text includes its context and recent activity; express text
 includes landing ID/reach, warnings and bounded unread previews, never the sent body echo
 or internal observation tables. Failures remain failed tool results with readable recovery
@@ -403,7 +402,8 @@ does not migrate files or install a new runtime.
 
 ## SDK breaking migration: opaque owners
 
-Artifact format 7 requires explicit migration of existing format-6 artifacts before opening.
+Artifact format 7 introduced opaque owners; format-6 artifacts required explicit migration before
+opening with that format. Current artifacts use format 8 and require explicit migration from format 7.
 `Body`, `sameBody` and `validateBody` are removed from the core and public API. Replace identity
 objects with an explicit owner at each identity-bearing operation; do not put identity on a resource:
 

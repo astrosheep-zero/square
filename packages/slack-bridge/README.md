@@ -115,7 +115,7 @@ Inbound:
 Outbound:
 
 - Every `say` activity with a body whose actor does not start with `slack/`.
-  Joins, done, hold, resume, listen and unlisten are not posted, and Slack's own
+  Joins, done, listen and unlisten are not posted, and Slack's own
   participants are never echoed back.
 - `@persona` and `@slack/<name>` become native Slack mentions; other text is
   escaped for `&`, `<`, `>`; Square Markdown is sent as-is with `mrkdwn: true`

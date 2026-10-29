@@ -19,6 +19,15 @@ function normalizedSql(sql: string): string {
   return sql.trim().replace(/;$/, '').replace(/\s+/g, ' ').replace(/\s*([(),=])\s*/g, '$1');
 }
 
+/** Historical activity framing only; no runtime activity decoder accepts these kinds. */
+export function legacyActivitySchema(currentSchemaSql: string): string {
+  return currentSchemaSql
+    .replace("kind IN ('join','done','say','read','listen','ignore','unlisten')", "kind IN ('join','done','say','hold','resume','read','listen','ignore','unlisten')")
+    .replace('  actor_json TEXT COLLATE BINARY NOT NULL,', '  actor_json TEXT COLLATE BINARY,')
+    .replace('  actor_key_json TEXT COLLATE BINARY NOT NULL,', '  actor_key_json TEXT COLLATE BINARY,')
+    .replace("  CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))", "  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),\n  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),\n  CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))");
+}
+
 function legacyRowSchema(currentSchemaSql: string, version: 2 | 3): string[] {
   const statements = currentSchemaSql.split(';').map((statement) => statement.trim()).filter(Boolean)
     .filter((statement) => {

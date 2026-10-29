@@ -2,8 +2,9 @@
 //
 // Every maintained index read here (roster, landed audience + route, attention,
 // lifetime say counts, last join/active) is compared against the frozen v1
-// oracle in ./fixtures/legacy-square-core.js, which is a plain-JS copy of the
-// pre-row square-core fold/replay and was verified against the shipped v1
+// oracle in ./fixtures/legacy-square-core.js, which preserves the surviving
+// pre-row square-core fold/replay semantics (obsolete activity handling removed).
+// Its audience algorithm was verified against the shipped v1
 // module over 400 random replays before those folds were deleted. This file is
 // test-only: it imports nothing from production except the public fact port,
 // the shared domain helpers and the read-side projections.
@@ -47,7 +48,7 @@ function stored(acts) {
 
 // Covers mention, reply, listen, ignore, bell, done, rejoin, case-variant
 // spellings, unknown/self mentions, a departed reply author, an ignored
-// mention target, an actor-bearing hold used as a reply author, and a
+// mention target, a read activity used as a reply author, and a
 // case-variant actor that must fold onto the first spelling.
 const SEQUENTIAL_SOURCE = [
   { kind: 'join', actor: 'Alice' },
@@ -69,10 +70,10 @@ const SEQUENTIAL_SOURCE = [
   { kind: 'say', actor: 'Alice', body: 'a16', mentions: ['bob', 'CAROL'] },
   { kind: 'say', actor: 'Alice', body: 'a17', reply: 15 },
   { kind: 'read', actor: 'Alice', through: 17 },
-  { kind: 'hold', body: 'pause' },
-  { kind: 'resume' },
+  { kind: 'read', actor: 'Alice', through: 18 },
+  { kind: 'read', actor: 'Alice', through: 19 },
   { kind: 'say', actor: 'Alice', body: 'a21' },
-  { kind: 'hold', actor: 'Bob', body: 'pause' },
+  { kind: 'read', actor: 'Bob', through: 21 },
   { kind: 'say', actor: 'Alice', body: 'a23', reply: 22 },
   { kind: 'read', actor: 'CAROL', through: 23 },
   { kind: 'join', actor: 'Dave' },
@@ -82,7 +83,7 @@ const SEQUENTIAL_SOURCE = [
   { kind: 'listen', actor: 'Dave', target: 'Bob' },
   { kind: 'listen', actor: 'Dave', target: 'Bob' },
   { kind: 'listen', actor: 'Dave', target: 'carol' },
-  { kind: 'hold', actor: 'Dave', body: 'pause' },
+  { kind: 'read', actor: 'Dave', through: 31 },
   { kind: 'say', actor: 'Alice', body: 'a33', reply: 32 },
 ];
 
@@ -100,7 +101,7 @@ const GAPPED_ACTS = [
   { index: 25, at: T0 + 25, kind: 'say', actor: 'Alice', body: 'g25', reach: 'bell' },
 ];
 
-// Cursor fixture: actor-bearing non-read 5/7/8, read 6, actorless 9, and two
+// Cursor fixture: non-read 5/7/8, reads 6/9/10/11, and two
 // unseen addressed says (12, 13) after Alice's second join at 4.
 const CURSOR_SOURCE = [
   { kind: 'join', actor: 'Alice' },
@@ -112,9 +113,9 @@ const CURSOR_SOURCE = [
   { kind: 'read', actor: 'Alice', through: 5 },
   { kind: 'say', actor: 'Bob', body: 'c7' },
   { kind: 'say', actor: 'Bob', body: 'c8' },
-  { kind: 'hold', body: 'c9' },
+  { kind: 'read', actor: 'Bob', through: 8 },
   { kind: 'read', actor: 'Bob', through: 9 },
-  { kind: 'hold', body: 'c11' },
+  { kind: 'read', actor: 'Bob', through: 10 },
   { kind: 'say', actor: 'Bob', body: 'c12', mentions: ['alice', 'carol'] },
   { kind: 'say', actor: 'Bob', body: 'c13', mentions: ['alice', 'carol'] },
 ];
@@ -151,17 +152,7 @@ async function maintainedIndices(port, acts, listeners = LISTENERS, senders = SE
     audiences: Object.fromEntries(says.map((index) => [index, facts.audience(index).map((row) => ({ ...row }))])),
     attention: Object.fromEntries(listeners.map((listener) => [listener, facts.attention(listener).map((fact) => ({ ...fact }))])),
     incoming: Object.fromEntries(senders.map((sender) => [sender, facts.incomingAttention(sender).map((fact) => ({ ...fact }))])),
-    hold: facts.hold(),
   }))).value;
-}
-
-function normalizedHold(hold) {
-  return {
-    active: hold.active,
-    ...(hold.at === undefined ? {} : { at: hold.at }),
-    ...(hold.reason === undefined ? {} : { reason: hold.reason }),
-    ...(hold.actor === undefined ? {} : { actor: hold.actor }),
-  };
 }
 
 function withoutRevision(maintained) {
@@ -215,7 +206,6 @@ function compareWithFrozenReplay(maintained, acts, listeners = LISTENERS, sender
     assert.deepEqual(sortFacts(actual), sortFacts(expected), `incomingAttention(${sender})`);
   }
 
-  assert.deepEqual(maintained.hold, normalizedHold(oracle.hold), 'hold state');
   return oracle;
 }
 
@@ -240,7 +230,7 @@ test('the frozen oracle labels stay a mechanical rearrangement of its verbatim r
   const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
   const pick = (values) => values[Math.floor(random() * values.length)];
   const names = ['Ada', 'bo', 'Cy', 'dee'];
-  const kinds = ['join', 'done', 'say', 'say', 'listen', 'ignore', 'hold', 'resume', 'read'];
+  const kinds = ['join', 'done', 'say', 'say', 'listen', 'ignore', 'read'];
   for (let round = 0; round < 200; round += 1) {
     const generated = [];
     const count = 2 + Math.floor(random() * 25);
@@ -255,8 +245,6 @@ test('the frozen oracle labels stay a mechanical rearrangement of its verbatim r
         generated.push({ ...base, target: pick([...names, 'ghost']) });
       } else if (kind === 'read') {
         generated.push({ ...base, through: index });
-      } else if (kind === 'hold' || kind === 'resume') {
-        generated.push({ kind, at: base.at, index });
       } else {
         generated.push(base);
       }
@@ -309,7 +297,7 @@ test('importing a gapped v1-shaped snapshot rebuilds the same maintained indices
   }
 });
 
-test('a file-backed v2 artifact agrees with memory and with the frozen replay', async (t) => {
+test('a file-backed artifact agrees with memory and with the frozen replay', async (t) => {
   const directory = makeDirectory(t);
   const location = path.join(directory, 'SQUARE.square');
   assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), true);
@@ -354,7 +342,7 @@ test('audience priority is bell > mention > reply > attention, with self and ign
     assert.deepEqual(await audience(16), [], 'done mention target drops; ignoring target stays skipped after rejoin');
     assert.deepEqual(await audience(17), [], 'reply author who is no longer standing reaches nobody');
     assert.deepEqual(await audience(23), [], 'ignore blocks a reply as well as a mention');
-    assert.deepEqual(await audience(33), [{ recipient: 'Dave', route: 'reply' }], 'an actor-bearing hold can be a reply author');
+    assert.deepEqual(await audience(33), [{ recipient: 'Dave', route: 'reply' }], 'a read activity can be a reply author');
   } finally {
     await port.close();
   }

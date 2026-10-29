@@ -178,7 +178,6 @@ test('catch fences selection and captures the page facts in its receipt transact
       await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.land({ kind: 'say', actor: 'Bob', body: 'later own activity', at: 200 }));
       await cell.transactAs({ kind: 'participant', seat: aliceSeat }, facts => {
         facts.land({ kind: 'say', actor: 'Alice', body: 'later for Bob', mentions: ['Bob'], at: 201 });
-        facts.land({ kind: 'hold', actor: 'Alice', body: 'later hold', at: 202 });
       });
       artifact.read = () => { throw new Error('committed selection must not be looked up again'); };
     }
@@ -190,15 +189,14 @@ test('catch fences selection and captures the page facts in its receipt transact
   assert.equal(caught.reason, 'drained');
   assert.equal(caught.remaining, 1);
   assert.equal(caught.observation.standingCount, 2);
-  assert.equal(caught.observation.held, false);
   assert.equal(caught.observation.now, 100);
   assert.equal(caught.observation.ownActivityCount, 0);
   assert.equal(caught.observation.hardCap, 5);
   assert.equal(caught.observation.enrichmentUnavailable, true);
   assert.deepEqual((await cell.read(facts => ({
     receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
-    held: facts.hold().active, ownActivityCount: facts.participant('Bob').sayCount,
-  }))).value, { receipt: { at: 100 }, remaining: 2, held: true, ownActivityCount: 1 });
+    ownActivityCount: facts.participant('Bob').sayCount,
+  }))).value, { receipt: { at: 100 }, remaining: 2, ownActivityCount: 1 });
 });
 
 test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async t => {

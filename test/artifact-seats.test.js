@@ -123,7 +123,7 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
   assert.equal(await artifact.cancelDeliveries(bob), true);
   assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, 2);
   const revisionAtCancellation = await artifact.revision();
-  await assert.rejects(artifact.cancelDeliveries(bob, 999), /existing activity|current head/i);
+  await assert.rejects(artifact.cancelDeliveries(bob, 999), /assigned activity index|allocator/i);
   assert.equal(await artifact.revision(), revisionAtCancellation, 'a future cancellation boundary rolls back');
   assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, 2);
   assert.deepEqual(await artifact.claimDelivery({ seat: bob, activity: 'act/2', kind: 'wake', at: 7, leaseMs: 100, claimToken: 'claim-2' }),

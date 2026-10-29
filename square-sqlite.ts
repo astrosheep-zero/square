@@ -4,7 +4,7 @@ import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, Activity
 import type { DeliveryDeferralFact } from './delivery-deferral.js';
 import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
-import { legacyRowFramingIssue } from './square-legacy-framing.js';
+import { legacyRowFramingIssue, legacyActivitySchema } from './square-legacy-framing.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -30,7 +30,8 @@ export const V3_USER_VERSION = 3;
 export const V4_USER_VERSION = 4;
 export const V5_USER_VERSION = 5;
 export const V6_USER_VERSION = 6;
-export const CURRENT_USER_VERSION = 7;
+export const V7_USER_VERSION = 7;
+export const CURRENT_USER_VERSION = 8;
 export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
@@ -74,19 +75,17 @@ export function validateLegacyFraming(database: DatabaseSync, applicationId: num
 function normalizedLegacySql(sql: string): string {
     return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
 }
-const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','hold','resume','read','listen','ignore','unlisten')";
+const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','read','listen','ignore','unlisten')";
 
 export const ACTIVITIES_TABLE_SQL = `CREATE TABLE activities (
   act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
   at REAL NOT NULL,
   kind TEXT NOT NULL CHECK (${CURRENT_ACTIVITY_KIND_CHECK}),
-  actor_json TEXT COLLATE BINARY,
-  actor_key_json TEXT COLLATE BINARY,
+  actor_json TEXT COLLATE BINARY NOT NULL,
+  actor_key_json TEXT COLLATE BINARY NOT NULL,
   reach TEXT CHECK (reach = 'bell'),
   reply_index INTEGER CHECK (reply_index >= 0 AND reply_index < act_index),
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
-  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),
-  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),
   CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))
 );`;
 export const ACTIVITY_INDEXES_SQL = [
@@ -199,9 +198,11 @@ CREATE TABLE landed_audience (
   UNIQUE (act_index, recipient_order)
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
-export const FORMAT6_SCHEMA_SQL = SCHEMA_SQL.replace(`  owner_json TEXT NOT NULL,\n  generation_json TEXT NOT NULL,`, `  channel_json TEXT NOT NULL,\n  session_json TEXT NOT NULL,\n  agent_json TEXT,\n  generation_json TEXT NOT NULL,`).replace('CREATE INDEX seat_owner ON seats(owner_json);', 'CREATE INDEX seat_body ON seats(channel_json, session_json, agent_json);');
+export const FORMAT7_SCHEMA_SQL = legacyActivitySchema(SCHEMA_SQL);
+export const FORMAT6_SCHEMA_SQL = FORMAT7_SCHEMA_SQL.replace(`  owner_json TEXT NOT NULL,\n  generation_json TEXT NOT NULL,`, `  channel_json TEXT NOT NULL,\n  session_json TEXT NOT NULL,\n  agent_json TEXT,\n  generation_json TEXT NOT NULL,`).replace('CREATE INDEX seat_owner ON seats(owner_json);', 'CREATE INDEX seat_body ON seats(channel_json, session_json, agent_json);');
 export const FORMAT5_SCHEMA_SQL = FORMAT6_SCHEMA_SQL.replace(`,\n  ${ATTACHMENT_COLUMN_SQL}`, '');
 export const FORMAT4_SCHEMA_SQL = FORMAT5_SCHEMA_SQL.replace(DELIVERY_DEFERRALS_SQL, '');
+const FORMAT7_SCHEMA = FORMAT7_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const FORMAT6_SCHEMA = FORMAT6_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const FORMAT5_SCHEMA = FORMAT5_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const EXPECTED_SCHEMA_SQL = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
@@ -263,17 +264,17 @@ function immutable<T>(value: T): T {
     }
     return value;
 }
-const kinds = ['join', 'done', 'say', 'hold', 'resume', 'read', 'listen', 'ignore', 'unlisten'];
+const kinds = ['join', 'done', 'say', 'read', 'listen', 'ignore', 'unlisten'];
 function head(row: Row): ActivityHead {
     const index = integer(row.act_index), at = finite(row.at);
     requireFact(kinds.includes(string(row.kind)));
-    const actor = row.actor_json === null ? undefined : decoded(row.actor_json, true);
-    requireFact(actor === undefined ? row.actor_key_json === null && ['hold', 'resume'].includes(row.kind as string) : row.actor_key_json === key(actor));
+    const actor = decoded(row.actor_json, true);
+    requireFact(row.actor_key_json === key(actor));
     requireFact(row.reach === null || row.kind === 'say' && row.reach === 'bell');
     if (row.reply_index !== null)
         requireFact(row.kind === 'say' && integer(row.reply_index) < index);
     return immutable({
-        index, at, kind: row.kind as StoredAct['kind'], ...(actor === undefined ? {} : { actor }), ...(row.reach === null ? {} : { reach: 'bell' as const }), ...(row.reply_index === null ? {} : { reply: row.reply_index as number })
+        index, at, kind: row.kind as StoredAct['kind'], actor, ...(row.reach === null ? {} : { reach: 'bell' as const }), ...(row.reply_index === null ? {} : { reply: row.reply_index as number })
     });
 }
 export function validateStoredActivity(value: unknown): StoredAct {
@@ -281,13 +282,8 @@ export function validateStoredActivity(value: unknown): StoredAct {
     integer(a.index);
     finite(a.at);
     requireFact(kinds.includes(string(a.kind)));
-    const common = ['kind', 'at', 'index'];
-    if (a.kind !== 'hold' && a.kind !== 'resume') {
-        common.push('actor');
-        string(a.actor, true);
-    }
-    else if (Object.hasOwn(a, 'actor'))
-        string(a.actor, true);
+    const common = ['kind', 'at', 'index', 'actor'];
+    string(a.actor, true);
     switch (a.kind) {
         case 'say':
             shape(a, [...common], ['body', 'mentions', 'reach', 'reply', 'metadata']);
@@ -306,8 +302,7 @@ export function validateStoredActivity(value: unknown): StoredAct {
                 requireFact(integer(a.reply) < (a.index as number));
             break;
         case 'done':
-        case 'hold':
-            shape(a, common, ['body', ...(a.kind === 'hold' ? ['actor'] : [])]);
+            shape(a, common, ['body']);
             if (Object.hasOwn(a, 'body'))
                 string(a.body);
             break;
@@ -321,14 +316,14 @@ export function validateStoredActivity(value: unknown): StoredAct {
             shape(a, [...common, 'target']);
             string(a.target, true);
             break;
-        default: shape(a, common, a.kind === 'resume' ? ['actor'] : []);
+        default: shape(a, common);
     }
     return value as StoredAct;
 }
 function activity(row: Row): StoredAct {
     const h = head(row), payload = object(json(row.payload_json));
     // Payload cannot shadow indexed structural columns.
-    const allowed = h.kind === 'say' ? ['body', 'mentions', 'metadata'] : h.kind === 'done' || h.kind === 'hold' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
+    const allowed = h.kind === 'say' ? ['body', 'mentions', 'metadata'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
     requireFact(Object.keys(payload).every(k => allowed.includes(k)));
     return immutable(validateStoredActivity({ ...h, ...payload }));
 }
@@ -463,7 +458,7 @@ function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], loca
     requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
 }
-export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 | 7, location = ''): void {
+export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 | 7 | 8, location = ''): void {
     if (version === V2_USER_VERSION || version === V3_USER_VERSION) {
         const issue = legacyRowFramingIssue(db, APPLICATION_ID, version, location, FORMAT4_SCHEMA_SQL);
         if (issue !== undefined) throw invalidArtifact(issue);
@@ -472,7 +467,7 @@ export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     requireFact(identity.user_version === version, 'unsupported SQLite format version.');
-    validateOwnedSchema(db, version === V4_USER_VERSION ? FORMAT4_SCHEMA : version === V5_USER_VERSION ? FORMAT5_SCHEMA : version === V6_USER_VERSION ? FORMAT6_SCHEMA : EXPECTED_SCHEMA_SQL, location);
+    validateOwnedSchema(db, version === V4_USER_VERSION ? FORMAT4_SCHEMA : version === V5_USER_VERSION ? FORMAT5_SCHEMA : version === V6_USER_VERSION ? FORMAT6_SCHEMA : version === V7_USER_VERSION ? FORMAT7_SCHEMA : EXPECTED_SCHEMA_SQL, location);
 }
 export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
@@ -481,7 +476,7 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
         validateLegacyFraming(db, APPLICATION_ID, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION || identity.user_version === V4_USER_VERSION || identity.user_version === V5_USER_VERSION || identity.user_version === V6_USER_VERSION) {
+    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION || identity.user_version === V4_USER_VERSION || identity.user_version === V5_USER_VERSION || identity.user_version === V6_USER_VERSION || identity.user_version === V7_USER_VERSION) {
         validateRowFraming(db, identity.user_version, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
@@ -509,8 +504,6 @@ function activitySelection(filter: ActivityFilter, alias = 'a'): Selection {
         add(`${alias}.act_index <= ?`, integer(filter.throughIndex, -1));
     if (filter.afterAt !== undefined)
         add(`${alias}.at > ?`, finite(filter.afterAt));
-    if (filter.actorRequired)
-        terms.push(`${alias}.actor_json IS NOT NULL`);
     for (const [column, values] of [['act_index', filter.indexes], ['kind', filter.kinds], [filter.actorMatch === 'exact' ? 'actor_json' : 'actor_key_json', filter.actors?.map(name => filter.actorMatch === 'exact' ? encode(name) : key(name))]] as const) {
         if (values !== undefined) {
             if (column === 'act_index')
@@ -562,7 +555,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     }
     function directedHead(row: Row, recipient: string): DirectedHead {
         const h = head(row);
-        requireFact(h.kind === 'say' && h.actor !== undefined);
+        requireFact(h.kind === 'say');
         return immutable({
             index: h.index, at: h.at, actor: h.actor, recipient, route: routeKind(row.route)
         });
@@ -618,18 +611,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         roster: () => immutable(all('SELECT * FROM participants ORDER BY first_index').map(participant)),
         attention: name => immutable(attentionRows('t.listener_key_json=?', [key(name)])),
         incomingAttention: name => immutable(attentionRows('t.target_key_json=?', [key(name)])),
-        hold() {
-            const r = one("SELECT * FROM activities WHERE kind IN ('hold','resume') ORDER BY act_index DESC LIMIT 1");
-            if (!r)
-                return immutable({ active: false });
-            const a = activity(r);
-            if (a.kind === 'resume')
-                return immutable({ active: false });
-            requireFact(a.kind === 'hold');
-            return immutable({
-                active: true, at: a.at, ...(a.body === undefined ? {} : { reason: a.body }), ...(a.actor === undefined ? {} : { actor: a.actor })
-            });
-        },
         activity(index) {
             const r = one('SELECT * FROM activities WHERE act_index=?', [integer(index)]);
             return r ? activity(r) : undefined;
@@ -707,7 +688,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const groups = indices.map(r => {
                 const rows = all(`SELECT a.act_index,a.at,a.kind,a.actor_json,a.actor_key_json,a.reach,a.reply_index,p.name_json,d.route FROM ${pendingFrom} WHERE ${pendingWhere} AND d.act_index=? ORDER BY d.recipient_order`, [integer(r.act_index)]);
                 const h = head(rows[0]);
-                requireFact(h.kind === 'say' && h.actor !== undefined);
+                requireFact(h.kind === 'say');
                 return {
                     index: h.index, at: h.at, actor: h.actor, recipients: rows.map(v => ({ recipient: decoded(v.name_json, true), route: routeKind(v.route) }))
                 };
@@ -805,7 +786,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 reach?: string;
                 reply?: number;
             };
-            run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, actor === undefined ? null : encode(actor), actor === undefined ? null : key(actor), reach ?? null, reply ?? null, encode(payload)]);
+            run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reach ?? null, reply ?? null, encode(payload)]);
             if (effect.participant) {
                 const p = effect.participant;
                 string(p.name, true);
@@ -1059,6 +1040,11 @@ function inspectRows(db: DatabaseSync, inspectSeat: (row: Row) => Seat): { stand
     const rebuilt = new MemoryDatabase(':memory:');
     try {
         initializeSqlite(rebuilt, state, d.header().revision);
+        // A migration may remove the activity that established canonical casing.
+        // Retained participant spelling stays authoritative while replay checks
+        // every derived lifecycle/count fact against surviving activities.
+        const retainName = rebuilt.prepare('UPDATE participants SET name_json=? WHERE name_key_json=?');
+        for (const p of d.roster()) retainName.run(encode(p.name), key(p.name));
         for (const table of ['participants', 'attention', 'landed_audience']) {
             const original = db.prepare(`SELECT * FROM ${table} ORDER BY 1,2`).all();
             const expected = rebuilt.prepare(`SELECT * FROM ${table} ORDER BY 1,2`).all();

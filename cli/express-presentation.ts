@@ -59,7 +59,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
   let owner: Owner | undefined;
   let square: Square | undefined;
   let attempted = false;
-  let announcedWait: 'held' | 'throttled' | undefined;
+  let announcedWait: 'throttled' | undefined;
   let landedId: ActivityId | undefined;
   let name = requestedName;
   const controller = new AbortController();
@@ -95,7 +95,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     const selected = square === undefined ? undefined : await selectOwnSeat(square, owner, name).catch(() => undefined);
     const fresh = await square?.recovery(selected?.name ?? name).catch(() => undefined);
     name = fresh?.participant ?? name;
-    const output = { squarePath, name, owner: opts.recoveryOwner, draftPath, participantCount: fresh?.standingCount, held: fresh?.held };
+    const output = { squarePath, name, owner: opts.recoveryOwner, draftPath, participantCount: fresh?.standingCount };
     const confirmedUnsent = landedId === undefined && detail?.landedId === undefined
       && detail?.expressEffect !== 'landed' && detail?.expressEffect !== 'unknown'
       && (!attempted || detail?.expressEffect === 'unsent' || (isSquareError(error) && error.facts?.activityUnsent === true));
@@ -121,9 +121,9 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         }));
         exitCode(1); return;
       }
-      if (error.code === 'held' || error.code === 'throttled') {
+      if (error.code === 'throttled') {
         process.stdout.write(renderExpressNoWait({ ...output, reason: error.code, retryCommand: retryInput,
-          delayMs: error.facts?.retryAfterMs ?? 1, holder: error.facts?.holder, holdReason: error.facts?.holdReason,
+          delayMs: error.facts?.retryAfterMs ?? 1,
         }));
         exitCode(1); return;
       }

@@ -97,7 +97,6 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
 
   await call('join', { as: participant });
-  await call('hold', { reason: 'concurrency' });
   const [history, status, participants] = await Promise.all([
     call('history'), call('status'), call('status', { as: participant }),
   ]);
@@ -105,7 +104,6 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
     assert.equal(result.isError, undefined, JSON.stringify(result));
     assert.equal(result.structuredContent, undefined);
   }
-  await call('hold', { release: true });
   await call('express', { body: 'after concurrency', force: true });
   assert.equal(opened(), 1);
   assert.match((await call('history')).content[0].text, /after concurrency/);

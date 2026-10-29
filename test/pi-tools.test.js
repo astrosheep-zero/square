@@ -18,11 +18,11 @@ function registeredTools() {
   return tools;
 }
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-tools-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const squarePath = path.join(cwd, 'test.square');
-  const square = await Square.build({ path: squarePath, markdown: 'Native tool scene' });
+  const square = await Square.build({ path: squarePath, markdown: 'Native tool scene', ...options });
   await square.close();
   const tools = registeredTools();
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
@@ -125,9 +125,9 @@ test('Pi calls use live context, preserve environment, and return human text and
 });
 
 test('Pi cancellation reaches a waiting operation without landing its body', async (t) => {
-  const { call } = await fixture(t);
+  const { call } = await fixture(t, { throttlePerMinute: 1 });
   await call('join', { as: 'rei' });
-  await call('hold', { as: 'rei', reason: 'wait' });
+  await call('express', { as: 'rei', body: 'first word' });
   const controller = new AbortController();
   const pending = call('express', { as: 'rei', body: 'must not land' }, undefined, controller.signal);
   const timer = setTimeout(() => controller.abort(), 30);
@@ -137,5 +137,4 @@ test('Pi cancellation reaches a waiting operation without landing its body', asy
   assert.match(result.content[0].text, /cancelled/i);
   const history = await call('history');
   assert.doesNotMatch(history.content[0].text, /must not land/);
-  assert.equal((await call('hold', { as: 'rei', release: true })).isError, undefined);
 });

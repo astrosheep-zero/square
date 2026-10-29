@@ -131,7 +131,6 @@ export type SquareErrorCode =
   | 'not_joined'
   | 'already_joined'
   | 'already_done'
-  | 'held'
   | 'capped'
   | 'throttled'
   | 'bell_quota'
@@ -161,8 +160,6 @@ export interface SquareErrorFacts {
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
   activityExists?: boolean;
   pending?: number;
-  holder?: string;
-  holdReason?: string;
   retryAfterMs?: number;
 }
 
@@ -244,7 +241,7 @@ export interface WatchOptions {
 }
 
 export type PublicAct = Extract<StoredAct, { kind: 'say' | 'done' }>;
-export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' | 'unlisten' }>;
+export type RoomChangeAct = Extract<StoredAct, { kind: 'join' | 'done' | 'listen' | 'ignore' | 'unlisten' }>;
 
 export function formatHardCap(hardCap: HardCap): string {
   return hardCap === null ? '-1' : String(hardCap);

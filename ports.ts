@@ -36,7 +36,7 @@ export interface ActivityHead {
   readonly index: ActivityIndex;
   readonly at: number;
   readonly kind: StoredAct['kind'];
-  readonly actor?: string;
+  readonly actor: string;
   readonly reach?: 'bell';
   readonly reply?: ActivityIndex;
 }
@@ -48,7 +48,6 @@ export interface ActivityFilter {
   readonly kinds?: readonly StoredAct['kind'][];
   readonly actors?: readonly string[];
   readonly actorMatch?: 'identity' | 'exact';
-  readonly actorRequired?: true;
   readonly afterAt?: number;
 }
 export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
@@ -135,7 +134,6 @@ export interface SquareRead {
   roster(): readonly ParticipantFact[];
   attention(listener: string): readonly AttentionFact[];
   incomingAttention(sender: string): readonly AttentionFact[];
-  hold(): { readonly active: boolean; readonly at?: number; readonly reason?: string; readonly actor?: string };
   activity(index: ActivityIndex): StoredAct | undefined;
   activityHeads(filter: ActivityFilter, page: IndexPage): FactPage<ActivityHead>;
   activities(indexes: readonly ActivityIndex[]): readonly StoredAct[];

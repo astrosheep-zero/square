@@ -7,8 +7,8 @@ import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
-import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
+import { coreDone, coreIgnore, coreListen, coreListening, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
+import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
@@ -38,7 +38,6 @@ export type * from './square-facade.js';
 export { createSquareResourceOwner } from './artifact.js';
 export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 export { CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT } from './catch-decisions.js';
-export { HELD_WAIT_BUDGET_MS } from './runtime.js';
 export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
 export { DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from './list.js';
 
@@ -118,12 +117,12 @@ export class SqliteSquare {
     if (this.indexPath !== undefined)
       await rememberSquarePath(this.location, owner, this.indexPath).catch(() => undefined);
   }
-  private observation(standingCount: number, held: boolean, participant?: string, now = this.clock()): SquareObservation {
-    return { location: this.location, standingCount, held, now,
+  private observation(standingCount: number, participant?: string, now = this.clock()): SquareObservation {
+    return { location: this.location, standingCount, now,
       ...(participant === undefined ? {} : { participant }) };
   }
   private async contextObservation(participant?: string, control?: OperationControl): Promise<SquareObservation> {
-    return (await this.artifact.read(facts => this.observation(inSquareCount(facts), facts.hold().active, participant), control?.signal)).value;
+    return (await this.artifact.read(facts => this.observation(inSquareCount(facts), participant), control?.signal)).value;
   }
   private handle(seat: Seat): Participant { return new SqliteSquare.ParticipantHandle(seat.participant, this, seat); }
 
@@ -140,7 +139,6 @@ export class SqliteSquare {
       const control = input === undefined ? operationControl : optionsOrControl as OperationControl;
       let name = this.name, effect: 'unsent' | 'unknown' | 'landed' = 'unsent';
       let landedId: ExpressResult['activity']['id'] | undefined;
-      let heldWaitedMs = 0;
       try {
         checkControl(control);
         name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
@@ -163,16 +161,14 @@ export class SqliteSquare {
               // Decoding selected rows is storage work, not proof of safe admission refusal.
               const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
                 ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
-              const holder = proposed.type === 'held' ? facts.hold().actor : undefined;
               const decision = rejectUnsentActivity(() => {
                 if (proposed.type === 'blocked') throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { pending: proposed.activitySummaries.reduce((count, summary) => count + summary.count, 0) });
-                if (proposed.type === 'held') throw new SquareError('held', 'The square is held', { ...(holder === undefined ? {} : { holder }), ...(proposed.reason === undefined ? {} : { holdReason: proposed.reason }) });
                 if (proposed.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`);
                 if (proposed.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: proposed.delayMs });
                 if (proposed.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, proposed.nextAt - now) });
                 return proposed;
               });
-              return { stored: facts.land(decision.act), standingCount: inSquareCount(facts), held: facts.hold().active,
+              return { stored: facts.land(decision.act), standingCount: inSquareCount(facts),
                 ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
                 ...(decision.unmatchedMentions === undefined ? {} : { unmatchedMentions: decision.unmatchedMentions }),
                 ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }) };
@@ -181,27 +177,17 @@ export class SqliteSquare {
             effect = 'landed';
             if (square.wakeTransport !== undefined)
               await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now }).catch(() => undefined);
-            const { stored, standingCount, held, ownActivityCount, hardCap, ...metadata } = committed;
+            const { stored, standingCount, ownActivityCount, hardCap, ...metadata } = committed;
             const hint = expressHint(ownActivityCount);
             return { activity: toPublicActivity(stored), ...metadata,
               ...(hint === undefined ? {} : { hint }), ...(context === undefined ? {} : { observation: {
-                ...square.observation(standingCount, held, name, now), ownActivityCount, hardCap, context, participant: name,
+                ...square.observation(standingCount, name, now), ownActivityCount, hardCap, context, participant: name,
               } }) };
           } catch (error) {
             if (effect !== 'landed' && isSquareError(error) && error.facts?.activityUnsent === true) effect = 'unsent';
-            if (effect === 'landed' || !isSquareError(error) || options.noWait || (error.code !== 'held' && error.code !== 'throttled')) throw error;
-            if (error.code === 'held' && heldWaitedMs >= HELD_WAIT_BUDGET_MS) throw error;
-            control?.onProgress?.({ kind: 'waiting', reason: error.code,
-              ...(error.code === 'throttled' ? { delayMs: error.facts?.retryAfterMs ?? 1 } : {}),
-              ...(error.facts?.holder === undefined ? {} : { holder: error.facts.holder }),
-              ...(error.facts?.holdReason === undefined ? {} : { holdReason: error.facts.holdReason }) });
-            if (error.code === 'throttled') await sleep(error.facts?.retryAfterMs ?? 1, undefined, { signal: control?.signal });
-            else {
-              const started = Date.now();
-              const observation = await square.artifact.read(facts => facts.hold().active, control?.signal);
-              if (observation.value) await square.artifact.changed(observation.version, Math.max(1, HELD_WAIT_BUDGET_MS - heldWaitedMs), control?.signal);
-              heldWaitedMs += Date.now() - started;
-            }
+            if (effect === 'landed' || !isSquareError(error) || options.noWait || error.code !== 'throttled') throw error;
+            control?.onProgress?.({ kind: 'waiting', reason: 'throttled', delayMs: error.facts?.retryAfterMs ?? 1 });
+            await sleep(error.facts?.retryAfterMs ?? 1, undefined, { signal: control?.signal });
           }
         }
       } catch (error) {
@@ -220,7 +206,7 @@ export class SqliteSquare {
         const act = verb === 'listen' ? coreListen(facts, name, target, now) : verb === 'ignore' ? coreIgnore(facts, name, target, now) : coreUnlisten(facts, name, target, now);
         const activity = act === undefined ? null : toPublicActivity(facts.land(act));
         return { activity, ...(!options.observe ? {} : { observation: {
-          ...square.observation(inSquareCount(facts), facts.hold().active, name, now), participant: name,
+          ...square.observation(inSquareCount(facts), name, now), participant: name,
           target: activity?.target ?? target,
         } }) };
       }, control?.signal)).value;
@@ -232,7 +218,7 @@ export class SqliteSquare {
       const square = this.owner;
       return (await square.artifact.read(facts => {
         const name = resolveKnownName(facts, this.name);
-        return { listening: coreListening(facts, name), ...(!options.observe ? {} : { observation: square.observation(inSquareCount(facts), facts.hold().active, name) }) };
+        return { listening: coreListening(facts, name), ...(!options.observe ? {} : { observation: square.observation(inSquareCount(facts), name) }) };
       }, control?.signal)).value;
     }
 
@@ -265,7 +251,7 @@ export class SqliteSquare {
         }
         return { activities: view.activities, remaining: view.remaining, reason,
           ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
-            ...square.observation(view.standingCount, view.held, view.participant, view.now), participant: view.participant,
+            ...square.observation(view.standingCount, view.participant, view.now), participant: view.participant,
             deliveryAvailable: view.deliveryAvailable,
             ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
             ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
@@ -303,7 +289,8 @@ export class SqliteSquare {
         if (start.type === 'active') return await complete(undefined, 'already-active');
         leaseId = start.leaseId;
         control?.onProgress?.({ kind: 'catch-started', participant: name, idleMs: idle, replacementRequested: options.replace ?? false, replaced: start.replaced });
-        let quietSince = square.clock(), wasHeld = false, nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
+        const quietSince = square.clock();
+        let nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
         while (true) {
           checkControl(control);
           // Arm before selecting: a commit during selection must not be missed.
@@ -312,18 +299,14 @@ export class SqliteSquare {
           if (pulse.type === 'replaced') return await complete(undefined, 'replaced');
           if (pulse.type === 'terminal') return await complete(undefined, pulse.status);
           if (pulse.heartbeatAt !== undefined) nextHeartbeat = pulse.heartbeatAt + WATCH_HEARTBEAT_MS;
-          if (pulse.type === 'sleep') {
-            const caught = await this.catchPage(name, seat!, selection, control, leaseId);
-            if (caught === null) return await complete(undefined, 'replaced');
-            if (caught.activities.length > 0) return await complete(caught);
-          }
-          if (pulse.type === 'held' || wasHeld) quietSince = square.clock();
-          wasHeld = pulse.type === 'held';
-          if (!wasHeld && square.clock() - quietSince >= idle) {
+          const caught = await this.catchPage(name, seat!, selection, control, leaseId);
+          if (caught === null) return await complete(undefined, 'replaced');
+          if (caught.activities.length > 0) return await complete(caught);
+          if (square.clock() - quietSince >= idle) {
             const owns = await ownsWatchLease(square.artifact, seat!, square.clock(), leaseId, control?.signal);
             return await complete(undefined, owns ? 'idle' : 'replaced');
           }
-          const deadline = Math.min(nextHeartbeat, wasHeld ? Infinity : quietSince + idle);
+          const deadline = Math.min(nextHeartbeat, quietSince + idle);
           await square.artifact.changed(baseline, Math.max(0, deadline - square.clock()), control?.signal);
         }
       } catch (error) {
@@ -362,21 +345,18 @@ export class SqliteSquare {
       return (await square.artifact.transactAs(participantAuthority(seat), facts =>
         facts.releaseDeliveryDeferral(asSeatRef(seat), id, square.clock()), control?.signal)).value;
     }
-    private async lifecycle(verb: 'done' | 'hold' | 'resume', body: string | undefined, options: ObservationOptions, control?: OperationControl): Promise<LifecycleResult> {
-      if (verb === 'done') validateDoneBody(body);
+    async done(body?: string, options: ObservationOptions = {}, control?: OperationControl): Promise<LifecycleResult> {
+      validateDoneBody(body);
       const square = this.owner;
       const name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
       const seat = this.seat, now = square.clock();
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
-        const stored = facts.land(verb === 'done' ? coreDone(facts, name, body ?? '', now) : verb === 'hold' ? coreHold(facts, name, body ?? '', now) : coreResume(facts, name, now));
+        const stored = facts.land(coreDone(facts, name, body ?? '', now));
         return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation:
-          square.observation(inSquareCount(facts), facts.hold().active, name, now),
+          square.observation(inSquareCount(facts), name, now),
         }) };
       }, control?.signal)).value;
     }
-    hold(reason?: string, options: ObservationOptions = {}, control?: OperationControl) { return this.lifecycle('hold', reason, options, control); }
-    resume(options: ObservationOptions = {}, control?: OperationControl) { return this.lifecycle('resume', undefined, options, control); }
-    done(body?: string, options: ObservationOptions = {}, control?: OperationControl) { return this.lifecycle('done', body, options, control); }
   };
 
   async participant(name: string, { owner }: { readonly owner: Owner }): Promise<Participant> {
@@ -432,7 +412,7 @@ export class SqliteSquare {
         const seat = facts.seat(participant);
         if (seat === undefined) throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');
         return { participant: this.handle(seat), activity, kind,
-          ...(!options.observe ? {} : { observation: { ...this.observation(inSquareCount(facts), facts.hold().active, seat.participant, now),
+          ...(!options.observe ? {} : { observation: { ...this.observation(inSquareCount(facts), seat.participant, now),
             deliveryAvailable: seat.wakeAddress !== undefined } }) };
       }, control?.signal)).value;
       await this.publishSeat(owner);
@@ -485,7 +465,7 @@ export class SqliteSquare {
         const anchor = presenceAnchor(facts, participant.name);
         if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
       }
-      return { activities, observation: { ...this.observation(inSquareCount(facts), facts.hold().active), ...selected,
+      return { activities, observation: { ...this.observation(inSquareCount(facts)), ...selected,
         sayNumbers: facts.sayOrdinals(indexes), presenceAnchors } };
     }, control?.signal)).value;
   }

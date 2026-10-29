@@ -3,13 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
-import { createArtifactPort, readSquareSnapshot } from '../dist/artifact.js';
 import { Square } from '../dist/square-api.js';
 import { CLI, ROOT, testEnv, withName } from './square-cli-helpers.js';
 
-async function fixture(t, held = false) {
+async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-wait-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'SQUARE.square');
@@ -18,9 +16,8 @@ async function fixture(t, held = false) {
   const body = `codex:${session}`;
   const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null, env: testEnv({}, file) });
   try {
-    const host = (await square.join('Host', { owner: body })).participant;
+    await square.join('Host', { owner: body });
     await square.join('Bob', { owner: body });
-    if (held) await host.hold('pause');
   } finally { await square.close(); }
   const child = spawn(process.execPath, [CLI, ...withName(file, 'Bob', ['catch', '--mention', '--idle', '120ms'])], {
     cwd: ROOT, env: testEnv({ CODEX_THREAD_ID: session, SQUARE_WATCH_QUIET_MS: '120', SQUARE_WATCH_POLL_MS: '10000', SQUARE_WATCH_HEARTBEAT_MS: '100', SQUARE_WATCH_STALE_MS: '2000' }, file),
@@ -45,32 +42,4 @@ test('CLI quiet deadline is independent of the obsolete ten-second poll interval
   const result = await bounded(item.finished, 'quiet catch still depended on the old polling timer');
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /quiet|footsteps|dust/i);
-});
-
-test('CLI hold keeps its lease alive, pauses quiet expiry, then wakes on resume and activity', async (t) => {
-  const item = await fixture(t, true);
-  await bounded((async () => {
-    let firstHeartbeat;
-    for (;;) {
-      const lease = (await readSquareSnapshot(item.file)).state.runtime.leases.Bob;
-      if (lease) {
-        firstHeartbeat ??= lease.heartbeatAt;
-        if (lease.heartbeatAt - firstHeartbeat >= 200) return;
-      }
-      assert.equal(item.child.exitCode, null, 'held catch exited before resume');
-      await sleep(20);
-    }
-  })(), 'held catch did not renew its lease');
-  const cell = createArtifactPort(item.file);
-  try {
-    const host = (await cell.read(facts => facts.seat('Host'))).value;
-    await cell.transactAs({ kind: 'participant', seat: host }, facts => {
-      facts.land({ kind: 'resume', actor: 'Host', at: Date.now() });
-      facts.land({ kind: 'say', actor: 'Host', at: Date.now(), body: 'activity after resume', mentions: ['Bob'] });
-    });
-  } finally { await cell.close(); }
-  const result = await bounded(item.finished, 'catch did not wake for resumed activity');
-  assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /activity after resume/);
-  assert.equal((await readSquareSnapshot(item.file)).state.runtime.leases.Bob, undefined);
 });

@@ -92,7 +92,6 @@ test('read-only tools print the same page as the CLI', async (t) => {
     await rei.express('first words @bob', { force: true });
     await rei.express('*waves*', { force: true, noMention: true });
     await bob.listen('rei');
-    await rei.hold('writing');
   });
   const call = await openMcp(t, squarePath);
   const cases = [
@@ -136,16 +135,6 @@ test('mutating tools print the same result as the CLI', async (t) => {
       await joinReiAndBob(square, body);
       await (await square.participant('rei', { owner: body })).listen('bob');
     }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
-  });
-  await t.test('hold', async (t) => {
-    await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
-      ['--as', 'rei', 'hold', 'deep work'], 'hold', { as: 'rei', reason: 'deep work' });
-  });
-  await t.test('resume', async (t) => {
-    await assertTextParity(t, async (square, body) => {
-      await square.join('rei', { owner: body });
-      await (await square.participant('rei', { owner: body })).hold('deep work');
-    }, ['--as', 'rei', 'resume'], 'hold', { as: 'rei', release: true });
   });
   await t.test('done', async (t) => {
     await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },

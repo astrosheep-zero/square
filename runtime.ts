@@ -12,7 +12,6 @@ export const WATCH_HEARTBEAT_MS = parseIntegerEnv('SQUARE_WATCH_HEARTBEAT_MS', 6
 export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', 180000);
 export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
 export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
-export const HELD_WAIT_BUDGET_MS = parseIntegerEnv('SQUARE_HELD_WAIT_BUDGET_MS', 10 * 60 * 1000);
 export const FACT_PAGE_SIZE = 100;
 
 export function inSquareCount(facts: SquareRead): number { return facts.participantCounts().joined; }
@@ -34,8 +33,8 @@ export function readCursor(facts: SquareRead, name: string): number {
   const boundary = facts.participant(name)?.lastJoinIndex ?? -1;
   const block = facts.directed(name, { afterIndex: boundary, unseenOnly: true }, { edge: 'oldest', limit: 1 }).items[0]?.index;
   const last = facts.activityHeads({
-    afterIndex: boundary, ...(block === undefined ? {} : { beforeIndex: block }), actorRequired: true,
-    kinds: ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore', 'unlisten'],
+    afterIndex: boundary, ...(block === undefined ? {} : { beforeIndex: block }),
+    kinds: ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'],
   }, { edge: 'newest', limit: 1 }).items[0]?.index;
   return Math.max(boundary, last ?? boundary);
 }

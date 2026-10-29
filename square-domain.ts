@@ -39,7 +39,6 @@ export function deriveLanding(activity: StoredAct, facts: LandingFacts): Landing
     }
   }
   const actor = activity.actor;
-  if (actor === undefined) return { activity, audience };
   const previous = facts.actor ?? { name: actor, firstIndex: activity.index, joined: false, done: false, sayCount: 0 };
   const participant: ParticipantFact = {
     ...previous,
@@ -68,7 +67,7 @@ export function deriveLanding(activity: StoredAct, facts: LandingFacts): Landing
 
 export function landingFacts(read: SquareRead, activity: StoredAct): LandingFacts {
   return {
-    actor: activity.actor === undefined ? undefined : read.participant(activity.actor),
+    actor: read.participant(activity.actor),
     standing: activity.kind === 'say' ? read.roster().filter((item) => item.joined) : [],
     incoming: activity.kind === 'say' ? read.incomingAttention(activity.actor) : [],
     outgoing: activity.kind === 'listen' || activity.kind === 'ignore' || activity.kind === 'unlisten' ? read.attention(activity.actor) : [],
@@ -238,8 +237,8 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     },
     cancelThrough(seat: import('./ports.js').SeatRef, through: number): boolean {
       assertSeat(seat);
-      if (!Number.isSafeInteger(through) || through < 0 || through > read.header().lastActIndex || read.activity(through) === undefined)
-        throw new SquareError('invalid_args', 'Cancellation boundary must name an existing activity at or below the current head.');
+      if (!Number.isSafeInteger(through) || through < 0 || through >= read.header().nextActIndex)
+        throw new SquareError('invalid_args', 'Cancellation boundary must be an assigned activity index below the allocator.');
       return mutations.cancelThrough(seat, through);
     },
     markSeen(name: string, indexes: readonly number[], at: number): number {

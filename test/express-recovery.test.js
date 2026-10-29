@@ -161,32 +161,6 @@ test('bell quota preserves a retryable draft, bell reach, reply and no-wait', sh
   assert.equal(last.reply, 'act/0');
 });
 
-test('held recovery preserves the original force choice and no-wait without widening reach', shellReplay, async () => {
-  for (const force of [false, true]) {
-    const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-      await square.join('Alice', { owner: body, wakeAddress });
-      const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
-      await bob.hold('pause');
-    });
-    const body = `held ${force}\n`;
-    const saved = recovery(run(withName(file, 'Alice', ['express', ...(force ? ['--force'] : []), '--no-wait', '--mention', 'Bob', '--reply', 'act/0', '-']), { input: body }), body);
-    assert.equal(saved.commands.length, 1);
-    assert.equal(saved.commands[0].includes('--force'), force);
-    assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/0 -/);
-    const stillHeld = executeRecovery(saved.commands[0]);
-    assert.equal(stillHeld.status, 1, stillHeld.stderr);
-    assert.equal(stillHeld.signal, null);
-    assert.equal((await says(file)).length, 0);
-    assert.equal(run(withName(file, 'Bob', ['resume'])).status, 0);
-    const retry = executeRecovery(saved.commands[0]);
-    assert.equal(retry.status, 0, retry.stdout + retry.stderr);
-    const last = (await says(file)).at(-1);
-    assert.equal(last.body, body.trim());
-    assert.deepEqual(last.mentions, ['Bob']);
-    assert.equal(last.reply, 'act/0');
-  }
-});
-
 test('throttle recovery remains no-wait and does not add force', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;

@@ -4,7 +4,8 @@ Square stores its authority in one versioned SQLite artifact. Format 1 kept a sn
 format 2 introduced typed facts; format 3 added `unlisten`; format 4 moved participant custody
 and delivery evidence into the artifact; format 5 added independent delivery deferrals.
 **Format 6 separates participant membership from host attachment; format 7 replaces harness Body
-coordinates with opaque owners.** Existing artifacts are never converted implicitly.
+coordinates with opaque owners; format 8 removes Square hold/resume activities and held state.**
+Existing artifacts are never converted implicitly.
 
 Stop all processes using the artifact, make an offline backup, then run:
 
@@ -13,11 +14,15 @@ square --location /path/to/SQUARE.square migrate
 square --location /path/to/SQUARE.square doctor
 ```
 
-The command handles supported formats 2–6 in place and publishes only final format 7, in one
+The command handles supported formats 2–7 in place and publishes only final format 8, in one
 transaction. It does not make a backup, stop processes, install a runtime or update another
 artifact. For formats 2/3, also freeze and back up the legacy HostLedger used for owner/evidence
 import. A legacy ledger needing its own conversion must be prepared separately with its old
 runtime's offline tooling. Snapshot format 1 is not accepted by this conversion.
+
+Format 7 to 8 deletes hold/resume activities and rows keyed to them, clears replies that point to
+deleted activities, and preserves every surviving activity index. Gaps remain legal; `lastActIndex`
+is the greatest surviving index and `nextActIndex` never reuses a deleted index.
 
 ## Membership and attachment after conversion
 
@@ -101,9 +106,10 @@ not import. Evidence without current or verified completed ownership is skipped 
 read-only legacy ledger remains available for offline diagnosis; an absent ledger permits route-
 derived custody, but an unreadable or unsupported ledger refuses before changing the square.
 
-One transaction imports verified authority/evidence, adds deferral and attachment support and
-publishes format 7. Existing conversation and membership facts are preserved; no intermediate
-format is published. Legacy catch ownership is generation-bound only for exact standing owner
+One transaction imports verified authority/evidence, adds deferral and attachment support, applies
+the format-7-to-8 deletion, and publishes format 8. Existing conversation and membership facts are
+preserved apart from the deleted hold/resume rows and cleared replies; no intermediate format is
+published. Legacy catch ownership is generation-bound only for exact standing owner
 spellings; otherwise it stays unbound. Legacy routes are consumed only during migration and are
 not a live authority source. The new delivery revision starts at zero. Format 2 first adds support
 for `unlisten`, then follows the same conversion.
@@ -142,7 +148,7 @@ rows are ignored. Rejoin with the exact migrated owner to republish discovery (o
 harness reconnect). This preserves generation, listens and unread activity; do not use takeover
 merely to rebuild the index.
 
-Upgrade all attached runtimes before reopening format 7; older runtimes must not be mixed with it.
+Upgrade all attached runtimes before reopening format 8; older runtimes must not be mixed with it.
 Updating a package does not migrate an artifact, and migration does not install upgraded runtimes.
 After conversion, run read-only `doctor` before restarting clients. To roll back a committed
 conversion, stop all clients and restore the offline backup with its compatible older runtime;

@@ -27,7 +27,7 @@ Replace AGENTS.md's `All behavior operates on SquareState ...` sentence, with th
 
 > Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.
 
-One typed domain representation: activities, sparse seen receipts, catch leases, and ordered published routes, plus small configuration facts. Current participants/attention and historical landed audience are reconstructible indices. No inbox, continuous cursor, pending flag, eligibility, persisted ordinal, or receiver acknowledgement watermark. Hold is read from the latest hold/resume activity, not another authoritative fact.
+One typed domain representation: activities, sparse seen receipts, catch leases, and ordered published routes, plus small configuration facts. Current participants/attention and historical landed audience are reconstructible indices. No inbox, continuous cursor, pending flag, eligibility, persisted ordinal, or receiver acknowledgement watermark.
 
 Three layers:
 - Domain actions validate admission and produce `Act` values; domain projections combine the read capabilities below. Host/network work is outside artifact transactions.
@@ -82,7 +82,6 @@ interface ActivityFilter {
   readonly kinds?: readonly StoredAct['kind'][];
   readonly actors?: readonly string[];
   readonly actorMatch?: 'identity' | 'exact'; // default identity
-  readonly actorRequired?: true;
   readonly afterAt?: number; // exclusive; no implicit upper-time bound
 }
 interface IndexPage {
@@ -144,9 +143,6 @@ interface SquareRead {
   attention(listener: string): readonly AttentionFact[]; // sinceIndex ascending
   incomingAttention(sender: string): readonly AttentionFact[];
   // incoming matches nameKey(target); includes listen and ignore, not only joined actors
-  hold(): { readonly active: boolean; readonly at?: number;
-            readonly reason?: string; readonly actor?: string };
-
   activity(index: ActivityIndex): StoredAct | undefined;
   activityHeads(filter: ActivityFilter, page: IndexPage): FactPage<ActivityHead>;
   activities(indexes: readonly ActivityIndex[]): readonly StoredAct[];
@@ -232,7 +228,7 @@ interface LandingFacts {
 function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect;
 ```
 
-`deriveLanding` is pure and shared by runtime and rebuild. `land()` reads the necessary narrow facts, validates structural invariants (not action admission again), allocates **header.nextActIndex**, calls this transition, and applies the effect plus nextActIndex increment atomically. Migration supplies the preserved assigned indices; it never calls the allocator or admission validation. Earlier reply author lookup uses the existing activity row, including join/done/read/listen/actor-bearing hold; missing earlier coordinate means no author. Valid legacy replay never requires a future author because reply < own index.
+`deriveLanding` is pure and shared by runtime and rebuild. `land()` reads the necessary narrow facts, validates structural invariants (not action admission again), allocates **header.nextActIndex**, calls this transition, and applies the effect plus nextActIndex increment atomically. Migration supplies the preserved assigned indices; it never calls the allocator or admission validation. Earlier reply author lookup uses the existing activity row; missing earlier coordinate means no author. Valid replay never requires a future author because reply < own index.
 
 `markSeen` accepts any nonnegative index below nextActIndex, even if no activity/participant exists. It refuses unassigned coordinates and non-finite timestamps; it inserts only missing exact-owner receipts. Actions—not a receipt FK—ensure catch/native writes concern the intended activities. Lease writers similarly retain unknown/raw owner fallback. Only receipt insertion marks seen; presentation outcome, cancellation, and wake evidence do not.
 
@@ -257,14 +253,12 @@ CREATE TABLE square_meta (
 CREATE TABLE activities (
   act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
   at REAL NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('join','done','say','hold','resume','read','listen','ignore')),
-  actor_json TEXT COLLATE BINARY,
-  actor_key_json TEXT COLLATE BINARY,
+  kind TEXT NOT NULL CHECK (kind IN ('join','done','say','read','listen','ignore')),
+  actor_json TEXT COLLATE BINARY NOT NULL,
+  actor_key_json TEXT COLLATE BINARY NOT NULL,
   reach TEXT CHECK (reach = 'bell'),
   reply_index INTEGER CHECK (reply_index >= 0 AND reply_index < act_index),
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
-  CHECK ((actor_json IS NULL) = (actor_key_json IS NULL)),
-  CHECK (kind IN ('hold','resume') OR actor_json IS NOT NULL),
   CHECK (kind = 'say' OR (reach IS NULL AND reply_index IS NULL))
 );
 CREATE INDEX activity_kind_index ON activities(kind, act_index);
@@ -333,9 +327,9 @@ CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index
 No foreign keys. In particular receipts must not reference activities or participants; replies/through must not require existing rows; leases/routes must not require known names. Derived tables are maintained and checked against authority, not used to reinterpret permissible v1 authority as invalid. `next_act_index > greatest existing activity index` and receipts < next_act_index are checked by the boundary (all receipts only on full integrity/import; inserted receipts on writes). No contiguous-index constraint. Finite fractional activity/receipt/lease times remain REAL, not INTEGER. Number-safe limits are enforced in the codec and allocator.
 
 Activity payload shapes, with optional-property presence preserved:
-- join/resume: `{}`.
+- join: `{}`.
 - say: `{body: string, mentions?: string[]}`; reach/reply live only in their columns.
-- done/hold: `{body?: string}`.
+- done: `{body?: string}`.
 - read: `{through: number}`; no reference check on through.
 - listen/ignore: `{target: string}`; no participant reference check on target.
 Actor's original spelling lives in actor_json; actor_key_json is its indexed identity derivative. Neither is repeated in payload. Indices store coordinates/keys, never duplicate bodies.
@@ -344,7 +338,7 @@ Route payload contains location, original participant spelling, channel, address
 
 Preserve finite route epoch/extra JSON values and empty strings; do not otherwise tighten their legacy shapes. Use ordinary JSON encoding, not a bespoke numeric codec. Migration explicitly refuses non-finite numbers anywhere in a route (updatedAt, epoch, or nested extras) before DDL/inserts and leaves the artifact unchanged; never silently coerce them to null. These exponent-overflow values can pass the old permissive validator on manually authored JSON, but are not non-finite values normally persisted by the v1 JSON.stringify writer. Runtime codecs likewise require finite route numeric values. Raw schema equality is not receipt or participant equality.
 
-No receipt `state` column: all receipts are seen. No persisted hold table: `hold()` selects last hold/resume using activity_kind_index; resume returns inactive with no stale reason/actor/time. No additional name registry: a participant is first touched by ANY actor-bearing activity, not necessarily join.
+No receipt `state` column: all receipts are seen. No additional name registry: a participant is first touched by ANY actor-bearing activity, not necessarily join.
 
 ## 4. Exact derived transitions and routes
 
@@ -352,7 +346,7 @@ Landing uses pre-activity participant/attention facts:
 1. Compute a say audience first. Resolve deduplicated mentions against standing roster (bell: all standing); then standing reply author; then active listeners in roster order. Skip sender and duplicate recipients. Ignore blocks all non-bell reach; bell bypasses ignore. Store ordered unique recipients and priority **bell > mention > reply > attention**. Explicit self mention remains in activity metadata but creates no self audience edge. Missing/departed reply author creates no edge; action result retains existing replyAuthorNotHere semantics.
 2. Touch actor if new: name is first actor spelling, joined=false, done=false, sayCount=0. Update lastActiveAt with max(existing, activity.at), not latest-by-index time.
 3. join sets joined=true/done=false and lastJoinIndex=index. done sets joined=false/done=true and clears OUTGOING listen only. Ignore survives departure/rejoin; incoming attention is not cleared. Say increments lifetime count, even for unusual imported prejoin/postdone sequences.
-4. listen inserts listen only when not already listening; removes matching ignore. ignore removes matching listen and inserts ignore only when absent. Preserve target's first retained spelling and relation order, including unknown/self targets. A no-op legacy activity still touches actor time; replay never applies the current ten-name admission cap. hold/resume remain events; read does not acknowledge receipts or advance a persisted cursor.
+4. listen inserts listen only when not already listening; removes matching ignore. ignore removes matching listen and inserts ignore only when absent. Preserve target's first retained spelling and relation order, including unknown/self targets. A no-op legacy activity still touches actor time; replay never applies the current ten-name admission cap. Read does not acknowledge receipts or advance a persisted cursor.
 
 There is one production transition, no SQL triggers and no separate migration fold. Test-only frozen old fold/replay supplies differential evidence. Index integrity checking can rebuild through the production transition but cannot replace differential tests with self-comparison.
 
@@ -370,9 +364,9 @@ Let P be resolved participant, K=P.name (or requested raw spelling if unknown), 
 
 ### Continuous cursor
 
-Find B = smallest landed-audience index > J without receipt (K,index). Then find C = greatest EXISTING activity index > J and < B (no upper bound if no B), with actor present and kind != read. Return max(J,C), with missing C treated as J. Implementation uses `directed(... unseenOnly, oldest limit=1)` and `activityHeads(... actorRequired, kinds excluding read, newest limit=1)` in the SAME transaction. It does not read every intervening activity body.
+Find B = smallest landed-audience index > J without receipt (K,index). Then find C = greatest EXISTING activity index > J and < B (no upper bound if no B), with kind != read. Every persisted activity has an actor. Return max(J,C), with missing C treated as J. Implementation uses `directed(... unseenOnly, oldest limit=1)` and `activityHeads(... kinds excluding read, newest limit=1)` in the SAME transaction. It does not read every intervening activity body.
 
-Why this is exact: audience edges only exist on peer says. Before the first unseen addressed say, own and nonaddressed actor-bearing non-read events all advance readCursor. Read and actorless events do not. No cursor at B-1 is invented: if J=4, actor-bearing act/7 exists, act/9 is actorless, and unseen addressed act/12 blocks, cursor is 7, not 11 or 9. Seen act/13 beyond that hole does not advance it.
+Why this is exact: audience edges only exist on peer says. Before the first unseen addressed say, own and nonaddressed non-read events all advance readCursor. Reads do not. No cursor at B-1 is invented: if J=4, act/7 exists, act/9 is a read, and unseen addressed act/12 blocks, cursor is 7, not 11 or 9. Seen act/13 beyond that hole does not advance it.
 
 ### Evidence and presence
 
@@ -417,12 +411,12 @@ No production structure below carries `.state`, all `.activities`, or a deferred
 |---|---|
 | openSquare/openSquareArtifact, wait baselines, watch headers, cli/program | header/revision only; remove preliminary whole-state validation/load. Every normal selected-row decode remains validated. |
 | square-actions join/implicitJoin/takeover/done/endOwnedSession, registry-associated route cleanup | participant/roster as needed, routes, land/replaceRoutes; same host claim lock scopes and cleanup sequences. Takeover done+join is one txn. No full SDK snapshot. |
-| Join's before/after snapshot and CLI hold/resume/done count calls | `Square.join` returns a Participant handle and committed activity; optional observations use transaction-captured counts, held state and time. Listener/lifecycle commit facts likewise come from the mutation transaction; join's extra entry history is best-effort. See [Square/Participant API](square-api.md). |
-| express/decideAct and behind rendering | header, actor fact, roster for longest standing-body mention resolution, hold, reply head/existence, recentSayTimes, continuous cursor, directed suffix. Admission normalization/error order unchanged. A valid reply coordinate is <nextActIndex, even if a gap: preserve current acceptance of assigned-but-missing reply. Recovery supplies own count/cap/hold and behind summaries with one full preview per sender. |
-| listen/ignore/listening, watch leases and terminal checks | actor fact, outgoing attention; roster only for quorum; land or lease methods. Unknown valid attention target still allowed. Pulse keeps hold-before-terminal priority. |
+| Join/status/done count calls | `Square.join` returns a Participant handle and committed activity; optional observations use transaction-captured counts and time. Listener/lifecycle commit facts likewise come from the mutation transaction; join's extra entry history is best-effort. See [Square/Participant API](square-api.md). |
+| express/decideAct and behind rendering | header, actor fact, roster for longest standing-body mention resolution, reply head/existence, recentSayTimes, continuous cursor, directed suffix. Admission normalization/error order unchanged. A valid reply coordinate is <nextActIndex, even if a gap: preserve current acceptance of assigned-but-missing reply. Recovery supplies own count/cap and behind summaries with one full preview per sender. |
+| listen/ignore/listening, watch leases and terminal checks | actor fact, outgoing attention; roster only for quorum; land or lease methods. Unknown valid attention target still allowed. |
 | catch / native seen | directed selectors/activity exact, markSeen, cursor/counts in txn; native `current` becomes synchronous `(facts: SquareRead)=>boolean`, evaluated ONLY within reads/receipt txn. It cannot escape or call host I/O. |
 | entryPresentation / cli/square-commands join | bounded newest say/done heads then public activities with settled perceptions for the selected viewer; header context/scene; actor's join count from activityCount(kind join, actor identity). Supply `joinedBefore` rather than replaying `.state.acts`. `lastN=null` remains an explicit complete history request, not normal join's default. |
-| statusPresentation / cli/observation-commands status | roster+attention, hold, receiptFacts, continuous cursors and directed counts, fresh lease status; latest say/done. Supply last THREE public join events after latest public index, total number of such joins, and each `rejoined` boolean from existence of earlier done with EXACT actor spelling (current CLI equality). Latest line carries settled perception for context.name (including '' ambient viewer), not a SquareState. No receipts/history map hydrated. |
+| statusPresentation / cli/observation-commands status | roster+attention, receiptFacts, continuous cursors and directed counts, fresh lease status; latest say/done. Supply last THREE public join events after latest public index, total number of such joins, and each `rejoined` boolean from existence of earlier done with EXACT actor spelling (current CLI equality). Latest line carries settled perception for context.name (including '' ambient viewer), not a SquareState. No receipts/history map hydrated. |
 | participants/participantsPresentation/listPresentation | roster-derived status sorted by existing compareParticipantActivity; receipts/leases aggregates for participant statuses; list requires only active names, header preamble and say count. Change probeSquare to create a validated file-backed port, not full read then memory clone. |
 | history / participantHistory / historyPresentation | relational head filter + contextIndexes; hydrate filtered candidate bodies for JS search, otherwise page only; count before final limit; selected ordinals + detached presence anchors/perceptions. Retain CLI lifecycle archive/raw coordinate windows and facade non-read inclusion. See algorithm below. |
 | catch selection and rendering | hydrate ONLY selected rows, capture caught perceptions, participant status/clock, count/cap/terminal in the receipt transaction. Empty completion does not hydrate bodies. No all-history lookup of caught ids. |
@@ -444,7 +438,7 @@ Keep synchronous arbitrary `delivered(name,id)`. `snapshot()` intentionally copi
    Execution is fixed: with an audience filter, enumerate historical `directed` pages without unseenOnly or a join cutoff; intersect each page's indices with the context union and other index/time/actor/kind filters through `activityHeads`. Without an audience filter, enumerate `activityHeads` directly. Continue the source traversal even when an intersection is empty. Public limiting follows the remaining filters/search; storage page exhaustion is distinct from a filtered empty page. This composition needs no new audience selector or query framework.
 2. Nonempty regex/fixed search additionally restricts to say/done. Compile existing JS case-insensitive search once and test id/actor/body, not SQL LIKE/SQLite regexp. Iterate all relationally matching candidate body pages in the txn to count matches; maintain only the requested edge's selected page plus the needed existence/count metadata. Regex remains potentially expensive exactly as current engine; no new safety claim. Empty supplied pattern keeps current no-search semantics for facade.
 3. Default/before selects LAST N filtered matches; after selects FIRST N. Select chronological edge first; desc reverses ONLY selected page. A complete request remains explicit and follows existing CLI maximum refusal. Continuation availability is computed over the current archive-visible kind set and current public page min/max, preserving current text/JSON differences; it is not simply a raw-head hasMore flag. Return total search matches, selected rows, public-before/public-after existence, selected ordinals and all anchor names landing on selected coordinates.
-4. Presence anchors are the §5 evidence algorithm for all roster names; compute without full hydration and attach only selected-coordinate annotations in roster order. Context positions include read/actorless activities; coordinate arithmetic must not replace position selection. History across separate calls promises stable activity-id coordinates, not frozen mutable receipt/presence annotations.
+4. Presence anchors are the §5 evidence algorithm for all roster names; compute without full hydration and attach only selected-coordinate annotations in roster order. Context positions include reads; coordinate arithmetic must not replace position selection. History across separate calls promises stable activity-id coordinates, not frozen mutable receipt/presence annotations.
 
 ## 8. Error/transaction lifecycle (fixed)
 
@@ -473,7 +467,7 @@ These terms apply together with the domain specification above.
 - Open existing canonical path create-disabled. A read-only preflight establishes owned known schema/version before any persistent pragma or DDL. Require existing DELETE journal mode, refuse another mode without changing it; the shipped v1 creator/writer already establishes DELETE. Set connection busy_timeout=0 and synchronous=FULL. Acquire BEGIN IMMEDIATE, re-check format/schema under the lock, and validate the full v1 snapshot inside it. If v2 is already present and has valid framing/header, return already-format-2 without changing revision. A second migrator follows this same in-lock check.
 - Use v1 validation retained ONLY in migration (test oracle may also retain it), plus one explicit restriction: non-finite numbers anywhere in a route (including nested extras) are unsupported input, refused before DDL/inserts with the artifact untouched. They are not normally persisted as non-finite values by the v1 JSON.stringify writer; do not add a bespoke overflow-number codec or silently coerce to null. Copy normally persisted authoritative facts losslessly, preserving revision and nextActIndex, activity indices/gaps and optional field distinctions, raw receipt/lease owner keys, route order/duplicates, strings and finite fractional timestamps. Absent routes and [] both become zero rows; empty receipt-owner maps are behaviorless and may become zero receipt rows. Do not canonicalize receipts or add foreign keys that reject accepted v1 facts.
 - Actual receipt lookup is exact canonical roster spelling, not lowercase nameKey: preserve the raw owner-key relation and resolve lookup via the domain. Free-form JS strings must survive SQLite binding; JSON string encoding (including for key strings where necessary) preserves lone surrogates. All normalized lookup keys come from domain nameKey, never SQLite LOWER.
-- Create v2 tables and insert authority. Build derived participant/hold/attention/audience facts with the SAME single-step domain transition used by runtime landing (admission checks are NOT replayed). Check insert/constraint failures normally; do not add a second full replay or a second in-memory copy just to validate the function against itself. Lossless authority equality and old-replay equivalence are migration tests; doctor can explicitly recompute indices for integrity checking. Drop square_snapshot. Set user_version=2 inside the same transaction. Commit once; nothing is published piecemeal.
+- Create v2 tables and insert authority. Build derived participant/attention/audience facts with the SAME single-step domain transition used by runtime landing (admission checks are NOT replayed). Check insert/constraint failures normally; do not add a second full replay or a second in-memory copy just to validate the function against itself. Lossless authority equality and old-replay equivalence are migration tests; doctor can explicitly recompute indices for integrity checking. Drop square_snapshot. Set user_version=2 inside the same transaction. Commit once; nothing is published piecemeal.
 - Busy acquisition/read retries yield using existing 25ms retry and operation cancellation. Busy COMMIT retries the same transaction; never rerun copy or domain callback. Error/abort before successful COMMIT rolls back. Process death before commit recovers v1 through SQLite journal; after commit leaves complete v2. Preserve path/inode/registry identity. No host-ledger mutation and no synthetic activity.
 - Storage exclusion is guaranteed for the shipped SQLite v1 runtime because it validates again after BEGIN IMMEDIATE: its write commits before migration, or it sees v2 and refuses afterward. A pre-migration read can finish with its old snapshot. Migration does not revoke in-flight remote delivery or stop processes; recommend stopping/upgrading attached runtimes for an operationally quiet migration. Arbitrary external path replacement and pre-SQLite binaries are outside the artifact update protocol. Do not claim a distributed transaction or exactly-once remote delivery.
 

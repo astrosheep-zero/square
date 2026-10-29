@@ -6,12 +6,12 @@ import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
 export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
-/** Indexed archive event, including read and historical actorless lifecycle records. */
+/** Indexed archive event, including read bookkeeping. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
   readonly id: ActivityId;
   readonly at: number;
-  readonly kind: 'join' | 'say' | 'done' | 'hold' | 'resume' | 'listen' | 'ignore' | 'unlisten';
+  readonly kind: 'join' | 'say' | 'done' | 'listen' | 'ignore' | 'unlisten';
   readonly actor: string;
   readonly body?: string;
   readonly metadata?: ActivityMetadata;
@@ -87,10 +87,8 @@ export interface CatchWaitStart {
 export type OperationProgress =
   | {
       readonly kind: 'waiting';
-      readonly reason: 'held' | 'throttled';
+      readonly reason: 'throttled';
       readonly delayMs?: number;
-      readonly holder?: string;
-      readonly holdReason?: string;
     }
   | ({ readonly kind: 'catch-started'; readonly participant: string } & CatchWaitStart);
 export interface OperationControl {
@@ -132,7 +130,6 @@ export interface SquareSnapshot {
   readonly actCount: number;
   readonly hardCap: number | null;
   readonly throttlePerMinute?: number;
-  readonly held: { readonly by: string; readonly reason?: string } | null;
   readonly participants: readonly Pick<ParticipantSummary, 'name' | 'presence' | 'listening'>[];
   delivered(name: string, id: ActivityId): boolean;
 }
@@ -178,8 +175,6 @@ export interface Participant {
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
-  hold(reason?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
-  resume(options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral>;
@@ -212,8 +207,6 @@ export interface StatusResult {
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
   readonly throttlePerMinute?: number;
-  /** Non-null whenever held; by is present with an actor and omitted only for historical actorless holds. */
-  readonly held: { readonly by?: string; readonly reason?: string; readonly at?: number } | null;
   readonly latestActivity?: Activity;
   readonly observation?: StatusObservation;
 }
@@ -255,7 +248,6 @@ export interface InboxResult {
 export interface RecoveryResult {
   readonly participant?: string;
   readonly standingCount?: number;
-  readonly held?: boolean;
   readonly ownActivityCount?: number;
   readonly hardCap?: number | null;
   readonly activitySummaries?: readonly UnreadActivitySummary[];
@@ -293,7 +285,6 @@ export interface CatchPresence {
 export interface SquareObservation {
   readonly location: string;
   readonly standingCount: number;
-  readonly held: boolean;
   readonly now: number;
   readonly participant?: string;
 }
@@ -303,7 +294,7 @@ export interface JoinObservation extends SquareObservation {
   /** The receipt succeeded, but optional recent-history/context enrichment was unavailable. */
   readonly enrichmentUnavailable?: true;
 }
-export interface ExpressionObservation extends Pick<SquareObservation, 'standingCount' | 'held' | 'now'> {
+export interface ExpressionObservation extends Pick<SquareObservation, 'standingCount' | 'now'> {
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
 }
@@ -339,7 +330,7 @@ export interface ListenerObservation extends SquareObservation {
   readonly participant: string;
   readonly target: string;
 }
-export interface StatusObservation extends Omit<SquareObservation, 'now' | 'held'>, PresenceClassification {
+export interface StatusObservation extends Omit<SquareObservation, 'now'>, PresenceClassification {
   readonly knownParticipantCount: number;
   readonly latestPerception?: Perception;
   readonly joins: readonly { readonly activity: Activity; readonly rejoined: boolean }[];

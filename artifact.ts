@@ -132,7 +132,7 @@ function synchronous(value: unknown): void {
     }
 }
 const readMethods: readonly (keyof SquareRead)[] = [
-    'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
+    'header', 'participant', 'roster', 'attention', 'incomingAttention',
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
     'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForOwner',

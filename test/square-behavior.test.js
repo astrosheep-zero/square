@@ -47,7 +47,6 @@ test('build persists a square that reopens through the facade', async () => {
   assert.equal(snapshot.actCount, 0);
   assert.match(snapshot.context, /## Topic/);
   assert.match(snapshot.context, /Testing v2/);
-  assert.equal(snapshot.held, null);
   await closeSquare(square);
 
   const persisted = (await readSquareSnapshot(squarePath)).state;
@@ -88,23 +87,6 @@ test('rejoin does not append a second join activity', async () => {
   await square.join('Alice', { owner: squareBody });
   await square.join('Alice', { owner: squareBody });
   assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => activity.kind), ['join']);
-  await closeSquare(square);
-});
-
-test('hold and resume persist the requesting actor and never a system actor', async () => {
-  const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.tick });
-  const host = (await square.join('Host', { owner: squareBody })).participant;
-  const held = await host.hold('pause');
-  assert.equal(held.activity.kind, 'hold');
-  assert.equal(held.activity.actor, 'Host');
-  assert.equal(held.activity.body, 'pause');
-  assert.equal((await square.snapshot()).held?.by, 'Host');
-  const resumed = await host.resume();
-  assert.equal(resumed.activity.kind, 'resume');
-  assert.equal(resumed.activity.actor, 'Host');
-  assert.equal((await square.snapshot()).held, null);
-  assert.ok(((await square.history({ limit: 100 })).activities).every((activity) => activity.actor !== 'system'));
   await closeSquare(square);
 });
 
@@ -417,8 +399,6 @@ test('leaving stays in history without sending a message to catch', async () => 
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  await bob.hold('pause');
-  await bob.resume();
   const first = await alice.catch();
   assert.deepEqual(
     first.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
@@ -437,25 +417,8 @@ test('leaving stays in history without sending a message to catch', async () => 
   await closeSquare(square);
 });
 
-test('hold, unread room changes, and an unread join gate express independently', async () => {
+test('an unread join alone does not gate express', async () => {
   const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
-  time.set(1000);
-  const alice = (await square.join('Alice', { owner: squareBody })).participant;
-  time.set(2000);
-  const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  time.set(3000);
-  await bob.hold('pause');
-  time.set(200000);
-  await assert.rejects(
-    () => alice.express('late body @Bob', { mentions: ['Bob'], noWait: true }),
-    (error) => error instanceof SquareError && error.code === 'held' && error.facts?.holder === 'Bob',
-  );
-  time.set(210000);
-  await bob.resume();
-  time.set(220000);
-  await assert.doesNotReject(() => alice.express('after resume @Bob', { mentions: ['Bob'] }));
-
   const open = Square.inMemory({ markdown: 'context', clock: time.now });
   time.set(1000);
   const welcomeAlice = (await open.join('Alice', { owner: squareBody })).participant;
@@ -464,21 +427,10 @@ test('hold, unread room changes, and an unread join gate express independently',
   time.set(200000);
   const welcomed = await welcomeAlice.express('welcome @Bob', { mentions: ['Bob'] });
   assert.equal(welcomed.activity.body, 'welcome @Bob');
-  await closeSquare(square);
   await closeSquare(open);
 });
 
-test('held, throttled, and capped expressions keep their coded errors', async () => {
-  const heldSquare = Square.inMemory({ markdown: 'context', hardCap: 10, clock: tickingClock().tick });
-  const heldAlice = (await heldSquare.join('Alice', { owner: squareBody })).participant;
-  const host = (await heldSquare.join('Host', { owner: squareBody })).participant;
-  await host.hold('pause');
-  await assert.rejects(
-    () => heldAlice.express('held body @Host', { mentions: ['Host'], noWait: true }),
-    (error) => error instanceof SquareError && error.code === 'held',
-  );
-  await closeSquare(heldSquare);
-
+test('throttled and capped expressions keep their coded errors', async () => {
   const throttleSquare = Square.inMemory({
     markdown: 'context',
     hardCap: 10,

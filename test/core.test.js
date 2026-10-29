@@ -4,7 +4,7 @@ import test from 'node:test';
 import { expressionContext } from '../dist/activity-feed.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideCatch } from '../dist/catch-decisions.js';
-import { coreHold, coreIgnore, coreListen, coreListening, coreParticipants, coreResume, decideAct, decideJoin } from '../dist/decisions.js';
+import { coreIgnore, coreListen, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { Square } from '../dist/square-api.js';
@@ -85,8 +85,6 @@ test('participant activity includes authored actions and never advances from unr
   for (const action of [
     { kind: 'listen', target: 'Other' },
     { kind: 'ignore', target: 'Other' },
-    { kind: 'hold' },
-    { kind: 'resume' },
     { kind: 'read', through: 0 },
   ]) {
     const { cell } = memorySquare({ acts: [
@@ -186,32 +184,11 @@ test('presence rides on own activity or actor-bearing receipts, never orphan coo
     { kind: 'join', actor: 'Bob', at: 2 },
     { kind: 'say', actor: 'Alice', at: 3, body: 'own activity' },
     { kind: 'say', actor: 'Bob', at: 4, body: 'peer activity' },
-    { kind: 'hold', at: 5, body: 'actorless hold' },
   ] });
   state.runtime = { nextActIndex: 5, observations: { Alice: { 'act/4': { state: 'seen', at: 50 } } }, leases: {} };
   const cell = createArtifactPort(':memory:', state);
   try {
     assert.equal((await cell.read((facts) => presenceAnchor(facts, 'Alice'))).value, 2);
-  } finally {
-    await cell.close();
-  }
-});
-
-test('host controls preserve the requesting actor and body', async () => {
-  const { cell } = memorySquare({ acts: [{ kind: 'join', actor: 'Host', at: 1 }] });
-  try {
-    const controls = (await cell.read((facts) => ({
-      hold: coreHold(facts, 'Host', 'pause', 10),
-      resume: coreResume(facts, 'Host', 11),
-    }))).value;
-    assert.deepEqual(
-      { kind: controls.hold.kind, actor: controls.hold.actor, body: controls.hold.body },
-      { kind: 'hold', actor: 'Host', body: 'pause' }
-    );
-    assert.deepEqual(
-      { kind: controls.resume.kind, actor: controls.resume.actor },
-      { kind: 'resume', actor: 'Host' }
-    );
   } finally {
     await cell.close();
   }
@@ -379,11 +356,7 @@ test('reply rejects an activity id that has not landed yet', async () => {
   }
 });
 
-test('admission refuses held, capped, throttled and quota-exhausted says', async () => {
-  const held = memorySquare({ acts: [
-    { kind: 'join', actor: 'Alice', at: 1 },
-    { kind: 'hold', actor: 'Host', at: 2, body: 'pause' },
-  ] });
+test('admission refuses capped, throttled and quota-exhausted says', async () => {
   const capped = memorySquare({ hardCap: 1, acts: [
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'say', actor: 'Alice', at: 2, body: 'one' },
@@ -398,7 +371,6 @@ test('admission refuses held, capped, throttled and quota-exhausted says', async
   ] });
   try {
     const decide = (cell, now, extra = {}) => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'again', force: true, now, ...extra })).then((result) => result.value);
-    assert.deepEqual(await decide(held.cell, 20), { type: 'held', reason: 'pause' });
     assert.deepEqual(await decide(capped.cell, 20), { type: 'capped', count: 1, hardCap: 1 });
     const throttledDecision = await decide(throttled.cell, 1000);
     assert.equal(throttledDecision.type, 'throttled');
@@ -407,7 +379,6 @@ test('admission refuses held, capped, throttled and quota-exhausted says', async
     // The same bell becomes eligible exactly at the end of its quota window.
     assert.equal((await decide(bell.cell, 1000 + 3600000, { reach: 'bell' })).type, 'sent');
   } finally {
-    await held.cell.close();
     await capped.cell.close();
     await throttled.cell.close();
     await bell.cell.close();

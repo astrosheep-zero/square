@@ -16,7 +16,7 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   const lines = renderFailureLines(error, { squarePath, name, owner: context?.owner ?? context?.env.SQUARE_OWNER });
   if (squarePath === undefined) process.stderr.write(`${lines.join('\n')}\n`);
   else process.stderr.write(formatRefusal(squarePath, lines, {
-    participantCount: recovery?.standingCount, held: recovery?.held,
+    participantCount: recovery?.standingCount,
   }));
   process.exit(error.code === 'not_found' ? 1 : 2);
 }

@@ -21,8 +21,6 @@ export type Act =
   | { kind: 'join'; actor: Participant; at?: number }
   | { kind: 'done'; actor: Participant; at?: number; body?: string }
   | { kind: 'say'; actor: Participant; at?: number; body?: string; metadata?: import('./model.js').ActivityMetadata; mentions?: readonly Participant[]; reach?: Reach; reply?: number }
-  | { kind: 'hold'; actor?: Participant; at?: number; body?: string }
-  | { kind: 'resume'; actor?: Participant; at?: number }
   | { kind: 'read'; actor: Participant; at?: number; through: number }
   | { kind: 'listen'; actor: Participant; target: Participant; at?: number }
   | { kind: 'ignore'; actor: Participant; target: Participant; at?: number }

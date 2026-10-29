@@ -35,16 +35,14 @@ test('done rejects supplied bodies without changing participation or history', a
   }
 });
 
-test('done remains bodyless after reaching the cap and while a hand is raised', async () => {
+test('done remains bodyless after reaching the cap', async () => {
   const file = await persistSquare(async ({ square, body }) => {
     const alice = (await square.join('Alice', { owner: body })).participant;
-    const bob = (await square.join('Bob', { owner: body })).participant;
     await alice.express('the one activity');
-    await bob.hold('pause');
     await alice.done('');
   }, { hardCap: 1 });
   const state = (await readSquareSnapshot(file)).state;
-  assert.deepEqual(state.acts.map((activity) => activity.kind), ['join', 'join', 'say', 'hold', 'done']);
+  assert.deepEqual(state.acts.map((activity) => activity.kind), ['join', 'say', 'done']);
   assert.equal(Object.hasOwn(state.acts.at(-1), 'body'), false);
 });
 

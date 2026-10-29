@@ -25,7 +25,7 @@ Deliverer evidence, not independent review or acceptance.
 | `square-state.ts` legacy SQLite framing | `square-sqlite.ts`: read-only owned-v1 recognition beside row framing/codecs |
 | `square-state.ts` legacy payload validation | `square-migration.ts`: explicit legacy envelope, order/gap and assigned-reference checks, permissive finite route data and path-specific nonfinite rejection |
 | General-model snapshot/runtime DTOs | `square-sqlite.ts`: explicit import/export DTOs, not runtime transaction state |
-| Dead `StoredActHead`, `HoldState`, `findParticipantName`, empty `ReceiverRoute` alias | Deleted; interchange routes use the existing `WakeRoute` type |
+| Dead `StoredActHead`, `findParticipantName`, empty `ReceiverRoute` alias | Deleted; interchange routes use the existing `WakeRoute` type |
 
 There are no forwarding stubs. The renamed build preparation is the actual implementation, not an alias. File SDK build, synchronous memory build and application build share it. Application build returns the normalized configuration from canonical creation rather than reconstructing it. Ordinary storage/resource imports perform no guide reads; the first build reads only its selected guides and caches them.
 

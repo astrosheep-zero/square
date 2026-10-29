@@ -445,13 +445,11 @@ test('package facade participant verbs persist through shared actions', async ()
   try {
     const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
-    await alice.hold('pause');
-    await alice.resume();
     await alice.done();
     await square.close();
     const persisted = (await readSquareSnapshot(squarePath)).state;
-    assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'hold', 'resume', 'done']);
-    assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2, 3, 4]);
+    assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'done']);
+    assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2]);
   } finally {
     if (previousDisableWake === undefined) delete process.env.SQUARE_DISABLE_PASEO_WAKE;
     else process.env.SQUARE_DISABLE_PASEO_WAKE = previousDisableWake;

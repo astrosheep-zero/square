@@ -28,9 +28,9 @@ notifications are hints, not activity delivery or consumption receipts.
   returns promptly. An existing active delivery observer will reconsider release/expiry; absent an
   observer, pending work waits for the next normal delivery opportunity. A lease does not create a
   process that was not already running.
-- Blocking catch waits for conversation revision or its heartbeat/quiet deadline. A held catch keeps
+- Blocking catch waits for conversation revision or its heartbeat/quiet deadline. An active catch keeps
   its single lease alive and pauses quiet expiry. Core catch and streams use the same storage change
-  detector. Held express also waits for changes; throttling waits for its eligibility time.
+  detector. Throttling waits for its eligibility time.
 - Deferrals are independent of catch filters, presentation claims, full-delivery seen receipts,
   clipped previews and session-local cancellation. Sharing storage detection does not share session
   delivery state. Cancellation never creates a receipt or removes archive history. A deferral cannot

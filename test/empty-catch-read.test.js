@@ -31,7 +31,6 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
     { kind: 'join', actor: 'Cara', at: 2 },
     { kind: 'say', actor: 'Cara', at: 3, body: 'still pending', mentions: ['Bob'] },
     { kind: 'say', actor: 'Bob', at: 4, body: 'own activity' },
-    { kind: 'hold', actor: 'Alice', at: 5, body: 'pause' },
   ], 1);
   const before = (await cell.read(facts => facts.receiptAssignments())).value, revision = await cell.revision();
   let reads = 0;
@@ -40,7 +39,7 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
   const result = await bob.catch({ from: ['Alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
   const { observation } = result;
-  assert.deepEqual([observation.participant, observation.standingCount, observation.held, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, true, 100, 1, 1]);
+  assert.deepEqual([observation.participant, observation.standingCount, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, 100, 1, 1]);
   assert.equal(reads, 2, 'one selection and one explicitly requested presence read');
   assert.equal(await cell.revision(), revision);
   assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
@@ -62,7 +61,6 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
       await cell.transactAs({ kind: 'participant', seat: seats.get('Alice') }, facts => {
         facts.land({ kind: 'say', actor: 'Alice', at: 51, body: 'selected by writer', mentions: ['Bob'] });
         facts.land({ kind: 'say', actor: 'Alice', at: 52, body: 'remaining', mentions: ['Bob'] });
-        facts.land({ kind: 'hold', actor: 'Alice', at: 53, body: 'later hold' });
       });
     }
     return result;
@@ -76,7 +74,6 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
   assert.equal(caught.remaining, 1);
   assert.equal(caught.reason, 'drained');
   assert.equal(caught.activities[0].via, 'mention');
-  assert.equal(caught.observation.held, true);
   assert.equal(writes, 1);
   assert.deepEqual(hydrated, [[3]]);
   assert.deepEqual((await cell.read(facts => [facts.receipt('Bob', 2), facts.receipt('Bob', 3), facts.receipt('Bob', 4)])).value, [{ at: 50 }, { at: 100 }, undefined]);

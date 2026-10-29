@@ -59,7 +59,7 @@ test('host detach preserves membership, listens, horizon and evidence, but revok
   await assert.rejects(f.square.participant('Bob', { owner: f.body }), needsSeat);
   for (const participant of [f.bob]) for (const mutate of [
     p => p.express('no effect', { force: true }), p => p.catch(), p => p.catch({ id: sent.activity.id }),
-    p => p.listen('Alice'), p => p.unlisten('Alice'), p => p.ignore('Alice'), p => p.hold(), p => p.resume(), p => p.done(),
+    p => p.listen('Alice'), p => p.unlisten('Alice'), p => p.ignore('Alice'), p => p.done(),
     p => p.deferDelivery({ match, durationMs: 1000 }), p => p.renewDeliveryDeferral(lease.id, 1000), p => p.releaseDeliveryDeferral(lease.id),
   ]) await assert.rejects(mutate(participant), needsSeat);
   const unchanged = await f.read(facts => facts.header());

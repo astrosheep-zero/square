@@ -234,8 +234,6 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'history',
     'status',
     'participants',
-    'hold',
-    'resume',
     'install',
     'uninstall',
     'harness',
@@ -353,7 +351,7 @@ test('CLI flags override Square location and participant environment values', as
 test('square-accessing commands refuse to invent a default location', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-no-default-location-'));
   try {
-    for (const command of ['build', 'stream', 'join', 'catch', 'express', 'done', 'hold', 'resume', 'history', 'status', 'participants', 'doctor']) {
+    for (const command of ['build', 'stream', 'join', 'catch', 'express', 'done', 'history', 'status', 'participants', 'doctor']) {
       const result = run([command], { cwd, input: command === 'build' ? 'body\n' : undefined });
       assert.equal(result.status, 2, `${command}: ${result.stderr}`);
       assert.match(result.stderr, new RegExp(`${command} needs a square location`));

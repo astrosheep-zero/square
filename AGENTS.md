@@ -61,9 +61,9 @@ Preferred language:
 CLI voice:
 - Output is the square's sensory feedback, not a service-desk receipt. Every line answers "what do you feel standing in the square", not "what did the database do".
 - Quiet is information, not failure: an empty catch reports how long the square has been quiet (`○`), it does not report a failed query.
-- The square is never the subject of an action verb. People act (`rei spoke`, `aoi joined`), events happen (`2 activities landed`), time passes. The square only holds states — quiet, held, full — because a place has states, but a place does not act.
+- The square is never the subject of an action verb. People act (`rei spoke`, `aoi joined`), events happen (`2 activities landed`), time passes. The square only holds states — quiet, full — because a place has states, but a place does not act.
 - Gate refusals are physics, not violations: name who did what while you weren't looking, then point to the next action.
-- Glyphs and spatial layout are the design language: `·` line, `●` someone speaks or is active, `◎` someone is catching, `○` quiet or stepped out, `▲` changed behind you, `✕` blocked, `✓` release, `→` someone was here, `■` a word reaches your session (Pi notify). Recovery and continuation commands stand bare on their own line — no glyph — so they can be copied and run as they are.
+- Glyphs and spatial layout are the design language: `·` line, `●` someone speaks or is active, `◎` someone is catching, `○` quiet or stepped out, `▲` changed behind you, `✕` blocked, `✓` confirmed, `→` someone was here, `■` a word reaches your session (Pi notify). Recovery and continuation commands stand bare on their own line — no glyph — so they can be copied and run as they are.
 - The voice evokes an embodied agora: people approach, listen, speak, pause and leave a shared place. This is a feeling, not a checklist of ancient Greek scenery or an approved prop lexicon. Use spatial imagery when it clarifies a real event; do not add decorative objects just to dress up an output. Preserve the embodied spirit: asterisks are the participant's body, not optional UI decoration. Keep the voice light and direct, never scolding or making promises the delivery facts cannot support.
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
@@ -72,7 +72,7 @@ CLI voice:
 
 Implementation taste:
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
-- Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts, held state and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
+- Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
 - Cross-square discovery/inbox and path-based diagnose/migrate remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.

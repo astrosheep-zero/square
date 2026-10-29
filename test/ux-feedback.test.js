@@ -6,7 +6,7 @@ import { renderExpressWaiting } from '../dist/presentation.js';
 
 test('join guidance follows delivery capability, not a blanket instruction to wait', () => {
   const base = { kind: 'reconnected', participant: 'rei', observation: {
-    location: '/tmp/example.square', standingCount: 1, held: false, now: 0,
+    location: '/tmp/example.square', standingCount: 1, now: 0,
   } };
   const native = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: true } });
   const manual = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: false } });
@@ -31,13 +31,8 @@ test('expanding a clipped history page keeps its activity coordinates', async ()
   } finally { await square.close(); }
 });
 
-test('waiting is not rendered as a failed send', () => {
-  for (const facts of [
-    { reason: 'throttled', delayMs: 1000 },
-    { reason: 'held', holder: 'rei' },
-  ]) {
-    const text = renderExpressWaiting(facts);
-    assert.match(text, /waiting/);
-    assert.doesNotMatch(text, /✕/);
-  }
+test('throttle waiting is not rendered as a failed send', () => {
+  const text = renderExpressWaiting({ reason: 'throttled', delayMs: 1000 });
+  assert.match(text, /waiting/);
+  assert.doesNotMatch(text, /✕/);
 });

@@ -115,8 +115,6 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'unlisten',
   'listening',
   'done',
-  'hold',
-  'resume',
   'history',
   'status',
   'participants',

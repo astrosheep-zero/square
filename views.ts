@@ -16,12 +16,12 @@ export const HISTORY_DEFAULT_LIMIT = 10;
 export const HISTORY_MAX_LIMIT = 100;
 const STATUS_HERE_WINDOW_MS = 30 * 60_000;
 const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
-export const NON_READ = ['join', 'done', 'say', 'hold', 'resume', 'listen', 'ignore', 'unlisten'] as const;
-const ARCHIVE = new Set(['join', 'done', 'say', 'hold', 'resume']);
+export const NON_READ = ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'] as const;
+const ARCHIVE = new Set(['join', 'done', 'say']);
 
-/** The one StoredAct-to-public-Activity field mapping. Rejects read and actorless acts. */
+/** The one StoredAct-to-public-Activity field mapping. Rejects read bookkeeping. */
 export function toPublicActivity(stored: StoredAct): Activity {
-  if (stored.kind === 'read' || stored.actor === undefined) throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
+  if (stored.kind === 'read') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
@@ -105,21 +105,20 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
   return { activities, visibleActivities, totalMatches, ...(continuation === undefined ? {} : { continuation }) };
 }
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
-  return activities.flatMap((activity) => activity.kind === 'read' || activity.actor === undefined ? [] : [toPublicActivity(activity)]);
+  return activities.flatMap((activity) => activity.kind === 'read' ? [] : [toPublicActivity(activity)]);
 }
 export function snapshot(facts: SquareRead, now: number): SquareSnapshot {
-  const header = facts.header(), hold = facts.hold();
+  const header = facts.header();
   const names = new Map(facts.roster().map((p) => [nameKey(p.name), p.name]));
   const receipts = new Set(facts.receiptAssignments().map((r) => JSON.stringify([r.owner, r.index])));
   return { context: [...header.preamble, ...header.warmup].join('\n'), actCount: facts.activityCount({ kinds: NON_READ }), hardCap: header.hardCap,
     ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
-    held: hold.active && hold.actor !== undefined ? { by: hold.actor, ...(hold.reason === undefined ? {} : { reason: hold.reason }) } : null,
     participants: coreParticipants(facts, now).filter((p) => p.presence !== 'never-joined').map(({ name, presence, listening }) => ({ name, presence, listening })),
     delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
-  const known = resolveKnownName(facts, name), hold = facts.hold();
-  return { participant: known, activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts), held: hold.active,
+  const known = resolveKnownName(facts, name);
+  return { participant: known, activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts),
     ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
 }
 export function entryPresentation(facts: SquareRead, name: string, lastN: number | null = HISTORY_DEFAULT_LIMIT): EntryPresentation {
@@ -144,7 +143,7 @@ type ParticipantQueryContext = Pick<SquareObservation, 'location' | 'now'>;
 export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext, observe = false): ParticipantsResult {
   const participants = coreParticipants(facts, context.now);
   return { participants, ...(!observe ? {} : { observation: { ...context, ...classifyPresence(participants, context.now),
-    standingCount: inSquareCount(facts), held: facts.hold().active } }) };
+    standingCount: inSquareCount(facts) } }) };
 }
 export function listPresentation(facts: SquareRead) {
   const participants = facts.roster().filter((p) => p.joined).map((p) => {
@@ -155,21 +154,16 @@ export function listPresentation(facts: SquareRead) {
 }
 export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', observe = false): StatusResult {
   const participants = coreParticipants(facts, context.now);
-  const header = facts.header(), hold = facts.hold(), standingCount = inSquareCount(facts);
+  const header = facts.header(), standingCount = inSquareCount(facts);
   const listener = participants.find((p) => p.presence !== 'never-joined' && nameKey(p.name) === nameKey(viewer));
   const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
   const latestAct = latest === undefined ? undefined : facts.activity(latest.index);
   const data: StatusResult = {
     hardCap: header.hardCap,
     ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
-    held: hold.active ? {
-      ...(hold.actor === undefined ? {} : { by: hold.actor }),
-      ...(hold.reason === undefined ? {} : { reason: hold.reason }),
-      ...(hold.at === undefined ? {} : { at: hold.at }),
-    } : null,
     ...(listener === undefined ? {} : { listening: listener.listening }),
     participants: participants.filter((p) => p.presence !== 'never-joined'), now: context.now,
-    ...(latestAct === undefined || latestAct.actor === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
+    ...(latestAct === undefined || latestAct.kind === 'read' ? {} : { latestActivity: toPublicActivity(latestAct) }),
   };
   if (!observe) return data;
   const afterIndex = latestAct?.index ?? -1;
@@ -196,7 +190,7 @@ export function catchPresence(facts: SquareRead, now: number): CatchPresence {
   return { participants, now };
 }
 export function streamProjection(facts: SquareRead, cursor: number, recipient?: string) {
-  const page = facts.activityHeads({ afterIndex: cursor, kinds: NON_READ, actorRequired: true }, { edge: 'oldest', limit: PAGE_SIZE });
+  const page = facts.activityHeads({ afterIndex: cursor, kinds: NON_READ }, { edge: 'oldest', limit: PAGE_SIZE });
   const heads = recipient === undefined ? page.items : page.items.filter((head) => facts.directedAt(recipient, head.index) !== undefined);
   const activities = facts.activities(heads.map((head) => head.index)).map((activity) => recipient === undefined
     ? toPublicActivity(activity) : toPerceivedActivity(facts, activity, recipient));
@@ -205,7 +199,7 @@ export function streamProjection(facts: SquareRead, cursor: number, recipient?: 
 export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_LIMIT, recipient?: string) {
   if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
   const heads = last === 0 ? [] : recipient === undefined
-    ? facts.activityHeads({ kinds: NON_READ, actorRequired: true }, { edge: 'newest', limit: last }).items
+    ? facts.activityHeads({ kinds: NON_READ }, { edge: 'newest', limit: last }).items
     : facts.directed(recipient, {}, { edge: 'newest', limit: last }).items;
   const activities = facts.activities(heads.map((head) => head.index)).map((activity) => recipient === undefined
     ? toPublicActivity(activity) : toPerceivedActivity(facts, activity, recipient));

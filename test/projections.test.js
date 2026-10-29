@@ -8,7 +8,6 @@ import { createTestArtifactPort as createArtifactPort } from './fixtures/test-ar
 import { Square } from '../dist/square-api.js';
 import { resolveKnownName } from '../dist/decisions.js';
 import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, snapshot, queryStatus, streamProjection } from '../dist/views.js';
-import { renderLifecycleResult, renderStatusResult } from '../dist/operation-presentation.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 
@@ -48,7 +47,6 @@ test('recovery observes caller gates and bounded unread previews without selecti
     { kind: 'say', actor: 'Bob', at: 2, index: 2, body: 'own', mentions: [] },
   ];
   for (let index = 3; index <= 10; index++) acts.push({ kind: 'say', actor: 'Alice', at: index === 3 ? 40 : index, index, body: String(index), mentions: ['Bob'] });
-  acts.push({ kind: 'hold', actor: 'Bob', at: 11, index: 11, body: 'pause' });
   const state = fixture(acts);
   state.hardCap = 5;
   const { square, reads, cell } = measuredSquare(state);
@@ -58,7 +56,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'BOB', square.clock()))).value;
     assert.deepEqual(recovered, {
       participant: 'Bob', standingCount: 2,
-      held: true, ownActivityCount: 1, hardCap: 5,
+      ownActivityCount: 1, hardCap: 5,
       activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: acts[10] }],
     });
     assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
@@ -134,12 +132,12 @@ test('history keeps traversing audience pages through empty intersections and li
   } finally { await cell.close(); }
 });
 
-test('context uses existing activity positions while facade omits read and CLI raw windows retain it', async (t) => {
+test('context uses existing activity positions while facade omits read', async (t) => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0, index: 0 },
     { kind: 'say', actor: 'Alice', at: 1, index: 7, body: 'before' },
     { kind: 'read', actor: 'Alice', at: 2, index: 50, through: 7 },
-    { kind: 'hold', at: 3, index: 80 },
+    { kind: 'say', actor: 'Alice', at: 3, index: 80, body: 'middle', mentions: [] },
     { kind: 'say', actor: 'Alice', at: 4, index: 101, body: 'after' },
   ];
   const { square, cell } = measuredSquare(fixture(acts));
@@ -148,7 +146,7 @@ test('context uses existing activity positions while facade omits read and CLI r
     const application = await app.history({ observe: true, at: ['act/50'], contextBefore: 1, contextAfter: 1 });
     assert.deepEqual(application.observation.visibleActivities.map((a) => a.index), [7, 80]);
     assert.deepEqual(application.observation.activities.map((activity) => activity.index), [7, 50, 80]);
-    assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7']);
+    assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7', 'act/80']);
     assert.equal(application.observation.continuation, undefined);
     const ordinary = await app.history({ observe: true, limit: 3 });
     assert.deepEqual(ordinary.observation.activities.map((a) => a.index), [7, 80, 101]);
@@ -161,9 +159,9 @@ test('context uses existing activity positions while facade omits read and CLI r
     const records = [];
     for (const _activity of all) records.push((await stream.next()).value);
     await stream.return();
-    assert.deepEqual(records, all, 'read and actorless historical records never escape as stream activities');
+    assert.deepEqual(records, all, 'read records never escape as stream activities');
     const later = app.stream({ start: { kind: 'after', after: 'act/50' } }, { signal: AbortSignal.timeout(2000) })[Symbol.asyncIterator]();
-    assert.equal((await later.next()).value.id, 'act/101');
+    assert.equal((await later.next()).value.id, 'act/80');
     await later.return();
   } finally { await cell.close(); }
 });
@@ -242,15 +240,13 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
   } finally { await cell.close(); }
 });
 
-test('status keeps one filtered roster and ignores read and actorless hold when selecting latest words', async (t) => {
+test('status keeps one filtered roster and ignores read activities when selecting latest words', async (t) => {
   const state = fixture([
     { kind: 'read', actor: 'Reserved', at: 0, index: 0, through: 0 },
     { kind: 'join', actor: 'Alice', at: 1, index: 1 },
     { kind: 'join', actor: 'Gone', at: 2, index: 2 },
     { kind: 'done', actor: 'Gone', at: 3, index: 3 },
-    { kind: 'hold', actor: 'Alice', at: 4, index: 4, body: 'pause' },
-    { kind: 'hold', at: 5, index: 5, body: 'historical pause' },
-    { kind: 'read', actor: 'Alice', at: 6, index: 6, through: 5 },
+    { kind: 'read', actor: 'Alice', at: 4, index: 4, through: 3 },
   ]);
   state.hardCap = 7;
   state.throttlePerMinute = 3;
@@ -259,27 +255,24 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
     const before = (await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value;
     const { observation: projection, ...data } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice', true))).value;
     assert.deepEqual(data, {
-      hardCap: 7, throttlePerMinute: 3, held: { reason: 'historical pause', at: 5 }, now: 100_000, listening: [],
+      hardCap: 7, throttlePerMinute: 3, now: 100_000, listening: [],
       latestActivity: { id: 'act/3', at: 3, kind: 'done', actor: 'Gone', mentions: [] },
       participants: [
-        { name: 'Alice', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 6, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
+        { name: 'Alice', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 4, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
         { name: 'Gone', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 3, presence: 'done', unreadActivityCount: 0, pendingMentionCount: 0 },
       ],
     });
     assert.equal(projection.knownParticipantCount, 3);
     const app = await archiveSquare(t, state);
     const status = await app.status({ viewer: 'alice' });
-    assert.deepEqual(status.held, { reason: 'historical pause', at: 5 });
     const observed = await app.status({ viewer: 'alice', observe: true });
-    assert.deepEqual(observed.held, status.held);
-    assert.match(renderStatusResult(app.location, observed), /· someone raised a hand — historical pause · 1m ago/);
+    assert.deepEqual(observed.latestActivity, status.latestActivity);
     assert.deepEqual(projection.orderedHereNames, ['Alice']);
     assert.equal(projection.classificationByName.Reserved, 'not-joined');
     assert.equal(Object.hasOwn(projection, 'latestAct'), false);
     assert.equal(Object.hasOwn(projection, 'status'), false);
     assert.equal(Object.hasOwn(projection, 'participants'), false);
     assert.equal(Object.hasOwn(projection, 'now'), false);
-    assert.equal(Object.hasOwn(projection, 'held'), false);
     const snap = (await square.artifact.read(facts => snapshot(facts, queryContext.now))).value;
     assert.deepEqual(snap.participants, [
       { name: 'Alice', presence: 'active', listening: [] },
@@ -300,13 +293,6 @@ test('observed lifecycle renders its committed public activity and listener keep
   const listened = await alice.listen('Bob', { observe: true });
   assert.equal(listened.observation.target, 'Bob');
   assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);
-  const held = await alice.hold('pause', { observe: true });
-  assert.equal(Object.hasOwn(held.observation, 'activity'), false);
-  assert.deepEqual(held.activity, { id: 'act/2', at: 100, kind: 'hold', actor: 'Alice', body: 'pause', mentions: [] });
-  assert.match(renderLifecycleResult(square.location, 'hold', held), /@Alice raised a hand — pause · act\/2 · just now/);
-  const resumed = await alice.resume({ observe: true });
-  assert.equal(Object.hasOwn(resumed.observation, 'activity'), false);
-  assert.match(renderLifecycleResult(square.location, 'resume', resumed), /@Alice lowered the hand · act\/3 · just now/);
 });
 
 test('SDK delivered closure detaches exact raw assignments including orphan coordinates', async () => {

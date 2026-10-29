@@ -4,7 +4,6 @@ import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
-import { HELD_WAIT_BUDGET_MS } from './runtime.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
 import { grepSnippet } from './search.js';
@@ -14,7 +13,6 @@ export type WatchStatus = 'idle' | 'drained' | 'quorum' | 'capped';
 
 interface HeaderOptions {
   participantCount?: number;
-  held?: boolean;
   /** Refusal bodies go to stderr, which stays literal even when it is a TTY. */
   plain?: boolean;
 }
@@ -24,7 +22,6 @@ interface ParticipantOutputOptions {
   squarePath: string;
   name: string;
   participantCount?: number;
-  held?: boolean;
 }
 
 interface ActivityLimitOptions extends ParticipantOutputOptions {
@@ -40,18 +37,14 @@ interface ActivityBlockedOptions extends ParticipantOutputOptions {
 }
 
 interface ExpressWaitingOptions {
-  reason: 'throttled' | 'held';
+  reason: 'throttled';
   delayMs?: number;
-  holder?: string;
-  holdReason?: string;
 }
 
 interface ExpressNoWaitOptions extends ParticipantOutputOptions {
-  reason: 'throttled' | 'held';
+  reason: 'throttled';
   retryCommand: string;
   delayMs?: number;
-  holder?: string;
-  holdReason?: string;
   draftPath?: string;
 }
 
@@ -81,8 +74,7 @@ export function displayPath(squarePath: string, cwd = process.cwd()): string {
 
 export function withPathOutput(squarePath: string, body = '', opts: HeaderOptions = {}): string {
   const count = opts.participantCount ?? 0;
-  const heldSuffix = opts.held ? ' — a hand is raised' : '';
-  const line = `· ${displayPath(squarePath)} — ${count} in the square${heldSuffix}`;
+  const line = `· ${displayPath(squarePath)} — ${count} in the square`;
   return [opts.plain === true ? line : style('dim', line), ...(body === '' ? [] : ['', body])].join('\n') + '\n';
 }
 
@@ -90,7 +82,7 @@ export function withPathOutput(squarePath: string, body = '', opts: HeaderOption
 export function formatRefusal(
   squarePath: string,
   bodyLines: string[],
-  opts: { participantCount?: number; held?: boolean } = {}
+  opts: { participantCount?: number } = {}
 ): string {
   const body = bodyLines.join('\n');
   // A refusal with no known count stays bare rather than claiming "0 in the square".
@@ -193,10 +185,6 @@ export function renderRoomChangeText(event: RoomChangeAct | Activity): string {
       return `${identity} stepped into the square`;
     case 'done':
       return `${identity} stepped out of the square`;
-    case 'hold':
-      return `${identity} raised a hand${event.body ? ` — ${event.body}` : ''}`;
-    case 'resume':
-      return `${identity} lowered the hand`;
     case 'listen':
       return `${identity} turned an ear toward ${participantIdentity(event.target ?? 'someone')}`;
     case 'ignore':
@@ -240,10 +228,6 @@ function renderEventCliFacts(
   switch (event.kind) {
     case 'join':
       return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
-    case 'hold':
-      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
-    case 'resume':
-      return { text: `${style('release', '✓')} ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'listen':
     case 'ignore':
     case 'unlisten':
@@ -359,7 +343,7 @@ export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
       '  · take it in, then retry:',
       withDraftInput(opts.retryCommand, opts.draftPath),
     ].join('\n'),
-    { participantCount: opts.participantCount, held: opts.held }
+    { participantCount: opts.participantCount }
   );
 }
 
@@ -376,51 +360,23 @@ export function renderActivityUncertain(opts: ParticipantOutputOptions & { draft
   ], opts);
 }
 
-/** A blank or whitespace hold reason is absent, never an empty sensory line. */
-function holdReasonLines(reason: string | undefined): string[] {
-  const text = reason?.trim() ?? '';
-  return text === '' ? [] : [style('dim', `  · ${text}`)];
-}
-
-function heldMainLine(holder: string | undefined, styled: boolean): string {
-  const glyph = styled ? style('blocked', '✕') : '·';
-  const who = holder === undefined ? 'a hand is raised' : `${participantIdentity(holder)} has a hand raised`;
-  return `${glyph} ${who} — voices drop, yours too`;
-}
-
 export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
-  if (opts.reason === 'throttled') {
-    return [
-      '· the square is packed — your activity is waiting',
-      `  · a lull opens in ${formatDuration(opts.delayMs)}`,
-      '  · --no-wait saves a draft and returns now',
-    ].join('\n');
-  }
   return [
-    heldMainLine(opts.holder, false),
-    ...holdReasonLines(opts.holdReason),
-    `  · your activity is waiting — after ${formatDuration(HELD_WAIT_BUDGET_MS)} it saves a draft and stops`,
+    '· the square is packed — your activity is waiting',
+    `  · a lull opens in ${formatDuration(opts.delayMs)}`,
     '  · --no-wait saves a draft and returns now',
   ].join('\n');
 }
 
 export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
   const retryCommand = opts.retryCommand;
-  const lines =
-    opts.reason === 'throttled'
-      ? [
-          `${style('blocked', '✕')} the square is packed — shoulder to shoulder`,
-          `  · a lull opens in ${formatDuration(opts.delayMs)}`,
-          ...draftSavedLines(opts.draftPath),
-          `${withDraftInput(retryCommand, opts.draftPath)}`,
-        ]
-      : [
-          heldMainLine(opts.holder, true),
-          ...holdReasonLines(opts.holdReason),
-          ...draftSavedLines(opts.draftPath),
-          `${withDraftInput(retryCommand, opts.draftPath)}`,
-        ];
-  return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount, held: opts.held });
+  const lines = [
+    `${style('blocked', '✕')} the square is packed — shoulder to shoulder`,
+    `  · a lull opens in ${formatDuration(opts.delayMs)}`,
+    ...draftSavedLines(opts.draftPath),
+    `${withDraftInput(retryCommand, opts.draftPath)}`,
+  ];
+  return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount });
 }
 
 export function renderPresenceAnchor(names: readonly string[]): string {
@@ -450,7 +406,7 @@ export function renderGrepActivitiesView(
 
   for (const act of publicVisible) {
     const rawBody = act.body ?? '';
-    const header = `${style('dim', formatActivityId(act.index))} · ${act.actor === undefined ? 'unknown' : participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
+    const header = `${style('dim', formatActivityId(act.index))} · ${participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
     if (perception?.(act) === 'presence') {
       chunks.push(header);
       continue;
@@ -494,7 +450,7 @@ export function renderActivityLimit(opts: ActivityLimitOptions): string {
     ...draftSavedLines(opts.draftPath),
     '  · your draft stays unsent; done only steps out',
     doneCommand,
-  ].join('\n'), { participantCount: opts.participantCount, held: opts.held });
+  ].join('\n'), { participantCount: opts.participantCount });
 }
 
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {

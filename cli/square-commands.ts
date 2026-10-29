@@ -89,7 +89,7 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
     const cap = data.hardCap === null ? 'unlimited' : formatHardCap(data.hardCap);
     const throttle = data.throttlePerMinute === undefined ? [] : [`  · throttle ${data.throttlePerMinute}/min`];
     return withPathOutput(square.location, ['· the square stands ready', `  · cap ${cap}`, ...throttle].join('\n'), {
-      participantCount: 0, held: false,
+      participantCount: 0,
     });
   },
   present: (result) => process.stdout.write(result),
@@ -204,28 +204,22 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-function lifecycleCommand(verb: 'done' | 'hold' | 'resume'): CommandSpec<BodyIntent, string> {
-  return {
-    parse(argv, context) {
-      const args = argv.filter((arg) => arg !== '--json');
-      if (args.length > (verb === 'resume' ? 0 : 1)) usage(context.command);
-      return { body: args[0] };
-    },
-    async execute(intent, context) {
-      const body = verb === 'hold' ? (await resolveBody(intent.body ?? '')).replace(/\r\n/g, '\n').trim()
-        : verb === 'done' && (intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY))
-          ? await readStdin() : intent.body;
-      const squarePath = requireSquarePath(context);
-      const result = await withSquare(context, async (square) => {
-        const participant = await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name);
-        const options = context.json ? {} : { observe: true };
-        return verb === 'resume' ? participant.resume(options) : participant[verb](body, options);
-      });
-      return context.json ? jsonResult(result) : renderLifecycleResult(squarePath, verb, result)!;
-    },
-    present: (result) => process.stdout.write(result),
-  };
-}
-export const doneCommand = lifecycleCommand('done');
-export const holdCommand = lifecycleCommand('hold');
-export const resumeCommand = lifecycleCommand('resume');
+export const doneCommand: CommandSpec<BodyIntent, string> = {
+  parse(argv, context) {
+    const args = argv.filter((arg) => arg !== '--json');
+    if (args.length > 1) usage(context.command);
+    return { body: args[0] };
+  },
+  async execute(intent, context) {
+    const body = intent.body === '-' || ((intent.body === undefined || intent.body === '') && !process.stdin.isTTY)
+      ? await readStdin() : intent.body;
+    const squarePath = requireSquarePath(context);
+    const result = await withSquare(context, async (square) => {
+      const participant = await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name);
+      const options = context.json ? {} : { observe: true };
+      return participant.done(body, options);
+    });
+    return context.json ? jsonResult(result) : renderLifecycleResult(squarePath, result)!;
+  },
+  present: (result) => process.stdout.write(result),
+};
