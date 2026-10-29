@@ -7,6 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { Square, harnessOwner } from '../dist/square-api.js';
 import { CodexQueueTransport } from '../dist/codex-queue.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
+import { HttpWakeTransport } from '../dist/http-delivery.js';
 
 async function fixture(t, transport, receivers) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-concurrency-'));
@@ -38,6 +39,12 @@ test('public build/open use env-resolved defaults; false and memory do not wake 
     attempts.push(request.participant);
     return { outcome: 'accepted' };
   });
+  const httpAttempts = [];
+  t.mock.method(HttpWakeTransport.prototype, 'attempt', async (request, _budget, beforeSend) => {
+    assert.equal(await beforeSend(), true);
+    httpAttempts.push(request.participant);
+    return { outcome: 'accepted' };
+  });
   t.mock.method(PaseoWakeTransport.prototype, 'attempt', async () => {
     assert.fail('the supplied env disables Paseo defaults');
   });
@@ -55,9 +62,13 @@ test('public build/open use env-resolved defaults; false and memory do not wake 
     await resource.join(`Paseo${i}`, { owner: `test:paseo-${i}`, wakeAddress: {
       kind: 'paseo', address: { agentId: `paseo-${i}` },
     } });
-    await alice.express(`hello @Bob${i} @Paseo${i}`, { force: true });
+    await resource.join(`Http${i}`, { owner: `example:http-${i}`, wakeAddress: {
+      kind: 'http', address: { url: 'https://example.com/wake' },
+    } });
+    await alice.express(`hello @Bob${i} @Paseo${i} @Http${i}`, { force: true });
   }
   assert.deepEqual(attempts, ['Bob0', 'Bob1']);
+  assert.deepEqual(httpAttempts, ['Http0', 'Http1']);
   assert.equal(Object.hasOwn(input, 'wakeTransport'), false);
 });
 
@@ -82,7 +93,7 @@ test('public build/open/memory retain the injected transport identity', async t 
   for (const [i, resource] of resources.entries()) {
     const alice = (await resource.join(`Alice${i}`, { owner: ':' })).participant;
     await resource.join(`Bob${i}`, { owner: `test:receiver-${i}`, wakeAddress: {
-      kind: 'paseo', address: { agentId: `receiver-${i}` },
+      kind: 'http', address: { url: `https://example.com/receiver-${i}` },
     } });
     await alice.express(`hello @Bob${i}`, { force: true });
   }

@@ -48,6 +48,8 @@ export async function createDefaultWakeTransport(
   }
   const { createClaudeWakeTransport } = await import('./claude-delivery.js');
   transports['claude-native'] = createClaudeWakeTransport(env);
+  const { HttpWakeTransport } = await import('./http-delivery.js');
+  transports.http = new HttpWakeTransport({ env });
   return createWakeTransport(transports);
 }
 

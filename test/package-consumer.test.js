@@ -52,6 +52,10 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const injected: Promise<Square> = Square.at({ path: './test.square', wakeTransport: { attempt: async () => ({ outcome: 'accepted' }) } });
     void opened; void built; void injected;
     const joined: Promise<JoinResult> = square.join('Alice', { owner: body });
+    const webhook: Promise<JoinResult> = square.join('Bob', { owner: 'example:bob', wakeAddress: {
+      kind: 'http', address: { url: 'https://example.com/square/wake', tokenEnv: 'BOB_WAKE_TOKEN' },
+    } });
+    void webhook;
     // @ts-expect-error caller identity is required on join, not the resource
     square.join('NoBody');
     // @ts-expect-error the resource never captures caller identity

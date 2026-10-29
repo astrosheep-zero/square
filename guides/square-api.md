@@ -34,7 +34,7 @@ try {
 
 - `Square.build({path, markdown, hardCap?, throttlePerMinute?, template?, force?, ...})` returns
   the same open resource. Public `Square.at` and `Square.build` resolve an omitted `wakeTransport`
-  once from `env ?? process.env` to the product's Claude/Codex/Paseo defaults; if creation fails,
+  once from `env ?? process.env` to the product's Claude/Codex/Paseo/HTTP defaults; if creation fails,
   opening still succeeds without proactive wake. A supplied port is used unchanged; `false`
   disables proactive wake. Activities still land normally without a transport.
 - Synchronous `Square.inMemory` uses only an explicitly supplied port; omitted or `false` means
@@ -127,6 +127,65 @@ or restoration by the old owner cannot reclaim it.
 current seat it advances the suppression boundary through the current activity head, returning
 whether it changed. A mismatched seat returns `false`; a detached or concurrently replaced seat may
 be refused. It does not consume activity or recall an external send already past its final check.
+
+## HTTP(S) wake notifications
+
+File-backed public opens include a built-in `http` wake transport for both HTTP and HTTPS.
+Register its address through SDK join or same-owner `reattach`:
+
+```ts
+const { participant: bob } = await square.join('Bob', {
+  owner: 'example:bob-process',
+  wakeAddress: { kind: 'http', address: {
+    url: 'https://example.com/square/wake',
+    tokenEnv: 'BOB_WAKE_TOKEN', // optional; sender process environment variable
+  } },
+});
+```
+
+The URL must have an HTTP(S) scheme and hostname, with no embedded username/password or fragment.
+Local/private endpoints are allowed. HTTPS uses normal certificate validation. The sender POSTs
+`Content-Type: application/json` to that URL without following redirects. When `tokenEnv` is
+configured, the sender resolves it in its own environment (`env` at open, otherwise `process.env`),
+not the receiver's. A missing, blank or invalid bearer token refuses locally without HTTP I/O.
+Keep the secret in that environment variable, never in the stored address. Diagnostics do not echo
+URLs or raw network errors; URL query strings may themselves be sensitive and remain stored config.
+
+The JSON body contains only:
+
+```json
+{
+  "location": "/sender/path/discussion.square",
+  "participant": "Bob",
+  "activity": "act/12",
+  "actor": "Alice",
+  "attemptN": 0,
+  "preview": "<existing rendered Square wake reminder>"
+}
+```
+
+`attemptN` is omitted when unavailable. The preview is the existing rendered awareness reminder,
+not a new payload template or full artifact. Owner, route and claim token are never included. `location` is the
+**sender's artifact locator**, not a downloadable URL. HTTP adds wake notification, not a remote
+Square backend: the receiver owns how it queues/wakes its agent and gives it access to Square.
+
+Return 2xx promptly only after accepting wake custody. A 2xx records an accepted wake, **not** catch
+or presentation; activity remains unread until normal consumption. Redirects and 4xx are rejected,
+5xx are transient failures, and other non-2xx statuses are rejected. A network error or timeout
+after sending starts is **unknown**: the receiver may already have accepted. Unknown/accepted wakes
+are not automatically replayed. There is no retry loop in the HTTP adapter; existing delivery policy
+owns future dispatch. Local configuration, absent preview, expired pre-send budget or a refused final
+gate sends nothing. One deadline covers preparation, the final gate and waiting for response headers;
+response bodies are cancelled rather than read. Claims, per-owner ordering, deferral, attachment and
+cancellation checks are shared with every transport. `wakeTransport: false` still disables wakes,
+and an injected transport remains authoritative.
+
+The enclosing dispatcher's safety deadline is transport-neutral: if an attempt is still unsettled,
+it records conservative **unknown**, even when HTTP has not started (for example, while the final
+send gate is stalled). A local pre-send expiry is known no-send only when the adapter's result arrives
+before that outer fallback. HTTP still must not start I/O after a stalled gate resumes past its
+deadline; the persisted unknown remains and prevents automatic replay. This does not change the
+shared dispatcher's timeout or retry policy.
 
 ## One set of operations and defaults
 

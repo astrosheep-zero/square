@@ -4,7 +4,7 @@ import type { Act, ActivityId } from './square-core.js';
 export { formatActivityId, parseActivityId } from './square-core.js';
 export type { Act, ActivityId, Audience, Reach } from './square-core.js';
 
-export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'claude-native', 'paseo'] as const;
+export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'claude-native', 'paseo', 'http'] as const;
 export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
