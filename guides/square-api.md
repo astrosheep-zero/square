@@ -1,11 +1,9 @@
 # Square and Participant API
 
-`Square` is the actual resource handle shared by SDK, CLI, MCP and Pi. `square-api.ts` selects a
-structural backend resource: `sqlite-square.ts` owns existing local semantics, and `square-stdio.ts`
-adapts that same API over a process connection. `square.ts` remains the executable CLI entrypoint.
+`Square` is the concrete local SQLite resource shared by SDK, CLI, MCP and Pi. `square-api.ts`
+exports `SqliteSquare` as `Square`; `square.ts` remains the executable CLI entrypoint.
 `square-facade.ts` contains only public types. There is no separate operation factory, policy
-dispatcher or `{data, projection}` envelope. See [backends.md](backends.md) for runnable configuration,
-URI encoding, the versioned protocol and explicit remote limitations.
+dispatcher or `{data, projection}` envelope.
 
 ## Open, select, join, close
 
@@ -38,15 +36,13 @@ try {
   currentness checks as file delivery. Each memory resource has a unique `memory://` identity;
   this is not a remotely openable address, is not indexed, and does not enable file-based hooks.
 - `Square.at` accepts `path`, optional `cwd`, `body`, `wakeAddress`, `clock`, `wakeTransport`,
-  `backends`, default `participant`, and a caller-owned connection via `resources`. At the entry
-  boundary, optional `env` resolves path/configuration, the clock, the concrete transport and the
+  default `participant`, and a caller-owned connection via `resources`. At the entry
+  boundary, optional `env` resolves the path, the clock, the concrete transport and the
   discovery index path once. The opened local resource and participant operations do not carry an
   environment object or derive identity from it. Supply an explicit Body (`channel`, `session`,
   optional `agent`) for writes; read-only operations need none. `wakeTransport` injection is retained
   for both file-backed build/open and memory resources.
-- Paths resolve against `cwd`; an omitted path uses `SQUARE_LOCATION` at entry.
-  `stdio://name/key` stays a canonical URI and routes before filesystem access. The `backends`
-  configuration selects named stdio aliases.
+- Local artifact paths resolve against `cwd`; an omitted path uses `SQUARE_LOCATION` at entry.
 - `await square.participant(name?)` selects a handle **without joining, claiming or reentering**.
   A supplied name or explicit resource `participant` selects that voice; without either, the artifact
   must recognize exactly one current seat for the captured Body. Zero or multiple matches refuse.
@@ -72,15 +68,13 @@ try {
   address. It neither joins nor inherits the source handle's participant or wake address. This is a
   trusted SDK operation, not authentication; never let an untrusted client select another caller's
   Body. Participant ownership and takeover-generation checks are unchanged. Closing the borrowed
-  handle is a no-op; closing the resource owner invalidates all handles. Stdio explicitly refuses
-  this local operation: open a separate stdio handle with its own Body instead.
+  handle is a no-op; closing the resource owner invalidates all handles.
 - A Square owns its connection unless `resources: createSquareResourceOwner()` lends it one.
   Closing a borrowing handle leaves that owner open. Request signals never become the borrowed
   connection's lifetime. The MCP server drains cancelled/in-flight work before closing its owner;
-  explicit location overrides get independent request-owned connections. Stdio opens always own
-  their process connection (SQLite resource lending does not pool remote processes).
+  explicit location overrides get independent request-owned connections.
 
-### Host attachment lifecycle (local only)
+### Host attachment lifecycle
 
 `detachOwnedSession(name, sessionId, expectedGeneration?, body?)` checks captured Body and generation
 inside the artifact transaction. It returns `true` when it detaches, or `null` for stale, replaced,
@@ -100,7 +94,7 @@ There are three endings: participant `done` ends membership; Pi shutdown, Codex 
 Claude session end detach only; host-confirmed permanent deletion uses `endOwnedSession(...)` to
 land a fenced `done`, whether attached or detached. OpenCode `session.deleted` is permanent deletion.
 Takeover replaces either attachment state with `done -> join`; late cleanup or restoration by the
-old Body cannot reclaim it. Stdio refuses these host-only operations, as it does `implicitJoin`.
+old Body cannot reclaim it.
 
 ## One set of operations and defaults
 
@@ -108,12 +102,12 @@ Square owns `history`, `status`, `participants`, `snapshot`, `stream`, and recov
 A file-backed `stream` follows the path with a fresh artifact read for each page, so atomic file
 replacement is visible even while the resource holds its original connection. Its iterator owns
 its observation lifetime: `return()` interrupts a pending pull; closing a local Square does not close
-that independent path observation. A stdio stream belongs to its open connection and closes with it.
+that independent path observation.
 Internal readers that explicitly borrow an artifact port leave its lifetime with the lender and
 propagate port failures rather than waiting for path repair.
 
 `Activity` is `{id, at, kind, actor, body?, metadata?, mentions, reach?, target?, reply?}` throughout
-the SDK and stdio. Stream without a recipient yields these activities; with a recipient it selects
+the SDK. Stream without a recipient yields these activities; with a recipient it selects
 their landed directed activities and adds `perception` and the landing route `via`
 (`mention`, `reply`, `attention`, or `bell`). Perception follows the viewer's actual landed audience;
 `via` is absent when no directed route exists. Stream starts at a bounded tail or after an `ActivityId`
@@ -131,12 +125,12 @@ its `history` delegates to the same Square history operation.
   body may carry `{}`; an omitted, empty or whitespace-only body requires non-empty metadata. Metadata-only
   says omit `body` from public activity records. Invalid objects, cycles, unsupported values and oversized
   metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
-  catch, status/latest, unread projections and stream records through the SDK, stdio, CLI and stream.
+  catch, status/latest, unread projections and stream records through the SDK, CLI and stream.
   MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
   `metadata` argument. Tool history/catch return rendered text with a structured-activity placeholder,
   not metadata JSON or activity objects. Metadata does not affect mentions, replies, listening, audience,
   ordering, consumption or permissions. A current participant may temporarily defer proactive delivery
-  by exact metadata match through the SDK/stdio lease API below. Metadata may nest up to 256 levels; the bound is enforced before
+  by exact metadata match through the SDK lease API below. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
   metadata JSON. There is no archive metadata filter, query language or index; CLI `--metadata <json>` is the only
   metadata input flag.
@@ -175,7 +169,7 @@ Listener/lifecycle operations take optional observation options before that cont
 
 ## Temporary proactive delivery deferral
 
-SDK and stdio Participants expose the same three operations. There are no CLI/MCP/Pi authoring
+SDK Participants expose three operations. There are no CLI/MCP/Pi authoring
 commands or listing operation in this delivery. Existing proactive adapters still obey deferrals.
 
 ```ts
@@ -268,7 +262,7 @@ MCP/Pi use the shared `square-tools.ts` definitions. All eight tools return only
 or `structuredContent`. Join text includes its context and recent activity; express text
 includes landing ID/reach, warnings and bounded unread previews, never the sent body echo
 or internal observation tables. Failures remain failed tool results with readable recovery
-text. The SDK, CLI JSON and stdio keep their full domain receipts. The optional express observation
+text. The SDK and CLI JSON keep their full domain receipts. The optional express observation
 contains `context: {activities: [{id, actor, preview, truncated}], remaining}`, not the old
 unbounded `pendingPublic`/ordinal/perception tables.
 

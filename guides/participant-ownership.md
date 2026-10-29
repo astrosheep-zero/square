@@ -47,9 +47,6 @@ lifetimes and selection.
   deferrals until reattachment. Rejoin/takeover fences old handles permanently, even if the same
   Body later reacquires the name. Host cleanup checks Body and generation inside its transaction;
   stale, foreign, done or already-detached cleanup changes nothing.
-- Stdio retains the selected Participant in a connection-local reference. It uses that captured
-  handle rather than reselecting authority by name. Host-only discovery and cleanup operations
-  remain local and are not exposed over stdio.
 
 The HOME index supplies candidate paths only. Losing it may delay restoration or delivery but
 cannot transfer a seat, erase delivery evidence or consume unread activity. A wake address is

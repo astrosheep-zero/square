@@ -4,18 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Square, squareLocation } from '../dist/square-api.js';
-import { localSquareLocation, parseSquareLocation } from '../dist/square-location.js';
 import { run } from './square-cli-helpers.js';
 
 test('Windows drive paths are local, not URI schemes', () => {
   // Drive-relative forms are paths too; path.resolve handles the drive's cwd on Windows.
   for (const location of ['D:\\work\\conversation.square', 'D:/work/conversation.square', 'D:conversation.square', 'D:']) {
-    assert.deepEqual(parseSquareLocation(location), { kind: 'local', path: location });
+    assert.equal(squareLocation({ path: location }), path.resolve(location));
   }
-  assert.deepEqual(parseSquareLocation('stdio://local/conversation'), {
-    kind: 'stdio', backend: 'local', key: 'conversation', uri: 'stdio://local/conversation',
-  });
-  assert.throws(() => parseSquareLocation('https://example.com/conversation'), error => error.code === 'invalid_args');
+  assert.throws(() => squareLocation({ path: 'https://example.com/conversation' }), error => error.code === 'invalid_args');
 });
 
 test('a relative local location stays local after resolving and reopening through SDK and CLI', async t => {
@@ -23,10 +19,8 @@ test('a relative local location stays local after resolving and reopening throug
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const relative = './conversation.square';
   const absolute = path.resolve(cwd, relative);
-  // On Windows this second parse sees an absolute drive path even when the caller used ./.
   assert.equal(squareLocation({ cwd, path: relative }), absolute);
-  assert.deepEqual(parseSquareLocation(absolute), { kind: 'local', path: absolute });
-  assert.equal(localSquareLocation({ cwd, path: relative }), absolute);
+  assert.equal(squareLocation({ cwd, path: absolute }), absolute);
   const created = await Square.build({ cwd, path: relative, markdown: 'A local conversation' });
   await created.close();
   const reopened = await Square.at({ cwd, path: absolute });

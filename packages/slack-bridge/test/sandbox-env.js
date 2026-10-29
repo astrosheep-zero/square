@@ -20,7 +20,6 @@ for (const [name, directory] of Object.entries({
 process.env.PASEO_HOST = `unix://${join(sandbox, 'paseo', 'daemon.sock')}`
 process.env.SQUARE_REGISTRY = join(sandbox, 'sessions.ndjsonl')
 for (const name of ['PASEO_PASSWORD', 'PI_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
-  'CODEX_THREAD_ID', 'OPENCODE_SESSION_ID', 'PASEO_AGENT_ID', 'SQUARE_LOCATION', 'SQUARE_PARTICIPANT_NAME',
-  'SQUARE_BACKENDS_CONFIG']) delete process.env[name]
+  'CODEX_THREAD_ID', 'OPENCODE_SESSION_ID', 'PASEO_AGENT_ID', 'SQUARE_LOCATION', 'SQUARE_PARTICIPANT_NAME']) delete process.env[name]
 
 process.on('exit', () => rmSync(sandbox, { recursive: true, force: true }))

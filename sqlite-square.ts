@@ -3,7 +3,7 @@ import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
 import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
 import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
-import { squareLocation, localSquareLocation } from './square-location.js';
+import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, sameBody, validateName, type Body, type Seat, type WakeAddress, type WatchOptions } from './model.js';
@@ -81,24 +81,22 @@ export class SqliteSquare {
     private readonly wakeAddress?: WakeAddress,
     private readonly wakeTransport?: WakeTransportPort,
     private readonly indexPath?: string,
-    private readonly automaticDelivery = true,
     private readonly ownsArtifact = true,
     private readonly defaultParticipant?: string,
     private readonly deliveryLocation = location,
   ) { }
 
-  static async at(input: SquareAtInput, control?: OperationControl, automaticDelivery = true): Promise<SqliteSquare> {
+  static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
     const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
     const clock = squareClock(env, input.clock);
-    const wakeTransport = input.wakeTransport ?? (automaticDelivery
-      ? await createDefaultWakeTransport(env).catch(() => undefined) : undefined);
+    const wakeTransport = input.wakeTransport ?? await createDefaultWakeTransport(env).catch(() => undefined);
     // A request can abort its own borrowed reads, never the owner's connection lifetime.
     const borrowed = input.resources?.artifact(location);
     const artifact = borrowed ?? createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
       const resource = new SqliteSquare(location, artifact, clock, input.body, input.wakeAddress,
-        wakeTransport, squareIndexPath(env), automaticDelivery, borrowed === undefined, input.participant, await canonicalPath(location));
+        wakeTransport, squareIndexPath(env), borrowed === undefined, input.participant, await canonicalPath(location));
       await resource.publishIdentity();
       return resource;
     } catch (error) {
@@ -108,18 +106,18 @@ export class SqliteSquare {
       throw error;
     }
   }
-  static async build(input: SquareBuildInput, control?: OperationControl, automaticDelivery = true): Promise<SqliteSquare> {
+  static async build(input: SquareBuildInput, control?: OperationControl): Promise<SqliteSquare> {
     checkControl(control);
     const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
     await createSquare(location, { hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
       template: input.template, force: input.force ?? false }, input.markdown, control?.signal);
     // Publication already committed; cancellation cannot erase the completed build.
-    return SqliteSquare.at({ ...input, path: location, env }, undefined, automaticDelivery);
+    return SqliteSquare.at({ ...input, path: location, env });
   }
   static inMemory(input: Omit<SquareBuildInput, 'path' | 'resources'>): SqliteSquare {
     const env = { ...(input.env ?? process.env) };
     return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
-      squareClock(env, input.clock), input.body, input.wakeAddress, input.wakeTransport, undefined, true, true, input.participant);
+      squareClock(env, input.clock), input.body, input.wakeAddress, input.wakeTransport, undefined, true, input.participant);
   }
   /** Trusted local SDK binding: shares this resource, never changes an existing caller's identity.
    * The original resource owner controls lifetime; closing a borrowed handle is a no-op. */
@@ -128,7 +126,7 @@ export class SqliteSquare {
     const wakeAddress = input.wakeAddress === undefined ? undefined
       : { kind: input.wakeAddress.kind, address: { ...input.wakeAddress.address } };
     return new SqliteSquare(this.location, this.artifact, this.clock, body, wakeAddress,
-      this.wakeTransport, this.indexPath, this.automaticDelivery, false, undefined, this.deliveryLocation);
+      this.wakeTransport, this.indexPath, false, undefined, this.deliveryLocation);
   }
   /** Discovery is best effort and never grants write authority. Finish it before returning. */
   private async publishIdentity(): Promise<void> {
@@ -137,15 +135,15 @@ export class SqliteSquare {
   }
   private observation(standingCount: number, held: boolean, participant?: string, now = this.clock()): SquareObservation {
     return { location: this.location, standingCount, held, now,
-      ...(participant === undefined ? {} : { participant }), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined };
+      ...(participant === undefined ? {} : { participant }), automaticDeliveryAvailable: this.body !== undefined };
   }
   private async contextObservation(participant?: string, control?: OperationControl): Promise<SquareObservation> {
     return (await this.artifact.read(facts => this.observation(inSquareCount(facts), facts.hold().active, participant), control?.signal)).value;
   }
   private handle(name: string, seat?: Seat): Participant { return new SqliteSquare.ParticipantHandle(name, this, seat); }
 
-  // The nested handle can use its resource's private dependencies without widening
-  // the concrete-derived backend contract or copying them into a second context.
+  // The nested handle uses its resource's private dependencies without copying
+  // them into a second context.
   private static readonly ParticipantHandle = class implements Participant {
     constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly seat?: Seat) { }
 
@@ -518,13 +516,13 @@ export class SqliteSquare {
       const seats = this.body === undefined ? [] : facts.seatsForBody(this.body).filter(seat => seat.attachment === 'attached');
       const viewer = options.viewer ?? this.defaultParticipant ?? (seats.length === 1 ? seats[0].participant : '');
       return queryStatus(facts, {
-        location: this.location, now: this.clock(), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined,
+        location: this.location, now: this.clock(), automaticDeliveryAvailable: this.body !== undefined,
       }, viewer, options.observe === true);
     }, control?.signal)).value;
   }
   async participants(options: ObservationOptions = {}, control?: OperationControl): Promise<ParticipantsResult> {
     return (await this.artifact.read(facts => queryParticipants(facts, {
-      location: this.location, now: this.clock(), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined,
+      location: this.location, now: this.clock(), automaticDeliveryAvailable: this.body !== undefined,
     }, options.observe === true), control?.signal)).value;
   }
   async recovery(requested?: string, control?: OperationControl): Promise<RecoveryResult> {
@@ -577,10 +575,10 @@ export class SqliteSquare {
   }
 }
 
-export function diagnoseSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return diagnoseSquareFile(localSquareLocation(input)); }
-export function migrateSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); const env = input.env ?? process.env; return migrateSquareFile(localSquareLocation(input), control?.signal, env); }
+export function diagnoseSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return diagnoseSquareFile(squareLocation(input)); }
+export function migrateSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); const env = input.env ?? process.env; return migrateSquareFile(squareLocation(input), control?.signal, env); }
 export function discover(input: SquareAtInput, options: DiscoveryOptions = {}, control?: OperationControl) {
-  if (input.path !== undefined || (input.env ?? process.env).SQUARE_LOCATION) localSquareLocation(input);
+  if (input.path !== undefined || (input.env ?? process.env).SQUARE_LOCATION) squareLocation(input);
   const env = { ...(input.env ?? process.env) };
   return discoverSquares(input.cwd ?? process.cwd(), options, control, { clock: squareClock(env, input.clock) });
 }

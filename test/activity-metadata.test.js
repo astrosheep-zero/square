@@ -108,20 +108,6 @@ test('metadata admission is bounded, lossless, and rejects unsupported content b
   } finally { await square.close(); }
 });
 
-test('stdio exposes the same object-form metadata activity result', async t => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-metadata-stdio-'));
-  const root = path.join(cwd, 'artifacts');
-  const server = path.resolve('dist/stdio-server.js');
-  const env = { ...process.env, HOME: cwd, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), PI_SESSION_ID: '', CLAUDE_CODE_SESSION_ID: '', CODEX_THREAD_ID: '', OPENCODE_SESSION_ID: '', PASEO_AGENT_ID: '' };
-  const square = await Square.build({ path: 'stdio://local/metadata', cwd, env, backends: { local: { command: process.execPath, args: [server, '--root', root] } }, markdown: 'stdio metadata', body: body('stdio'), participant: 'Alice', force: true });
-  t.after(async () => { await square.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
-  const alice = (await square.join('Alice')).participant;
-  const result = await alice.express({ metadata: { remote: true } }, { force: true });
-  assert.deepEqual(result.activity.metadata, { remote: true });
-  assert.deepEqual((await alice.history({ limit: null })).activities.at(-1)?.metadata, { remote: true });
-  assert.equal(result.activity.body, undefined);
-});
-
 test('stored say validation rejects blank bodies with empty metadata', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-metadata-corrupt-'));
   const location = path.join(root, 'corrupt.square');

@@ -20,7 +20,7 @@ All eight tools return the CLI's human-readable text, without an `outputSchema` 
 `structuredContent`. In Pi codemode, a successful call resolves to a `string`:
 use `text(result)`, not `text(result.text)`. Failures are marked as failed tool results;
 codemode rejects with the readable error and recovery commands rather than returning
-an error object. For machine-readable domain results, use the [SDK or stdio API](square-api.md).
+an error object. For machine-readable domain results, use the [SDK](square-api.md).
 
 `express` confirms landing and reach warnings without echoing the sent body. Unread
 context shows at most the latest five directed activities, in chronological order,

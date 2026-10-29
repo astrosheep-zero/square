@@ -18,7 +18,7 @@ Boundaries should be light and useful:
   proactive delivery do not. Host start/resume restores only detached standing seats of that exact
   Body before delivery, never a voluntary departure or takeover. Host-confirmed permanent deletion
   (OpenCode `session.deleted`) still lands fenced `done`. See `guides/participant-ownership.md`.
-- Proactive delivery may be temporarily deferred by the current participant through the SDK/stdio
+- Proactive delivery may be temporarily deferred by the current participant through the SDK
   `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` methods. Independent leases
   are artifact-owned, expiring, and fenced to the captured Body/join generation. One lease matches
   exact nested metadata scalar equalities with AND; active leases combine with OR. They never alter

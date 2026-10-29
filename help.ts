@@ -133,8 +133,7 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] <command> [args...]',
-    'Environment: SQUARE_LOCATION sets the CLI location (local artifact path or stdio://name/key); square-accessing commands require it or --location. Use --as to select a participant.',
-    'Backends: SQUARE_BACKENDS_CONFIG selects {backends:{name:{command,args?,cwd?,env?}}}; default ~/.config/square/backends.json. See guides/backends.md.',
+    'Environment: SQUARE_LOCATION sets the CLI local artifact path; square-accessing commands require it or --location. Use --as to select a participant.',
     'CLI flags override environment values. Participants join explicitly; no square is joined automatically.',
     'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, hold, resume, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',

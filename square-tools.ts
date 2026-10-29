@@ -22,7 +22,7 @@ interface ToolDefinition {
   run(square: Square, args: JsonObject, control: OperationControl): Promise<string>;
 }
 
-const location = z.string().optional().describe('Which square: a .square file path, or a backend URI like stdio://name/key. Relative paths start from the working directory. Leave it out for the configured square.');
+const location = z.string().optional().describe('Which square: a .square file path. Relative paths start from the working directory. Leave it out for the configured square.');
 const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());

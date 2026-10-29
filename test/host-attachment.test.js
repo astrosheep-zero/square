@@ -276,7 +276,7 @@ test('the OpenCode session.deleted event uses permanent membership cleanup, not 
   }
 });
 
-test('CLI rosters show away, detached writes end with a plain rejoin, and stdio keeps host-only operations unavailable', async t => {
+test('CLI rosters show away and detached writes end with a plain rejoin', async t => {
   const f = await fixture(t);
   await f.detach();
   const cli = (...args) => spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', f.location, '--as', 'Bob', ...args], {
@@ -294,10 +294,4 @@ test('CLI rosters show away, detached writes end with a plain rejoin, and stdio 
     assert.match(output, /away/);
     assert.match(output.trim().split('\n').at(-1), /^square .* join(?:\s|$)/);
   }
-  const remote = await Square.at({ path: 'stdio://local/TEST', backends: { local: { command: process.execPath,
-    args: [path.resolve('dist/stdio-server.js'), '--root', f.root] } }, env: f.env, body: f.body });
-  try {
-    for (const operation of [() => remote.bodySeats(), () => remote.detachOwnedSession('Bob', f.body.session), () => remote.endOwnedSession('Bob', f.body.session)])
-      await assert.rejects(async () => operation(), error => error.code === 'invalid_args' && /stdio/.test(error.message));
-  } finally { await remote.close(); }
 });
