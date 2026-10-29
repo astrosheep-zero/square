@@ -71,9 +71,10 @@ export interface DirectedHead {
 export interface LandedRecipient { readonly recipient: string; readonly route: DirectedHead['route'] }
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
-export type SeatRef = Omit<Seat, 'wakeAddress'>;
+export type SeatRef = Pick<Seat, 'participant' | 'body' | 'generation'>;
 export type ArtifactWriteAuthority =
   | { readonly kind: 'participant'; readonly seat: SeatRef }
+  | { readonly kind: 'host-cleanup'; readonly seat: SeatRef }
   | { readonly kind: 'join'; readonly participant: string; readonly body: Body; readonly wakeAddress?: WakeAddress }
   | { readonly kind: 'takeover'; readonly participant: string; readonly body: Body; readonly expectedGeneration: ActivityId; readonly wakeAddress?: WakeAddress };
 export interface DeliveryEvidence {
@@ -125,8 +126,6 @@ export interface DeliveryCompletion {
 export interface SquareRead {
   seat(requestedName: string): Seat | undefined;
   seatsForBody(body: Body): readonly Seat[];
-  /** Latest completed coordinates only; never participant write authority. */
-  completedSeatsForBody(body: Body): readonly Seat[];
   deliveryEvidence(participant: string, generation: ActivityId, activity?: ActivityId): readonly DeliveryEvidence[];
   deliveryByToken(claimToken: string): DeliveryEvidence | undefined;
   cancelledThrough(participant: string, generation: ActivityId): number | undefined;
@@ -161,6 +160,10 @@ export interface SquareRead {
 export interface SquareWrite extends SquareRead {
   land(activity: Act & { readonly at: number }): StoredAct;
   updateWakeAddress(seat: SeatRef, wakeAddress?: WakeAddress): boolean;
+  /** Join authority only; preserves membership and its establishing generation. */
+  reattachSeat(seat: SeatRef, wakeAddress?: WakeAddress): boolean;
+  /** Host-cleanup authority only; stale/already-detached coordinates are a no-op. */
+  detachSeat(seat: SeatRef): boolean;
   cancelThrough(seat: SeatRef, through: ActivityIndex): boolean;
   claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult;
   prepareDelivery(input: DeliveryPreparation): boolean;

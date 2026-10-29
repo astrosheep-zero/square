@@ -9,7 +9,7 @@ import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
 
 function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefined {
-  if (seat.wakeAddress === undefined) return undefined;
+  if (seat.attachment !== 'attached' || seat.wakeAddress === undefined) return undefined;
   return {
     location, participant: seat.participant, sessionId: seat.body.session, channel: seat.body.channel,
     kind: seat.wakeAddress.kind, address: { ...seat.wakeAddress.address }, updatedAt: now,
@@ -28,7 +28,7 @@ async function currentness(artifact: SquareArtifactPort, request: WakeRequest, n
   const index = parseActivityId(request.activity)!;
   const { value } = await artifact.read((facts) => {
     const currentSeat = facts.seat(request.participant);
-    const seatCurrent = currentSeat !== undefined && currentSeat.generation === request.seat.generation
+    const seatCurrent = currentSeat !== undefined && currentSeat.attachment === 'attached' && currentSeat.generation === request.seat.generation
       && sameBody(currentSeat.body, request.seat.body)
       && currentSeat.wakeAddress?.kind === request.route.kind
       && Object.keys(currentSeat.wakeAddress.address).length === Object.keys(request.route.address).length
@@ -78,7 +78,7 @@ async function candidates(artifact: SquareArtifactPort, requested?: number, now 
       : pendingRecipients(facts, requested);
     return heads.flatMap((head) => {
       const seat = facts.seat(head.recipient);
-      return seat === undefined || deliveryDeferralExpiry(facts, seat, head.index, now) !== undefined ? [] : [{ seat, head }];
+      return seat === undefined || seat.attachment !== 'attached' || deliveryDeferralExpiry(facts, seat, head.index, now) !== undefined ? [] : [{ seat, head }];
     });
   });
   return value;

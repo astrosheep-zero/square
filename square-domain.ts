@@ -77,7 +77,7 @@ export function landingFacts(read: SquareRead, activity: StoredAct): LandingFact
 }
 
 export interface LandingWriter extends Pick<SquareWrite,
-  'markSeen' | 'putLease' | 'removeLease' | 'updateWakeAddress' | 'cancelThrough' |
+  'markSeen' | 'putLease' | 'removeLease' | 'updateWakeAddress' | 'reattachSeat' | 'detachSeat' | 'cancelThrough' |
   'putDeliveryDeferral' | 'renewDeliveryDeferral' | 'releaseDeliveryDeferral' |
   'claimDelivery' | 'prepareDelivery' | 'completeDelivery' | 'observeNativeDelivery'> {
   /** Artifact-private seat persistence used only by this gate's lifecycle transition. */
@@ -95,16 +95,26 @@ function validateGeneration(value: string): void {
     throw new SquareError('invalid_args', 'Artifact authority requires a valid join generation.');
 }
 
+/** Read probes and writes share the same captured-coordinate and attachment fence. */
+export function assertCurrentSeat(read: SquareRead, expected: SeatRef, allowDetached = false): void {
+  const current = read.seat(expected.participant);
+  if (current === undefined || !sameBody(current.body, expected.body) || current.generation !== expected.generation)
+    throw new SquareError('already_joined', 'This participant seat has been replaced.');
+  if (!allowDetached && current.attachment !== 'attached')
+    throw new SquareError('already_joined', 'This participant is away; join again before writing.', { reason: 'needs_seat', activityUnsent: true });
+}
+
 /** The artifact transaction supplies one captured authority; every mutation checks it here. */
 export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authority: ArtifactWriteAuthority): SquareWriteGate {
   if (authority === undefined || typeof authority !== 'object' || authority === null)
     throw new SquareError('invalid_args', 'Artifact writes require an explicit authority.');
   const { applyLanding, ...mutations } = writes;
-  const expectedName = authority.kind === 'participant' ? authority.seat?.participant : authority.participant;
-  if (!['participant', 'join', 'takeover'].includes(authority.kind) || typeof expectedName !== 'string')
+  const seated = authority.kind === 'participant' || authority.kind === 'host-cleanup';
+  const expectedName = seated ? authority.seat?.participant : authority.participant;
+  if (!['participant', 'host-cleanup', 'join', 'takeover'].includes(authority.kind) || typeof expectedName !== 'string')
     throw new SquareError('invalid_args', 'Artifact write authority is malformed.');
   validateName(expectedName);
-  if (authority.kind === 'participant') {
+  if (seated) {
     validateBody(authority.seat.body);
     validateGeneration(authority.seat.generation);
   } else {
@@ -112,13 +122,11 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     if (authority.kind === 'takeover') validateGeneration(authority.expectedGeneration);
   }
 
-  const assertSeat = (seat: SeatRef, expected = authority.kind === 'participant' ? authority.seat : undefined) => {
+  const assertSeat = (seat: SeatRef, expected = authority.kind === 'participant' ? authority.seat : undefined, allowDetached = false) => {
     if (expected === undefined || !sameName(expected.participant, seat.participant)
       || seat.generation !== expected.generation || !sameBody(seat.body, expected.body))
       throw new SquareError('already_joined', 'This write needs the current participant seat.');
-    const current = read.seat(seat.participant);
-    if (current === undefined || !sameBody(current.body, expected.body) || current.generation !== expected.generation)
-      throw new SquareError('already_joined', 'This participant seat has been replaced.');
+    assertCurrentSeat(read, expected, allowDetached);
   };
   const assertParticipant = (name: string, generation?: import('./square-core.js').ActivityId) => {
     if (authority.kind !== 'participant')
@@ -130,6 +138,8 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
   let takeoverPhase: 'ready' | 'done' | 'joined' | undefined = authority.kind === 'takeover' ? 'ready' : undefined;
   if (authority.kind === 'participant') {
     assertSeat(authority.seat);
+  } else if (authority.kind === 'host-cleanup') {
+    // A late host cleanup is allowed to inspect a stale coordinate and return a no-op.
   } else if (authority.kind === 'join') {
     const participant = read.participant(expectedName), seat = read.seat(expectedName);
     if (participant?.joined) {
@@ -155,6 +165,9 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       if (authority.kind === 'participant') {
         assertSeat(authority.seat);
         if (activity.kind === 'join') throw new SquareError('invalid_args', 'A participant seat can only be re-established by join.');
+      } else if (authority.kind === 'host-cleanup') {
+        assertSeat(authority.seat, authority.seat, true);
+        if (activity.kind !== 'done') throw new SquareError('invalid_args', 'Host cleanup may only end membership.');
       } else if (authority.kind === 'join') {
         if (activity.kind !== 'join') throw new SquareError('invalid_args', 'A new seat must be established by its join activity.');
         if (read.participant(expectedName)?.joined)
@@ -179,11 +192,12 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       applyLanding(deriveLanding(stored, landingFacts(read, stored)));
 
       if (stored.kind === 'join') {
-        if (authority.kind === 'participant') throw new SquareError('invalid_args', 'Participant authority cannot establish a seat.');
+        if (seated) throw new SquareError('invalid_args', 'Seat authority cannot establish another seat.');
         const seat: Seat = {
           participant: stored.actor,
           body: authority.body,
           generation: formatActivityId(stored.index),
+          attachment: 'attached',
           ...(authority.wakeAddress === undefined ? {} : { wakeAddress: authority.wakeAddress }),
         };
         mutations.storeSeat(seat);
@@ -191,7 +205,7 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
         if (established === undefined || !sameBody(established.body, seat.body) || established.generation !== seat.generation)
           throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');
         if (authority.kind === 'takeover') takeoverPhase = 'joined';
-      } else if (stored.kind === 'done' && authority.kind === 'participant') {
+      } else if (stored.kind === 'done' && seated) {
         if (!mutations.removeSeat(authority.seat))
           throw new SquareError('already_joined', 'The participant seat changed while it was being completed.');
       } else if (stored.kind === 'done' && authority.kind === 'takeover') {
@@ -202,9 +216,25 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       lastActivity = read.activity(index)!;
       return lastActivity;
     },
-    updateWakeAddress(seat: import('./ports.js').SeatRef, wakeAddress?: import('./model.js').WakeAddress): boolean {
-      assertSeat(seat, authority.kind === 'join' ? reconnectSeat : undefined);
+    updateWakeAddress(seat: SeatRef, wakeAddress?: import('./model.js').WakeAddress): boolean {
+      if (authority.kind !== 'join' && authority.kind !== 'participant')
+        throw new SquareError('already_joined', 'This write needs the current participant seat.');
+      assertSeat(seat, authority.kind === 'join' ? reconnectSeat : authority.seat);
       return mutations.updateWakeAddress(seat, wakeAddress);
+    },
+    reattachSeat(seat: SeatRef, wakeAddress?: import('./model.js').WakeAddress): boolean {
+      if (authority.kind !== 'join') throw new SquareError('already_joined', 'Reattachment requires a same-Body join.');
+      assertSeat(seat, reconnectSeat, true);
+      return mutations.reattachSeat(seat, wakeAddress);
+    },
+    detachSeat(seat: SeatRef): boolean {
+      if (authority.kind !== 'host-cleanup') throw new SquareError('already_joined', 'Detach requires captured host cleanup authority.');
+      const current = read.seat(seat.participant), expected = authority.seat;
+      if (!sameName(seat.participant, expected.participant) || !sameBody(seat.body, expected.body) || seat.generation !== expected.generation)
+        throw new SquareError('already_joined', 'Host cleanup does not match its captured seat.');
+      if (current === undefined || current.attachment !== 'attached' || !sameBody(current.body, expected.body)
+        || current.generation !== expected.generation) return false;
+      return mutations.detachSeat(seat);
     },
     cancelThrough(seat: import('./ports.js').SeatRef, through: number): boolean {
       assertSeat(seat);

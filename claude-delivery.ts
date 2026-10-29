@@ -83,7 +83,7 @@ interface NativeRow {
 
 function currentPayload(facts: SquareRead, request: WakeRequest): string | undefined {
   const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
-  if (seat === undefined || evidence === undefined || seat.generation !== evidence.generation
+  if (seat === undefined || seat.attachment !== 'attached' || evidence === undefined || seat.generation !== evidence.generation
     || seat.generation !== request.seat.generation || !sameBody(seat.body, request.seat.body)
     || seat.body.channel !== 'claude-code' || seat.body.session !== request.route.sessionId
     || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)

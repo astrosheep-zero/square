@@ -238,6 +238,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   const participantsByName = new Map(data.participants.map((participant) => [participant.name, participant]));
   const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
   const lingering = presentation.lingeringCount;
+  const away = data.participants.filter(participant => participant.presence === 'away');
   const people: string[] = [];
   if (presentation.standingCount === 0) {
     people.push('  ○ nobody in the square');
@@ -262,7 +263,10 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
             : 'caught up';
       return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
     }));
-    const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
+    people.push(...away.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map(participant => `  ○ ${participantIdentity(participant.name)}${style('dim', ' · away')}`));
+    if (away.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) people.push(`  ○ … ${away.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more away`);
+    const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT)
+      + Math.max(0, away.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
     if (orderedHere.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
       people.push(`  ○ … ${orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more here`);
     }
@@ -302,6 +306,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
   }
   const counts = [
     `${orderedHere.length} here`,
+    ...(away.length > 0 ? [`${away.length} away`] : []),
     ...(lingering > 0 ? [`${lingering} lingering`] : []),
     `${data.participants.filter((participant) => participant.presence === 'done').length} done`,
     `cap ${cap}`,
@@ -364,7 +369,7 @@ export interface FailureReport {
   readonly code: string;
   readonly message: string;
   readonly facts?: {
-    readonly reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'invalid_reply' | 'invalid_done_body';
+    readonly reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
     readonly activityId?: string;
     readonly ledgerRoot?: string;
     readonly activityExists?: boolean;
@@ -382,6 +387,9 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
   if (reason === 'migration_required') {
     if (facts?.ledgerRoot !== undefined) lines.push('square ledger migrate', 'square ledger verify');
     else if (squarePath !== undefined) lines.push(`${commandPrefix(squarePath)} migrate`);
+  } else if (squarePath !== undefined && name !== undefined && reason === 'needs_seat') {
+    lines.splice(0, 1, `✕ ${participantIdentity(name)} is away — join again before writing`);
+    lines.push(joinRecoveryCommand(squarePath, name));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);

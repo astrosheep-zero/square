@@ -456,13 +456,13 @@ test('format-3 migration keeps only retired Claude correlation for a done partic
   try {
     const { value } = await artifact.read(facts => ({
       seat: facts.seat('Dana'),
-      completed: facts.completedSeatsForBody({ channel: 'claude-code', session: 'dana-session' }),
+      bodySeats: facts.seatsForBody({ channel: 'claude-code', session: 'dana-session' }),
       evidence: facts.deliveryEvidence('Dana', 'act/8', 'act/9'),
       receipt: facts.receipt('Dana', 9),
       dropped: facts.deliveryByToken('dropped-claude-token'),
     }));
     assert.equal(value.seat, undefined);
-    assert.deepEqual(value.completed, []);
+    assert.deepEqual(value.bodySeats, []);
     assert.equal(value.receipt, undefined);
     assert.equal(value.dropped, undefined);
     assert.equal(value.evidence.length, 1);

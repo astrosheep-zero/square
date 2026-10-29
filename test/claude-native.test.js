@@ -551,8 +551,9 @@ test('late Claude memberships reconcile, cancellation covers committed joins, an
     seats: facts.seatsForBody(claudeBody),
     acts: facts.activityHeads({}, { edge: 'oldest', limit: 30 }).items,
   }));
-  assert.deepEqual(state.seats, []);
-  assert.equal(state.acts.filter(activity => activity.kind === 'done').length, 3);
+  assert.deepEqual(state.seats.map(seat => [seat.participant, seat.attachment, seat.wakeAddress]),
+    [['After', 'detached', undefined], ['Bob', 'detached', undefined], ['Late', 'detached', undefined]]);
+  assert.equal(state.acts.filter(activity => activity.kind === 'done').length, 0);
 });
 
 test('a prior cancellation cutoff cannot suppress a replacement generation on repeated reconciliation', supported, async t => {

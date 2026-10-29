@@ -144,9 +144,10 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
   if (shown.length === 0) return [style('dim', '  ○ nobody nearby')];
 
   const lines = shown.map((p) => {
-    const glyph = p.presence === 'done' ? '○' : p.presence === 'watching' ? '◎' : p.lastActiveAt !== undefined ? '●' : '○';
+    const glyph = p.presence === 'done' || p.presence === 'away' ? '○' : p.presence === 'watching' ? '◎' : p.lastActiveAt !== undefined ? '●' : '○';
     const text = p.presence === 'done'
       ? (p.lastActiveAt === undefined ? 'stepped out of the square' : `stepped out of the square · ${formatRelativeTime(p.lastActiveAt, now)}`)
+      : p.presence === 'away' ? 'is away'
       : p.presence === 'watching'
         ? (p.lastActiveAt === undefined ? 'is nearby · catching' : `is nearby · catching · ${formatRelativeTime(p.lastActiveAt, now)}`)
         : p.lastActiveAt === undefined ? 'is nearby · quiet'

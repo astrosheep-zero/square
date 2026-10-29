@@ -160,7 +160,7 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
   assert.equal((await artifact.read(facts => facts.seat('Bob'))).value.generation, replacement.generation);
 });
 
-test('done retains one completed coordinate, never authority, and join/takeover replace it atomically', async t => {
+test('done removes seat authority, and rejoin/takeover replace it atomically', async t => {
   const artifact = createArtifactPort(':memory:', empty());
   t.after(() => artifact.close());
   const body = { channel: 'test', session: 'same', agent: 'child' };
@@ -170,16 +170,11 @@ test('done retains one completed coordinate, never authority, and join/takeover 
     facts.land({ kind: 'done', actor: 'Ivy', at: 2 });
     assert.equal(facts.seat('Ivy'), undefined);
     assert.deepEqual(facts.seatsForBody(body), []);
-    assert.equal(facts.completedSeatsForBody(body)[0].generation, first.generation);
     assert.equal(facts.lease('Ivy'), undefined);
   });
-  const completed = (await artifact.read(facts => facts.completedSeatsForBody(body))).value[0];
-  await assert.rejects(artifact.transactAs({ kind: 'participant', seat: completed }, facts => facts.putLease('Ivy', { leaseId: 'invalid', heartbeatAt: 2, expiresAt: 100 })), /replaced/);
-  for (const other of [{ channel: 'test', session: 'same' }, { channel: 'pi', session: 'same', agent: 'child' }])
-    assert.deepEqual((await artifact.read(facts => facts.completedSeatsForBody(other))).value, []);
+  await assert.rejects(artifact.transactAs({ kind: 'participant', seat: first }, facts => facts.putLease('Ivy', { leaseId: 'invalid', heartbeatAt: 2, expiresAt: 100 })), /replaced/);
   const second = await join(artifact, 'Ivy', body, 3);
   assert.notEqual(second.generation, first.generation);
-  assert.deepEqual((await artifact.read(facts => facts.completedSeatsForBody(body))).value, []);
   await artifact.transactAs({ kind: 'participant', seat: second }, facts => facts.putLease('Ivy', { leaseId: 'new', heartbeatAt: 3, expiresAt: 100 }, second.generation));
   await assert.rejects(artifact.transactAs({ kind: 'participant', seat: first }, facts => facts.removeLease('Ivy', 'new', first.generation)), /replaced/);
   await assert.rejects(artifact.transactAs({ kind: 'takeover', participant: 'Ivy', body, expectedGeneration: second.generation }, facts => facts.land({ kind: 'done', actor: 'Ivy', at: 4 })), /replacement join/);
@@ -188,7 +183,6 @@ test('done retains one completed coordinate, never authority, and join/takeover 
   await artifact.transactAs({ kind: 'takeover', participant: 'Ivy', body, expectedGeneration: second.generation }, facts => {
     facts.land({ kind: 'done', actor: 'Ivy', at: 4 });
     facts.land({ kind: 'join', actor: 'Ivy', at: 5 });
-    assert.deepEqual(facts.completedSeatsForBody(body), []);
     assert.notEqual(facts.seat('Ivy').generation, second.generation);
     assert.equal(facts.lease('Ivy'), undefined);
   });

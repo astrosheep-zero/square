@@ -12,6 +12,12 @@ inside the activity stream. One participant name means one participant agent, be
 the conversation easier to follow.
 
 Boundaries should be light and useful:
+- Membership and host attachment are separate. Participant `done` ends membership; Pi/Codex/Claude
+  session end only detaches the exact Body/generation, preserving listens and the read horizon.
+  Detached members are away without a timeout: audience and unread activity continue, writes and
+  proactive delivery do not. Host start/resume restores only detached standing seats of that exact
+  Body before delivery, never a voluntary departure or takeover. Host-confirmed permanent deletion
+  (OpenCode `session.deleted`) still lands fenced `done`. See `guides/participant-ownership.md`.
 - Proactive delivery may be temporarily deferred by the current participant through the SDK/stdio
   `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` methods. Independent leases
   are artifact-owned, expiring, and fenced to the captured Body/join generation. One lease matches

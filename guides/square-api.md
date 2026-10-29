@@ -10,7 +10,9 @@ URI encoding, the versioned protocol and explicit remote limitations.
 ## Open, select, join, close
 
 Membership is explicit: no harness joins a square based on its filename or working directory.
-`PUBLIC.square` has exactly the same behavior as any other square file.
+`PUBLIC.square` has exactly the same behavior as any other square file. Membership (join/done,
+read horizon and listens) is separate from host attachment (whether an exact Body is currently
+executing for that participant). Host shutdown detaches; it does not make the participant leave.
 
 ```ts
 import { Square } from '@astrosheep/square';
@@ -48,16 +50,22 @@ try {
 - `await square.participant(name?)` selects a handle **without joining, claiming or reentering**.
   A supplied name or explicit resource `participant` selects that voice; without either, the artifact
   must recognize exactly one current seat for the captured Body. Zero or multiple matches refuse.
-  `await square.recognize()` returns all current handles held by that exact Body; the discovery index
-  never establishes ownership, and a name alone never authorizes writes.
+  `await square.recognize()` returns only attached current handles held by that exact Body.
+  `await square.bodySeats()` returns all its standing seats as `{participant, generation, attachment}`,
+  where attachment is `attached` or `detached`. Both are read-only; neither returns done participants,
+  joins or restores a seat. The discovery index never establishes ownership, and a name alone never
+  authorizes writes.
 - Join with an explicit name: `square.join('Alice', options?, control?)` returns one `JoinResult`:
   `{participant, kind, activity, observation?}`. The name is required at every
   boundary: an omitted or blank name refuses, even when the resource has a default `participant` or
   the captured Body holds exactly one current seat. Only `participant()` performs that unambiguous
   current-body selection. `participant` is a handle, not a
   string. `takeover: true` atomically replaces a standing seat; a rejoin after done establishes a new
-  join generation. Same-body reconnection retains its generation. Old handles remain fenced after
-  takeover or rejoin, including when the same Body reacquires the name. There is no separate
+  join generation. Same-Body reconnection retains its generation. A detached seat reattaches with
+  kind `reconnected`, no activity and no change to its read horizon or listens; wake readiness comes
+  from the joining resource. A foreign Body still needs explicit takeover, including for an away
+  participant. Old handles remain fenced after takeover or rejoin, including when the same Body
+  reacquires the name. There is no separate
   `Participant.join()` or public `takeover()` API.
 - Local resources expose `square.forBody({body, wakeAddress?})`: a synchronous borrowed handle
   sharing the artifact, clock and transport but capturing its own caller identity and optional wake
@@ -71,6 +79,28 @@ try {
   connection's lifetime. The MCP server drains cancelled/in-flight work before closing its owner;
   explicit location overrides get independent request-owned connections. Stdio opens always own
   their process connection (SQLite resource lending does not pool remote processes).
+
+### Host attachment lifecycle (local only)
+
+`detachOwnedSession(name, sessionId, expectedGeneration?, body?)` checks captured Body and generation
+inside the artifact transaction. It returns `true` when it detaches, or `null` for stale, replaced,
+foreign, done or already-detached custody. It lands no activity, preserves membership/read horizon/
+listens, and clears wake readiness, catch ownership and delivery deferrals. Detached handles cannot
+write, including an empty catch; rejoin restores access. Proactive claims, observers and final
+send/presentation checks exclude detached seats. Existing receipts and delivery evidence survive.
+A detached participant stays away indefinitely; no timer manufactures a departure.
+
+`implicitJoin(name)` returns `active` with a handle when reattaching the same exact Body; a foreign
+Body is refused and a done participant returns `done`, never reentered. Host start/resume restores
+detached seats discovered by `bodySeats()` for its exact Body before arming delivery, independently
+across seats and locations. New/forked Bodies restore nothing. Hosts do not recover from historical
+done coordinates.
+
+There are three endings: participant `done` ends membership; Pi shutdown, Codex SessionEnd and
+Claude session end detach only; host-confirmed permanent deletion uses `endOwnedSession(...)` to
+land a fenced `done`, whether attached or detached. OpenCode `session.deleted` is permanent deletion.
+Takeover replaces either attachment state with `done -> join`; late cleanup or restoration by the
+old Body cannot reclaim it. Stdio refuses these host-only operations, as it does `implicitJoin`.
 
 ## One set of operations and defaults
 
@@ -123,7 +153,8 @@ its `history` delegates to the same Square history operation.
   observations retain lifetime say ordinals for CLI `history --format number`.
 - `participants()` returns `{participants, observation?}` and `listening()` returns
   `{listening, observation?}`, not arrays carrying metadata. Participant summaries use `presence`
-  (`never-joined`, `active`, `watching`, or `done`). Status reports a non-null `held` whenever a
+  (`never-joined`, `active`, `watching`, `away`, or `done`). Away participants remain members,
+  count toward in-square totals and keep receiving normal bell, mention and listened audience. Status reports a non-null `held` whenever a
   hold is active; `by` is omitted only for historical actorless holds. Its roster supplies the
   participant counts. Snapshot participants use the same `name`, `presence` and `listening` facts,
   excluding never-joined people; its detached `delivered(name, id)` predicate remains available.
@@ -134,7 +165,8 @@ its `history` delegates to the same Square history operation.
 - Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate;
   observations do not repeat the activity. Join entry uses public activities with settled perception,
   and status observations use public join activities. Done accepts no message and retires only its
-  captured Body/join generation; it never implicitly rejoins or grants a completed seat write authority.
+  attached, captured Body/join generation; it never implicitly rejoins. A done participant is not
+  recoverable authority for any host path.
 - Recovery summarizes unread directed activity with per-sender count, latest age and the single
   greatest-index preview. Age uses the greatest timestamp, which may belong to another activity.
 
@@ -254,21 +286,23 @@ opening a valid current-format Square first.
 
 ## Artifact format and explicit migration
 
-The current artifact format is 5. It owns participant seats, delivery evidence, cancellation and
-independent delivery deferrals, separate from conversation activities and catch leases; `unlisten` remains a real history activity. Ordinary opens
-refuse older formats with migration guidance and never convert them implicitly.
+The current artifact format is 6. It distinguishes membership from attached/detached custody,
+and owns seats, delivery evidence, cancellation and independent delivery deferrals separately from
+conversation activities and catch ownership. Ordinary opens refuse older formats with migration
+guidance and never convert them implicitly.
 
 Stop all sessions and services using the artifact, make an offline backup, then run
 `square --location <path.square> migrate` and `doctor` before reopening with upgraded runtimes.
-For formats 2/3, also freeze and back up the legacy HostLedger used for owner/evidence import.
-Format 4 adds only an empty deferral table and its owner/generation/expiry index, preserving
-all existing facts and revisions without consulting HostLedger. Supported row formats 2/3 convert
-directly into format 5 in one transaction, only when owner/route/join mappings are
-directly verifiable; no seat is manufactured for done participants. Replay-critical native ambiguity
-refuses rather than disappears, including the conservative refusal of any nonempty legacy token-only
-tombstone table. Current-format migration is a byte-preserving no-op. See [migration.md](migration.md)
-for the deliberately lossy metadata policy, source-preserving refusal and filesystem requirements.
-Updating a package does not migrate files or install a new runtime.
+Supported formats 2–5 convert directly to 6 in one transaction. Format 5 conversion is additive:
+every existing seat starts attached, no detached seat is manufactured, and all facts/revisions
+are preserved. Format 4 also gains empty deferral support. Neither consults HostLedger.
+Historic host-cleanup departures cannot be distinguished from voluntary `done` and stay done.
+For formats 2/3, also freeze and back up the legacy HostLedger used for verified owner/evidence
+import; no authority is manufactured for done participants. Replay-critical native ambiguity
+refuses rather than disappears, including any nonempty legacy token-only tombstones.
+Current-format migration is a byte-preserving no-op. See [migration.md](migration.md) for the
+narrow metadata policy, source-preserving refusal and filesystem requirements. Updating a package
+does not migrate files or install a new runtime.
 
 ## Deliberate migration breaks
 

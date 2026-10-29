@@ -18,7 +18,7 @@ export function wakePreview(facts: SquareRead, request: WakeRequest): string | u
   const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
   const item = index === undefined ? undefined : facts.activity(index);
   const seat = facts.seat(request.participant);
-  if (head === undefined || item?.kind !== 'say' || seat === undefined
+  if (head === undefined || item?.kind !== 'say' || seat === undefined || seat.attachment !== 'attached'
     || deliveryDeferralExpiry(facts, request.seat, item.index, Date.now()) !== undefined) return undefined;
   return renderSquareReminder([renderAttentionPreview({
     squarePath: request.location, recipient: request.participant, actIndex: item.index,

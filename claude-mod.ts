@@ -7,7 +7,8 @@ import { processActNotificationsOnce } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { asSeatRef } from './seats.js';
-import { projectSessionSeats, projectSessionCandidates } from './inbox.js';
+import { projectSessionSeats } from './inbox.js';
+import { restoreSessionSeats } from './session-lifecycle.js';
 import { InternalSquareError, SquareError, sameBody, type LocatedSeat } from './model.js';
 
 /** Persisted hook state keeps its wire coordinate; internal consumers keep the located seat. */
@@ -50,12 +51,12 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   const signal = AbortSignal.timeout(2500);
   const body = { channel: 'claude-code', session: input.sessionId, ...(input.agentId === undefined ? {} : { agent: input.agentId }) };
   const supported = process.platform === 'darwin' && typeof input.endpoint === 'string' && input.endpoint.startsWith('/');
-  const sessionSeats = () => projectSessionSeats({ body, env }, signal);
+  const sessionSeats = async () => (await projectSessionSeats({ body, env }, signal)).filter(member => member.seat.attachment === 'attached');
   if (input.operation === 'end') {
     const retired: ClaudeBinding[] = [];
     const captured = [...input.bindings ?? []];
     // Discover committed late joins at the pinned end boundary, never later owners.
-    if (input.endedAt !== undefined) for (const member of await sessionSeats()) {
+    if (input.endedAt !== undefined) for (const member of await projectSessionSeats({ body, env }, signal)) {
       if (member.joinedAt > input.endedAt || captured.some((item) => item.location === member.location
         && item.participant === member.seat.participant && item.generation === member.seat.generation)) continue;
       captured.push(claudeBinding(member));
@@ -65,8 +66,8 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       const square = await Square.at({ path: binding.location, env: scoped, body,
         participant: binding.participant });
       try {
-        const ended = await square.endOwnedSession(binding.participant, input.sessionId, binding.generation, body);
-        if (ended?.activity) retired.push({ ...binding, generation: binding.generation });
+        const detached = await square.detachOwnedSession(binding.participant, input.sessionId, binding.generation, body);
+        if (detached) retired.push(binding);
       } finally { await square.close(); }
       if (signal.aborted) break;
     }
@@ -74,31 +75,10 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
   }
   const recovery = new Set<string>();
   const cancelledBindings = [...input.cancelledBindings ?? []];
-  if (input.operation === 'start' && input.resume) {
-    // Resume is proven by the artifact's latest participant lifecycle, while HOME
-    // contributes only candidate paths. A stale candidate never establishes a seat.
-    const candidates = await projectSessionCandidates({ body, env });
-    const seen = new Set<string>();
-    for (const candidate of candidates) {
-      if (signal.aborted) break;
-      const probe = createArtifactPort(candidate.location, undefined, signal);
-      let names: string[];
-      try {
-        names = (await probe.read(facts => facts.completedSeatsForBody(body).map(seat => seat.participant), signal)).value;
-      } catch (error) {
-        if (error instanceof InternalSquareError && error.code === 'not_found')
-          throw new SquareError('unavailable', `Square is unavailable at ${candidate.location}`);
-        throw error;
-      } finally { await probe.close(); }
-      for (const participant of names) {
-        const key = `${candidate.location}\0${participant}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const square = await Square.at({ path: candidate.location, env: scoped, body, participant });
-        try { await square.join(participant); }
-        finally { await square.close(); }
-      }
-    }
+  if (input.operation === 'start') {
+    await restoreSessionSeats(body, scoped, supported ? {
+      kind: 'claude-native', address: { sessionId: input.sessionId, endpoint: input.endpoint!, version: input.version, platform: 'darwin', loaded: 'true' },
+    } : undefined, signal);
   }
   if (input.operation === 'start' || input.operation === 'reconcile' || input.operation === 'cancel' || input.cancelAt !== undefined) {
     for (const member of await sessionSeats()) {
@@ -116,7 +96,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       const artifact = createArtifactPort(location, undefined, signal);
       try {
         const { value: currentSeat } = await artifact.read((facts) => facts.seat(capturedSeat.participant), signal);
-        if (currentSeat === undefined || currentSeat.generation !== capturedSeat.generation
+        if (currentSeat === undefined || currentSeat.attachment !== 'attached' || currentSeat.generation !== capturedSeat.generation
           || !sameBody(currentSeat.body, capturedSeat.body)) continue;
         const seat = asSeatRef(currentSeat);
         const existing = currentSeat.wakeAddress?.kind === 'claude-native' ? currentSeat.wakeAddress : undefined;

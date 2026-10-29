@@ -79,7 +79,7 @@ test('explicit borrowed stream leaves its port alive and reports a closed port i
   finally { clearTimeout(timer); await closed.return(); }
 });
 
-test('direct notification, doctor and Claude resume boundaries preserve unavailable errors for missing paths', async t => {
+test('direct diagnostics preserve unavailable errors while host resume skips missing candidate paths', async t => {
   const f = await fixture(t);
   await f.alice.done();
   await f.square.close();
@@ -89,6 +89,8 @@ test('direct notification, doctor and Claude resume boundaries preserve unavaila
     () => sweepPendingNotifications(f.location, { env: { ...f.env, SQUARE_DISABLE_PASEO_WAKE: '0' } }),
     () => classifyDeliveryHealth(f.location, { graceMs: 0 }),
     () => doctorDeliveryHealth(f.location, 0, Date.now(), f.env),
-    () => runClaudeMod(JSON.stringify({ operation: 'start', resume: true, sessionId: f.body.session, cwd: f.root, version: 'test' }), f.env),
   ]) await assert.rejects(operation, error => error.code === 'unavailable' && error.message === `Square is unavailable at ${f.location}`);
+  const resumed = JSON.parse(await runClaudeMod(JSON.stringify({ operation: 'start', resume: true,
+    sessionId: f.body.session, cwd: f.root, version: 'test' }), f.env));
+  assert.deepEqual(resumed.bindings, []);
 });

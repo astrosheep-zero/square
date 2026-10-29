@@ -14,8 +14,7 @@ export function requireJoinName(name: string | undefined): string {
 }
 
 export function asSeatRef(seat: Seat): SeatRef {
-  const { wakeAddress: _wakeAddress, ...ref } = seat;
-  return ref;
+  return { participant: seat.participant, body: seat.body, generation: seat.generation };
 }
 
 export function participantAuthority(seat: Seat): ArtifactWriteAuthority {

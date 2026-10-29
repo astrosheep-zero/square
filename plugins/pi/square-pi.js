@@ -7,7 +7,7 @@ import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFa
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
-import { endSessionMemberships } from '../../dist/session-lifecycle.js';
+import { detachSessionSeats, restoreSessionSeats } from '../../dist/session-lifecycle.js';
 import { projectSessionSeats, observeSessionPending, pendingKey } from '../../dist/inbox.js';
 import { previewAttentionBody, renderAttentionDescription, renderAttentionFull } from '../../dist/attention-presentation.js';
 import { formatActivityId } from '../../dist/square-core.js';
@@ -259,6 +259,7 @@ export default function squarePiExtension(pi) {
       const env = sessionEnv(id);
       const seats = await projectSessionSeats({ body, env });
       for (const { location, seat } of seats) {
+        if (seat.attachment !== 'attached') continue;
         const square = await Square.at({ path: location, env, body, participant: seat.participant });
         try { await square.cancelDeliveries(seat.participant, seat.generation); }
         finally { await square.close(); }
@@ -427,6 +428,8 @@ export default function squarePiExtension(pi) {
     if (token !== generation || cancellationFailures.has(sessionId)) return;
     watcherAbort = new AbortController();
     const signal = watcherAbort.signal;
+    await restoreSessionSeats({ channel: 'pi', session: sessionId }, sessionEnv(sessionId), undefined, signal).catch(() => undefined);
+    if (token !== generation || signal.aborted) return;
     watcher = wake(token, signal).catch(() => undefined);
   });
 
@@ -501,6 +504,6 @@ export default function squarePiExtension(pi) {
     currentRunSignal = undefined;
     await stopped;
     await waitForSessionCancellation(endedId);
-    if (endedId) await endSessionMemberships('pi', endedId, endedEnv).catch(() => undefined);
+    if (endedId) await detachSessionSeats('pi', endedId, endedEnv).catch(() => undefined);
   });
 }

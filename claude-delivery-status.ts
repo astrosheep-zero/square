@@ -32,7 +32,7 @@ export async function recordClaudeDeliveryStatus(input: ClaudeDeliveryStatus, en
     try {
       const { value: match } = await artifact.read((facts) => facts.roster().flatMap((participant) => {
         const seat = facts.seat(participant.name);
-        if (seat === undefined || seat.body.session !== input.sessionId || seat.body.channel !== 'claude-code') return [];
+        if (seat === undefined || seat.attachment !== 'attached' || seat.body.session !== input.sessionId || seat.body.channel !== 'claude-code') return [];
         const evidence = facts.deliveryEvidence(seat.participant, seat.generation).find((row) =>
           row.correlation?.harness === 'claude' && row.correlation.messageId === input.messageId && row.claimToken !== undefined);
         return evidence === undefined ? [] : [{ seat, evidence }];

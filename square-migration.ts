@@ -8,7 +8,7 @@ import { formatActivityId, isWakeRouteKind, nameKey, sameBody, validateBody, typ
 import { parseActivityId } from './square-core.js';
 import { readLegacyHostData, type LegacyDeliveryEvidence, type LegacyHostData } from './square-migration-host-ledger.js';
 import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS } from './square-legacy-framing.js';
-import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, SEAT_ATTACHMENT_SQL, validateRowFraming, inspectPreAttachmentSqlite, createSqliteDriver, invalidArtifact,
   validateStoredActivity,
   type SquareRuntimeState, type SquareState } from './square-sqlite.js';
 
@@ -284,6 +284,7 @@ function planSeats(
       participant: participant.name,
       body,
       generation: formatActivityId(joined),
+      attachment: 'attached',
       ...(address === undefined ? {} : { wakeAddress: address }),
     });
   }
@@ -507,7 +508,7 @@ function upgradeRowArtifact(database: DatabaseSync, location: string, plan: RowM
   validateCurrentFraming(database, location);
 }
 
-function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | undefined {
+function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | undefined {
   const before = identity(database);
   if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
   if (before.userVersion === V2_USER_VERSION || before.userVersion === V3_USER_VERSION) {
@@ -515,10 +516,10 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
     if (issue !== undefined) throw invalidArtifact(issue);
     return before.userVersion;
   }
-  if (before.userVersion === V4_USER_VERSION) {
-    validateRowFraming(database, V4_USER_VERSION, location);
-    inspectSqlite(database);
-    return V4_USER_VERSION;
+  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION) {
+    validateRowFraming(database, before.userVersion, location);
+    inspectPreAttachmentSqlite(database);
+    return before.userVersion;
   }
   if (before.userVersion === CURRENT_USER_VERSION) {
     validateCurrentFraming(database, location);
@@ -530,7 +531,7 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
 /**
  * Explicit conversion of the supported legacy formats. Row-backed versions 2 and 3 are
  * preflighted read-only, then receive ownership/evidence and deferral storage in one
- * format-5 transaction. Format 4 adds only the empty deferral table and its index.
+ * format-6 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
  * Legacy delivery evidence is copied from HostLedger only when its owner/session mapping is
  * unique; no source record is retired. Version 1 is not a supported source for this format transition.
  */
@@ -540,11 +541,12 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
   try {
     const source = await inSqliteTransaction(database, false, () => validateMigrationSource(database, squarePath), value => value, signal);
     if (source === undefined) return { status: 'already-current', standing: standing(database) };
-    if (source === V4_USER_VERSION) {
+    if (source === V4_USER_VERSION || source === V5_USER_VERSION) {
       return await inSqliteTransaction(database, true, () => {
         assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');
       }, () => {
-        database.exec(DELIVERY_DEFERRALS_SQL);
+        if (source === V4_USER_VERSION) database.exec(DELIVERY_DEFERRALS_SQL);
+        database.exec(SEAT_ATTACHMENT_SQL);
         database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
         validateCurrentFraming(database, squarePath);
         return { status: 'migrated' as const, standing: standing(database) };

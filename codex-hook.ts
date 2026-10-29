@@ -2,8 +2,9 @@ import { handleCodexHook } from './packages/agent-delivery/src/codex-hook.js';
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { sessionInbox } from './inbox.js';
 import type { Body, PendingMembership } from './model.js';
-import { endSessionMemberships } from './session-lifecycle.js';
+import { detachSessionSeats, restoreSessionSeats } from './session-lifecycle.js';
 import { codexBoundaryStore } from './codex-boundary-state.js';
+import { codexWakeAddress } from './codex-address.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeTransports } from './notifications.js';
 
@@ -22,13 +23,20 @@ export async function codexHookResponse(
   const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
   const startedAt = Date.now();
   let mark = startedAt;
+  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS;
+  const signal = AbortSignal.timeout(timeoutMs);
+  if ((input.hook_event_name === 'SessionStart' || input.hook_event_name === 'SessionResume')
+    && typeof input.session_id === 'string' && input.session_id.trim()) {
+    await restoreSessionSeats({ channel: 'codex', session: input.session_id }, env, codexWakeAddress(input.session_id, env), signal);
+  }
   return handleCodexHook(input, {
     boundaries: codexBoundaryStore(env),
-    timeoutMs: Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS,
+    timeoutMs,
+    signal,
     sweepTimeoutMs: PRIVILEGED_HOOK_BUDGET_MS,
     pull: (id, signal) => presentPendingAtBoundary({ channel: 'codex', session: id }, (context) => context, lookup, env, signal),
     sweep: (cwd, deadline, signal) => sweepPrivilegedPending(cwd ?? process.cwd(), env, deliveryTransports, deadline, signal),
-    end: async (id) => { await endSessionMemberships('codex', id, env); },
+    end: async (id) => { await detachSessionSeats('codex', id, env); },
     trace: (name, detail = '') => {
       const now = Date.now();
       const durationMs = now - mark;

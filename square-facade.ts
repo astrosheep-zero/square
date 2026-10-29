@@ -192,7 +192,12 @@ export interface Participant {
   renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
   releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
-export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'done';
+export interface BodySeat {
+  readonly participant: string;
+  readonly generation: ActivityId;
+  readonly attachment: 'attached' | 'detached';
+}
+export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'away' | 'done';
 export interface ParticipantSummary {
   readonly name: string;
   readonly listening: readonly string[];
@@ -284,7 +289,7 @@ export interface EntryPresentation {
 export interface PresenceClassification {
   readonly orderedHereNames: readonly string[];
   readonly lingeringCount: number;
-  readonly classificationByName: Readonly<Record<string, 'here' | 'lingering' | 'done' | 'not-joined'>>;
+  readonly classificationByName: Readonly<Record<string, 'here' | 'lingering' | 'away' | 'done' | 'not-joined'>>;
 }
 export interface CatchPresence {
   readonly participants: readonly ParticipantSummary[];

@@ -35,7 +35,7 @@ export function pendingAtBoundary(inbox: readonly PendingMembership[]): PendingM
 
 function eligibleNotifications(facts: SquareRead, membership: PendingMembership, now = Date.now()): Pick<PendingMembership, 'notifications' | 'deliveryDeferralExpiry'> {
   const seat = facts.seat(membership.seat.participant);
-  if (seat === undefined || seat.generation !== membership.seat.generation
+  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== membership.seat.generation
     || !sameBody(seat.body, membership.seat.body)) return { notifications: [] };
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
   let expiry = Infinity;
@@ -142,7 +142,7 @@ export async function sessionInboxCounts(input: SessionSeatQuery, signal?: Abort
     signal?.throwIfAborted();
     const artifact = createArtifactPort(location, undefined, signal);
     try {
-      rows.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body))).map(({ seat }) => ({
+      rows.push(...(await artifact.read(facts => locatedSeats(facts, location, bodies.flatMap(body => facts.seatsForBody(body).filter(seat => seat.attachment === 'attached'))).map(({ seat }) => ({
         name: seat.participant, squarePath: location, pending: facts.directedCount(seat.participant, { unseenOnly: true }),
       })), signal)).value);
     } catch (error) {
@@ -167,7 +167,7 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
     const artifact = createArtifactPort(location, undefined, signal);
     try {
       const { value: current } = await artifact.read(facts => {
-        const seats = bodies.flatMap(body => facts.seatsForBody(body));
+        const seats = bodies.flatMap(body => facts.seatsForBody(body).filter(seat => seat.attachment === 'attached'));
         const coordinate = JSON.stringify([bodies, seats.map(seat => [seat.participant, seat.body, seat.generation])]);
         const header = facts.header();
         let cached = cache?.get(location);
@@ -217,7 +217,7 @@ function sameWakeAddress(address: import('./model.js').WakeAddress | undefined, 
 /** First matching current seat, exact body/generation/address and catch ownership. */
 export function nativePendingPreview(facts: SquareRead, input: NativePendingPreviewInput): NativePendingPreview | undefined {
   const seat = facts.seat(input.participant);
-  if (seat === undefined || seat.body.session !== input.sessionId
+  if (seat === undefined || seat.attachment !== 'attached' || seat.body.session !== input.sessionId
     || !sameWakeAddress(seat.wakeAddress, input.routeKind, input.address)) return undefined;
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
   if (input.actIndex <= Math.max(input.cancelledThrough ?? -1, cancelledThrough ?? -1)) return undefined;

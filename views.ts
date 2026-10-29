@@ -138,7 +138,7 @@ function classifyPresence(participants: readonly ParticipantSummary[], now: numb
   return { orderedHereNames: [...here.filter((participant) => participant.presence === 'watching'), ...here.filter((participant) => participant.presence !== 'watching')].map((participant) => participant.name),
     lingeringCount: participants.filter((participant) => standing(participant) && !hereNames.has(participant.name)).length,
     classificationByName: Object.fromEntries(participants.map((participant) => [participant.name, participant.presence === 'done' ? 'done'
-      : participant.presence === 'never-joined' ? 'not-joined' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
+      : participant.presence === 'never-joined' ? 'not-joined' : participant.presence === 'away' ? 'away' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
 }
 type ParticipantQueryContext = Pick<SquareObservation, 'location' | 'now' | 'automaticDeliveryAvailable'>;
 export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext, observe = false): ParticipantsResult {
@@ -191,7 +191,7 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
   };
 }
 export function catchPresence(facts: SquareRead, now: number): CatchPresence {
-  const participants = coreParticipants(facts, now).filter((participant) => participant.presence === 'done' || participant.presence === 'watching'
+  const participants = coreParticipants(facts, now).filter((participant) => participant.presence === 'done' || participant.presence === 'away' || participant.presence === 'watching'
     || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
   return { participants, now };
 }

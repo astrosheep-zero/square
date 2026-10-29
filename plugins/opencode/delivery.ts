@@ -8,6 +8,7 @@ import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js'
 import { formatActivityId, parseActivityId } from '../../square-core.js';
 import { indexedSquareEntries } from '../../square-index.js';
 import { asSeatRef } from '../../seats.js';
+import { restoreSessionSeats } from '../../session-lifecycle.js';
 import { presentPending } from '../../presentation-operations.js';
 import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
 
@@ -32,7 +33,7 @@ export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.Proce
 }
 
 function sameSeat(left: Seat | undefined, right: Seat): boolean {
-  return left !== undefined && left.generation === right.generation && sameBody(left.body, right.body);
+  return left !== undefined && left.attachment === 'attached' && left.generation === right.generation && sameBody(left.body, right.body);
 }
 
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
@@ -167,7 +168,8 @@ export async function receiveOpenCodePending(target: OpenCodeNativeSession, env:
 
 /** Publish the native address into current artifact seats; the legacy route projection is not read. */
 export async function publishOpenCodeAddress(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<boolean> {
-  const seats = await discoverOpenCodeSeats(sessionId, env, signal);
+  await restoreSessionSeats(bodyFor(sessionId), env, { kind: routeKind, address: { sessionId } }, signal);
+  const seats = (await discoverOpenCodeSeats(sessionId, env, signal)).filter(({ seat }) => seat.attachment === 'attached');
   for (const { location, seat } of seats) {
     if (signal.aborted) return false;
     const artifact = createArtifactPort(location, undefined, signal);
@@ -182,6 +184,7 @@ export async function publishOpenCodeAddress(sessionId: string, env: NodeJS.Proc
 export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
   for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
     if (signal.aborted) return;
+    if (seat.attachment !== 'attached') continue;
     const artifact = createArtifactPort(location, undefined, signal);
     try {
       const { value: through } = await artifact.read((facts) => facts.header().lastActIndex, signal);

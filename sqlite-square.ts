@@ -1,4 +1,5 @@
 import { formatActivityId } from './square-core.js';
+import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
 import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
 import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
@@ -298,6 +299,7 @@ export class SqliteSquare {
         const probe = (await square.artifact.read(facts => {
           name = resolveKnownName(facts, this.name);
           seat = requireSeat(this.seat, square.body, name);
+          assertCurrentSeat(facts, asSeatRef(seat));
           subject = 'filter';
           const from = options.from?.map(target => resolveKnownName(facts, target));
           selection = { ...options, ...(from === undefined ? {} : { from }) };
@@ -403,7 +405,7 @@ export class SqliteSquare {
       return this.handle(selected, seat);
     }
     if (this.body !== undefined) {
-      const seats = (await this.artifact.read(facts => facts.seatsForBody(this.body!))).value;
+      const seats = (await this.artifact.read(facts => facts.seatsForBody(this.body!).filter(seat => seat.attachment === 'attached'))).value;
       if (seats.length === 1) return this.handle(seats[0].participant, seats[0]);
       if (seats.length > 1) throw new SquareError('invalid_args', 'Square needs an explicit participant name: this body holds multiple names');
     }
@@ -431,7 +433,8 @@ export class SqliteSquare {
         } else if (current?.joined) {
           if (currentSeat === undefined || !sameBody(currentSeat.body, body))
             throw new SquareError('already_joined', `${participantIdentity(participant)} is held by another body; take it over explicitly`);
-          if (this.wakeAddress !== undefined && canRefreshWakeAddress(currentSeat.wakeAddress, this.wakeAddress))
+          if (currentSeat.attachment === 'detached') facts.reattachSeat(asSeatRef(currentSeat), this.wakeAddress);
+          else if (this.wakeAddress !== undefined && canRefreshWakeAddress(currentSeat.wakeAddress, this.wakeAddress))
             facts.updateWakeAddress(asSeatRef(currentSeat), this.wakeAddress);
           kind = 'reconnected';
         }
@@ -467,8 +470,12 @@ export class SqliteSquare {
       if (decision.joinAct === undefined) {
         if (decision.state === 'active' && (seat === undefined || !sameBody(seat.body, body)))
           throw new SquareError('already_joined', `${participantIdentity(decision.joinedName)} is held by another body`);
-        if (decision.state === 'active' && this.wakeAddress !== undefined && canRefreshWakeAddress(seat!.wakeAddress, this.wakeAddress))
-          facts.updateWakeAddress(asSeatRef(seat!), this.wakeAddress);
+        if (decision.state === 'active') {
+          if (seat!.attachment === 'detached') facts.reattachSeat(asSeatRef(seat!), this.wakeAddress);
+          else if (this.wakeAddress !== undefined && canRefreshWakeAddress(seat!.wakeAddress, this.wakeAddress))
+            facts.updateWakeAddress(asSeatRef(seat!), this.wakeAddress);
+          seat = facts.seat(decision.joinedName);
+        }
       } else {
         facts.land(decision.joinAct);
         seat = facts.seat(decision.joinedName);
@@ -508,7 +515,7 @@ export class SqliteSquare {
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
     return (await this.artifact.read(facts => {
-      const seats = this.body === undefined ? [] : facts.seatsForBody(this.body);
+      const seats = this.body === undefined ? [] : facts.seatsForBody(this.body).filter(seat => seat.attachment === 'attached');
       const viewer = options.viewer ?? this.defaultParticipant ?? (seats.length === 1 ? seats[0].participant : '');
       return queryStatus(facts, {
         location: this.location, now: this.clock(), automaticDeliveryAvailable: this.automaticDelivery && this.body !== undefined,
@@ -535,8 +542,13 @@ export class SqliteSquare {
   }
   async recognize(): Promise<readonly Participant[]> {
     if (this.body === undefined) return [];
-    const candidates = (await this.artifact.read(facts => facts.seatsForBody(this.body!))).value;
+    const candidates = (await this.artifact.read(facts => facts.seatsForBody(this.body!).filter(seat => seat.attachment === 'attached'))).value;
     return candidates.map(seat => this.handle(seat.participant, seat));
+  }
+  async bodySeats(): Promise<readonly import('./square-facade.js').BodySeat[]> {
+    if (this.body === undefined) return [];
+    return (await this.artifact.read(facts => facts.seatsForBody(this.body!).map(({ participant, generation, attachment }) =>
+      ({ participant, generation, attachment })))).value;
   }
   close(): Promise<void> { return this.ownsArtifact ? this.artifact.close() : Promise.resolve(); }
   async cancelDeliveries(name: string, expectedGeneration: import('./square-core.js').ActivityId): Promise<boolean> {
@@ -546,11 +558,18 @@ export class SqliteSquare {
     if (seat === undefined || seat.generation !== expectedGeneration || !sameBody(seat.body, body)) return false;
     return this.artifact.cancelDeliveries(asSeatRef(seat));
   }
+  async detachOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<true | null> {
+    const captured = (await this.artifact.read(facts => facts.seat(name))).value;
+    if (captured === undefined || captured.body.session !== sessionId || (body !== undefined && !sameBody(captured.body, body))
+      || (expectedGeneration !== undefined && captured.generation !== expectedGeneration)) return null;
+    const seat = asSeatRef(captured);
+    return (await this.artifact.transactAs({ kind: 'host-cleanup', seat }, facts => facts.detachSeat(seat) ? true : null)).value;
+  }
   async endOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<LifecycleResult | null> {
     const captured = (await this.artifact.read(facts => facts.seat(name))).value;
     if (captured === undefined || captured.body.session !== sessionId || (body !== undefined && !sameBody(captured.body, body))
       || (expectedGeneration !== undefined && captured.generation !== expectedGeneration)) return null;
-    return (await this.artifact.transactAs(participantAuthority(captured), facts => {
+    return (await this.artifact.transactAs({ kind: 'host-cleanup', seat: asSeatRef(captured) }, facts => {
       const current = facts.seat(name);
       if (current === undefined || current.generation !== captured.generation || !sameBody(current.body, captured.body)) return null;
       return { activity: toPublicActivity(facts.land(coreDone(facts, current.participant, '', this.clock()))) };

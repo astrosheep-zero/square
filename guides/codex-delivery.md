@@ -10,9 +10,12 @@ app-server capability and its host-owned hook integration.
 `plugins/codex/hooks/hooks.json` invokes `square codex-hook`:
 
 - `SessionStart`, `SessionResume` and `UserPromptSubmit` invalidate the previous
-  Stop observation. `SessionEnd` marks the session ended and ends Square's owned
-  memberships. Later Stop/tool callbacks cannot re-enable queue until a new
-  `SessionStart` or `SessionResume`.
+  Stop observation. `SessionEnd` marks the host session ended and detaches its exact
+  Body's seats without landing `done`, ending membership, dropping listens or resetting
+  the read horizon. Later Stop/tool callbacks cannot re-enable queue until a new
+  `SessionStart` or `SessionResume`. Before enabling delivery, those start paths restore
+  only detached standing seats returned by `bodySeats()` for that exact Body; voluntary
+  departures and takeovers are never revived. A new/forked session restores nothing.
 - `PostToolUse` asks Square for current pending activity and returns the existing
   bounded `additionalContext` presentation.
 - `Stop` records queue eligibility and sweeps pending work, but does not itself
@@ -20,7 +23,7 @@ app-server capability and its host-owned hook integration.
 
 The shared handler owns hook framing, lifecycle sequencing, its cancellation
 budget and bounded sweeps. Square supplies activity selection, formatting,
-artifact-owned presentation claims, cancellation, membership cleanup and
+artifact-owned presentation claims, cancellation, attachment cleanup and
 pending-work sweeps. The handler cooperatively awaits Square's pull: the signal
 cancels work before presentation, but a successful presentation's `settleAs`
 finishes independently of request cancellation. Even when that settlement crosses
@@ -32,7 +35,10 @@ an exact Body (`{ channel: 'codex', session }`), not a bare session id. The shar
 boundary store uses Square's caller-selected `SQUARE_CODEX_BOUNDARIES` file,
 defaulting to `~/.square/codex-boundaries.json`; its JSON observations are not
 conversation storage and are not proof of current native execution or consumption.
-Square's format5 artifact remains authoritative for seats and delivery evidence.
+Square's format-6 artifact remains authoritative for membership, attachment and delivery evidence.
+Detached members appear away indefinitely and keep accumulating unread audience, but have no
+write or proactive delivery eligibility until same-Body reattachment. Only a host-confirmed
+permanent deletion uses fenced membership-ending cleanup; Codex SessionEnd is not that proof.
 
 `CodexQueueTransport` implements the existing `WakeTransportPort` and uses the public
 `connect({ harness: 'codex', transport: 'cli', sessionId, boundaries, ... })`

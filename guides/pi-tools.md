@@ -30,4 +30,15 @@ activity; the text supplies a `catch` command and the count of other unread acti
 Use `catch` for consumption or `history` for archives. Exact parameters and semantics
 come from the tool descriptions, shared with MCP through `square-tools.ts`.
 
-Each operation owns and closes its connection through the facade, including cancellation cleanup. Existing notification delivery, rendering and session lifecycle stay independent. Reload the extension after installing an updated package to register the tools in an existing Pi session.
+Each operation owns and closes its connection through the facade, including cancellation cleanup.
+Pi `session_shutdown` detaches that exact Body's seats, not membership: no `done` lands, listens
+and the read horizon remain, and mentions received while away stay unread. Catch ownership,
+deferrals and wake readiness are cleared. Detached participants cannot write or receive proactive
+delivery. On `session_start`, before watching, the extension restores only that exact Body's
+detached standing seats discovered by `bodySeats()`. One failed seat/location does not block the
+others. New/forked Bodies restore nothing, voluntary `done` is never revived, and away has no
+timeout. Permanent deletion is a separate host-confirmed membership ending; Pi shutdown is not
+such proof. See [participant-ownership.md](participant-ownership.md).
+
+Notification rendering remains independent of tool calls. Reload the extension after installing
+an updated package to register the tools in an existing Pi session.

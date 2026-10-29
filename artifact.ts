@@ -135,10 +135,10 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'header', 'participant', 'roster', 'attention', 'incomingAttention', 'hold',
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount', 'pendingAudience',
-    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForBody', 'completedSeatsForBody',
+    'receipt', 'receiptFacts', 'receiptAssignments', 'lease', 'participantCounts', 'seat', 'seatsForBody',
     'deliveryEvidence', 'deliveryByToken', 'cancelledThrough', 'deliveryDeferrals',
 ];
-const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery', 'putDeliveryDeferral', 'renewDeliveryDeferral', 'releaseDeliveryDeferral'];
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'markSeen', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'reattachSeat', 'detachSeat', 'cancelThrough', 'claimDelivery', 'prepareDelivery', 'completeDelivery', 'observeNativeDelivery', 'putDeliveryDeferral', 'renewDeliveryDeferral', 'releaseDeliveryDeferral'];
 /** One connection, ordered operations, guarded synchronous transaction capabilities. */
 export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
     let database: DatabaseSync | undefined;

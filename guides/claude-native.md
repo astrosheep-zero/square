@@ -95,15 +95,18 @@ Initial activation and hot reload use `session.start`. New conversations use
 `classic.SessionStart`: clear reads the new API coordinate; **resume's event
 `session_id` is already the resumed coordinate while `$.session.id()` still reads
 the ending one (observed in 2.1.295)**. The event coordinate is used at that boundary, with
-API cwd/version/socket. Modern `session.end` retires only its pinned `e.sessionId`
-and captured ownership epochs, within the event budget. Late committed joins
+API cwd/version/socket. Modern `session.end` detaches only its pinned `e.sessionId`
+and captured Body/join generations, within the event budget. Late committed joins
 are discovered at the pinned end timestamp. A process crash can omit end.
 
-A resumed conversation restores only memberships whose last lifecycle activity
-is exactly the `done` recorded by its previous confirmed end in the existing
-host ledger. It never takes another owner's participant or re-enters a later
-explicit user `done`. Restoration advances the binding epoch, so callbacks and
-old ends cannot retire that replacement. Unchanged reload preserves epochs.
+Host end is not a participant departure: no `done` lands, and membership, listens,
+read horizon and generation remain intact. Catch ownership, deferrals and wake readiness
+are cleared; the participant appears away and keeps accumulating unread audience without
+proactive delivery. Before arming a receiver, start/resume discovers the exact Body's
+standing seats through `bodySeats()` and reattaches only detached ones. One failed seat
+or location does not block the others. New/forked Bodies restore nothing. Neither a
+voluntary `done` nor a takeover is revived; there is no completed-seat recovery path or
+timeout that turns away into done. See [participant-ownership.md](participant-ownership.md).
 
 ## Body, admission, and presentation
 
@@ -143,7 +146,7 @@ Explicit plugin `turn.abort` and terminal `turn.complete(reason:'aborted')`
 suppress the outstanding local batch without recording seen. Ordinary answer,
 refusal, and error completion are not user cancellation. Separate engine-owned
 family state survives hot reload, containing the abort timestamp and frozen
-membership epochs. Same-epoch host-ledger presence stores a monotonic activity
+membership generations. The artifact stores a generation-scoped monotonic activity
 cutoff; replacement generations cannot inherit the old abort.
 
 Engine state reads are snapshots of one dispatch. Confirmation therefore uses

@@ -227,7 +227,9 @@ class StdioSquare implements SquareBackend {
     } };
   }
   recognize(): ReturnType<SquareBackend['recognize']> { return Promise.reject(new SquareError('invalid_args', 'stdio does not support host recognition; select a participant explicitly')); }
+  bodySeats(): ReturnType<SquareBackend['bodySeats']> { unsupported('host body seats'); }
   implicitJoin(): ReturnType<SquareBackend['implicitJoin']> { unsupported('host implicit join'); }
+  detachOwnedSession(): ReturnType<SquareBackend['detachOwnedSession']> { unsupported('host session detach'); }
   endOwnedSession(): ReturnType<SquareBackend['endOwnedSession']> { unsupported('host session cleanup'); }
   cancelDeliveries(): ReturnType<SquareBackend['cancelDeliveries']> { unsupported('host delivery cancellation'); }
   forBody(): ReturnType<SquareBackend['forBody']> { unsupported('local resource identity binding; open a separate stdio handle with its own body'); }

@@ -13,7 +13,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
   const initial = await input.artifact.read((facts) => {
     const participant = facts.participant(input.participant);
     const seat = facts.seat(input.participant);
-    if (!participant?.joined || seat === undefined || input.generation !== undefined && input.generation !== seat.generation
+    if (!participant?.joined || seat === undefined || seat.attachment !== 'attached' || input.generation !== undefined && input.generation !== seat.generation
       || input.seat !== undefined && (input.seat.generation !== seat.generation || !sameBody(input.seat.body, seat.body))
       || input.current?.(facts) === false || !pendingHead(facts, participant.name, index)
       || deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) !== undefined) return undefined;
@@ -25,7 +25,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
   const ref = asSeatRef(seat);
   const owns = (facts: SquareRead) => {
     const current = facts.seat(seat.participant);
-    return current !== undefined && sameBody(current.body, seat.body) && current.generation === seat.generation
+    return current !== undefined && current.attachment === 'attached' && sameBody(current.body, seat.body) && current.generation === seat.generation
       && sameJoin(facts, participant);
   };
   const claimToken = randomUUID();

@@ -205,7 +205,8 @@ export function coreParticipants(facts: SquareRead, now: number): ParticipantSum
       name: current.name,
       listening: facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target),
       activityCount: current.sayCount, lastActiveAt,
-      presence: current.done ? 'done' : !current.joined ? 'never-joined' : freshWatchLease(facts, current.name, now) !== undefined ? 'watching' : 'active',
+      presence: current.done ? 'done' : !current.joined ? 'never-joined' : facts.seat(current.name)?.attachment === 'detached' ? 'away'
+        : freshWatchLease(facts, current.name, now) !== undefined ? 'watching' : 'active',
       unreadActivityCount: current.joined ? facts.directedCount(current.name, { afterIndex: readCursor(facts, current.name) }) : 0,
       pendingMentionCount: current.joined ? facts.directedCount(current.name, { afterIndex: current.lastJoinIndex ?? -1, unseenOnly: true }) : 0,
     };

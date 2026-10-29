@@ -140,6 +140,11 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
           : 'Invalid --reply: expected an activity id like act/12'
         : refusalText(error);
     const lines = [message, `· draft kept: ${draftPath}`];
+    if (reason === 'needs_seat') {
+      lines.push(joinRecoveryCommand(squarePath, name));
+      process.stderr.write(formatRefusal(squarePath, lines, output));
+      exitCode(2); return;
+    }
     const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
     if (isSquareError(error)) {
       if ((reason === 'never_joined' && detail?.subject === 'caller') || error.code === 'unknown_participant' || error.code === 'not_joined') {
