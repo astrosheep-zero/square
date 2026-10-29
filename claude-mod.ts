@@ -1,7 +1,7 @@
 import { operationEnv } from './participant-identity.js';
 import { createArtifactPort } from './artifact.js';
 import { recordClaudeDeliveryStatus, type ClaudeDeliveryStatus } from './claude-delivery-status.js';
-import { Square, withDefaultWakeTransport } from './square-api.js';
+import { Square } from './square-api.js';
 import { observeClaudeDelivery, type ClaudeBinding } from './claude-delivery.js';
 import { processActNotificationsOnce } from './notifications.js';
 import { sweepPending } from './delivery-operations.js';
@@ -64,7 +64,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     }
     for (const binding of captured) {
       if (binding.session !== input.sessionId) continue;
-      const square = await Square.at(await withDefaultWakeTransport({ path: binding.location, env: scoped }));
+      const square = await Square.at({ path: binding.location, env: scoped });
       try {
         const detached = binding.generation === undefined ? null
           : await square.detach(binding.participant, { owner, generation: binding.generation });

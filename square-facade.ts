@@ -139,7 +139,7 @@ export interface SquareSnapshot {
 
 export interface OpenOptions {
   readonly clock?: () => number;
-  readonly wakeTransport?: WakeTransportPort;
+  readonly wakeTransport?: WakeTransportPort | false;
 }
 export interface SquareLocation {
   readonly path?: string;

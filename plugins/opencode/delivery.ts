@@ -203,8 +203,8 @@ export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.Pr
 export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
   for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
     if (signal.aborted) return;
-    const { Square, withDefaultWakeTransport } = await import('../../square-api.js');
-    const square = await Square.at(await withDefaultWakeTransport({ path: location, env }));
+    const { Square } = await import('../../square-api.js');
+    const square = await Square.at({ path: location, env });
     try { await square.endHeld(seat.participant, { owner: seat.owner, generation: seat.generation }); }
     finally { await square.close(); }
   }

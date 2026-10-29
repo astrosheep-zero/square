@@ -43,8 +43,8 @@ test('the local resource accepts transport injection without composing harness d
   const resource = productionSources.get('sqlite-square.ts');
   assert.ok(resource);
   assert.equal(moduleEdges('sqlite-square.ts', resource).some(edge =>
-    edge.module === './notifications.js'), false);
-  assert.doesNotMatch(resource, /createDefaultWakeTransport|withDefaultWakeTransport/);
+    ['./notifications.js', './claude-delivery.js', './codex-queue.js', './paseo-delivery.js'].includes(edge.module)), false);
+  assert.doesNotMatch(resource, /createDefaultWakeTransport/);
 });
 
 test('normal runtime has one fact path, with no retired whole-state bridge', () => {

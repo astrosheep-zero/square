@@ -5,9 +5,9 @@ contains only `{"modules":["./register.js"]}`. Install with `square install clau
 and load/approve it in a trusted interactive Claude terminal. Installation is
 not evidence of a live receiver.
 
-Square's CLI/MCP/mod entrypoints explicitly compose the default wake transport. Direct SDK
-resources do not discover native adapters: inject `wakeTransport` or opt into
-`withDefaultWakeTransport` as described in [square-api.md](square-api.md).
+Public `Square.at` and `Square.build` use the default Claude/Codex/Paseo wake transport when
+`wakeTransport` is omitted. Supply a port to replace it or `false` to disable proactive wake;
+synchronous `Square.inMemory` uses only an explicit port. See [square-api.md](square-api.md).
 
 ## Validated capability
 

@@ -1,13 +1,21 @@
 import { SqliteSquare } from './sqlite-square.js';
-import { SquareError } from './model.js';
+import { SquareError, type Owner } from './model.js';
 import { requireOwner } from './seats.js';
-import type { Owner } from './model.js';
-import type { Participant } from './square-facade.js';
+import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import { createDefaultWakeTransport } from './notifications.js';
+
+export type Square = SqliteSquare;
+export const Square = { at: async (input: SquareAtInput, control?: OperationControl) =>
+  SqliteSquare.at({ ...input, wakeTransport: await resolveWakeTransport(input) }, control),
+  build: async (input: SquareBuildInput, control?: OperationControl) =>
+    SqliteSquare.build({ ...input, wakeTransport: await resolveWakeTransport(input) }, control), inMemory: SqliteSquare.inMemory };
+const resolveWakeTransport = (input: SquareAtInput) => input.wakeTransport !== undefined
+  ? Promise.resolve(input.wakeTransport)
+  : createDefaultWakeTransport(input.env ?? process.env).catch(() => undefined);
 
 export { requireOwner, requireJoinName } from './seats.js';
 export type * from './square-facade.js';
 export { squareLocation } from './square-location.js';
-export { withDefaultWakeTransport } from './notifications.js';
 export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string): Promise<Participant>;
 export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name: string | undefined, options: { readonly optional: true }): Promise<Participant | undefined>;
 export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string, options?: { readonly optional?: boolean }): Promise<Participant | undefined> {
@@ -25,7 +33,7 @@ export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | '
 }
 export { ACTIVITY_METADATA_MAX_BYTES } from './model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from './owner.js';
-export { SqliteSquare as Square, squareClock, createSquareResourceOwner, formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE,
+export { squareClock, createSquareResourceOwner, formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE,
   CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HELD_WAIT_BUDGET_MS, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
   DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,
   diagnoseSquare, migrateSquare, discover, inbox } from './sqlite-square.js';

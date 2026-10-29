@@ -5,9 +5,9 @@ maintaining a second hook protocol, boundary store or CLI sender. The standalone
 package's [README](../packages/agent-delivery/README.md) describes both its native
 app-server capability and its host-owned hook integration.
 
-Square's CLI/MCP entrypoints explicitly compose the default wake transport, including the
-Codex queue. Direct SDK resources use only an injected `wakeTransport`; opt into the product
-defaults with `withDefaultWakeTransport` (see [square-api.md](square-api.md)).
+Public `Square.at` and `Square.build` use the default Claude/Codex/Paseo wake transport when
+`wakeTransport` is omitted. Supply a port to replace it or `false` to disable proactive wake;
+synchronous `Square.inMemory` uses only an explicit port. See [square-api.md](square-api.md).
 
 ## Square's hook path
 

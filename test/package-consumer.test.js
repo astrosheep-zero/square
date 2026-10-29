@@ -44,12 +44,13 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   }
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
-    import { Square, withDefaultWakeTransport, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
+    import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
     const body = "test" + ":" + ('consumer');
-    const square = Square.inMemory({ markdown: 'context' });
-    const composed = withDefaultWakeTransport({ markdown: 'context', env: {} }).then(input => Square.inMemory(input));
-    const opened = withDefaultWakeTransport({ path: './test.square' }).then(input => Square.at(input));
-    void composed; void opened;
+    const square: Square = Square.inMemory({ markdown: 'context', wakeTransport: false });
+    const opened: Promise<Square> = Square.at({ path: './test.square' });
+    const built: Promise<Square> = Square.build({ path: './new.square', markdown: '', wakeTransport: false });
+    const injected: Promise<Square> = Square.at({ path: './test.square', wakeTransport: { attempt: async () => ({ outcome: 'accepted' }) } });
+    void opened; void built; void injected;
     const joined: Promise<JoinResult> = square.join('Alice', { owner: body });
     // @ts-expect-error caller identity is required on join, not the resource
     square.join('NoBody');
@@ -79,8 +80,10 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   assert.equal(typecheck.status, 0, typecheck.stderr || typecheck.stdout || typecheck.error?.message);
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
-    import { Square, withDefaultWakeTransport } from '@astrosheep/square';
-    if (typeof withDefaultWakeTransport !== 'function') process.exit(7);
+    import * as api from '@astrosheep/square';
+    const { Square } = api;
+    if (Object.hasOwn(api, 'withDefault' + 'WakeTransport')) process.exit(7);
+    if (['at', 'build', 'inMemory'].some(key => typeof Square[key] !== 'function')) process.exit(8);
     const body = "test" + ":" + ('consumer');
     const square = Square.inMemory({ markdown: 'context' });
     const { participant: alice } = await square.join('Alice', { owner: body });

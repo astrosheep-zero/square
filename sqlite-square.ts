@@ -92,7 +92,7 @@ export class SqliteSquare {
     try {
       await artifact.read(facts => facts.header(), control?.signal);
       return new SqliteSquare(location, artifact, clock,
-        input.wakeTransport, squareIndexPath(env), borrowed === undefined, await canonicalPath(location));
+        input.wakeTransport || undefined, squareIndexPath(env), borrowed === undefined, await canonicalPath(location));
     } catch (error) {
       if (borrowed === undefined) await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -111,7 +111,7 @@ export class SqliteSquare {
   static inMemory(input: Omit<SquareBuildInput, 'path' | 'resources'>): SqliteSquare {
     const env = { ...(input.env ?? process.env) };
     return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
-      squareClock(env, input.clock), input.wakeTransport);
+      squareClock(env, input.clock), input.wakeTransport || undefined);
   }
   /** Discovery is best effort and never grants write authority. */
   private async publishSeat(owner: Owner): Promise<void> {

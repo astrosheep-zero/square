@@ -8,7 +8,6 @@ import { InternalSquareError, SquareError, type WakeRouteKind } from './model.js
 import { createArtifactPort } from './artifact.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';
 import type { WakeTransportPort } from './ports.js';
-import type { SquareAtInput } from './square-facade.js';
 
 export type { PlannedNotification } from './delivery.js';
 
@@ -50,13 +49,6 @@ export async function createDefaultWakeTransport(
   const { createClaudeWakeTransport } = await import('./claude-delivery.js');
   transports['claude-native'] = createClaudeWakeTransport(env);
   return createWakeTransport(transports);
-}
-
-/** Opt into product delivery defaults without replacing an explicitly supplied transport. */
-export async function withDefaultWakeTransport<T extends SquareAtInput>(input: T): Promise<T> {
-  if (input.wakeTransport !== undefined) return input;
-  const wakeTransport = await createDefaultWakeTransport(input.env ?? process.env).catch(() => undefined);
-  return { ...input, wakeTransport };
 }
 
 /** Route selection only: all implementations receive the same request and final gate. */

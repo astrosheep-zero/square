@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Square, harnessOwner, withDefaultWakeTransport } from '../dist/square-api.js';
+import { Square, harnessOwner } from '../dist/square-api.js';
 import { CodexQueueTransport } from '../dist/codex-queue.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
@@ -24,7 +24,7 @@ async function fixture(t, transport, receivers) {
   return { alice, names: receivers.map((_, i) => `R${i}`) };
 }
 
-test('core open/build/memory do not deliver implicitly; product composition opts in', async t => {
+test('public build/open use env-resolved defaults; false and memory do not wake implicitly', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-transport-'));
   const input = { path: path.join(dir, 'test.square'), env: { ...process.env, SQUARE_DISABLE_PASEO_WAKE: '1' } };
   const resources = [];
@@ -32,44 +32,61 @@ test('core open/build/memory do not deliver implicitly; product composition opts
     await Promise.all(resources.map(resource => resource.close()));
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  let attempts = 0;
-  t.mock.method(CodexQueueTransport.prototype, 'attempt', async (_request, _budget, beforeSend) => {
+  const attempts = [];
+  t.mock.method(CodexQueueTransport.prototype, 'attempt', async (request, _budget, beforeSend) => {
     assert.equal(await beforeSend(), true);
-    attempts++;
+    attempts.push(request.participant);
     return { outcome: 'accepted' };
   });
-  const built = await Square.build({ ...input, markdown: '' });
-  resources.push(built);
-  const opened = await Square.at(input);
-  resources.push(opened);
-  const memory = Square.inMemory({ markdown: '', env: input.env });
-  resources.push(memory);
+  t.mock.method(PaseoWakeTransport.prototype, 'attempt', async () => {
+    assert.fail('the supplied env disables Paseo defaults');
+  });
+  resources.push(await Square.build({ ...input, markdown: '' }));
+  resources.push(await Square.at(input));
+  resources.push(await Square.build({ ...input, path: path.join(dir, 'silent.square'), markdown: '', wakeTransport: false }));
+  resources.push(await Square.at({ ...input, wakeTransport: false }));
+  resources.push(Square.inMemory({ markdown: '', env: input.env }));
+  resources.push(Square.inMemory({ markdown: '', env: input.env, wakeTransport: false }));
   for (const [i, resource] of resources.entries()) {
     const alice = (await resource.join(`Alice${i}`, { owner: ':' })).participant;
     await resource.join(`Bob${i}`, { owner: `codex:receiver-${i}`, wakeAddress: {
       kind: 'codex-queue', address: { threadId: `receiver-${i}`, codexHome: dir },
     } });
-    await alice.express(`hello @Bob${i}`, { force: true });
+    await resource.join(`Paseo${i}`, { owner: `test:paseo-${i}`, wakeAddress: {
+      kind: 'paseo', address: { agentId: `paseo-${i}` },
+    } });
+    await alice.express(`hello @Bob${i} @Paseo${i}`, { force: true });
   }
-  assert.equal(attempts, 0);
-  const composed = await Square.at(await withDefaultWakeTransport(input));
-  resources.push(composed);
-  await (await composed.participant('Alice0', { owner: ':' })).express('explicit opt-in @Bob0', { force: true });
-  assert.equal(attempts, 1);
+  assert.deepEqual(attempts, ['Bob0', 'Bob1']);
+  assert.equal(Object.hasOwn(input, 'wakeTransport'), false);
 });
 
-test('default composition preserves injection and uses the supplied environment without mutating input', async () => {
-  const wakeTransport = { attempt: async () => ({ outcome: 'accepted' }) };
-  const injected = { markdown: 'context', wakeTransport };
-  assert.equal(await withDefaultWakeTransport(injected), injected);
-  const input = { markdown: 'context', env: { SQUARE_DISABLE_PASEO_WAKE: '1' } };
-  const composed = await withDefaultWakeTransport(input);
-  assert.notEqual(composed, input);
-  assert.equal(Object.hasOwn(input, 'wakeTransport'), false);
-  assert.equal(composed.markdown, input.markdown);
-  assert.equal(composed.env, input.env);
-  assert.equal(await composed.wakeTransport.probe({ kind: 'codex-queue', address: {} }), true);
-  assert.equal((await composed.wakeTransport.probe({ kind: 'paseo', address: {} })).outcome, 'not-capable');
+test('public build/open/memory retain the injected transport identity', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-injected-'));
+  const resources = [];
+  t.after(async () => {
+    await Promise.all(resources.map(resource => resource.close()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const attempts = [];
+  const wakeTransport = { async attempt(request, _budget, beforeSend) {
+    assert.equal(this, wakeTransport);
+    assert.equal(await beforeSend(), true);
+    attempts.push(request.participant);
+    return { outcome: 'accepted' };
+  } };
+  const input = { path: path.join(dir, 'test.square'), env: { ...process.env }, wakeTransport };
+  resources.push(await Square.build({ ...input, markdown: '' }));
+  resources.push(await Square.at(input));
+  resources.push(Square.inMemory({ markdown: '', wakeTransport }));
+  for (const [i, resource] of resources.entries()) {
+    const alice = (await resource.join(`Alice${i}`, { owner: ':' })).participant;
+    await resource.join(`Bob${i}`, { owner: `test:receiver-${i}`, wakeAddress: {
+      kind: 'paseo', address: { agentId: `receiver-${i}` },
+    } });
+    await alice.express(`hello @Bob${i}`, { force: true });
+  }
+  assert.deepEqual(attempts, ['Bob0', 'Bob1', 'Bob2']);
 });
 
 test('express overlaps four receiver identities, keeps same-Body order, and drains before returning', { timeout: 5000 }, async t => {
