@@ -5,6 +5,10 @@ maintaining a second hook protocol, boundary store or CLI sender. The standalone
 package's [README](../packages/agent-delivery/README.md) describes both its native
 app-server capability and its host-owned hook integration.
 
+Square's CLI/MCP entrypoints explicitly compose the default wake transport, including the
+Codex queue. Direct SDK resources use only an injected `wakeTransport`; opt into the product
+defaults with `withDefaultWakeTransport` (see [square-api.md](square-api.md)).
+
 ## Square's hook path
 
 `plugins/codex/hooks/hooks.json` invokes `square codex-hook`:

@@ -7,6 +7,7 @@ import type { Participant } from './square-facade.js';
 export { requireOwner, requireJoinName } from './seats.js';
 export type * from './square-facade.js';
 export { squareLocation } from './square-location.js';
+export { withDefaultWakeTransport } from './notifications.js';
 export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string): Promise<Participant>;
 export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name: string | undefined, options: { readonly optional: true }): Promise<Participant | undefined>;
 export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string, options?: { readonly optional?: boolean }): Promise<Participant | undefined> {

@@ -17,7 +17,6 @@ import { recoveryObservation, entryPresentation, snapshot, queryStatus, queryPar
   parseRequiredActivityId, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
 import { rememberSquarePath, squareIndexPath } from './square-index.js';
-import { createDefaultWakeTransport } from './notifications.js';
 import { deliverPending } from './delivery-operations.js';
 import { participantIdentity } from './participant-identity.js';
 import { joinRecoveryCommand } from './presentation.js';
@@ -87,14 +86,13 @@ export class SqliteSquare {
   static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
     const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
     const clock = squareClock(env, input.clock);
-    const wakeTransport = input.wakeTransport ?? await createDefaultWakeTransport(env).catch(() => undefined);
     // A request can abort its own borrowed reads, never the owner's connection lifetime.
     const borrowed = input.resources?.artifact(location);
     const artifact = borrowed ?? createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
       return new SqliteSquare(location, artifact, clock,
-        wakeTransport, squareIndexPath(env), borrowed === undefined, await canonicalPath(location));
+        input.wakeTransport, squareIndexPath(env), borrowed === undefined, await canonicalPath(location));
     } catch (error) {
       if (borrowed === undefined) await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')

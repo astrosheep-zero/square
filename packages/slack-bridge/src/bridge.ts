@@ -1,4 +1,4 @@
-import { Square } from '@astrosheep/square';
+import { Square, withDefaultWakeTransport } from '@astrosheep/square';
 import type { Activity, ActivityId, Participant, StreamRecord } from '@astrosheep/square';
 import type { BridgeSettings } from './config.js';
 import { Directory } from './directory.js';
@@ -59,7 +59,7 @@ export class Bridge {
     const directory = await Directory.build({
       settings: options.settings, port: options.port, state: store.state, save: () => store.save(),
     });
-    const square = options.square ?? await Square.at({ path: options.settings.square });
+    const square = options.square ?? await Square.at(await withDefaultWakeTransport({ path: options.settings.square }));
     if (loaded.fresh) {
       // A first start begins at the current end of the archive; old history is not replayed.
       store.state.cursor = (await square.history({ limit: 1, order: 'desc' })).activities[0]?.id ?? null;

@@ -5,7 +5,7 @@ import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
 import { type HardCap, parseParticipantList, validateName } from '../model.js';
-import { Square, squareClock } from '../square-api.js';
+import { Square, squareClock, withDefaultWakeTransport } from '../square-api.js';
 import type { OperationControl } from '../square-facade.js';
 
 export interface CommandContext {
@@ -196,7 +196,7 @@ export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { own
 
 /** Adapter lifetime only; each callback uses the actual public resource API. */
 export async function withSquare<T>(context: CommandContext, run: (square: Square) => Promise<T>, control?: OperationControl): Promise<T> {
-  const square = await Square.at(squareInput(context), control);
+  const square = await Square.at(await withDefaultWakeTransport(squareInput(context)), control);
   try { return await run(square); }
   finally { await square.close(); }
 }

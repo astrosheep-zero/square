@@ -11,7 +11,7 @@ import {
   renderListenerChange,
   renderListeningResult,
 } from '../operation-presentation.js';
-import { Square, requireOwner, requireJoinName, selectOwnSeat } from '../square-api.js';
+import { Square, requireOwner, requireJoinName, selectOwnSeat, withDefaultWakeTransport } from '../square-api.js';
 import { executeExpression } from './express-presentation.js';
 import { jsonResult } from './json.js';
 import {
@@ -164,7 +164,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   parse: parseActivity,
   async execute(intent, context) {
     const rawInput = intent.activity === undefined ? undefined : await resolveBody(intent.activity);
-    await executeExpression((control) => Square.at(squareInput(context), control), requireSquarePath(context), context.name, rawInput, {
+    await executeExpression(async (control) => Square.at(await withDefaultWakeTransport(squareInput(context)), control), requireSquarePath(context), context.name, rawInput, {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
       mentions: intent.mentions, reach: intent.reach, reply: intent.reply, metadata: intent.metadata,
       recoveryOwner: context.owner ?? context.env.SQUARE_OWNER,

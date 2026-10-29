@@ -39,6 +39,14 @@ function ownershipLeaks(identifier, owners) {
     .map((file) => `${identifier}: ${file}`);
 }
 
+test('the local resource accepts transport injection without composing harness defaults', () => {
+  const resource = productionSources.get('sqlite-square.ts');
+  assert.ok(resource);
+  assert.equal(moduleEdges('sqlite-square.ts', resource).some(edge =>
+    edge.module === './notifications.js'), false);
+  assert.doesNotMatch(resource, /createDefaultWakeTransport|withDefaultWakeTransport/);
+});
+
 test('normal runtime has one fact path, with no retired whole-state bridge', () => {
   const retired = ['SquareDoc', 'createSquareDoc', 'readDocument', 'transactSquareSnapshot', 'deriveDeliveryModel', 'replayLandedAudiences', 'cloneState'];
   const leaks = retired.flatMap((identifier) => ownershipLeaks(identifier, []));

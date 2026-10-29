@@ -5,6 +5,10 @@ contains only `{"modules":["./register.js"]}`. Install with `square install clau
 and load/approve it in a trusted interactive Claude terminal. Installation is
 not evidence of a live receiver.
 
+Square's CLI/MCP/mod entrypoints explicitly compose the default wake transport. Direct SDK
+resources do not discover native adapters: inject `wakeTransport` or opt into
+`withDefaultWakeTransport` as described in [square-api.md](square-api.md).
+
 ## Validated capability
 
 The supported baseline is **macOS Claude Code with the mod actually loaded**;

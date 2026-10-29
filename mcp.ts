@@ -5,7 +5,7 @@ import { operationEnv } from './participant-identity.js';
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { Square, createSquareResourceOwner } from './square-api.js';
+import { Square, createSquareResourceOwner, withDefaultWakeTransport } from './square-api.js';
 import { harnessOwner, type Owner } from './square-api.js';
 import type { SquareAtInput } from './square-facade.js';
 
@@ -55,12 +55,12 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
               : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
                 ? operationEnv('opencode', opencodeSessionId, baseEnv)
                 : baseEnv;
-          square = await Square.at({
+          square = await Square.at(await withDefaultWakeTransport({
             ...resourceOptions, env, cwd: claude?.cwd ?? resourceOptions.cwd,
             path: (location as string | undefined) ?? options.path,
             // The server owner is bound to its configured square; overrides close after each call.
             resources: location === undefined && claude === undefined ? resources : undefined,
-          }, { signal: extra.signal });
+          }), { signal: extra.signal });
           const callWake = wakeAddress !== undefined && (owner === configuredOwner
             || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
             || wakeAddress.kind === 'claude-native' && wakeAddress.address.sessionId === claude?.sessionId

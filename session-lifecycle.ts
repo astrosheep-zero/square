@@ -1,4 +1,4 @@
-import { Square } from './square-api.js';
+import { Square, withDefaultWakeTransport } from './square-api.js';
 import { harnessOwner, type Owner } from './owner.js';
 import type { AutomaticProvider } from './participant-identity.js';
 import type { WakeAddress } from './model.js';
@@ -14,7 +14,7 @@ export async function detachSessionSeats(provider: AutomaticProvider, sessionId:
   for (const { location, seat } of await projectSessionSeats({ owner, env })) {
     let square: Square | undefined;
     try {
-      square = await Square.at({ path: location, env });
+      square = await Square.at(await withDefaultWakeTransport({ path: location, env }));
       await square.detach(seat.participant, { owner, generation: seat.generation });
     } catch { /* One unavailable or replaced seat must not block cleanup of the others. */ }
     finally { await square?.close(); }
@@ -28,7 +28,7 @@ export async function restoreSessionSeats(owner: Owner, env: NodeJS.ProcessEnv =
     if (signal?.aborted) return;
     let square: Square | undefined;
     try {
-      square = await Square.at({ path: location, env }, { signal });
+      square = await Square.at(await withDefaultWakeTransport({ path: location, env }), { signal });
       for (const seat of await square.seatsOf(owner)) {
         if (signal?.aborted) return;
         if (seat.attachment !== 'detached') continue;

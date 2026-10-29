@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Square, harnessOwner } from '../dist/square-api.js';
+import { Square, harnessOwner, withDefaultWakeTransport } from '../dist/square-api.js';
+import { CodexQueueTransport } from '../dist/codex-queue.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
 async function fixture(t, transport, receivers) {
@@ -22,6 +23,54 @@ async function fixture(t, transport, receivers) {
   }
   return { alice, names: receivers.map((_, i) => `R${i}`) };
 }
+
+test('core open/build/memory do not deliver implicitly; product composition opts in', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-transport-'));
+  const input = { path: path.join(dir, 'test.square'), env: { ...process.env, SQUARE_DISABLE_PASEO_WAKE: '1' } };
+  const resources = [];
+  t.after(async () => {
+    await Promise.all(resources.map(resource => resource.close()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  let attempts = 0;
+  t.mock.method(CodexQueueTransport.prototype, 'attempt', async (_request, _budget, beforeSend) => {
+    assert.equal(await beforeSend(), true);
+    attempts++;
+    return { outcome: 'accepted' };
+  });
+  const built = await Square.build({ ...input, markdown: '' });
+  resources.push(built);
+  const opened = await Square.at(input);
+  resources.push(opened);
+  const memory = Square.inMemory({ markdown: '', env: input.env });
+  resources.push(memory);
+  for (const [i, resource] of resources.entries()) {
+    const alice = (await resource.join(`Alice${i}`, { owner: ':' })).participant;
+    await resource.join(`Bob${i}`, { owner: `codex:receiver-${i}`, wakeAddress: {
+      kind: 'codex-queue', address: { threadId: `receiver-${i}`, codexHome: dir },
+    } });
+    await alice.express(`hello @Bob${i}`, { force: true });
+  }
+  assert.equal(attempts, 0);
+  const composed = await Square.at(await withDefaultWakeTransport(input));
+  resources.push(composed);
+  await (await composed.participant('Alice0', { owner: ':' })).express('explicit opt-in @Bob0', { force: true });
+  assert.equal(attempts, 1);
+});
+
+test('default composition preserves injection and uses the supplied environment without mutating input', async () => {
+  const wakeTransport = { attempt: async () => ({ outcome: 'accepted' }) };
+  const injected = { markdown: 'context', wakeTransport };
+  assert.equal(await withDefaultWakeTransport(injected), injected);
+  const input = { markdown: 'context', env: { SQUARE_DISABLE_PASEO_WAKE: '1' } };
+  const composed = await withDefaultWakeTransport(input);
+  assert.notEqual(composed, input);
+  assert.equal(Object.hasOwn(input, 'wakeTransport'), false);
+  assert.equal(composed.markdown, input.markdown);
+  assert.equal(composed.env, input.env);
+  assert.equal(await composed.wakeTransport.probe({ kind: 'codex-queue', address: {} }), true);
+  assert.equal((await composed.wakeTransport.probe({ kind: 'paseo', address: {} })).outcome, 'not-capable');
+});
 
 test('express overlaps four receiver identities, keeps same-Body order, and drains before returning', { timeout: 5000 }, async t => {
   const starts = [], activeReceivers = new Set();

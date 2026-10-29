@@ -32,16 +32,25 @@ try {
 ```
 
 - `Square.build({path, markdown, hardCap?, throttlePerMinute?, template?, force?, ...})` returns
-  the same open resource. `Square.inMemory({markdown, ...})` is synchronous and creates no default
-  native wake transport. An explicitly injected transport runs the same claim, deferral and final
+  the same open resource. `Square.at`, `Square.build` and synchronous `Square.inMemory` use only
+  an explicitly supplied `wakeTransport`; opening or creating a resource never discovers harness
+  adapters. An injected transport runs the same claim, deferral and final
   currentness checks as file delivery. Each memory resource has a unique `memory://` identity;
   this is not a remotely openable address, is not indexed, and does not enable file-based hooks.
 - `Square.at` accepts `path`, optional `cwd`, `env`, `clock`, `wakeTransport` and a caller-owned
-  connection via `resources`. At entry, `env` resolves the path, clock, concrete transport and
-  discovery index path once. `Square.at`, `Square.build` and `Square.inMemory` do not capture a
+  connection via `resources`. At entry, `env` resolves the path, clock and discovery index path
+  once. `Square.at`, `Square.build` and `Square.inMemory` do not capture a
   `owner`, `wakeAddress` or default `participant`. The same resource can serve multiple owners;
   identity is supplied at each join or participant selection. `wakeTransport` injection is retained
   for both file-backed build/open and memory resources.
+- Direct SDK callers opt into the product's existing Claude/Codex/Paseo delivery defaults with
+  `await Square.at(await withDefaultWakeTransport({path, env}))`, importing both functions from
+  `@astrosheep/square`. The asynchronous helper returns an input with a default transport created
+  from `input.env ?? process.env`, or `undefined` if creation fails. An explicitly supplied transport
+  returns the original input unchanged. The helper also accepts build/memory inputs; use it before
+  `Square.build` when the returned resource will perform participant writes. CLI, MCP and harness
+  entrypoints compose these defaults explicitly. Without injection or opt-in, activities still land
+  normally but the resource does not dispatch proactive wakes.
 - Local artifact paths resolve against `cwd`; an omitted path uses `SQUARE_LOCATION` at entry.
 - `await square.participant(name, {owner})` selects an **attached, standing** seat held by that exact
   owner without joining, claiming or reentering. It never manufactures a ghost handle: a never-joined,

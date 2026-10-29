@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
-import { Square, harnessOwner } from '../../dist/square-api.js';
+import { Square, harnessOwner, withDefaultWakeTransport } from '../../dist/square-api.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
@@ -152,11 +152,11 @@ export default function squarePiExtension(pi) {
       async execute(_id, args, signal, _onUpdate, ctx) {
         try {
           const sessionId = ctx.sessionManager.getSessionId();
-          const square = await Square.at({
+          const square = await Square.at(await withDefaultWakeTransport({
             cwd: ctx.cwd,
             env: operationEnv('pi', sessionId, process.env),
             path: args.location,
-          }, { signal });
+          }), { signal });
           let text;
           try { text = await tool.run(square, args, { signal }, { owner: harnessOwner({ channel: 'pi', session: sessionId }) }); }
           finally { await square.close(); }
@@ -258,7 +258,7 @@ export default function squarePiExtension(pi) {
       const seats = await projectSessionSeats({ owner, env });
       for (const { location, seat } of seats) {
         if (seat.attachment !== 'attached') continue;
-        const square = await Square.at({ path: location, env });
+        const square = await Square.at(await withDefaultWakeTransport({ path: location, env }));
         try { await square.cancelDeliveries(seat.participant, { owner, generation: seat.generation }); }
         finally { await square.close(); }
       }
