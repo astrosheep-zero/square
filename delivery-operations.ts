@@ -4,6 +4,7 @@ import { sameBody, type Seat, type WakeRoute } from './model.js';
 import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
 import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
+import { bodyKey } from './square-index.js';
 import { freshWatchLease } from './runtime.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
@@ -11,7 +12,7 @@ import { leaseOwnsNotification } from './delivery.js';
 function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefined {
   if (seat.attachment !== 'attached' || seat.wakeAddress === undefined) return undefined;
   return {
-    location, participant: seat.participant, sessionId: seat.body.session, channel: seat.body.channel,
+    location, participant: seat.participant,
     kind: seat.wakeAddress.kind, address: { ...seat.wakeAddress.address }, updatedAt: now,
   };
 }
@@ -109,12 +110,12 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
 
   const pending = await candidates(input.artifact, requested, input.now ?? Date.now());
   // Preserve order within a receiving session; unrelated receivers need not wait for each other.
-  const sessions = new Map<string, Candidate[]>();
+  const receivers = new Map<string, Candidate[]>();
   for (const candidate of pending) {
-    const key = JSON.stringify([candidate.seat.body.channel, candidate.seat.body.session]);
-    const group = sessions.get(key) ?? [];
+    const key = bodyKey(candidate.seat.body);
+    const group = receivers.get(key) ?? [];
     group.push(candidate);
-    sessions.set(key, group);
+    receivers.set(key, group);
   }
   const dispatch = async ({ seat, head }: Candidate): Promise<void> => {
     const route = routeFor(location, seat, input.now ?? Date.now());
@@ -178,8 +179,8 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
       ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: safeJson(outcome.diagnostic) } : {}),
     }).catch(() => false);
   };
-  const groups = sessions.values();
-  const settled = await Promise.allSettled(Array.from({ length: Math.min(4, sessions.size) }, async () => {
+  const groups = receivers.values();
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(4, receivers.size) }, async () => {
     for (const group of groups) for (const candidate of group) await dispatch(candidate);
   }));
   // Even an unexpected failure must drain siblings before the caller closes its artifact.

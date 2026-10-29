@@ -14,7 +14,6 @@ export interface WakeAttempt {
   readonly outcome: 'accepted' | 'unknown' | 'failed';
   readonly signature?: string;
   readonly attemptN: number;
-  readonly session?: string;
   readonly message?: string;
   readonly diagnostic?: unknown;
 }
@@ -92,7 +91,6 @@ export async function classifyDeliveryHealth(
         routeKind: attemptRow.route.kind,
         outcome: attemptRow.outcome as 'accepted' | 'unknown' | 'failed',
         attemptN: attemptRow.attemptN,
-        session: seat.body.session,
         ...(attemptRow.signature === undefined ? {} : { signature: attemptRow.signature }),
         ...(attemptRow.message === undefined ? {} : { message: attemptRow.message }),
         ...(attemptRow.diagnostic === undefined ? {} : { diagnostic: attemptRow.diagnostic }),
@@ -180,7 +178,7 @@ function formatRelease(release: WakeReleaseDiagnostic, now: number): string {
   return `  · ${formatActivityId(release.attention.actIndex)} → ${displayField(participantIdentity(release.attention.recipient))} · ${route} · ${reason} · ${age}${message}${diagnostic}`;
 }
 
-function deliveryAttempt(squarePath: string, row: DeliveryEvidence, session?: string): WakeAttempt | undefined {
+function deliveryAttempt(squarePath: string, row: DeliveryEvidence): WakeAttempt | undefined {
   if (row.route?.kind === undefined || row.outcome === 'released' || row.outcome === 'dispatching') return undefined;
   return {
     at: row.at,
@@ -188,7 +186,6 @@ function deliveryAttempt(squarePath: string, row: DeliveryEvidence, session?: st
     routeKind: row.route.kind,
     outcome: row.outcome as 'accepted' | 'unknown' | 'failed',
     attemptN: row.attemptN,
-    ...(session === undefined ? {} : { session }),
     ...(row.signature === undefined ? {} : { signature: row.signature }),
     ...(row.message === undefined ? {} : { message: row.message }),
     ...(row.diagnostic === undefined ? {} : { diagnostic: row.diagnostic }),

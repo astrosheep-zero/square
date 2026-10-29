@@ -5,7 +5,7 @@ import { createWakeTransport, createDefaultWakeTransport } from '../dist/notific
 const request = (kind) => ({
   location: '/tmp/transport.square', participant: 'Faye', activity: 'act/2', actor: 'Bev',
   seat: { participant: 'Faye', generation: 'act/1', body: { channel: 'test', session: 'faye' } },
-  route: { kind, address: {}, sessionId: 'faye', channel: 'test', location: '/tmp/transport.square', participant: 'Faye', updatedAt: 1 },
+  route: { kind, address: {}, location: '/tmp/transport.square', participant: 'Faye', updatedAt: 1 },
 });
 const gate = async () => true;
 

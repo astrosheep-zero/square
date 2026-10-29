@@ -150,7 +150,8 @@ test('detach invalidates cached inboxes, claims and final proactive presentation
   assert.deepEqual(await sweepPending({ artifact: f.artifact, location: f.location, now: Date.now(), graceMs: 0, limit: 20 }), []);
   assert.equal(effects, 0);
   assert.equal(await f.read(facts => facts.receipt('Bob', Number(sent.activity.id.slice(4)))), undefined);
-  assert.equal(await f.read(facts => nativePendingPreview(facts, { location: f.location, sessionId: f.body.session, participant: 'Bob', actIndex: Number(sent.activity.id.slice(4)), now: Date.now(), routeKind: 'opencode-server', address: { sessionId: f.body.session } })), undefined);
+  assert.equal(await f.read(facts => nativePendingPreview(facts, { location: f.location, participant: 'Bob', generation: f.ref.generation,
+    actIndex: Number(sent.activity.id.slice(4)), now: Date.now(), routeKind: 'opencode-server', address: { sessionId: f.body.session } })), undefined);
   await prepared.release();
 });
 

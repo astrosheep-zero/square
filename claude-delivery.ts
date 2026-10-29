@@ -28,8 +28,9 @@ interface NativePreview {
 function previewFacts(facts: import('./ports.js').SquareRead, request: WakeRequest): NativePreview | undefined {
   const index = parseActivityId(request.activity);
   if (index === undefined || request.route.kind !== 'claude-native' || request.route.address.endpoint === undefined) return undefined;
-  return nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', sessionId: request.route.sessionId,
-    participant: request.participant, actIndex: index, address: { endpoint: request.route.address.endpoint }, now: Date.now() });
+  return nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', generation: request.seat.generation,
+    address: request.route.address,
+    participant: request.participant, actIndex: index, now: Date.now() });
 }
 
 async function preview(artifact: SquareArtifactPort, request: WakeRequest): Promise<NativePreview | undefined> {
@@ -71,7 +72,9 @@ async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSen
   if (fresh === undefined || nativePayload(request.claimToken, fresh.payload) !== payload)
     return { outcome: 'not-capable', diagnostic: 'Claude activity changed before native write.' };
   if (signal.aborted || !await beforeSend()) return { outcome: 'not-capable', diagnostic: 'Claude activity was consumed before native write.' };
-  return writeClaudeWake(request.route.sessionId, request.route.address.endpoint!, messageId, payload, timeoutMs, signal);
+  const sessionId = request.route.address.sessionId;
+  if (sessionId === undefined) return { outcome: 'not-capable', diagnostic: 'Claude native route has no session address.' };
+  return writeClaudeWake(sessionId, request.route.address.endpoint!, messageId, payload, timeoutMs, signal);
 }
 
 interface NativeRow {
@@ -85,7 +88,6 @@ function currentPayload(facts: SquareRead, request: WakeRequest): string | undef
   const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
   if (seat === undefined || seat.attachment !== 'attached' || evidence === undefined || seat.generation !== evidence.generation
     || seat.generation !== request.seat.generation || !sameBody(seat.body, request.seat.body)
-    || seat.body.channel !== 'claude-code' || seat.body.session !== request.route.sessionId
     || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
     || seat.wakeAddress?.kind !== 'claude-native' || !sameAddress(seat.wakeAddress.address, request.route.address)) return undefined;
   const native = previewFacts(facts, request);
@@ -108,7 +110,7 @@ async function rowsForSession(sessionId: string, env: NodeJS.ProcessEnv, tokens:
         const seat = facts.seat(evidence.participant), index = parseActivityId(evidence.activity);
         const item = index === undefined ? undefined : facts.activity(index);
         if (seat === undefined || item?.kind !== 'say') return [row];
-        const route: WakeRoute = { location, participant: seat.participant, sessionId, channel: 'claude-code',
+        const route: WakeRoute = { location, participant: seat.participant,
           ...evidence.route, updatedAt: evidence.at };
         const request: WakeRequest = { location, participant: seat.participant, activity: evidence.activity,
           actor: item.actor, seat: asSeatRef(seat), claimToken: token, attemptN: evidence.attemptN, route, artifact };

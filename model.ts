@@ -126,8 +126,6 @@ export interface WakeRoute {
   epoch?: number;
   location: string;
   participant: string;
-  sessionId: string;
-  channel: string;
   kind: WakeRouteKind;
   address: Record<string, string>;
   updatedAt: number;

@@ -411,14 +411,21 @@ test('native previews for both native addresses revalidate current-generation de
   const f = await fixture(t);
   const activity = await f.say();
   const lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  for (const [routeKind, address] of [['claude-native', { endpoint: '/tmp/unused-deferral-test.sock' }], ['opencode-server', { sessionId: 'Bob' }]]) {
+  const previews = [];
+  for (const [routeKind, address] of [['claude-native', { endpoint: '/tmp/unused-deferral-test.sock', sessionId: 'Bob', loaded: 'true' }], ['opencode-server', { sessionId: 'Bob' }]]) {
     await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: routeKind, address }));
-    const input = { location: f.location, participant: 'Bob', sessionId: 'Bob', actIndex: Number(activity.id.slice(4)), now: Date.now(), routeKind, address };
+    const input = { location: f.location, participant: 'Bob', generation: f.seat.generation,
+      actIndex: Number(activity.id.slice(4)), now: Date.now(), routeKind, address };
     assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, input))).value, undefined);
+    previews.push(input);
   }
   await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.ok((await f.artifact.read(facts => nativePendingPreview(facts, { location: f.location, participant: 'Bob', sessionId: 'Bob',
-    actIndex: Number(activity.id.slice(4)), now: Date.now(), routeKind: 'opencode-server', address: { sessionId: 'Bob' } }))).value);
+  for (const input of previews) {
+    await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: input.routeKind, address: input.address }));
+    assert.ok((await f.artifact.read(facts => nativePendingPreview(facts, input))).value);
+    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, generation: 'act/999' }))).value, undefined);
+    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, address: { ...input.address, stale: 'route' } }))).value, undefined);
+  }
 });
 
 test('active observers restore eligibility on release without another conversation activity', async t => {

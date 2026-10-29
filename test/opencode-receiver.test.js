@@ -221,14 +221,16 @@ test('receipt and takeover during native I/O exclude stale batch/context while n
   await until(async () => (await item.artifact.read(facts =>
     facts.deliveryEvidence('Cara', facts.seat('Cara').generation, `act/${fresh}`))).value.some(row => row.outcome === 'accepted'),
   'new exact-body membership did not receive pending activity');
-  assert.equal(calls.length, 2);
+  const newMessageCalls = calls.filter(call => call.text.includes('new exact-body member'));
+  assert.equal(newMessageCalls.length, 2, 'both current seats with the exact native address receive the new activity');
+  assert.deepEqual(newMessageCalls.map(call => call.text.match(/<square-activity[^>]* as="([^"]+)"/)?.[1]).sort(), ['Bob', 'Cara']);
   assert.match(calls[1].text, /new exact-body member/);
   await observeOpenCodeContext(item.body.session, [{ id: calls[0].id, role: 'user', content: [{ type: 'text', text: calls[0].text }] }],
     item.env, new AbortController().signal);
   assert.equal(await item.receipt(first), undefined, 'old prepared context cannot consume under a new generation');
   assert.ok(await item.receipt(caught));
   await sleep(100);
-  assert.equal(calls.length, 2, 'old captured batch must not send after catch/takeover');
+  assert.equal(calls.length, 3, 'the old in-flight attempt plus both exact-address deliveries remain accounted for');
 });
 
 test('an unreadable indexed candidate stays quiet and native delivery resumes after repair', async t => {

@@ -17,10 +17,14 @@ const bodyFor = (sessionId: string) => ({ channel: 'opencode', session: sessionI
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
 
-function preview(facts: SquareRead, location: string, seat: Seat, index: number) {
+function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'participant' | 'body' | 'generation'>, index: number) {
+  const seat = facts.seat(captured.participant);
+  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== captured.generation || !sameBody(seat.body, captured.body)) return undefined;
+  const wake = seat.wakeAddress;
+  if (wake?.kind !== routeKind) return undefined;
   return nativePendingPreview(facts, {
-    location, routeKind, sessionId: seat.body.session, participant: seat.participant,
-    actIndex: index, address: { sessionId: seat.body.session }, now: Date.now(),
+    location, routeKind, generation: seat.generation, participant: seat.participant,
+    actIndex: index, address: wake.address, now: Date.now(),
   });
 }
 
@@ -39,12 +43,11 @@ function sameSeat(left: Seat | undefined, right: Seat): boolean {
 function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
   return {
     probe: async (route) => !lifetime.aborted && route.kind === routeKind
-      && route.sessionId === target.sessionId && route.address.sessionId === target.sessionId,
+      && route.address.sessionId === target.sessionId,
     async attempt(request: WakeRequest, timeoutMs: number, beforeSend) {
       const index = parseActivityId(request.activity);
       const artifact = request.artifact;
       if (artifact === undefined || request.claimToken === undefined || index === undefined
-        || !sameBody(request.seat.body, bodyFor(target.sessionId))
         || request.route.kind !== routeKind || request.route.address.sessionId !== target.sessionId) {
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention has no matching artifact claim or session.' };
       }
@@ -52,13 +55,13 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
       const started = Date.now();
       if (signal.aborted || !await beforeSend())
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before send.' };
-      const { value: prepared } = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
+      const { value: prepared } = await artifact.read((facts) => preview(facts, request.location, request.seat, index), signal);
       if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
       const inputId = createNativeInputId();
       const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(prepared.payload) };
       if (!await artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }, signal))
         return { outcome: 'not-capable', diagnostic: 'OpenCode delivery claim is no longer current.' };
-      const fresh = await artifact.read((facts) => preview(facts, request.location, request.seat as Seat, index), signal);
+      const fresh = await artifact.read((facts) => preview(facts, request.location, request.seat, index), signal);
       if (fresh.value === undefined || payloadHash(fresh.value.payload) !== correlation.payloadHash)
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before native send.' };
       if (signal.aborted || !await beforeSend())

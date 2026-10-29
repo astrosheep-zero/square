@@ -51,6 +51,8 @@ test('file-backed public build and at retain injected delivery transport and com
     const alice = (await built.join('Alice')).participant;
     const first = await alice.express('from build', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 1, 'Square.build must retain the supplied transport');
+    assert.deepEqual(Object.keys(calls[0].route).sort(), ['address', 'kind', 'location', 'participant', 'updatedAt']);
+    assert.deepEqual(calls[0].route.address, { agentId: 'no-external-send' });
     reopened = await Square.at({ path: location, body, env, wakeTransport });
     const second = await (await reopened.participant()).express('from at', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 2, 'Square.at must retain the supplied transport');

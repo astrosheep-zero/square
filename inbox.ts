@@ -202,22 +202,22 @@ export interface NativePendingPreview {
   readonly clipped: boolean;
 }
 export type NativePendingPreviewInput = {
-  readonly location: string; readonly sessionId: string; readonly participant: string;
+  readonly location: string; readonly generation: import('./model.js').ActivityId; readonly participant: string;
   readonly actIndex: number; readonly cancelledThrough?: number; readonly now: number;
 } & (
-  | { readonly routeKind: 'claude-native'; readonly address: { readonly endpoint: string } }
-  | { readonly routeKind: 'opencode-server'; readonly address: { readonly sessionId: string } }
+  | { readonly routeKind: 'claude-native'; readonly address: Readonly<Record<string, string>> }
+  | { readonly routeKind: 'opencode-server'; readonly address: Readonly<Record<string, string>> }
 );
 
 function sameWakeAddress(address: import('./model.js').WakeAddress | undefined, kind: NativePendingPreviewInput['routeKind'], requested: Readonly<Record<string, string>>): boolean {
-  if (address?.kind !== kind) return false;
+  if (address?.kind !== kind || Object.keys(address.address).length !== Object.keys(requested).length) return false;
   return Object.entries(requested).every(([key, value]) => address.address[key] === value);
 }
 
-/** First matching current seat, exact body/generation/address and catch ownership. */
+/** Current-generation native attention, owned by its exact wake address and catch state. */
 export function nativePendingPreview(facts: SquareRead, input: NativePendingPreviewInput): NativePendingPreview | undefined {
   const seat = facts.seat(input.participant);
-  if (seat === undefined || seat.attachment !== 'attached' || seat.body.session !== input.sessionId
+  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== input.generation
     || !sameWakeAddress(seat.wakeAddress, input.routeKind, input.address)) return undefined;
   const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
   if (input.actIndex <= Math.max(input.cancelledThrough ?? -1, cancelledThrough ?? -1)) return undefined;

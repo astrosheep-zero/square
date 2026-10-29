@@ -148,7 +148,7 @@ function simulatedNativeTransport(f) {
       f.payloads.set(`${canonicalPathSync(request.location)}\0${request.activity}`, text);
       await f.onPrepared?.({ request, correlation, text });
       if (!await beforeSend()) return { outcome: 'not-capable' };
-      f.nativeMessages.push({ sessionId: request.route.sessionId, messageId, text });
+      f.nativeMessages.push({ sessionId: request.route.address.sessionId, messageId, text });
       return { outcome: 'unknown', signature: 'native_admission_unconfirmed' };
     },
   };
