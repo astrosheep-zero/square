@@ -34,7 +34,7 @@ export function renderJoinResult(data: JoinPresentation): string | undefined {
   const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
     now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
-  const fallback = after.automaticDeliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
+  const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
     '', `${participantCommandPrefix(after.location, name)} catch --idle 30m`,
     '  · stay within earshot — keep this catch open for new activity',
   ];
@@ -108,7 +108,7 @@ export function renderCatchOutcome(
   const header = { participantCount: projection.standingCount, held: projection.held };
   const statusOptions = {
     squarePath: location, name, presence: projection.presence,
-    showCatchHint: !projection.automaticDeliveryAvailable,
+    showCatchHint: !projection.deliveryAvailable,
     ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
   };
   if (stop === 'already-active' || stop === 'replaced') {
@@ -127,7 +127,7 @@ export function renderCatchOutcome(
     ...statusOptions, status: stop,
     ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
   });
-  const fallback = stop === undefined && !projection.automaticDeliveryAvailable && data.remaining === 0
+  const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
     ? `${participantCommandPrefix(location, name)} catch --idle 30m\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return {
@@ -388,7 +388,7 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
     if (facts?.ledgerRoot !== undefined) lines.push('square ledger migrate', 'square ledger verify');
     else if (squarePath !== undefined) lines.push(`${commandPrefix(squarePath)} migrate`);
   } else if (squarePath !== undefined && name !== undefined && reason === 'needs_seat') {
-    lines.splice(0, 1, `✕ ${participantIdentity(name)} is away — join again before writing`);
+    lines.splice(0, 1, `✕ ${failure.message}`);
     lines.push(joinRecoveryCommand(squarePath, name));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,

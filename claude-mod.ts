@@ -63,10 +63,10 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
     }
     for (const binding of captured) {
       if (binding.session !== input.sessionId) continue;
-      const square = await Square.at({ path: binding.location, env: scoped, body,
-        participant: binding.participant });
+      const square = await Square.at({ path: binding.location, env: scoped });
       try {
-        const detached = await square.detachOwnedSession(binding.participant, input.sessionId, binding.generation, body);
+        const detached = binding.generation === undefined ? null
+          : await square.detach(binding.participant, { body, generation: binding.generation });
         if (detached) retired.push(binding);
       } finally { await square.close(); }
       if (signal.aborted) break;

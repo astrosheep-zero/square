@@ -295,12 +295,13 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
     assert.equal(sends, 0, 'unowned standing names cannot receive a delivery');
   } finally { await artifact.close(); }
   assert.deepEqual(await diagnoseSquareFile(location), { problems: [], standingCount: 6 });
-  const square = await Square.at({ path: location, env, body: { channel: 'test', session: 'not-an-owner' } });
+  const body = { channel: 'test', session: 'not-an-owner' };
+  const square = await Square.at({ path: location, env });
   try {
-    assert.equal((await square.status()).participants.filter(participant => participant.presence === 'active' || participant.presence === 'watching').length, 6);
+    assert.equal((await square.status({ viewer: undefined })).participants.filter(participant => participant.presence === 'active' || participant.presence === 'watching').length, 6);
     assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').presence, 'active');
     assert.equal((await square.history({ limit: null })).activities.length, 14);
-    await assert.rejects((await square.participant('Bob')).done(), error => error.code === 'already_joined');
+    await assert.rejects(square.participant('Bob', { body }), error => error.code === 'already_joined');
   } finally { await square.close(); }
   const current = digest(location);
   assert.deepEqual(await migrateSquareFile(location, undefined, env), { status: 'already-current', standing: 6 });

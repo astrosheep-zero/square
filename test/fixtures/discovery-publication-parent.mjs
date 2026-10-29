@@ -31,14 +31,13 @@ function expressInChild(text) {
   assert.equal(result.status, 0, JSON.stringify(diagnostic));
 }
 try {
-  const built = await Square.build({ path: location, markdown: 'discovery is optional', body, env, wakeTransport });
-  try { await built.join('Alice'); }
+  const built = await Square.build({ path: location, markdown: 'discovery is optional', env, wakeTransport });
+  try { await built.join('Alice', { body }); }
   finally { await built.close(); }
 
   if (process.argv[2] === 'open') {
-    // Pause a real index publication after acquiring its lock. An old detached open
-    // can return at this point; its synchronous child then prevents the parent
-    // from finishing publication. Awaited publication finishes before that child.
+    // Pause a real reattachment publication after acquiring its lock. Publication
+    // must finish before a synchronous CLI child blocks the parent's event loop.
     const original = fs.promises.readFile;
     let publicationPending = false;
     let reached;
@@ -55,18 +54,18 @@ try {
     };
     restore = () => { fs.promises.readFile = original; };
     opened = await Square.at({ path: location, body, env, wakeTransport });
+    await opened.reattach('Alice', { body });
     await insideLock;
-    // On the detached implementation the queued setImmediate cannot release its
-    // index lock while this real parent synchronously waits for the CLI child.
+    // A queued publication could not release its lock during the synchronous child.
     expressInChild('child after open completion');
-    assert.equal(publicationPending, false, 'resource-open must not leave a detached publication');
+    assert.equal(publicationPending, false, 'join/reattach must not leave a detached publication');
   } else if (process.argv[2] === 'held') {
     const before = fs.readFileSync(index, 'utf8');
     lock = new DatabaseSync(`${index}.lock`);
     lock.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
     assert.equal(await rememberSquarePath(location, { channel: 'codex', session: 'not-published' }, index), false);
     opened = await Square.at({ path: location, body, env, wakeTransport });
-    const bob = (await opened.join('Bob')).participant;
+    const bob = (await opened.join('Bob', { body })).participant;
     await bob.express('parent while discovery is locked', { force: true });
     expressInChild('child while discovery is locked');
     assert.equal(fs.readFileSync(index, 'utf8'), before, 'contended publication must not write or queue');

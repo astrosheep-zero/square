@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { Square } from '../dist/index.js';
+import { Square } from '../dist/square-api.js';
 import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from '../dist/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
@@ -22,10 +22,10 @@ async function tempDirectory(prefix) {
 }
 
 test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
-  const square = Square.inMemory({ markdown: 'context', body: body('memory') });
+  const square = Square.inMemory({ markdown: 'context' });
   const before = await square.snapshot();
-  await assert.rejects(() => square.join('Alice', {}, { signal: aborted().signal }), /cancelled/);
-  await assert.rejects(() => square.implicitJoin('Bob', { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.join('Alice', { body: body('memory') }, { signal: aborted().signal }), /cancelled/);
+  await assert.rejects(() => square.reattach('Bob', { body: body('memory') }, { signal: aborted().signal }), /cancelled/);
   assert.equal((await square.snapshot()).actCount, before.actCount);
   await square.close();
 });
@@ -36,14 +36,14 @@ test('request operations abort under an exclusive artifact lock without a deferr
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
   const writerBody = body('writer');
   const readerBody = body('reader');
-  const built = await Square.build({ path: location, markdown: 'context', env, body: writerBody, participant: 'Writer' });
-  const writer = (await built.join('Writer')).participant;
+  const built = await Square.build({ path: location, markdown: 'context', env });
+  const writer = (await built.join('Writer', { body: writerBody })).participant;
   await built.close();
-  const readerSquare = await Square.at({ path: location, env, body: readerBody, participant: 'Reader' });
-  await readerSquare.join('Reader');
+  const readerSquare = await Square.at({ path: location, env });
+  await readerSquare.join('Reader', { body: readerBody });
   await readerSquare.close();
-  const writerSquare = await Square.at({ path: location, env, body: writerBody, participant: 'Writer' });
-  await (await writerSquare.participant()).express('unread', { force: true, mentions: ['Reader'] });
+  const writerSquare = await Square.at({ path: location, env });
+  await (await writerSquare.participant('Writer', { body: writerBody })).express('unread', { force: true, mentions: ['Reader'] });
   await writerSquare.close();
 
   const before = await readSquareSnapshot(location);
@@ -51,12 +51,12 @@ test('request operations abort under an exclusive artifact lock without a deferr
   database.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
   const requests = [
-    ['Reader', readerBody, async square => (await square.participant()).catch({}, { signal: controller.signal })],
-    ['Writer', writerBody, async square => (await square.participant()).express('cancelled', { force: true }, { signal: controller.signal })],
-    ['Newcomer', body('newcomer'), async square => square.join('Newcomer')],
+    async square => (await square.participant('Reader', { body: readerBody })).catch({}, { signal: controller.signal }),
+    async square => (await square.participant('Writer', { body: writerBody })).express('cancelled', { force: true }, { signal: controller.signal }),
+    async square => square.join('Newcomer', { body: body('newcomer') }),
   ];
-  const pending = requests.map(async ([participant, coordinate, operate]) => {
-    const square = await Square.at({ cwd: root, env, path: location, body: coordinate, participant }, { signal: controller.signal });
+  const pending = requests.map(async operate => {
+    const square = await Square.at({ cwd: root, env, path: location }, { signal: controller.signal });
     try { await operate(square); } finally { await square.close(); }
   });
   const abort = setTimeout(() => controller.abort(new Error('cancelled')), 50);
@@ -81,13 +81,13 @@ test('cancelled force-build leaves no replacement after the artifact lock is rel
   const { fs, path, root } = await tempDirectory('square-build-cancel-');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const location = path.join(root, 'SQUARE.square');
-  const built = await Square.build({ cwd: root, path: location, markdown: 'original', hardCap: 7, body: body('builder') });
+  const built = await Square.build({ cwd: root, path: location, markdown: 'original', hardCap: 7 });
   await built.close();
   const before = await readSquareSnapshot(location);
   const lock = new DatabaseSync(location);
   lock.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
-  const pending = Square.build({ path: location, markdown: 'must not replace original', hardCap: 2, force: true, body: body('builder') }, { signal: controller.signal });
+  const pending = Square.build({ path: location, markdown: 'must not replace original', hardCap: 2, force: true }, { signal: controller.signal });
   const abort = setTimeout(() => controller.abort(new Error('force-build cancelled')), 50);
   let deadline;
   try {
@@ -117,7 +117,7 @@ test('a published build keeps its result when cancellation follows publication',
   const link = fs.promises.link;
   fs.promises.link = async (...args) => { await link(...args); controller.abort(new Error('late response cancellation')); };
   try {
-    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3, body: body('builder') }, { signal: controller.signal });
+    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
     assert.equal(result.location, location);
     assert.equal((await result.status()).hardCap, 3);
     await result.close();
@@ -127,9 +127,9 @@ test('a published build keeps its result when cancellation follows publication',
 });
 
 test('idle catch aborts without consuming activity added later', async () => {
-  const square = Square.inMemory({ markdown: 'context', body: body('memory') });
-  const alice = (await square.join('Alice')).participant;
-  const bob = (await square.join('Bob')).participant;
+  const square = Square.inMemory({ markdown: 'context' });
+  const alice = (await square.join('Alice', { body: body('memory') })).participant;
+  const bob = (await square.join('Bob', { body: body('memory') })).participant;
   await bob.catch();
   const controller = new AbortController();
   const waiting = bob.catch({ idle: 60_000 }, { signal: controller.signal });
@@ -174,8 +174,8 @@ test('abort inside a transition before commit rolls back the whole change', asyn
 test('post-commit express preserves its result after response cancellation', async t => {
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
-  const square = await resourceWithArtifact(t, artifact, body('memory'));
-  const writer = (await square.join('Writer')).participant;
+  const square = await resourceWithArtifact(t, artifact);
+  const writer = (await square.join('Writer', { body: body('memory') })).participant;
   const controller = new AbortController();
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
@@ -191,9 +191,9 @@ test('post-commit express preserves its result after response cancellation', asy
 test('post-commit catch preserves its receipt and result before return cancellation', async t => {
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
-  const square = await resourceWithArtifact(t, artifact, body('memory'));
-  const alice = (await square.join('Alice')).participant;
-  const bob = (await square.join('Bob')).participant;
+  const square = await resourceWithArtifact(t, artifact);
+  const alice = (await square.join('Alice', { body: body('memory') })).participant;
+  const bob = (await square.join('Bob', { body: body('memory') })).participant;
   await bob.catch();
   await alice.express('boundary catch', { force: true, mentions: ['Bob'] });
   const controller = new AbortController();
@@ -212,17 +212,14 @@ test('post-commit catch preserves its receipt and result before return cancellat
 test('a result-assembly failure after express commit retains landed certainty and its activity id', async t => {
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
-  const square = await resourceWithArtifact(t, artifact, body('memory'));
-  const writer = (await square.join('Writer')).participant;
+  const square = await resourceWithArtifact(t, artifact);
+  const writer = (await square.join('Writer', { body: body('memory') })).participant;
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (...args) => {
     const result = await transactAs(...args);
-    return { ...result, value: { ...result.value, stored: new Proxy(result.value.stored, {
-      get(target, key) {
-        if (key === 'kind') throw new Error('public conversion failed after landing');
-        return Reflect.get(target, key);
-      },
-    }) } };
+    return { ...result, value: { ...result.value, stored: { ...result.value.stored,
+      get kind() { throw new Error('public conversion failed after landing'); },
+    } } };
   };
   await assert.rejects(writer.express('landed despite assembly failure'), error => {
     assert.deepEqual(error.operation, { operation: 'express', participant: 'Writer', subject: 'caller', expressEffect: 'landed', landedId: 'act/1' });
@@ -237,10 +234,10 @@ test('concurrent joins from one body establish one artifact seat and one join ac
   const location = path.join(root, 'SQUARE.square');
   const coordinate = body('same-session');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const square = await Square.build({ path: location, markdown: 'context', env, body: coordinate, participant: 'Same' });
-  const peer = await Square.at({ path: location, env, body: coordinate, participant: 'Same' });
+  const square = await Square.build({ path: location, markdown: 'context', env });
+  const peer = await Square.at({ path: location, env });
   try {
-    await Promise.all([square.join('Same'), peer.join('Same')]);
+    await Promise.all([square.join('Same', { body: coordinate }), peer.join('Same', { body: coordinate })]);
     assert.equal((await square.history()).activities.filter(activity => activity.kind === 'join').length, 1);
     const artifact = createArtifactPort(location);
     try { assert.deepEqual((await artifact.read(facts => facts.seatsForBody(coordinate))).value.map(seat => seat.participant), ['Same']); }

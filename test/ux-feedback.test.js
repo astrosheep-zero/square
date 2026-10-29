@@ -8,8 +8,8 @@ test('join guidance follows delivery capability, not a blanket instruction to wa
   const base = { kind: 'reconnected', participant: 'rei', observation: {
     location: '/tmp/example.square', standingCount: 1, held: false, now: 0,
   } };
-  const native = renderJoinResult({ ...base, observation: { ...base.observation, automaticDeliveryAvailable: true } });
-  const manual = renderJoinResult({ ...base, observation: { ...base.observation, automaticDeliveryAvailable: false } });
+  const native = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: true } });
+  const manual = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: false } });
   assert.match(native, /when someone calls you, you’ll hear them here/);
   assert.doesNotMatch(native, /catch --idle/);
   assert.match(manual, /catch --idle 30m/);
@@ -18,9 +18,9 @@ test('join guidance follows delivery capability, not a blanket instruction to wa
 });
 
 test('expanding a clipped history page keeps its activity coordinates', async () => {
-  const square = Square.inMemory({ markdown: 'Conversation', body: { channel: 'test', session: 'ux-feedback' } });
+  const square = Square.inMemory({ markdown: 'Conversation' });
   try {
-    const rei = (await square.join('rei')).participant;
+    const rei = (await square.join('rei', { body: { channel: 'test', session: 'ux-feedback' } })).participant;
     const a = await rei.express('a'.repeat(220), { force: true });
     const b = await rei.express('b'.repeat(220), { force: true });
     const c = await rei.express('newer words', { force: true });

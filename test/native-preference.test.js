@@ -17,36 +17,36 @@ test('managed reconnect preserves receiver-native custody until retirement or a 
       const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
       const fallback = { kind: 'paseo', address: { agentId: 'managed-agent' } };
       const native = { kind, address: { sessionId: body.session, ...(kind === 'claude-native' ? { endpoint: '/tmp/receiver.sock', loaded: 'true' } : {}) } };
-      const initial = await Square.build({ path: location, markdown: 'Native custody', body, env, wakeAddress: fallback });
-      await initial.join('Bob');
+      const initial = await Square.build({ path: location, markdown: 'Native custody', env });
+      await initial.join('Bob', { body, wakeAddress: fallback });
       await initial.close();
       const artifact = createArtifactPort(location);
       t.after(async () => { await artifact.close(); fs.rmSync(root, { recursive: true, force: true }); });
       const seat = async () => (await artifact.read(facts => facts.seat('Bob'))).value;
-      const open = wakeAddress => Square.at({ path: location, body, env, wakeAddress });
-      const receiver = await open(native);
-      try { assert.equal((await receiver.join('Bob')).kind, 'reconnected'); }
+      const open = () => Square.at({ path: location, env });
+      const receiver = await open();
+      try { assert.equal((await receiver.join('Bob', { body, wakeAddress: native })).kind, 'reconnected'); }
       finally { await receiver.close(); }
       const registered = await seat();
       assert.deepEqual(registered.wakeAddress, native);
-      const managed = await open(fallback);
+      const managed = await open();
       try {
-        assert.equal((await managed.join('Bob')).kind, 'reconnected');
+        assert.equal((await managed.join('Bob', { body, wakeAddress: fallback })).kind, 'reconnected');
         assert.deepEqual(await seat(), registered);
-        assert.equal((await managed.implicitJoin('Bob')).state, 'active');
+        assert.equal((await managed.reattach('Bob', { body, wakeAddress: fallback })).name, 'Bob');
         assert.deepEqual(await seat(), registered);
-        await (await managed.participant('Bob')).express('*waves*', { force: true });
+        await (await managed.participant('Bob', { body })).express('*waves*', { force: true });
         assert.deepEqual(await seat(), registered, 'express does not publish a generic replacement address');
 
         // An explicit receiver withdrawal permits fallback without inventing expiry policy.
         await artifact.transactAs({ kind: 'participant', seat: registered }, facts => facts.updateWakeAddress(registered, undefined));
-        await managed.join('Bob');
+        await managed.join('Bob', { body, wakeAddress: fallback });
         assert.deepEqual((await seat()).wakeAddress, fallback);
-        const restored = await open(native);
-        try { await restored.join('Bob'); } finally { await restored.close(); }
+        const restored = await open();
+        try { await restored.join('Bob', { body, wakeAddress: native }); } finally { await restored.close(); }
         assert.deepEqual((await seat()).wakeAddress, native);
 
-        await managed.join('Bob', { takeover: true });
+        await managed.join('Bob', { body, wakeAddress: fallback, takeover: true });
         const replacement = await seat();
         assert.notEqual(replacement.generation, registered.generation);
         assert.deepEqual(replacement.wakeAddress, fallback, 'new generation cannot inherit the old native registration');

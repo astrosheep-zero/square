@@ -17,7 +17,7 @@ function parent(mode) {
     [{ status: 0, error: null, signal: null }]);
 }
 
-test('resource-open discovery finishes before a real parent synchronously expresses through a CLI child', () => {
+test('seat reattachment publishes discovery before a real parent synchronously expresses through a CLI child', () => {
   parent('open');
 });
 

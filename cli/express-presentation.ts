@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSquareError } from '../model.js';
-import { type Square, formatActivityId, parseActivityId } from '../square-api.js';
+import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../square-api.js';
+import type { Body } from '../model.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
 import {
   formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
@@ -53,7 +54,7 @@ export function activityRetryCommand(squarePath: string, name: string, opts: Act
 }
 
 /** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
-export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false): Promise<void> {
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false, body?: Body): Promise<void> {
   let square: Square | undefined;
   let attempted = false;
   let announcedWait: 'held' | 'throttled' | undefined;
@@ -64,7 +65,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
   process.once('SIGINT', interrupt);
   try {
     square = await open({ signal: controller.signal });
-    const participant = await square.participant(requestedName);
+    const participant = await selectOwnSeat(square, body, requestedName);
     name = participant.name;
     attempted = true;
     const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, ...expressOptions } = opts;
@@ -88,7 +89,8 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     // This MUST precede recovery: even an unreadable artifact cannot eat the raw body.
     const draftPath = saveActivityDraft(squarePath, name, rawInput ?? '');
     if (square === undefined) square = await open().catch(() => undefined);
-    const fresh = await square?.recovery(name).catch(() => undefined);
+    const selected = square === undefined ? undefined : await selectOwnSeat(square, body, name).catch(() => undefined);
+    const fresh = await square?.recovery(selected?.name ?? name).catch(() => undefined);
     name = fresh?.participant ?? name;
     const output = { squarePath, name, draftPath, participantCount: fresh?.standingCount, held: fresh?.held };
     const confirmedUnsent = landedId === undefined && detail?.landedId === undefined
@@ -141,6 +143,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         : refusalText(error);
     const lines = [message, `· draft kept: ${draftPath}`];
     if (reason === 'needs_seat') {
+      lines[0] = `✕ ${message}`;
       lines.push(joinRecoveryCommand(squarePath, name));
       process.stderr.write(formatRefusal(squarePath, lines, output));
       exitCode(2); return;

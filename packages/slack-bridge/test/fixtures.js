@@ -23,9 +23,9 @@ export async function buildSquare(name = 'square') {
 }
 
 export async function opened(t, path, settings = settingsFor({ square: path })) {
-  const square = await Square.at({ path, body: bridgeBody(settings) })
+  const square = await Square.at({ path })
   t.after(() => square.close())
-  return square
+  return { square, body: bridgeBody(settings) }
 }
 
 export function settingsFor({ square, state, personas = {} }) {

@@ -11,11 +11,15 @@ import type { SquareAtInput } from './square-facade.js';
 type JsonObject = Record<string, unknown>;
 
 /** The server owns its artifact connection lifetime, so callers cannot lend one. */
-export interface SquareMcpOptions extends Omit<SquareAtInput, 'resources'> {}
+export interface SquareMcpOptions extends Omit<SquareAtInput, 'resources'> {
+  readonly body?: import('./model.js').Body;
+  readonly wakeAddress?: import('./model.js').WakeAddress;
+}
 export type SquareMcpServer = McpServer;
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
-  const baseEnv = { ...(options.env ?? process.env) };
+  const { body: configuredBody, wakeAddress, ...resourceOptions } = options;
+  const baseEnv = { ...(resourceOptions.env ?? process.env) };
   const resources = createSquareResourceOwner();
   // Calls to the configured square borrow one server-owned connection.
   const inFlight = new Set<Promise<unknown>>();
@@ -27,7 +31,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
       const call = (async () => {
         let square: Square | undefined;
         try {
-          const { as: participant, location } = args as JsonObject;
+          const { location } = args as JsonObject;
           const threadId = extra._meta?.threadId;
           const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
           // Claude's plugin endpoint requires the mod's call-local coordinate, never startup identity.
@@ -41,7 +45,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
               ? { channel: 'codex', session: threadId }
               : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
                 ? { channel: 'opencode', session: opencodeSessionId }
-                : options.body;
+                : configuredBody;
           const env = claude !== undefined
             ? { ...operationEnv('claude', claude.sessionId, baseEnv),
               // Preserve Claude's session + child flag semantics; an agent loop ID is not a session ID.
@@ -52,17 +56,16 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
                 ? operationEnv('opencode', opencodeSessionId, baseEnv)
                 : baseEnv;
           square = await Square.at({
-            ...options, env, body, cwd: claude?.cwd ?? options.cwd,
-            // A call-local Codex thread uses its native queue even when managed by Paseo.
-            wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-              ? codexWakeAddress(threadId, env) : options.wakeAddress,
+            ...resourceOptions, env, cwd: claude?.cwd ?? resourceOptions.cwd,
             path: (location as string | undefined) ?? options.path,
-            participant: (participant as string | undefined) ?? options.participant,
             // The server owner is bound to its configured square; overrides close after each call.
             resources: location === undefined && claude === undefined ? resources : undefined,
           }, { signal: extra.signal });
           let text: string;
-          try { text = await tool.run(square, args as JsonObject, { signal: extra.signal }); }
+          try { text = await tool.run(square, args as JsonObject, { signal: extra.signal }, {
+            body, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
+              ? codexWakeAddress(threadId, env) : wakeAddress,
+          }); }
           finally { await square.close(); }
           return { content: [{ type: 'text' as const, text }] };
         } catch (error) {
@@ -70,7 +73,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           const participant = (args as JsonObject).as;
           return { isError: true, content: [{ type: 'text' as const, text: squareToolFailureText(failure, {
             location: square?.location ?? options.path,
-            participant: typeof participant === 'string' ? participant : options.participant,
+            participant: typeof participant === 'string' ? participant : undefined,
           }) }] };
         }
       })();

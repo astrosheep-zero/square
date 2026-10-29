@@ -42,19 +42,19 @@ test('file-backed public build and at retain injected delivery transport and com
     calls.push(request);
     return { outcome: 'accepted' };
   } };
-  const built = await Square.build({ path: location, markdown: 'test', body, env, wakeTransport });
-  const bob = await Square.at({ path: location, env, body: { channel: 'test', session: 'bob' },
-    wakeAddress: { kind: 'paseo', address: { agentId: 'no-external-send' } } });
+  const built = await Square.build({ path: location, markdown: 'test', env, wakeTransport });
+  const bob = await Square.at({ path: location, env });
   let reopened;
   try {
-    await bob.join('Bob');
-    const alice = (await built.join('Alice')).participant;
+    await bob.join('Bob', { body: { channel: 'test', session: 'bob' },
+      wakeAddress: { kind: 'paseo', address: { agentId: 'no-external-send' } } });
+    const alice = (await built.join('Alice', { body })).participant;
     const first = await alice.express('from build', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 1, 'Square.build must retain the supplied transport');
     assert.deepEqual(Object.keys(calls[0].route).sort(), ['address', 'kind', 'location', 'participant', 'updatedAt']);
     assert.deepEqual(calls[0].route.address, { agentId: 'no-external-send' });
-    reopened = await Square.at({ path: location, body, env, wakeTransport });
-    const second = await (await reopened.participant()).express('from at', { mentions: ['Bob'], force: true });
+    reopened = await Square.at({ path: location, env, wakeTransport });
+    const second = await (await reopened.participant('Alice', { body })).express('from at', { mentions: ['Bob'], force: true });
     assert.equal(calls.length, 2, 'Square.at must retain the supplied transport');
     const artifact = createArtifactPort(location);
     try {
@@ -77,22 +77,22 @@ test('known-artifact participation survives an unavailable discovery home and ke
   const location = path.join(root, 'KNOWN.square');
   const body = { channel: 'test', session: 'known' };
   const wakeTransport = { async attempt() { assert.fail('no external sends'); } };
-  const built = await Square.build({ path: location, markdown: 'known artifact', env, body, wakeTransport });
+  const built = await Square.build({ path: location, markdown: 'known artifact', env, wakeTransport });
   try {
     // Neither discovery nor the clock may be resolved again during participant operations.
     env.SQUARE_INDEX = lateIndex;
     env.SQUARE_NOW_MS = 'not-a-clock';
-    const alice = (await built.join('Alice')).participant;
+    const alice = (await built.join('Alice', { body })).participant;
     const expressed = await alice.express('committed despite unavailable HOME', { force: true });
     assert.equal(expressed.activity.at, 1000);
-    assert.equal((await built.participant()).name, 'Alice');
+    assert.equal((await built.participant('Alice', { body })).name, 'Alice');
     await alice.done();
     assert.equal(fs.existsSync(lateIndex), false);
   } finally { await built.close(); }
-  const reopened = await Square.at({ path: location, body, wakeTransport,
+  const reopened = await Square.at({ path: location, wakeTransport,
     env: { ...env, SQUARE_INDEX: path.join(unavailableHome, 'index.ndjsonl'), SQUARE_NOW_MS: '2000' } });
   try {
-    const alice = (await reopened.join('Alice')).participant;
+    const alice = (await reopened.join('Alice', { body })).participant;
     assert.equal((await alice.express('known artifact reconnect', { force: true })).activity.at, 2000);
     assert.deepEqual((await reopened.history()).activities.filter(row => row.kind === 'say').map(row => row.body),
       ['committed despite unavailable HOME', 'known artifact reconnect']);

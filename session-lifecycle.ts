@@ -13,8 +13,8 @@ export async function detachSessionSeats(provider: AutomaticProvider, sessionId:
   for (const { location, seat } of await projectSessionSeats({ body, env })) {
     let square: Square | undefined;
     try {
-      square = await Square.at({ path: location, env, body });
-      await square.detachOwnedSession(seat.participant, sessionId, seat.generation, body);
+      square = await Square.at({ path: location, env });
+      await square.detach(seat.participant, { body, generation: seat.generation });
     } catch { /* One unavailable or replaced seat must not block cleanup of the others. */ }
     finally { await square?.close(); }
   }
@@ -27,12 +27,11 @@ export async function restoreSessionSeats(body: Body, env: NodeJS.ProcessEnv = p
     if (signal?.aborted) return;
     let square: Square | undefined;
     try {
-      square = await Square.at({ path: location, env, body, wakeAddress }, { signal });
-      for (const seat of await square.bodySeats()) {
+      square = await Square.at({ path: location, env }, { signal });
+      for (const seat of await square.seatsOf(body)) {
         if (signal?.aborted) return;
         if (seat.attachment !== 'detached') continue;
-        // Unlike explicit join, implicitJoin never revives a done that raced this read.
-        try { await square.implicitJoin(seat.participant, { signal }); }
+        try { await square.reattach(seat.name, { body, wakeAddress }, { signal }); }
         catch { /* A replacement or one failed seat does not block its peers. */ }
       }
     } catch { /* An indexed location is only a candidate, not a promise of availability. */ }

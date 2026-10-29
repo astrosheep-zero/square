@@ -15,9 +15,9 @@ async function fixture(t) {
   const env = { SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_DISABLE_PASEO_WAKE: '1' };
   const body = { channel: 'claude-code', session: 'stream-resource' };
   const location = path.join(root, 'original.square');
-  const square = await Square.build({ path: location, markdown: '', env, body });
+  const square = await Square.build({ path: location, markdown: '', env });
   t.after(async () => { await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const alice = (await square.join('Alice')).participant;
+  const alice = (await square.join('Alice', { body })).participant;
   await alice.express('original');
   return { root, env, body, location, square, alice };
 }
@@ -29,9 +29,9 @@ test('public path stream follows atomic replacement independently of the open re
   t.after(() => iterator.return());
   assert.equal((await iterator.next()).value.body, 'original');
   const pending = iterator.next();
-  const replacement = await Square.build({ path: replacementPath, markdown: '', env: f.env, body: f.body });
+  const replacement = await Square.build({ path: replacementPath, markdown: '', env: f.env });
   try {
-    const alice = (await replacement.join('Alice')).participant;
+    const alice = (await replacement.join('Alice', { body: f.body })).participant;
     await alice.express('same coordinate');
     await alice.express('after replacement');
   } finally { await replacement.close(); }
@@ -50,8 +50,8 @@ test('closing the resource does not strand its path stream; iterator disposal re
   assert.equal((await iterator.next()).value.body, 'original');
   await f.square.close();
   const pending = iterator.next();
-  const writer = await Square.at({ path: f.location, env: f.env, body: f.body });
-  try { await (await writer.participant('Alice')).express('after owner close'); }
+  const writer = await Square.at({ path: f.location, env: f.env });
+  try { await (await writer.participant('Alice', { body: f.body })).express('after owner close'); }
   finally { await writer.close(); }
   const timer = setTimeout(() => controller.abort(new Error('closed owner stranded path stream')), 2000);
   try { assert.equal((await pending).value.body, 'after owner close'); }

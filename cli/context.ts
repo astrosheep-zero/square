@@ -166,12 +166,10 @@ export function defaultContext(command: string, squarePath?: string, name?: stri
 }
 
 export function squareInput(context: CommandContext) {
-  const { body, wakeAddress } = commandIdentity(context.env);
-  return { cwd: context.cwd, env: context.env, path: context.squarePath, participant: context.name,
-    ...(body === undefined ? {} : { body }), ...(wakeAddress === undefined ? {} : { wakeAddress }) };
+  return { cwd: context.cwd, env: context.env, path: context.squarePath };
 }
 
-function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: import('../model.js').WakeAddress } {
+export function commandIdentity(env: NodeJS.ProcessEnv): { body?: Body; wakeAddress?: import('../model.js').WakeAddress } {
   const coordinates = harnessSessionSources.flatMap(({ variable, channel, provider }) => {
     const session = env[variable]?.trim();
     return session === undefined || session === '' ? [] : [{ channel, session, native: provider !== undefined }];

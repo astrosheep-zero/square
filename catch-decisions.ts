@@ -13,6 +13,7 @@ export interface CatchSelection {
   readonly remaining: number;
   readonly standingCount: number;
   readonly held: boolean;
+  readonly deliveryAvailable: boolean;
   readonly now: number;
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
@@ -28,6 +29,7 @@ export function observeCatchSelection(facts: SquareRead, participant: string, ac
     participant, activities: activities.map(activity => toPerceivedActivity(facts, activity, participant)),
     remaining: facts.directedCount(participant, filter),
     standingCount: counts.joined, held: facts.hold().active, now: at,
+    deliveryAvailable: facts.seat(participant)?.wakeAddress !== undefined,
     ownActivityCount: current.sayCount, hardCap: header.hardCap,
     terminalStatus: terminalStatusFor(current, header.hardCap, counts),
   };

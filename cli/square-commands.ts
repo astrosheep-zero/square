@@ -11,13 +11,13 @@ import {
   renderListenerChange,
   renderListeningResult,
 } from '../operation-presentation.js';
-import { Square } from '../square-api.js';
+import { Square, requireBody, requireJoinName, selectOwnSeat } from '../square-api.js';
 import { executeExpression } from './express-presentation.js';
 import { jsonResult } from './json.js';
 import {
   type CommandContext, type CommandSpec, squareInput, withSquare, fail, parseBoundedLimit,
   parseHardCap, parsePositiveInteger, readStdin, requireSquarePath, requireValue,
-  resolveBody, usage,
+  resolveBody, usage, commandIdentity,
 } from './context.js';
 
 interface BuildIntent {
@@ -110,8 +110,9 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
     return { lastN, kick };
   },
   async execute(intent, context) {
-    const data = await withSquare(context, (square) => square.join(context.name, {
-      takeover: intent.kick, last: intent.lastN, ...(context.json ? {} : { observe: true }),
+    const { body, wakeAddress } = commandIdentity(context.env);
+    const data = await withSquare(context, (square) => square.join(requireJoinName(context.name), {
+      body: requireBody(body), wakeAddress, takeover: intent.kick, last: intent.lastN, ...(context.json ? {} : { observe: true }),
     }));
     return context.json ? jsonResult(data) : renderJoinResult(data)!;
   },
@@ -167,7 +168,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
       mentions: intent.mentions, reach: intent.reach, reply: intent.reply, metadata: intent.metadata,
       metadataJson: intent.metadataJson, bodyProvided: intent.activity !== undefined,
-    }, context.json);
+    }, context.json, commandIdentity(context.env).body);
   },
   present: () => {},
 };
@@ -183,7 +184,7 @@ function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<Li
     parse(argv, context) { return parseListener(argv, context, true); },
     async execute(intent, context) {
       const squarePath = requireSquarePath(context);
-      const data = await withSquare(context, async (square) => (await square.participant(context.name))[verb](intent.target!, context.json ? {} : { observe: true }));
+      const data = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env).body, context.name))[verb](intent.target!, context.json ? {} : { observe: true }));
       return context.json ? jsonResult(data) : renderListenerChange(squarePath, verb, data)!;
     },
     present: (result) => process.stdout.write(result),
@@ -196,7 +197,7 @@ export const listeningCommand: CommandSpec<ListenerIntent, string> = {
   parse(argv, context) { return parseListener(argv, context, false); },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, async (square) => (await square.participant(context.name)).listening(context.json ? {} : { observe: true }));
+    const data = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env).body, context.name)).listening(context.json ? {} : { observe: true }));
     return context.json ? jsonResult(data) : renderListeningResult(squarePath, data)!;
   },
   present: (result) => process.stdout.write(result),
@@ -215,7 +216,7 @@ function lifecycleCommand(verb: 'done' | 'hold' | 'resume'): CommandSpec<BodyInt
           ? await readStdin() : intent.body;
       const squarePath = requireSquarePath(context);
       const result = await withSquare(context, async (square) => {
-        const participant = await square.participant(context.name);
+        const participant = await selectOwnSeat(square, commandIdentity(context.env).body, context.name);
         const options = context.json ? {} : { observe: true };
         return verb === 'resume' ? participant.resume(options) : participant[verb](body, options);
       });

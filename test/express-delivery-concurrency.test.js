@@ -10,15 +10,15 @@ import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 async function fixture(t, transport, receivers) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'express-concurrency-'));
   const base = { path: path.join(dir, 'test.square'), env: { ...process.env, SQUARE_INDEX: path.join(dir, 'index') }, wakeTransport: transport };
-  const root = await Square.build({ ...base, markdown: '', body: { channel: 'test', session: 'sender' } });
-  const alice = (await root.join('Alice')).participant;
+  const root = await Square.build({ ...base, markdown: '' });
+  const alice = (await root.join('Alice', { body: { channel: 'test', session: 'sender' } })).participant;
   const resources = [root];
   t.after(async () => { await Promise.all(resources.map(r => r.close())); fs.rmSync(dir, { recursive: true, force: true }); });
   for (const [i, receiver] of receivers.entries()) {
     const identity = typeof receiver === 'string' ? { session: receiver } : receiver;
-    const resource = await Square.at({ ...base, body: { channel: 'test', ...identity }, wakeAddress: { kind: 'paseo', address: { agentId: identity.session } } });
+    const resource = await Square.at(base);
     resources.push(resource);
-    await resource.join(`R${i}`);
+    await resource.join(`R${i}`, { body: { channel: 'test', ...identity }, wakeAddress: { kind: 'paseo', address: { agentId: identity.session } } });
   }
   return { alice, names: receivers.map((_, i) => `R${i}`) };
 }

@@ -155,12 +155,10 @@ export default function squarePiExtension(pi) {
           const square = await Square.at({
             cwd: ctx.cwd,
             env: operationEnv('pi', sessionId, process.env),
-            body: { channel: 'pi', session: sessionId },
             path: args.location,
-            participant: args.as,
           }, { signal });
           let text;
-          try { text = await tool.run(square, args, { signal }); }
+          try { text = await tool.run(square, args, { signal }, { body: { channel: 'pi', session: sessionId } }); }
           finally { await square.close(); }
           return { content: [{ type: 'text', text }] };
         } catch (error) {
@@ -260,8 +258,8 @@ export default function squarePiExtension(pi) {
       const seats = await projectSessionSeats({ body, env });
       for (const { location, seat } of seats) {
         if (seat.attachment !== 'attached') continue;
-        const square = await Square.at({ path: location, env, body, participant: seat.participant });
-        try { await square.cancelDeliveries(seat.participant, seat.generation); }
+        const square = await Square.at({ path: location, env });
+        try { await square.cancelDeliveries(seat.participant, { body, generation: seat.generation }); }
         finally { await square.close(); }
       }
     }).then(() => {

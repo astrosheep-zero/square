@@ -66,7 +66,7 @@ export class Bridge {
     const directory = await Directory.build({
       settings: options.settings, port: options.port, state: store.state, save: () => store.save(),
     });
-    const square = options.square ?? await Square.at({ path: options.settings.square, body: bridgeBody(options.settings) });
+    const square = options.square ?? await Square.at({ path: options.settings.square });
     if (loaded.fresh) {
       // A first start begins at the current end of the archive; old history is not replayed.
       store.state.cursor = (await square.history({ limit: 1, order: 'desc' })).activities[0]?.id ?? null;
@@ -152,7 +152,7 @@ export class Bridge {
   }
 
   private async participantFor(name: string): Promise<Participant> {
-    return (await this.square.join(name)).participant;
+    return (await this.square.join(name, { body: bridgeBody(this.settings) })).participant;
   }
 
   private async mirror(activity: Activity): Promise<void> {

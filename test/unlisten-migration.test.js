@@ -67,9 +67,9 @@ test('explicit v2 migration establishes artifact seats and removes legacy routes
   assert.equal((await migrateSquareFile(location, undefined, env)).status, 'already-current');
   assert.equal(digest(location), currentBytes, 'current migration is a byte-preserving no-op');
 
-  const square = await Square.at({ path: location, body: { channel: 'codex', session: 'bob-session' } });
+  const square = await Square.at({ path: location });
   try {
-    const bob = await square.participant('Bob');
+    const bob = await square.participant('Bob', { body: { channel: 'codex', session: 'bob-session' } });
     assert.equal((await bob.unlisten('Alice')).activity.kind, 'unlisten');
     assert.deepEqual((await bob.catch()).activities.map(activity => activity.body), ['v2 pending bare']);
   } finally { await square.close(); }

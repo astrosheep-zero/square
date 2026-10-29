@@ -13,9 +13,10 @@ app-server capability and its host-owned hook integration.
   Stop observation. `SessionEnd` marks the host session ended and detaches its exact
   Body's seats without landing `done`, ending membership, dropping listens or resetting
   the read horizon. Later Stop/tool callbacks cannot re-enable queue until a new
-  `SessionStart` or `SessionResume`. Before enabling delivery, those start paths restore
-  only detached standing seats returned by `bodySeats()` for that exact Body; voluntary
-  departures and takeovers are never revived. A new/forked session restores nothing.
+  `SessionStart` or `SessionResume`. Before enabling delivery, those start paths use
+  `seatsOf(body)` and `reattach(name, {body, wakeAddress?})` to restore only detached
+  standing seats of that exact Body; voluntary departures and takeovers are never revived.
+  A new/forked session restores nothing.
 - `PostToolUse` asks Square for current pending activity and returns the existing
   bounded `additionalContext` presentation.
 - `Stop` records queue eligibility and sweeps pending work, but does not itself

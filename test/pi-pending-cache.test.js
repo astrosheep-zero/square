@@ -25,14 +25,14 @@ async function pendingFixture(root, sessionId) {
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
   const authorBody = { channel: 'pi', session: `${sessionId}-author` };
   const recipientBody = { channel: 'pi', session: sessionId };
-  const author = await Square.build({ path: squarePath, markdown: 'pending-cache', env, body: authorBody, participant: 'Alice' });
-  try { await author.join('Alice'); }
+  const author = await Square.build({ path: squarePath, markdown: 'pending-cache', env });
+  try { await author.join('Alice', { body: authorBody }); }
   finally { await author.close(); }
-  const recipient = await Square.at({ path: squarePath, env, body: recipientBody, participant: 'Bob' });
-  try { await recipient.join('Bob'); }
+  const recipient = await Square.at({ path: squarePath, env });
+  try { await recipient.join('Bob', { body: recipientBody }); }
   finally { await recipient.close(); }
-  const speaker = await Square.at({ path: squarePath, env, body: authorBody, participant: 'Alice' });
-  try { await (await speaker.participant()).express('cached pending', { force: true, mentions: ['Bob'] }); }
+  const speaker = await Square.at({ path: squarePath, env });
+  try { await (await speaker.participant('Alice', { body: authorBody })).express('cached pending', { force: true, mentions: ['Bob'] }); }
   finally { await speaker.close(); }
   return { squarePath, env, authorBody, recipientBody, sessionId };
 }

@@ -29,22 +29,22 @@ function envFor(squarePath) {
 
 async function buildSquare(t) {
   const squarePath = path.join(tempDir(t), 'parity.square');
-  const body = bodyFor(squarePath);
-  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain', env: envFor(squarePath), body });
+  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain', env: envFor(squarePath) });
   await square.close();
   return squarePath;
 }
 
 async function seed(squarePath, setup) {
   const body = bodyFor(squarePath);
-  const square = await Square.at({ path: squarePath, env: envFor(squarePath), body });
-  try { await setup(square); } finally { await square.close(); }
+  const square = await Square.at({ path: squarePath, env: envFor(squarePath) });
+  try { await setup(square, body); } finally { await square.close(); }
 }
 
-async function openMcp(t, squarePath, participant) {
+async function openMcp(t, squarePath) {
   const body = bodyFor(squarePath);
   const server = createSquareMcpServer({
-    cwd: path.dirname(squarePath), env: envFor(squarePath), path: squarePath, participant, body,
+    cwd: path.dirname(squarePath), env: envFor(squarePath), path: squarePath, body,
+    wakeAddress: { kind: 'codex-queue', address: { threadId: body.session, codexHome: path.join(os.homedir(), '.codex') } },
   });
   const client = new Client({ name: 'square-mcp-presentation-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -69,8 +69,7 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
   for (const squarePath of [cliPath, mcpPath]) if (setup !== undefined) await seed(squarePath, setup);
   const result = cli(cliPath, cliArgs);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  const asIndex = cliArgs.indexOf('--as');
-  const call = await openMcp(t, mcpPath, asIndex === -1 ? 'rei' : cliArgs[asIndex + 1]);
+  const call = await openMcp(t, mcpPath);
   const response = await call(tool, toolArgs);
   assert.equal(response.isError, undefined, JSON.stringify(response));
   assert.equal(response.structuredContent, undefined);
@@ -79,26 +78,27 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
   return response;
 }
 
-const joinReiAndBob = async (square) => {
-  await square.join('rei');
-  await square.join('bob');
+const joinReiAndBob = async (square, body) => {
+  await square.join('rei', { body });
+  await square.join('bob', { body });
 };
 
 test('read-only tools print the same page as the CLI', async (t) => {
   const squarePath = await buildSquare(t);
-  await seed(squarePath, async (square) => {
-    await joinReiAndBob(square);
-    const rei = await square.participant('rei');
-    const bob = await square.participant('bob');
+  await seed(squarePath, async (square, body) => {
+    await joinReiAndBob(square, body);
+    const rei = await square.participant('rei', { body });
+    const bob = await square.participant('bob', { body });
     await rei.express('first words @bob', { force: true });
     await rei.express('*waves*', { force: true, noMention: true });
     await bob.listen('rei');
     await rei.hold('writing');
   });
-  const call = await openMcp(t, squarePath, 'rei');
+  const call = await openMcp(t, squarePath);
   const cases = [
     { tool: 'history', args: {}, cliArgs: ['history'] },
-    { tool: 'status', args: {}, cliArgs: ['--as', 'rei', 'status'] },
+    { tool: 'status', args: { as: 'rei' }, cliArgs: ['--as', 'rei', 'status'] },
+    { tool: 'status', args: {}, cliArgs: ['status'] },
     { tool: 'status', args: { as: 'bob' }, cliArgs: ['--as', 'bob', 'status'] },
   ];
   for (const { tool, args, cliArgs } of cases) {
@@ -120,9 +120,9 @@ test('mutating tools print the same result as the CLI', async (t) => {
       { as: 'rei', body: 'hello @bob' });
   });
   await t.test('catch', async (t) => {
-    await assertTextParity(t, async (square) => {
-      await joinReiAndBob(square);
-      await (await square.participant('bob')).express('@rei ping', { force: true });
+    await assertTextParity(t, async (square, body) => {
+      await joinReiAndBob(square, body);
+      await (await square.participant('bob', { body })).express('@rei ping', { force: true });
     }, ['--as', 'rei', 'catch'], 'catch', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
@@ -132,23 +132,23 @@ test('mutating tools print the same result as the CLI', async (t) => {
     await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'attention', { as: 'rei', action: 'ignore', target: 'bob' });
   });
   await t.test('unlisten', async (t) => {
-    await assertTextParity(t, async (square) => {
-      await joinReiAndBob(square);
-      await (await square.participant('rei')).listen('bob');
+    await assertTextParity(t, async (square, body) => {
+      await joinReiAndBob(square, body);
+      await (await square.participant('rei', { body })).listen('bob');
     }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
   });
   await t.test('hold', async (t) => {
-    await assertTextParity(t, async (square) => { await square.join('rei'); },
+    await assertTextParity(t, async (square, body) => { await square.join('rei', { body }); },
       ['--as', 'rei', 'hold', 'deep work'], 'hold', { as: 'rei', reason: 'deep work' });
   });
   await t.test('resume', async (t) => {
-    await assertTextParity(t, async (square) => {
-      await square.join('rei');
-      await (await square.participant('rei')).hold('deep work');
+    await assertTextParity(t, async (square, body) => {
+      await square.join('rei', { body });
+      await (await square.participant('rei', { body })).hold('deep work');
     }, ['--as', 'rei', 'resume'], 'hold', { as: 'rei', release: true });
   });
   await t.test('done', async (t) => {
-    await assertTextParity(t, async (square) => { await square.join('rei'); },
+    await assertTextParity(t, async (square, body) => { await square.join('rei', { body }); },
       ['--as', 'rei', 'done'], 'done', { as: 'rei' });
   });
 });
@@ -158,7 +158,7 @@ test('failures print the CLI recovery lines instead of JSON', async (t) => {
   const mcpPath = await buildSquare(t);
   const result = cli(cliPath, ['--as', 'ghost', 'catch']);
   assert.equal(result.status, 2, result.stdout + result.stderr);
-  const call = await openMcp(t, mcpPath, 'ghost');
+  const call = await openMcp(t, mcpPath);
   const response = await call('catch', { as: 'ghost' });
   assert.equal(response.isError, true);
   const text = response.content[0].text;

@@ -7,9 +7,9 @@ import { persistSquare, run, runAsync, withName, withPath } from './square-cli-h
 const HELD_BUDGET_ENV = { SQUARE_HELD_WAIT_BUDGET_MS: '300' };
 
 test('a held express announces the holder, waits within a budget, then keeps a draft', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { body });
+    const bob = (await square.join('Bob', { body })).participant;
     await bob.hold('pause for thought');
   });
 
@@ -31,9 +31,9 @@ test('a held express announces the holder, waits within a budget, then keeps a d
 });
 
 test('a held express lands as soon as the hand lowers mid-wait', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { body });
+    const bob = (await square.join('Bob', { body })).participant;
     await bob.hold();
   });
 
@@ -49,9 +49,9 @@ test('a held express lands as soon as the hand lowers mid-wait', async () => {
 });
 
 test('a departed participant steps back in before speaking, and only the return announces itself', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { body });
+    const bob = (await square.join('Bob', { body })).participant;
     await bob.done();
   });
 
@@ -59,9 +59,9 @@ test('a departed participant steps back in before speaking, and only the return 
   const refused = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
   const refusal = refused.stdout + refused.stderr;
   assert.equal(refused.status, 2, refusal);
-  assert.match(refusal, /Bob needs a current participant handle/);
+  assert.match(refusal, /Bob needs a current attached seat/);
   assert.match(refusal, /draft kept/);
-  assert.match(refusal, /express --no-mention - </);
+  assert.match(refusal.trim().split('\n').at(-1), /^square .* join$/);
   assert.equal((await readSquareSnapshot(file)).state.acts.at(-1).kind, 'done');
 
   const returned = run(withName(file, 'Bob', ['join']));
@@ -80,13 +80,13 @@ test('a departed participant steps back in before speaking, and only the return 
 });
 
 test('history pairs holds with lowerings and departures with returns', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { body });
+    const bob = (await square.join('Bob', { body })).participant;
     await bob.hold('pause');
     await bob.resume();
     await bob.done();
-    await square.join('Bob');
+    await square.join('Bob', { body });
   });
 
   const history = run(withPath(file, ['history']));

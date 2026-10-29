@@ -15,10 +15,11 @@ async function fixture(t, held = false) {
   const file = path.join(root, 'SQUARE.square');
   // The catching CLI presents this body, so the seats are established with it.
   const session = `wait-${path.basename(root)}`;
-  const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null, env: testEnv({}, file), body: { channel: 'codex', session } });
+  const body = { channel: 'codex', session };
+  const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null, env: testEnv({}, file) });
   try {
-    const host = (await square.join('Host')).participant;
-    await square.join('Bob');
+    const host = (await square.join('Host', { body })).participant;
+    await square.join('Bob', { body });
     if (held) await host.hold('pause');
   } finally { await square.close(); }
   const child = spawn(process.execPath, [CLI, ...withName(file, 'Bob', ['catch', '--mention', '--idle', '120ms'])], {

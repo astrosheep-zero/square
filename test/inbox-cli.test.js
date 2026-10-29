@@ -3,21 +3,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { Square, inbox } from '../dist/index.js';
+import { inbox } from '../dist/index.js';
+import { Square } from '../dist/square-api.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { rememberSquarePath } from '../dist/square-index.js';
-import { persistSquare, run, testEnv } from './square-cli-helpers.js';
+import { run, testEnv } from './square-cli-helpers.js';
 
 async function makeMembership(root, name, env) {
   const file = path.join(root, `${name}.square`);
-  const square = await Square.build({ path: file, markdown: 'inbox context', hardCap: null,
-    body: { channel: 'codex', session: 'inbox-snapshot' }, env });
+  const body = { channel: 'codex', session: 'inbox-snapshot' };
+  const square = await Square.build({ path: file, markdown: 'inbox context', hardCap: null, env });
   try {
-    const sender = (await square.join('Sender')).participant;
-    await square.join(name);
+    const sender = (await square.join('Sender', { body })).participant;
+    await square.join(name, { body });
     await sender.express(`notice for ${name}`, { force: true, mentions: [name] });
   } finally { await square.close(); }
-  await rememberSquarePath(file, { channel: 'codex', session: 'inbox-snapshot' }, env.SQUARE_INDEX);
+  await rememberSquarePath(file, body, env.SQUARE_INDEX);
   return file;
 }
 

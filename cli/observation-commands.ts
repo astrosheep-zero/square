@@ -22,6 +22,7 @@ import { style } from '../tty-style.js';
 import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { discover, inbox, formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
 import { renderCatchOutcome, renderCatchProgress } from './catch-presentation.js';
+import { selectOwnSeat } from '../square-api.js';
 import { jsonResult } from './json.js';
 
 import {
@@ -37,6 +38,7 @@ import {
   requireSquarePath,
   requireValue,
   usage,
+  commandIdentity,
 } from './context.js';
 const INBOX_DEFAULT_LIMIT = 20;
 const INBOX_MAX_LIMIT = 100;
@@ -220,7 +222,7 @@ export const catchCommand: CommandSpec<CatchOptions> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      const outcome = await withSquare(context, async (square) => (await square.participant(context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
+      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env).body, context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
         signal: controller.signal,
         onProgress(progress) {
           const line = renderCatchProgress(squarePath, progress);
@@ -440,7 +442,10 @@ export const statusCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.some((arg) => arg !== '--json')) usage(context.command); return undefined; },
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
-    const result = await withSquare(context, (square) => square.status({ viewer: context.name, ...(context.json ? {} : { observe: true }) }));
+    const result = await withSquare(context, async (square) => {
+      const viewer = (await selectOwnSeat(square, commandIdentity(context.env).body, context.name, { optional: true }))?.name;
+      return square.status({ viewer, ...(context.json ? {} : { observe: true }) });
+    });
     return context.json ? jsonResult(result) : renderStatusResult(squarePath, result)!;
   },
   present: (result) => process.stdout.write(result),

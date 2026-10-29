@@ -10,7 +10,7 @@ import { resolveKnownName } from '../dist/decisions.js';
 import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, snapshot, queryStatus, streamProjection } from '../dist/views.js';
 import { renderLifecycleResult, renderStatusResult } from '../dist/operation-presentation.js';
 
-const queryContext = { location: 'memory', now: 100_000, automaticDeliveryAvailable: false };
+const queryContext = { location: 'memory', now: 100_000 };
 
 function fixture(acts, observations = {}) {
   return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
@@ -30,16 +30,13 @@ function measuredSquare(state) {
   const cell = createArtifactPort(':memory:', state);
   const reads = { batches: [], singles: [], directed: 0, ordinals: [] };
   const artifact = { ...cell, read(select, signal) {
-    return cell.read((facts) => select(new Proxy(facts, { get(target, key) {
-      const method = target[key];
-      return (...args) => {
-        if (key === 'activities') reads.batches.push([...args[0]]);
-        if (key === 'activity') reads.singles.push(args[0]);
-        if (key === 'directed') reads.directed++;
-        if (key === 'sayOrdinals') reads.ordinals.push([...args[0]]);
-        return method.apply(target, args);
-      };
-    } })), signal);
+    return cell.read((facts) => select({
+      ...facts,
+      activities(...args) { reads.batches.push([...args[0]]); return facts.activities(...args); },
+      activity(...args) { reads.singles.push(args[0]); return facts.activity(...args); },
+      directed(...args) { reads.directed++; return facts.directed(...args); },
+      sayOrdinals(...args) { reads.ordinals.push([...args[0]]); return facts.sayOrdinals(...args); },
+    }), signal);
   } };
   return { square: { artifact, location: 'memory', clock: () => 100_000 }, reads, cell };
 }
@@ -265,8 +262,8 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
       hardCap: 7, throttlePerMinute: 3, held: { reason: 'historical pause', at: 5 }, now: 100_000, listening: [],
       latestActivity: { id: 'act/3', at: 3, kind: 'done', actor: 'Gone', mentions: [] },
       participants: [
-        { name: 'Alice', listening: [], activityCount: 0, lastActiveAt: 6, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
-        { name: 'Gone', listening: [], activityCount: 0, lastActiveAt: 3, presence: 'done', unreadActivityCount: 0, pendingMentionCount: 0 },
+        { name: 'Alice', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 6, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
+        { name: 'Gone', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 3, presence: 'done', unreadActivityCount: 0, pendingMentionCount: 0 },
       ],
     });
     assert.equal(projection.knownParticipantCount, 3);
@@ -296,9 +293,10 @@ test('status keeps one filtered roster and ignores read and actorless hold when 
 });
 
 test('observed lifecycle renders its committed public activity and listener keeps only its target', async t => {
-  const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'one' }, clock: () => 100 });
+  const body = { channel: 'test', session: 'one' };
+  const square = Square.inMemory({ markdown: 'context', clock: () => 100 });
   t.after(() => square.close());
-  const alice = (await square.join('Alice')).participant;
+  const alice = (await square.join('Alice', { body })).participant;
   const listened = await alice.listen('Bob', { observe: true });
   assert.equal(listened.observation.target, 'Bob');
   assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);

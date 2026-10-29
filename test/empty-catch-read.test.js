@@ -18,8 +18,8 @@ async function fixture(t, extra = [], hardCap = null) {
     } else await cell.transactAs({ kind: 'participant', seat: seats.get(activity.actor) }, facts => facts.land(activity));
   }
   const bobSeat = seats.get('Bob'), artifact = { ...cell };
-  const square = await resourceWithArtifact(t, artifact, bobSeat.body);
-  return { cell, artifact, square, bob: await square.participant('bOB'), seats, bobSeat };
+  const square = await resourceWithArtifact(t, artifact);
+  return { cell, artifact, square, bob: await square.participant('bOB', { body: bobSeat.body }), seats, bobSeat };
 }
 function withoutBodies(facts) {
   return { ...facts, activity() { assert.fail('catch probe must not hydrate a body'); }, activities() { assert.fail('catch probe must not hydrate bodies'); } };
@@ -96,15 +96,14 @@ test('exact-ID catches retain their repeatable receipt transaction and never use
 
 test('empty catch validates caller, filters, limits, and semantic time without a writer', async t => {
   const { cell, artifact, square } = await fixture(t);
-  const missing = await square.participant('Missing');
+  await assert.rejects(square.participant('Missing', { body: bodyFor('Bob') }), { code: 'already_joined' });
   artifact.transactAs = noWriter;
-  await assert.rejects(missing.catch(), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
-  const bob = await square.participant('Bob');
+  const bob = await square.participant('Bob', { body: bodyFor('Bob') });
   await assert.rejects(bob.catch({ from: ['Missing'] }), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
   for (const limit of [0, 101, 1.5]) await assert.rejects(bob.catch({ limit }), { code: 'invalid_args' });
   for (const at of [NaN, Infinity, '100', -0.5]) {
-    const resource = await resourceWithArtifact(t, artifact, bodyFor('Bob'), () => at);
-    const participant = await resource.participant('Bob');
+    const resource = await resourceWithArtifact(t, artifact, () => at);
+    const participant = await resource.participant('Bob', { body: bodyFor('Bob') });
     if (at === -0.5) assert.equal((await participant.catch({ observe: true })).observation.now, at);
     else await assert.rejects(participant.catch(), { code: 'invalid_args' });
   }

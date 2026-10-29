@@ -23,15 +23,14 @@ async function fixture(t) {
     SQUARE_CODEX_BOUNDARIES: path.join(root, 'codex-boundaries.json'),
   };
   const squarePath = path.join(root, 'main.square');
-  const square = await Square.build({ path: squarePath, markdown: 'Lifecycle fixture', env,
-    body: { channel: 'test', session: 'builder' }, participant: 'Host' });
+  const square = await Square.build({ path: squarePath, markdown: 'Lifecycle fixture', env });
   await square.close();
   return { root, squarePath, env };
 }
 
 async function joinAt(location, participant, body, env, options = {}) {
-  const square = await Square.at({ path: location, body, participant, env });
-  try { return await square.join(participant, options); }
+  const square = await Square.at({ path: location, env });
+  try { return await square.join(participant, { body, ...options }); }
   finally { await square.close(); }
 }
 
@@ -44,8 +43,7 @@ async function artifactFacts(location, select) {
 test('session end detaches every seat of the exact Body across indexed squares without departures', async t => {
   const f = await fixture(t);
   const secondPath = path.join(f.root, 'second.square');
-  const second = await Square.build({ path: secondPath, markdown: 'Second lifecycle fixture', env: f.env,
-    body: { channel: 'test', session: 'builder-2' }, participant: 'Host' });
+  const second = await Square.build({ path: secondPath, markdown: 'Second lifecycle fixture', env: f.env });
   await second.close();
   const body = { channel: 'codex', session: 'multi-square-session' };
   await joinAt(f.squarePath, 'lead', body, f.env);
@@ -97,10 +95,10 @@ test('a stale captured seat generation cannot end a replacement rejoin', async t
   const captured = first.participant && await artifactFacts(f.squarePath, facts => facts.seat('shared'));
   assert.ok(captured);
   await joinAt(f.squarePath, 'shared', body, f.env, { takeover: true });
-  const stale = await Square.at({ path: f.squarePath, body, participant: 'shared', env: f.env });
+  const stale = await Square.at({ path: f.squarePath, env: f.env });
   try {
-    assert.equal(await stale.detachOwnedSession('shared', body.session, captured.generation, body), null);
-    assert.equal(await stale.endOwnedSession('shared', body.session, captured.generation, body), null);
+    assert.equal(await stale.detach('shared', { body, generation: captured.generation }), null);
+    assert.equal(await stale.endHeld('shared', { body, generation: captured.generation }), null);
   } finally { await stale.close(); }
   const result = await artifactFacts(f.squarePath, facts => ({
     kinds: facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items.map(activity => activity.kind),
@@ -198,8 +196,8 @@ test('Claude starts restore only detached seats of the exact Body, never a volun
   for (const name of ['Resume', 'Replaced', 'Left']) await joinAt(f.squarePath, name, body, f.env);
   for (const [name, coordinate] of [['Parent', parent], ['Other', other], ['Left', body]]) {
     if (name !== 'Left') await joinAt(f.squarePath, name, coordinate, f.env);
-    const square = await Square.at({ path: f.squarePath, env: f.env, body: coordinate });
-    try { await (await square.participant(name)).done(); } finally { await square.close(); }
+    const square = await Square.at({ path: f.squarePath, env: f.env });
+    try { await (await square.participant(name, { body: coordinate })).done(); } finally { await square.close(); }
   }
   const start = await bridge({ operation: 'start' });
   assert.deepEqual(start.bindings.map(row => row.participant), ['Replaced', 'Resume']);
@@ -211,8 +209,8 @@ test('Claude starts restore only detached seats of the exact Body, never a volun
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('Resume').attachment), 'detached');
   const replacementBody = { ...body, agent: 'replacement' };
   await joinAt(f.squarePath, 'Replaced', replacementBody, f.env, { takeover: true });
-  const replacement = await Square.at({ path: f.squarePath, env: f.env, body: replacementBody });
-  try { await (await replacement.participant('Replaced')).done(); } finally { await replacement.close(); }
+  const replacement = await Square.at({ path: f.squarePath, env: f.env });
+  try { await (await replacement.participant('Replaced', { body: replacementBody })).done(); } finally { await replacement.close(); }
   const resumed = await bridge({ operation: 'start', resume: true });
   assert.deepEqual(resumed.bindings.map(row => row.participant), ['Resume']);
   assert.equal(resumed.bindings[0].generation, original.generation);
@@ -228,8 +226,8 @@ test('binding time is the establishing join and fences late same-body joins at p
   const f = await fixture(t);
   const body = { channel: 'claude-code', session: 'pinned-session' };
   const join = async (participant, at, takeover = false) => {
-    const square = await Square.at({ path: f.squarePath, env: f.env, body, participant, clock: () => at });
-    try { await square.join(participant, { takeover }); } finally { await square.close(); }
+    const square = await Square.at({ path: f.squarePath, env: f.env, clock: () => at });
+    try { await square.join(participant, { body, takeover }); } finally { await square.close(); }
   };
   const bridge = value => runClaudeMod(JSON.stringify({ sessionId: body.session, cwd: f.root,
     version: 'test', endpoint: 'relative.sock', ...value }), f.env).then(JSON.parse);
@@ -262,9 +260,9 @@ test('Pi shutdown keeps listens and the read horizon; session_start restores bef
   const previous = process.env.SQUARE_INDEX;
   process.env.SQUARE_INDEX = f.env.SQUARE_INDEX;
   const body = { channel: 'pi', session: 'pi-resume' };
-  const square = await Square.at({ path: f.squarePath, env: f.env, body });
-  const bob = (await square.join('Bob')).participant;
-  const alice = (await square.forBody({ body: { channel: 'test', session: 'author' } }).join('Alice')).participant;
+  const square = await Square.at({ path: f.squarePath, env: f.env });
+  const bob = (await square.join('Bob', { body })).participant;
+  const alice = (await square.join('Alice', { body: { channel: 'test', session: 'author' } })).participant;
   await bob.listen('Alice');
   const before = await artifactFacts(f.squarePath, facts => ({ member: facts.participant('Bob'), seat: facts.seat('Bob') }));
   const handlers = new Map();
@@ -284,11 +282,11 @@ test('Pi shutdown keeps listens and the read horizon; session_start restores bef
     assert.equal(restored.seat.generation, before.seat.generation);
     assert.equal(restored.listening[0].target, 'Alice');
     assert.deepEqual(restored.kinds, ['join', 'listen']);
-    assert.deepEqual((await (await square.participant('Bob')).catch()).activities.map(activity => activity.id), [unread]);
-    await (await square.participant('Bob')).done();
+    assert.deepEqual((await (await square.participant('Bob', { body })).catch()).activities.map(activity => activity.id), [unread]);
+    await (await square.participant('Bob', { body })).done();
     await handlers.get('session_shutdown')({}, context);
     await handlers.get('session_start')({}, context);
-    assert.equal((await square.implicitJoin('Bob')).state, 'done');
+    assert.equal(await square.reattach('Bob', { body }), null);
   } finally {
     await handlers.get('session_shutdown')({}, context);
     await square.close();
@@ -301,8 +299,8 @@ test('done retires only the completing participant seat when a body holds multip
   const body = { channel: 'codex', session: 'dual-session' };
   await joinAt(f.squarePath, 'a', body, f.env);
   await joinAt(f.squarePath, 'b', body, f.env);
-  const square = await Square.at({ path: f.squarePath, body, participant: 'a', env: f.env });
-  try { await (await square.participant()).done(); }
+  const square = await Square.at({ path: f.squarePath, env: f.env });
+  try { await (await square.participant('a', { body })).done(); }
   finally { await square.close(); }
   const result = await artifactFacts(f.squarePath, facts => ({
     seatA: facts.seat('a'), seatB: facts.seat('b'),

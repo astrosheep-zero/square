@@ -12,14 +12,15 @@ grant ownership. There is no writable HostLedger ownership layer.
 - **The participant leaves:** `Participant.done()` ends membership, removes its seat, catch
   lease and delivery deferrals, and removes outgoing listens. A later explicit `join` establishes
   a fresh generation and read horizon. No host start or resume brings a voluntary leave back.
-- **The host session ends:** `detachOwnedSession` detaches only its captured Body and generation.
-  It clears wake readiness, catch ownership and delivery deferrals, without landing an activity
-  or changing membership, listens or the read horizon. A detached participant is **away**, still
-  receives normal landed audience and accumulates unread activity, but cannot write or receive
-  proactive delivery. Away has no timeout; a session that never returns simply stays away.
-- **The host confirms permanent deletion:** `endOwnedSession` ends membership with a fenced
-  `done`, including for a detached seat. OpenCode's `session.deleted` uses this path. Pi shutdown,
-  Codex SessionEnd and Claude session end do not prove permanent deletion and therefore detach.
+- **The host session ends:** `detach(name, {body, generation})` detaches only that exact Body and
+  join generation. It clears wake readiness, catch ownership and delivery deferrals, without landing
+  an activity or changing membership, listens or the read horizon. A detached participant is
+  **away**, still receives normal landed audience and accumulates unread activity, but cannot write
+  or receive proactive delivery. Away has no timeout; a session that never returns simply stays away.
+- **The host confirms permanent deletion:** `endHeld(name, {body, generation})` ends membership
+  with a fenced `done`, including for a detached seat. OpenCode's `session.deleted` uses this path.
+  Pi shutdown, Codex SessionEnd and Claude session end do not prove permanent deletion and therefore
+  detach.
 
 An explicit takeover remains `done -> join` in one transaction, whether the old seat is attached
 or detached. It transfers the name to the new Body with a fresh generation; old cleanup and
@@ -27,30 +28,37 @@ recovery cannot reclaim it.
 
 ## Captured handles and restoration
 
-`Square.at` captures an explicit Body for writes. `participant(name?)` selects a handle without
-joining; `recognize()` returns only attached handles held by that exact Body. `bodySeats()` is a
-read-only discovery surface for all its standing seats, including their attached/detached state.
-It does not join or return done participants. See [square-api.md](square-api.md) for resource
-lifetimes and selection.
+A `Square` captures no participant identity. `participant(name, {body})` selects an attached,
+standing seat held by that exact Body without joining; never-joined, done, foreign and detached
+seats refuse with join recovery facts, not ghost handles. `seatsOf(body)` is a read-only discovery
+surface for the Body's standing seats as `{name, generation, attachment}`. It includes attached and
+detached seats, but does not join or return done participants. See [square-api.md](square-api.md)
+for resource lifetimes and adapter selection.
 
-- `join(name)` atomically establishes membership and its seat when absent. A same-Body reconnect
-  preserves the establishing generation. On a detached seat it also reattaches, refreshes wake
-  readiness from the joining resource and returns `reconnected`, with no activity, new read
-  horizon or listening changes. A foreign Body gets `already_joined`; takeover must be explicit.
-- `implicitJoin(name)` also reattaches a same-Body detached seat, returning `active` with a handle.
-  A done participant stays done. Host start/resume restores only detached seats found through
-  `bodySeats()` for that exact Body, before arming delivery. One unavailable location or failed
-  reattachment does not block the others. A new or forked session has a different Body and
+- `join(name, {body, wakeAddress?})` atomically establishes membership and its seat when absent.
+  A same-Body reconnect preserves the establishing generation. On a detached seat it also
+  reattaches, using the operation's supplied wake address, and returns `reconnected`, with no
+  activity, new read horizon or listening changes. A foreign Body gets `already_joined`; takeover
+  must be explicit.
+- `reattach(name, {body, wakeAddress?})` returns a handle for an exact-Body standing seat, or
+  `null` for absent, foreign or done custody; it never creates membership. A foreign takeover racing
+  the transaction can instead refuse. It can also refresh an attached seat's wake address subject to
+  native-route preference. Host start/resume restores only detached seats found through
+  `seatsOf(body)` before arming delivery. One unavailable location or
+  failed reattachment does not block the others. A new or forked session has a different Body and
   restores nothing. Hosts never infer restoration from a historical departure.
 - Participant mutations require both the captured generation and an attached current seat.
   Detach suspends existing handles; they cannot express, catch, listen, hold, leave or change
   deferrals until reattachment. Rejoin/takeover fences old handles permanently, even if the same
   Body later reacquires the name. Host cleanup checks Body and generation inside its transaction;
-  stale, foreign, done or already-detached cleanup changes nothing.
+  stale, foreign, done or already-detached detach changes nothing. Host `cancelDeliveries` also
+  requires the captured Body/generation and an attached current seat; it does not consume activity.
 
-The HOME index supplies candidate paths only. Losing it may delay restoration or delivery but
-cannot transfer a seat, erase delivery evidence or consume unread activity. A wake address is
-transport readiness for an attached seat, not an alternative ownership fact.
+The HOME index supplies candidate paths only. Successful file-backed joins and non-null
+reattachments attempt best-effort publication; opening or expressing does not publish. Losing the
+index may delay restoration or delivery but cannot transfer a seat, erase delivery evidence or
+consume unread activity. A wake address is transport readiness for an attached seat, not an
+alternative ownership fact.
 
 ## Independent delivery deferrals
 

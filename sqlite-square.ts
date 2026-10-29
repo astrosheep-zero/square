@@ -7,12 +7,12 @@ import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, sameBody, validateName, type Body, type Seat, type WakeAddress, type WatchOptions } from './model.js';
-import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, coreUnlisten, decideAct, decideImplicitJoin, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
+import { coreDone, coreHold, coreIgnore, coreListen, coreListening, coreResume, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { HELD_WAIT_BUDGET_MS, WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
-import { asSeatRef, participantAuthority, requireBody, requireJoinName, requireSeat } from './seats.js';
+import { asSeatRef, participantAuthority, requireBody, requireJoinName } from './seats.js';
 import { recoveryObservation, entryPresentation, snapshot, queryStatus, queryParticipants, catchPresence,
   parseRequiredActivityId, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
@@ -20,6 +20,7 @@ import { rememberSquarePath, squareIndexPath } from './square-index.js';
 import { createDefaultWakeTransport } from './notifications.js';
 import { deliverPending } from './delivery-operations.js';
 import { participantIdentity } from './participant-identity.js';
+import { joinRecoveryCommand } from './presentation.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from './artifact.js';
 import type { SquareArtifactPort, WakeTransportPort } from './ports.js';
@@ -77,12 +78,9 @@ export class SqliteSquare {
     readonly location: string,
     private readonly artifact: SquareArtifactPort,
     private readonly clock: () => number,
-    private readonly body?: Body,
-    private readonly wakeAddress?: WakeAddress,
     private readonly wakeTransport?: WakeTransportPort,
     private readonly indexPath?: string,
-    private readonly ownsArtifact = true,
-    private readonly defaultParticipant?: string,
+    private readonly closesArtifact = true,
     private readonly deliveryLocation = location,
   ) { }
 
@@ -95,10 +93,8 @@ export class SqliteSquare {
     const artifact = borrowed ?? createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
-      const resource = new SqliteSquare(location, artifact, clock, input.body, input.wakeAddress,
-        wakeTransport, squareIndexPath(env), borrowed === undefined, input.participant, await canonicalPath(location));
-      await resource.publishIdentity();
-      return resource;
+      return new SqliteSquare(location, artifact, clock,
+        wakeTransport, squareIndexPath(env), borrowed === undefined, await canonicalPath(location));
     } catch (error) {
       if (borrowed === undefined) await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -117,35 +113,26 @@ export class SqliteSquare {
   static inMemory(input: Omit<SquareBuildInput, 'path' | 'resources'>): SqliteSquare {
     const env = { ...(input.env ?? process.env) };
     return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
-      squareClock(env, input.clock), input.body, input.wakeAddress, input.wakeTransport, undefined, true, input.participant);
+      squareClock(env, input.clock), input.wakeTransport);
   }
-  /** Trusted local SDK binding: shares this resource, never changes an existing caller's identity.
-   * The original resource owner controls lifetime; closing a borrowed handle is a no-op. */
-  forBody(input: { readonly body: Body; readonly wakeAddress?: WakeAddress }): SqliteSquare {
-    const body = { ...requireBody(input.body) };
-    const wakeAddress = input.wakeAddress === undefined ? undefined
-      : { kind: input.wakeAddress.kind, address: { ...input.wakeAddress.address } };
-    return new SqliteSquare(this.location, this.artifact, this.clock, body, wakeAddress,
-      this.wakeTransport, this.indexPath, false, undefined, this.deliveryLocation);
-  }
-  /** Discovery is best effort and never grants write authority. Finish it before returning. */
-  private async publishIdentity(): Promise<void> {
-    if (this.body !== undefined && this.indexPath !== undefined)
-      await rememberSquarePath(this.location, this.body, this.indexPath).catch(() => undefined);
+  /** Discovery is best effort and never grants write authority. */
+  private async publishSeat(body: Body): Promise<void> {
+    if (this.indexPath !== undefined)
+      await rememberSquarePath(this.location, body, this.indexPath).catch(() => undefined);
   }
   private observation(standingCount: number, held: boolean, participant?: string, now = this.clock()): SquareObservation {
     return { location: this.location, standingCount, held, now,
-      ...(participant === undefined ? {} : { participant }), automaticDeliveryAvailable: this.body !== undefined };
+      ...(participant === undefined ? {} : { participant }) };
   }
   private async contextObservation(participant?: string, control?: OperationControl): Promise<SquareObservation> {
     return (await this.artifact.read(facts => this.observation(inSquareCount(facts), facts.hold().active, participant), control?.signal)).value;
   }
-  private handle(name: string, seat?: Seat): Participant { return new SqliteSquare.ParticipantHandle(name, this, seat); }
+  private handle(seat: Seat): Participant { return new SqliteSquare.ParticipantHandle(seat.participant, this, seat); }
 
   // The nested handle uses its resource's private dependencies without copying
   // them into a second context.
   private static readonly ParticipantHandle = class implements Participant {
-    constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly seat?: Seat) { }
+    constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly seat: Seat) { }
 
     async express(bodyOrInput: string | undefined | ExpressInput, optionsOrControl: ExpressOptions | OperationControl = {}, operationControl?: OperationControl): Promise<ExpressResult> {
       const square = this.owner;
@@ -159,7 +146,7 @@ export class SqliteSquare {
       try {
         checkControl(control);
         name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
-        const seat = requireSeat(this.seat, square.body, name);
+        const seat = this.seat;
         const context = !options.observe ? undefined : (await square.artifact.read(
           facts => expressionContext(facts, name), control?.signal)).value;
         while (true) {
@@ -194,7 +181,6 @@ export class SqliteSquare {
             }, control?.signal)).value;
             landedId = formatActivityId(committed.stored.index);
             effect = 'landed';
-            await square.publishIdentity();
             if (square.wakeTransport !== undefined)
               await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now }).catch(() => undefined);
             const { stored, standingCount, held, ownActivityCount, hardCap, ...metadata } = committed;
@@ -231,7 +217,7 @@ export class SqliteSquare {
       const square = this.owner;
       const name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
       checkControl(control);
-      const seat = requireSeat(this.seat, square.body, name), now = square.clock();
+      const seat = this.seat, now = square.clock();
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
         const act = verb === 'listen' ? coreListen(facts, name, target, now) : verb === 'ignore' ? coreIgnore(facts, name, target, now) : coreUnlisten(facts, name, target, now);
         const activity = act === undefined ? null : toPublicActivity(facts.land(act));
@@ -282,6 +268,7 @@ export class SqliteSquare {
         return { activities: view.activities, remaining: view.remaining, reason,
           ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
             ...square.observation(view.standingCount, view.held, view.participant, view.now), participant: view.participant,
+            deliveryAvailable: view.deliveryAvailable,
             ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
             ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
           } }) };
@@ -296,7 +283,7 @@ export class SqliteSquare {
         catchLimit(options.limit);
         const probe = (await square.artifact.read(facts => {
           name = resolveKnownName(facts, this.name);
-          seat = requireSeat(this.seat, square.body, name);
+          seat = this.seat;
           assertCurrentSeat(facts, asSeatRef(seat));
           subject = 'filter';
           const from = options.from?.map(target => resolveKnownName(facts, target));
@@ -351,7 +338,7 @@ export class SqliteSquare {
     async deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral> {
       checkControl(control);
       const match = validateMetadataMatch(input?.match), duration = validateDeferralDuration(input?.durationMs);
-      const square = this.owner, seat = requireSeat(this.seat, square.body, this.name);
+      const square = this.owner, seat = this.seat;
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
         const now = square.clock(), expiresAt = now + duration, id = crypto.randomUUID();
         const result = { id, expiresAt: new Date(expiresAt).toISOString() };
@@ -363,7 +350,7 @@ export class SqliteSquare {
       checkControl(control);
       validateDeferralId(id);
       const duration = validateDeferralDuration(durationMs), square = this.owner;
-      const seat = requireSeat(this.seat, square.body, this.name);
+      const seat = this.seat;
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
         const now = square.clock(), expiresAt = now + duration;
         const result = { id, expiresAt: new Date(expiresAt).toISOString() };
@@ -373,16 +360,15 @@ export class SqliteSquare {
     async releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean> {
       checkControl(control);
       validateDeferralId(id);
-      const square = this.owner, seat = requireSeat(this.seat, square.body, this.name);
+      const square = this.owner, seat = this.seat;
       return (await square.artifact.transactAs(participantAuthority(seat), facts =>
         facts.releaseDeliveryDeferral(asSeatRef(seat), id, square.clock()), control?.signal)).value;
     }
-    history(query?: HistoryQuery, control?: OperationControl) { return this.owner.history(query, control); }
     private async lifecycle(verb: 'done' | 'hold' | 'resume', body: string | undefined, options: ObservationOptions, control?: OperationControl): Promise<LifecycleResult> {
       if (verb === 'done') validateDoneBody(body);
       const square = this.owner;
       const name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
-      const seat = requireSeat(this.seat, square.body, name), now = square.clock();
+      const seat = this.seat, now = square.clock();
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
         const stored = facts.land(verb === 'done' ? coreDone(facts, name, body ?? '', now) : verb === 'hold' ? coreHold(facts, name, body ?? '', now) : coreResume(facts, name, now));
         return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation:
@@ -395,31 +381,35 @@ export class SqliteSquare {
     done(body?: string, options: ObservationOptions = {}, control?: OperationControl) { return this.lifecycle('done', body, options, control); }
   };
 
-  async participant(requested?: string): Promise<Participant> {
-    const selected = requested ?? this.defaultParticipant;
-    if (selected !== undefined) {
-      validateName(selected);
-      const seat = this.body === undefined ? undefined : (await this.artifact.read(facts => facts.seat(selected))).value;
-      return this.handle(selected, seat);
-    }
-    if (this.body !== undefined) {
-      const seats = (await this.artifact.read(facts => facts.seatsForBody(this.body!).filter(seat => seat.attachment === 'attached'))).value;
-      if (seats.length === 1) return this.handle(seats[0].participant, seats[0]);
-      if (seats.length > 1) throw new SquareError('invalid_args', 'Square needs an explicit participant name: this body holds multiple names');
-    }
-    throw new SquareError('invalid_args', 'Square needs one unambiguous participant name');
+  async participant(name: string, { body }: { readonly body: Body }): Promise<Participant> {
+    validateName(name);
+    requireBody(body);
+    return (await this.artifact.read(facts => {
+      const participant = facts.participant(name), seat = facts.seat(name);
+      if (!participant?.joined || seat === undefined || !sameBody(seat.body, body) || seat.attachment !== 'attached') {
+        const reason = participant === undefined ? 'has never stepped into this square'
+          : !participant.joined ? 'needs a current attached seat; join first'
+          : seat !== undefined && !sameBody(seat.body, body) ? 'is not held by this body; join before writing'
+          : seat?.attachment === 'detached' ? 'is away — join again before writing'
+          : 'needs a current attached seat; join first';
+        throw new SquareError('already_joined', `${participantIdentity(participant?.name ?? name)} ${reason}`, {
+          reason: 'needs_seat', join: joinRecoveryCommand(this.location, participant?.name ?? name),
+        });
+      }
+      return this.handle(seat);
+    })).value;
   }
-  async join(requested?: string, options: JoinOptions = {}, control?: OperationControl): Promise<JoinResult> {
+  async join(requested: string, options: JoinOptions, control?: OperationControl): Promise<JoinResult> {
     let name = requested;
     try {
       checkControl(control);
       name = requireJoinName(requested);
-      const last = options.last ?? HISTORY_DEFAULT_LIMIT;
+      const last = options?.last ?? HISTORY_DEFAULT_LIMIT;
       if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT) throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
-      const body = requireBody(this.body), now = this.clock();
+      const body = requireBody(options?.body), wakeAddress = options.wakeAddress, now = this.clock();
       const initial = !options.takeover ? undefined : (await this.artifact.read(facts => facts.participant(name!)?.joined ? facts.seat(name!) : undefined, control?.signal)).value;
-      const authority = initial === undefined ? { kind: 'join' as const, participant: name, body, wakeAddress: this.wakeAddress }
-        : { kind: 'takeover' as const, participant: initial.participant, body, expectedGeneration: initial.generation, wakeAddress: this.wakeAddress };
+      const authority = initial === undefined ? { kind: 'join' as const, participant: name, body, wakeAddress }
+        : { kind: 'takeover' as const, participant: initial.participant, body, expectedGeneration: initial.generation, wakeAddress };
       const committed = (await this.artifact.transactAs(authority, facts => {
         const participant = facts.participant(name!)?.name ?? name!;
         const current = facts.participant(participant), currentSeat = facts.seat(participant);
@@ -431,9 +421,9 @@ export class SqliteSquare {
         } else if (current?.joined) {
           if (currentSeat === undefined || !sameBody(currentSeat.body, body))
             throw new SquareError('already_joined', `${participantIdentity(participant)} is held by another body; take it over explicitly`);
-          if (currentSeat.attachment === 'detached') facts.reattachSeat(asSeatRef(currentSeat), this.wakeAddress);
-          else if (this.wakeAddress !== undefined && canRefreshWakeAddress(currentSeat.wakeAddress, this.wakeAddress))
-            facts.updateWakeAddress(asSeatRef(currentSeat), this.wakeAddress);
+          if (currentSeat.attachment === 'detached') facts.reattachSeat(asSeatRef(currentSeat), wakeAddress);
+          else if (wakeAddress !== undefined && canRefreshWakeAddress(currentSeat.wakeAddress, wakeAddress))
+            facts.updateWakeAddress(asSeatRef(currentSeat), wakeAddress);
           kind = 'reconnected';
         }
         if (kind !== 'reconnected') {
@@ -443,10 +433,11 @@ export class SqliteSquare {
         }
         const seat = facts.seat(participant);
         if (seat === undefined) throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');
-        return { participant: this.handle(seat.participant, seat), activity, kind,
-          ...(!options.observe ? {} : { observation: this.observation(inSquareCount(facts), facts.hold().active, seat.participant, now) }) };
+        return { participant: this.handle(seat), activity, kind,
+          ...(!options.observe ? {} : { observation: { ...this.observation(inSquareCount(facts), facts.hold().active, seat.participant, now),
+            deliveryAvailable: seat.wakeAddress !== undefined } }) };
       }, control?.signal)).value;
-      await this.publishIdentity();
+      await this.publishSeat(body);
       if (!options.observe) return committed;
       let entry;
       try { entry = (await this.artifact.read(facts => entryPresentation(facts, committed.participant.name, last), control?.signal)).value; }
@@ -456,33 +447,22 @@ export class SqliteSquare {
       throw failure(error, { operation: 'join', subject: 'caller', participant: name });
     }
   }
-  async implicitJoin(name: string, control?: OperationControl): Promise<{
-    readonly state: 'joined' | 'active' | 'done'; readonly participant?: Participant;
-  }> {
+  /** Restore only a standing seat; a concurrent departure or takeover cannot be revived. */
+  async reattach(name: string, { body, wakeAddress }: Pick<JoinOptions, 'body' | 'wakeAddress'>, control?: OperationControl): Promise<Participant | null> {
     checkControl(control);
     validateName(name);
-    const body = requireBody(this.body), now = this.clock();
-    const result = (await this.artifact.transactAs({ kind: 'join', participant: name, body, wakeAddress: this.wakeAddress }, facts => {
-      const decision = decideImplicitJoin(facts, name, now);
-      let seat = facts.seat(decision.joinedName);
-      if (decision.joinAct === undefined) {
-        if (decision.state === 'active' && (seat === undefined || !sameBody(seat.body, body)))
-          throw new SquareError('already_joined', `${participantIdentity(decision.joinedName)} is held by another body`);
-        if (decision.state === 'active') {
-          if (seat!.attachment === 'detached') facts.reattachSeat(asSeatRef(seat!), this.wakeAddress);
-          else if (this.wakeAddress !== undefined && canRefreshWakeAddress(seat!.wakeAddress, this.wakeAddress))
-            facts.updateWakeAddress(asSeatRef(seat!), this.wakeAddress);
-          seat = facts.seat(decision.joinedName);
-        }
-      } else {
-        facts.land(decision.joinAct);
-        seat = facts.seat(decision.joinedName);
-        if (seat === undefined) throw new SquareError('invalid_args', 'The implicit join did not establish its artifact seat.');
-      }
-      return { state: decision.state, ...(decision.state === 'done' ? {} : { participant: this.handle(decision.joinedName, seat) }) };
+    requireBody(body);
+    const captured = (await this.artifact.read(facts => facts.seat(name), control?.signal)).value;
+    if (captured === undefined || !sameBody(captured.body, body)) return null;
+    const seat = (await this.artifact.transactAs({ kind: 'join', participant: name, body, wakeAddress }, facts => {
+      const current = facts.seat(name);
+      if (!facts.participant(name)?.joined || current === undefined || current.generation !== captured.generation || !sameBody(current.body, body)) return null;
+      if (current.attachment === 'detached') facts.reattachSeat(asSeatRef(current), wakeAddress);
+      else if (wakeAddress !== undefined && canRefreshWakeAddress(current.wakeAddress, wakeAddress)) facts.updateWakeAddress(asSeatRef(current), wakeAddress);
+      return facts.seat(name)!;
     }, control?.signal)).value;
-    if (result.participant !== undefined) await this.publishIdentity();
-    return result;
+    if (seat !== null) await this.publishSeat(body);
+    return seat === null ? null : this.handle(seat);
   }
   async snapshot(control?: OperationControl) { return (await this.artifact.read(facts => snapshot(facts, this.clock()), control?.signal)).value; }
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
@@ -512,23 +492,17 @@ export class SqliteSquare {
     }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
-    return (await this.artifact.read(facts => {
-      const seats = this.body === undefined ? [] : facts.seatsForBody(this.body).filter(seat => seat.attachment === 'attached');
-      const viewer = options.viewer ?? this.defaultParticipant ?? (seats.length === 1 ? seats[0].participant : '');
-      return queryStatus(facts, {
-        location: this.location, now: this.clock(), automaticDeliveryAvailable: this.body !== undefined,
-      }, viewer, options.observe === true);
-    }, control?.signal)).value;
+    return (await this.artifact.read(facts =>
+      queryStatus(facts, { location: this.location, now: this.clock() }, options.viewer, options.observe === true), control?.signal)).value;
   }
   async participants(options: ObservationOptions = {}, control?: OperationControl): Promise<ParticipantsResult> {
     return (await this.artifact.read(facts => queryParticipants(facts, {
-      location: this.location, now: this.clock(), automaticDeliveryAvailable: this.body !== undefined,
+      location: this.location, now: this.clock(),
     }, options.observe === true), control?.signal)).value;
   }
   async recovery(requested?: string, control?: OperationControl): Promise<RecoveryResult> {
-    const name = (await this.participant(requested).catch(() => undefined))?.name;
-    const facts = name === undefined ? undefined : (await this.artifact.read(facts => recoveryObservation(facts, name, this.clock()), control?.signal).catch(() => undefined))?.value;
-    return facts ?? await this.contextObservation(name, control);
+    const facts = requested === undefined ? undefined : (await this.artifact.read(facts => recoveryObservation(facts, requested, this.clock()), control?.signal).catch(() => undefined))?.value;
+    return facts ?? await this.contextObservation(requested, control);
   }
   stream(options: StreamOptions & { readonly recipient: string }, control?: OperationControl): AsyncIterable<PerceivedActivity>;
   stream(options: StreamOptions & { readonly recipient?: undefined }, control?: OperationControl): AsyncIterable<Activity>;
@@ -538,35 +512,30 @@ export class SqliteSquare {
     // and lifetime. Only explicit artifact readers borrow an existing port.
     return streamSquare(this.location, options, control);
   }
-  async recognize(): Promise<readonly Participant[]> {
-    if (this.body === undefined) return [];
-    const candidates = (await this.artifact.read(facts => facts.seatsForBody(this.body!).filter(seat => seat.attachment === 'attached'))).value;
-    return candidates.map(seat => this.handle(seat.participant, seat));
+  async seatsOf(body: Body): Promise<readonly import('./square-facade.js').HeldSeat[]> {
+    requireBody(body);
+    return (await this.artifact.read(facts => facts.seatsForBody(body).map(({ participant: name, generation, attachment }) =>
+      ({ name, generation, attachment })))).value;
   }
-  async bodySeats(): Promise<readonly import('./square-facade.js').BodySeat[]> {
-    if (this.body === undefined) return [];
-    return (await this.artifact.read(facts => facts.seatsForBody(this.body!).map(({ participant, generation, attachment }) =>
-      ({ participant, generation, attachment })))).value;
-  }
-  close(): Promise<void> { return this.ownsArtifact ? this.artifact.close() : Promise.resolve(); }
-  async cancelDeliveries(name: string, expectedGeneration: import('./square-core.js').ActivityId): Promise<boolean> {
-    const body = this.body;
-    if (body === undefined) return false;
+  close(): Promise<void> { return this.closesArtifact ? this.artifact.close() : Promise.resolve(); }
+  private async heldSeat(name: string, { body, generation }: { readonly body: Body; readonly generation: import('./square-core.js').ActivityId }): Promise<Seat | undefined> {
+    requireBody(body);
     const seat = (await this.artifact.read(facts => facts.seat(name))).value;
-    if (seat === undefined || seat.generation !== expectedGeneration || !sameBody(seat.body, body)) return false;
-    return this.artifact.cancelDeliveries(asSeatRef(seat));
+    return seat?.generation === generation && sameBody(seat.body, body) ? seat : undefined;
   }
-  async detachOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<true | null> {
-    const captured = (await this.artifact.read(facts => facts.seat(name))).value;
-    if (captured === undefined || captured.body.session !== sessionId || (body !== undefined && !sameBody(captured.body, body))
-      || (expectedGeneration !== undefined && captured.generation !== expectedGeneration)) return null;
+  async cancelDeliveries(name: string, identity: { readonly body: Body; readonly generation: import('./square-core.js').ActivityId }): Promise<boolean> {
+    const seat = await this.heldSeat(name, identity);
+    return seat === undefined ? false : this.artifact.cancelDeliveries(asSeatRef(seat));
+  }
+  async detach(name: string, identity: { readonly body: Body; readonly generation: import('./square-core.js').ActivityId }): Promise<true | null> {
+    const captured = await this.heldSeat(name, identity);
+    if (captured === undefined) return null;
     const seat = asSeatRef(captured);
     return (await this.artifact.transactAs({ kind: 'host-cleanup', seat }, facts => facts.detachSeat(seat) ? true : null)).value;
   }
-  async endOwnedSession(name: string, sessionId: string, expectedGeneration?: import('./square-core.js').ActivityId, body?: Body): Promise<LifecycleResult | null> {
-    const captured = (await this.artifact.read(facts => facts.seat(name))).value;
-    if (captured === undefined || captured.body.session !== sessionId || (body !== undefined && !sameBody(captured.body, body))
-      || (expectedGeneration !== undefined && captured.generation !== expectedGeneration)) return null;
+  async endHeld(name: string, identity: { readonly body: Body; readonly generation: import('./square-core.js').ActivityId }): Promise<LifecycleResult | null> {
+    const captured = await this.heldSeat(name, identity);
+    if (captured === undefined) return null;
     return (await this.artifact.transactAs({ kind: 'host-cleanup', seat: asSeatRef(captured) }, facts => {
       const current = facts.seat(name);
       if (current === undefined || current.generation !== captured.generation || !sameBody(current.body, captured.body)) return null;

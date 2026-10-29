@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square } from '../dist/square-api.js';
+import { Square, selectOwnSeat } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from '../dist/claude-mcp-context.js';
@@ -22,9 +22,9 @@ async function fixture(participant = 'rei') {
   const squarePath = path.join(cwd, 'square.square');
   const square = await Square.build({ path: squarePath, markdown: 'MCP scene' });
   await square.close();
-  const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), SQUARE_PARTICIPANT_NAME: participant, CODEX_THREAD_ID: `mcp-${participant}` };
+  const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), CODEX_THREAD_ID: `mcp-${participant}` };
   const body = { channel: 'codex', session: `mcp-${participant}` };
-  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, path: squarePath, participant, body }) };
+  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, path: squarePath, body }) };
 }
 
 async function connectedClient(server) {
@@ -74,7 +74,7 @@ test('MCP migration refusals include the required action and recovery command', 
   writeV1Artifact(squarePath, legacyFixtureState(), 7);
   const before = fs.readFileSync(squarePath);
   const env = { ...process.env, CODEX_THREAD_ID: 'migration-refusal' };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, participant: 'rei' }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath }));
   try {
     const result = await client.callTool({ name: 'status', arguments: {} });
     assert.equal(result.isError, true);
@@ -90,7 +90,6 @@ test('MCP migration refusals include the required action and recovery command', 
 test('one MCP server accepts per-call participants without a configured default', async () => {
   const { cwd, squarePath, env, body } = await fixture();
   const baseEnv = { ...env };
-  delete baseEnv.SQUARE_PARTICIPANT_NAME;
   const beforeProcessEnv = { ...process.env };
   const beforeBaseEnv = { ...baseEnv };
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, body }));
@@ -144,7 +143,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
       const configuredBody = { channel: 'configured', session: `startup-${channel}` };
       const beforeProcessEnv = { ...process.env };
       const beforeBaseEnv = { ...env };
-      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, participant: 'rei', body: configuredBody,
+      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, body: configuredBody,
         wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }));
       const artifact = createArtifactPort(squarePath);
       const readSeats = () => artifact.read(facts => ({
@@ -200,8 +199,8 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
     { as: 'OpenCode', metadata: { 'ai.opencode/sessionID': 'call-opencode' }, body: { channel: 'opencode', session: 'call-opencode' } },
   ];
   const recognizes = async (body, expectedName) => {
-    const square = await Square.at({ cwd, path: squarePath, env, body });
-    try { assert.equal((await square.participant()).name, expectedName); }
+    const square = await Square.at({ cwd, path: squarePath, env });
+    try { assert.equal((await selectOwnSeat(square, body)).name, expectedName); }
     finally { await square.close(); }
   };
   try {
@@ -229,8 +228,8 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
   let token;
   const childBody = { channel: 'claude-code', session: call.sessionId, agent: call.agentId };
   const recognizes = async (body) => {
-    const square = await Square.at({ cwd, path: squarePath, env: claudeEnv, body });
-    try { return await square.participant(); }
+    const square = await Square.at({ cwd, path: squarePath, env: claudeEnv });
+    try { return await selectOwnSeat(square, body); }
     finally { await square.close(); }
   };
   try {
@@ -276,7 +275,7 @@ test('MCP shares location and noMention parameters with native tools', async (t)
   try {
     await client.callTool({ name: 'join', arguments: { as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { as: 'bob' } });
-    const bare = await client.callTool({ name: 'express', arguments: { body: 'literal @bob', noMention: true, force: true } });
+    const bare = await client.callTool({ name: 'express', arguments: { as: 'rei', body: 'literal @bob', noMention: true, force: true } });
     assert.match(bare.content[0].text, /your words land/);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
@@ -287,10 +286,10 @@ test('MCP shares location and noMention parameters with native tools', async (t)
     const square = await Square.at({ path: squarePath, env });
     try {
       const bareActivity = (await square.history()).activities.at(-1);
-      const directed = await client.callTool({ name: 'express', arguments: { body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
+      const directed = await client.callTool({ name: 'express', arguments: { as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
       assert.doesNotMatch(directed.content[0].text, /isn't standing here/);
-      const bell = await client.callTool({ name: 'express', arguments: { body: '@bob @Eve', reach: 'bell', force: true } });
+      const bell = await client.callTool({ name: 'express', arguments: { as: 'rei', body: '@bob @Eve', reach: 'bell', force: true } });
       assert.match(bell.content[0].text, /you ring the bell/);
       assert.doesNotMatch(bell.content[0].text, /isn't standing here/);
       const original = await client.callTool({ name: 'history', arguments: {} });
@@ -323,7 +322,7 @@ test('MCP cancellation reaches an in-progress application operation', async () =
 
 test('stdio disconnect aborts held express and idle catch without later mutation or consumption', async (t) => {
   const { cwd, squarePath, env, body } = await fixture('disconnected');
-  const app = await Square.at({ cwd, path: squarePath, env, body, participant: 'disconnected' });
+  const app = await Square.at({ cwd, path: squarePath, env });
   t.after(() => app.close());
   const child = spawn(process.execPath, [path.resolve('dist/square.js'), '--as', 'disconnected', 'mcp-server'], {
     cwd, env: { ...env, SQUARE_LOCATION: squarePath }, stdio: ['pipe', 'pipe', 'pipe'],
@@ -363,13 +362,14 @@ test('stdio disconnect aborts held express and idle catch without later mutation
   const disconnected = once(child, 'exit', { signal: AbortSignal.timeout(3000) });
   child.stdin.end();
   assert.deepEqual(await disconnected, [0, null], stderr);
-  await (await app.participant()).resume();
+  await (await app.participant('disconnected', { body })).resume();
   assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
-  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' }, body: { channel: 'codex', session: 'mcp-writer' } });
+  const writerBody = { channel: 'codex', session: 'mcp-writer' };
+  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' } });
   t.after(() => writer.close());
-  const { participant } = await writer.join('writer');
+  const { participant } = await writer.join('writer', { body: writerBody });
   const expressed = await participant.express('after disconnect', { force: true, mentions: ['disconnected'] });
-  const caught = await (await app.participant()).catch();
+  const caught = await (await app.participant('disconnected', { body })).catch();
   assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
 });
 

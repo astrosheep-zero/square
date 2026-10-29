@@ -21,14 +21,13 @@ async function fixture(t, extra = {}) {
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
   const body = { channel: 'pi', session: 'receiver' };
   const wakeAddress = { kind: 'paseo', address: { agentId: body.session } };
-  const square = await Square.build({ path: location, env, body, wakeAddress, markdown: 'attachment', ...extra });
-  const bob = (await square.join('Bob')).participant;
-  const author = square.forBody({ body: { channel: 'test', session: 'author' } });
-  const alice = (await author.join('Alice')).participant;
+  const square = await Square.build({ path: location, env, markdown: 'attachment', ...extra });
+  const bob = (await square.join('Bob', { body, wakeAddress })).participant;
+  const alice = (await square.join('Alice', { body: { channel: 'test', session: 'author' } })).participant;
   const artifact = createArtifactPort(location);
   const read = select => artifact.read(select).then(result => result.value);
   const ref = await read(facts => facts.seat('Bob'));
-  const detach = () => square.detachOwnedSession('Bob', body.session, ref.generation, body);
+  const detach = () => square.detach('Bob', { body, generation: ref.generation });
   t.after(async () => { await artifact.close(); await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, location, env, body, wakeAddress, square, bob, alice, artifact, read, ref, detach };
 }
@@ -56,11 +55,9 @@ test('host detach preserves membership, listens, horizon and evidence, but revok
   assert.deepEqual(after.seat, { participant: 'Bob', body: f.body, generation: f.ref.generation, attachment: 'detached' });
   assert.equal(after.catchLease, undefined);
   assert.deepEqual(after.deferrals, []);
-  assert.deepEqual(await f.square.recognize(), []);
-  assert.deepEqual(await f.square.bodySeats(), [{ participant: 'Bob', generation: f.ref.generation, attachment: 'detached' }]);
-  // Both a previously captured handle and one selected while detached must fail.
-  const detached = await f.square.participant('Bob');
-  for (const participant of [f.bob, detached]) for (const mutate of [
+  assert.deepEqual(await f.square.seatsOf(f.body), [{ name: 'Bob', generation: f.ref.generation, attachment: 'detached' }]);
+  await assert.rejects(f.square.participant('Bob', { body: f.body }), needsSeat);
+  for (const participant of [f.bob]) for (const mutate of [
     p => p.express('no effect', { force: true }), p => p.catch(), p => p.catch({ id: sent.activity.id }),
     p => p.listen('Alice'), p => p.unlisten('Alice'), p => p.ignore('Alice'), p => p.hold(), p => p.resume(), p => p.done(),
     p => p.deferDelivery({ match, durationMs: 1000 }), p => p.renewDeliveryDeferral(lease.id, 1000), p => p.releaseDeliveryDeferral(lease.id),
@@ -86,16 +83,15 @@ test('even an empty catch probe and raw artifact writes require an attached capt
   await assert.rejects(f.artifact.transactAs({ kind: 'host-cleanup', seat: f.ref }, facts => facts.markSeen('Bob', [], 1)), /current participant seat/);
 });
 
-test('away is projected without history; bells, mentions and listening accumulate and survive exact-Body join or implicitJoin', async t => {
+test('away is projected without history; audience accumulates and survives exact-Body join or reattach', async t => {
   const f = await fixture(t);
   await f.bob.listen('Alice');
   const before = await f.read(facts => facts.participant('Bob'));
   await f.detach();
   for (const body of [{ ...f.body, session: 'new-session' }, { ...f.body, agent: 'child' }, { ...f.body, channel: 'codex' }]) {
-    const foreign = f.square.forBody({ body });
-    assert.deepEqual(await foreign.bodySeats(), []);
-    await assert.rejects(foreign.join('Bob'), error => error.code === 'already_joined');
-    await assert.rejects(foreign.implicitJoin('Bob'), error => error.code === 'already_joined');
+    assert.deepEqual(await f.square.seatsOf(body), []);
+    await assert.rejects(f.square.join('Bob', { body, wakeAddress: f.wakeAddress }), error => error.code === 'already_joined');
+    assert.equal(await f.square.reattach('Bob', { body }), null);
   }
   const activities = [];
   activities.push((await f.alice.express('a mention @Bob', { force: true })).activity.id);
@@ -111,23 +107,22 @@ test('away is projected without history; bells, mentions and listening accumulat
     assert.equal(result.observation.classificationByName.Bob, 'away');
   }
   assert.equal((await f.square.snapshot()).participants.find(p => p.name === 'Bob').presence, 'away');
-  const suspended = await f.square.participant('Bob');
-  const reconnected = await f.square.join('Bob');
+  const suspended = f.bob;
+  const reconnected = await f.square.join('Bob', { body: f.body, wakeAddress: f.wakeAddress });
   assert.equal(reconnected.kind, 'reconnected');
   assert.equal(reconnected.activity, null);
   assert.deepEqual((await suspended.catch()).activities.map(item => item.id), activities);
   await f.detach();
   const last = (await f.alice.express('after a second detach @Bob', { force: true })).activity.id;
-  const implicit = await f.square.implicitJoin('Bob');
-  assert.equal(implicit.state, 'active');
-  assert.deepEqual((await implicit.participant.catch()).activities.map(item => item.id), [last]);
+  const restoredHandle = await f.square.reattach('Bob', { body: f.body, wakeAddress: f.wakeAddress });
+  assert.deepEqual((await restoredHandle.catch()).activities.map(item => item.id), [last]);
   const restored = await f.read(facts => ({ member: facts.participant('Bob'), seat: facts.seat('Bob'), kinds: facts.activityHeads({ actors: ['Bob'] }, { edge: 'oldest', limit: 100 }).items.map(a => a.kind) }));
   assert.equal(restored.member.lastJoinIndex, before.lastJoinIndex);
   assert.equal(restored.seat.generation, f.ref.generation);
   assert.equal(restored.seat.attachment, 'attached');
   assert.deepEqual(restored.seat.wakeAddress, f.wakeAddress);
   assert.deepEqual(restored.kinds, ['join', 'listen']);
-  assert.deepEqual((await f.square.recognize()).map(p => p.name), ['Bob']);
+  assert.deepEqual((await f.square.seatsOf(f.body)).map(p => p.name), ['Bob']);
 });
 
 test('detach invalidates cached inboxes, claims and final proactive presentation without success or consumption', async t => {
@@ -178,45 +173,45 @@ test('voluntary done and takeover cannot be undone by host discovery or late cle
   await f.bob.express('uses the cap', { force: true });
   await f.detach();
   await restoreSessionSeats(f.body, f.env);
-  await assert.rejects((await f.square.participant('Bob')).express('cap survives', { force: true, noWait: true }), error => error.code === 'capped');
-  await (await f.square.participant('Bob')).done();
+  await assert.rejects((await f.square.participant('Bob', { body: f.body })).express('cap survives', { force: true, noWait: true }), error => error.code === 'capped');
+  await (await f.square.participant('Bob', { body: f.body })).done();
   await restoreSessionSeats(f.body, f.env);
-  assert.equal((await f.square.implicitJoin('Bob')).state, 'done');
+  assert.equal(await f.square.reattach('Bob', { body: f.body }), null);
   assert.equal(await f.detach(), null);
-  assert.deepEqual(await f.square.bodySeats(), []);
+  assert.deepEqual(await f.square.seatsOf(f.body), []);
   // Explicit participant join remains the only way back after a voluntary leave.
-  await f.square.join('Bob');
+  await f.square.join('Bob', { body: f.body, wakeAddress: f.wakeAddress });
   const captured = await f.read(facts => facts.seat('Bob'));
-  await f.square.detachOwnedSession('Bob', f.body.session, captured.generation, f.body);
-  const replacement = f.square.forBody({ body: { channel: 'pi', session: 'replacement' } });
-  await replacement.join('Bob', { takeover: true });
-  assert.equal(await f.square.detachOwnedSession('Bob', f.body.session, captured.generation, f.body), null);
-  assert.equal(await f.square.endOwnedSession('Bob', f.body.session, captured.generation, f.body), null);
+  await f.square.detach('Bob', { body: f.body, generation: captured.generation });
+  await f.square.join('Bob', { body: { channel: 'pi', session: 'replacement' }, wakeAddress: f.wakeAddress, takeover: true });
+  assert.equal(await f.square.detach('Bob', { body: f.body, generation: captured.generation }), null);
+  assert.equal(await f.square.endHeld('Bob', { body: f.body, generation: captured.generation }), null);
   assert.equal((await f.artifact.transactAs({ kind: 'host-cleanup', seat: captured }, facts => facts.detachSeat(captured))).value, false);
   await restoreSessionSeats(f.body, f.env);
-  assert.deepEqual(await f.square.bodySeats(), []);
-  await assert.rejects(f.square.implicitJoin('Bob'), error => error.code === 'already_joined');
+  assert.deepEqual(await f.square.seatsOf(f.body), []);
+  assert.equal(await f.square.reattach('Bob', { body: f.body }), null);
   assert.equal(await f.read(facts => facts.seat('Bob').body.session), 'replacement');
 });
 
 test('host restore tolerates failed locations/seats and an intervening voluntary done', async t => {
   const f = await fixture(t);
-  await f.square.join('Peer');
-  await f.square.join('Broken');
+  await f.square.join('Peer', { body: f.body, wakeAddress: f.wakeAddress });
+  await f.square.join('Broken', { body: f.body, wakeAddress: f.wakeAddress });
   await f.detach();
-  await f.square.detachOwnedSession('Peer', f.body.session, undefined, f.body);
-  await f.square.detachOwnedSession('Broken', f.body.session, undefined, f.body);
+  for (const seat of await f.square.seatsOf(f.body)) {
+    if (seat.attachment === 'attached') await f.square.detach(seat.name, { body: f.body, generation: seat.generation });
+  }
   await rememberSquarePath(path.join(f.root, 'missing.square'), f.body, f.env.SQUARE_INDEX);
-  const implicitJoin = Object.getPrototypeOf(f.square).implicitJoin;
+  const reattach = Object.getPrototypeOf(f.square).reattach;
   let failed = false;
-  t.mock.method(Object.getPrototypeOf(f.square), 'implicitJoin', async function(name, control) {
+  t.mock.method(Object.getPrototypeOf(f.square), 'reattach', async function(name, options, control) {
     if (name === 'Bob' && !failed) {
       failed = true;
       // A participant voluntarily leaves between discovery and the restoring transaction.
-      await (await f.square.join('Bob')).participant.done();
+      await (await f.square.join('Bob', { body: f.body, wakeAddress: f.wakeAddress })).participant.done();
     }
     if (name === 'Broken') throw new Error('one failed seat');
-    return implicitJoin.call(this, name, control);
+    return reattach.call(this, name, options, control);
   });
   await restoreSessionSeats(f.body, f.env);
   assert.equal(await f.read(facts => facts.participant('Bob').done), true);
@@ -227,32 +222,30 @@ test('host restore tolerates failed locations/seats and an intervening voluntary
 test('OpenCode permanent deletion ends attached or detached membership, while normal startup only restores standing exact-Body seats', async t => {
   const f = await fixture(t);
   const body = { channel: 'opencode', session: 'native' };
-  const native = f.square.forBody({ body });
-  await native.join('Attached');
-  await native.join('Detached');
-  await native.join('Replaced');
-  const captured = (await native.bodySeats()).find(seat => seat.participant === 'Detached');
-  await native.detachOwnedSession('Detached', body.session, captured.generation, body);
-  await f.square.join('Replaced', { takeover: true });
+  await f.square.join('Attached', { body });
+  await f.square.join('Detached', { body });
+  await f.square.join('Replaced', { body });
+  const captured = (await f.square.seatsOf(body)).find(seat => seat.name === 'Detached');
+  await f.square.detach('Detached', { body, generation: captured.generation });
+  await f.square.join('Replaced', { body: f.body, wakeAddress: f.wakeAddress, takeover: true });
   await endOpenCodeSession(body.session, f.env, new AbortController().signal);
   const state = await f.read(facts => ({ attached: facts.participant('Attached'), detached: facts.participant('Detached'), replaced: facts.seat('Replaced') }));
   assert.equal(state.attached.done, true);
   assert.equal(state.detached.done, true);
   assert.deepEqual(state.replaced.body, f.body);
   assert.equal(await publishOpenCodeAddress(body.session, f.env, new AbortController().signal), false);
-  assert.deepEqual(await native.bodySeats(), []);
-  await native.join('Resumable');
-  const generation = (await native.bodySeats())[0].generation;
-  await native.detachOwnedSession('Resumable', body.session, generation, body);
+  assert.deepEqual(await f.square.seatsOf(body), []);
+  await f.square.join('Resumable', { body });
+  const generation = (await f.square.seatsOf(body))[0].generation;
+  await f.square.detach('Resumable', { body, generation });
   assert.equal(await publishOpenCodeAddress(body.session, f.env, new AbortController().signal), true);
-  assert.deepEqual(await native.bodySeats(), [{ participant: 'Resumable', generation, attachment: 'attached' }]);
+  assert.deepEqual(await f.square.seatsOf(body), [{ name: 'Resumable', generation, attachment: 'attached' }]);
 });
 
 test('the OpenCode session.deleted event uses permanent membership cleanup, not host detach', async t => {
   const f = await fixture(t);
   const body = { channel: 'opencode', session: 'deleted-session' };
-  const native = f.square.forBody({ body });
-  await native.join('Deleted');
+  await f.square.join('Deleted', { body });
   const previous = process.env.SQUARE_INDEX;
   process.env.SQUARE_INDEX = f.env.SQUARE_INDEX;
   let unload;
@@ -280,7 +273,7 @@ test('the OpenCode session.deleted event uses permanent membership cleanup, not 
 test('CLI rosters show away and detached writes end with a plain rejoin', async t => {
   const f = await fixture(t);
   await f.detach();
-  const cli = (...args) => spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', f.location, '--as', 'Bob', ...args], {
+  const cli = (...args) => spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', f.location, ...args], {
     env: { ...f.env, PI_SESSION_ID: f.body.session, NO_COLOR: '1' }, encoding: 'utf8', timeout: 10_000,
   });
   for (const command of ['participants', 'status']) {
@@ -289,7 +282,7 @@ test('CLI rosters show away and detached writes end with a plain rejoin', async 
     assert.match(result.stdout, /Bob[^\n]*away/);
   }
   for (const args of [['catch'], ['done'], ['express', '--force', '--no-wait', 'not sent']]) {
-    const result = cli(...args);
+    const result = cli('--as', 'Bob', ...args);
     assert.notEqual(result.status, 0);
     const output = result.stdout + result.stderr;
     assert.match(output, /away/);

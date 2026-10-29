@@ -12,7 +12,7 @@ import { renderActivityUncertain } from '../dist/presentation.js';
 import { SquareError } from '../dist/model.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
-import { Square } from '../dist/index.js';
+import { Square } from '../dist/square-api.js';
 import { CLI, ROOT, run, withName, persistSquare, draftPathFrom, testEnv } from './square-cli-helpers.js';
 
 const shellReplay = { skip: process.platform === 'win32' ? 'Printed command replay requires a POSIX shell.' : false };
@@ -43,9 +43,9 @@ async function says(file) {
 }
 
 test('a refused recipient is dropped from the printed retry instead of being suggested again', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    await square.join('Bob', { body, wakeAddress });
   });
   // Both are valid names that simply stand nowhere; an invalid name is a different refusal.
   for (const target of ['Bobb', 'Ghost']) {
@@ -67,9 +67,9 @@ test('a refused recipient is dropped from the printed retry instead of being sug
 });
 
 test('missing and malformed replies are dropped from runnable recovery while recipients and raw drafts survive', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    await square.join('Bob', { body, wakeAddress });
   });
   for (const reply of ['act/999', 'not-an-id']) {
     const body = `reply body \r\nwith 'quotes'\r\n`;
@@ -101,9 +101,9 @@ test('missing and malformed replies are dropped from runnable recovery while rec
 });
 
 test('invalid reply recovery retains body candidates without forcing a bare selector', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    await square.join('Bob', { body, wakeAddress });
   }, { hardCap: null });
   const cases = [
     ['act/999', '@Bob\n'],
@@ -124,9 +124,9 @@ test('invalid reply recovery retains body candidates without forcing a bare sele
 });
 
 test('explicit bell conflict repairs flags without asking for body edits', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    await square.join('Bob', { body, wakeAddress });
   });
   const body = '@Bob @Eve\n';
   const saved = recovery(run(withName(file, 'Alice', ['express', '--bell', '--no-mention', '--mention', 'Bob', '--reply', 'act/1', '-']), { input: body }), body);
@@ -141,9 +141,9 @@ test('explicit bell conflict repairs flags without asking for body edits', shell
 });
 
 test('bell quota preserves a retryable draft, bell reach, reply and no-wait', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
+    await square.join('Bob', { body, wakeAddress });
     await alice.express('first bell', { reach: 'bell' });
   });
   const body = 'second bell\n';
@@ -163,9 +163,9 @@ test('bell quota preserves a retryable draft, bell reach, reply and no-wait', sh
 
 test('held recovery preserves the original force choice and no-wait without widening reach', shellReplay, async () => {
   for (const force of [false, true]) {
-    const file = await persistSquare(async ({ square }) => {
-      await square.join('Alice');
-      const bob = (await square.join('Bob')).participant;
+    const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+      await square.join('Alice', { body, wakeAddress });
+      const bob = (await square.join('Bob', { body, wakeAddress })).participant;
       await bob.hold('pause');
     });
     const body = `held ${force}\n`;
@@ -188,8 +188,8 @@ test('held recovery preserves the original force choice and no-wait without wide
 });
 
 test('throttle recovery remains no-wait and does not add force', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
     await alice.express('first');
   }, { throttlePerMinute: 1 });
   const body = 'waiting for a lull\n';
@@ -204,9 +204,9 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
 });
 
 test('behind recovery offers catch then an ordinary retry without promoting a bypass', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    const bob = (await square.join('Bob', { body, wakeAddress })).participant;
     await bob.express('question', { mentions: ['Alice'] });
   });
   const body = 'answer\n';
@@ -235,8 +235,8 @@ test('retry commands quote shell data and keep every original recipient', () => 
 test('only admission rejection proves a failed express unsent; post-commit failure never suggests sending again', async t => {
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => artifact.close());
-  const square = await resourceWithArtifact(t, artifact, { channel: 'test', session: 'express-recovery' });
-  const alice = (await square.join('Alice')).participant;
+  const square = await resourceWithArtifact(t, artifact);
+  const alice = (await square.join('Alice', { body: { channel: 'test', session: 'express-recovery' } })).participant;
   await assert.rejects(alice.express('bad target', { mentions: ['Nobody'] }), error => error.facts?.activityUnsent === true && error.operation.expressEffect === 'unsent');
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (...args) => {
@@ -275,7 +275,7 @@ test('a failed observation clock cannot prevent raw draft saving or landed recon
         draftAtRecovery = fs.readFileSync(path.join(root, 'drafts', drafts[0]), 'utf8');
         throw clockFailure;
       },
-    }), file, 'Alice', raw, { noMention: true });
+    }), file, 'Alice', raw, { noMention: true }, false, { channel: 'test', session: 'draft-clock' });
     assert.equal(process.exitCode, 1);
     assert.equal(draftAtRecovery, raw);
     assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);
@@ -290,7 +290,7 @@ test('a failed observation clock cannot prevent raw draft saving or landed recon
 });
 
 test('Ctrl-C cancels the initial express open while SQLite is locked and keeps the raw draft', shellReplay, async () => {
-  const file = await persistSquare(async ({ square }) => { await square.join('Alice'); });
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => { await square.join('Alice', { body, wakeAddress }); });
   const database = new DatabaseSync(file);
   database.exec('BEGIN EXCLUSIVE');
   const body = 'raw locked body\r\n';
@@ -341,17 +341,17 @@ DatabaseSync.prototype.prepare = function(sql, ...args) {
 });
 
 test('selected artifact corruption never advertises a safely unsent activity', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    const writer = (await square.join('Writer')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const writer = (await square.join('Writer', { body, wakeAddress })).participant;
     await writer.express('original', { force: true });
   });
   const database = new DatabaseSync(file);
   const before = database.prepare('SELECT revision, next_act_index FROM square_meta').get();
   database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":42}');
   database.close();
-  const square = await Square.at({ path: file, body: { channel: 'codex', session: path.resolve(file) } });
+  const square = await Square.at({ path: file });
   try {
-    const writer = (await square.join('Writer')).participant;
+    const writer = (await square.join('Writer', { body: { channel: 'codex', session: path.resolve(file) } })).participant;
     await assert.rejects(writer.express('reply', { force: true, reply: 'act/1' }),
       (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
   } finally { await square.close(); }

@@ -30,14 +30,18 @@ says whether its exact Body is currently executing for it. Format 6 makes three 
   listens, read horizon, receipts and delivery evidence stay intact. Wake readiness, catch ownership
   and delivery deferrals are cleared. Away participants still receive landed audience and accumulate
   unread activity, but cannot write or receive proactive delivery. Away has no timeout.
-- Host-confirmed permanent deletion ends membership through fenced `endOwnedSession`, including
-  for a detached seat. OpenCode `session.deleted` uses this path.
+- Host-confirmed permanent deletion ends membership through fenced
+  `endHeld(name, {body, generation})`, including for a detached seat. OpenCode `session.deleted`
+  uses this path.
 
-On start/resume, hosts discover only their exact Body's standing seats with `bodySeats()` and
-restore the detached ones before arming delivery. Same-Body `join`/`implicitJoin` reattaches without
-changing the generation, read horizon or listens, so mentions received while away remain unread.
-A foreign Body cannot reattach. Explicit takeover still performs `done -> join` with a fresh
+On start/resume, hosts discover only their exact Body's standing seats with `seatsOf(body)` and
+restore the detached ones with `reattach(name, {body, wakeAddress?})` before arming delivery.
+Same-Body `join` or `reattach` preserves the generation, read horizon and listens, so mentions
+received while away remain unread. Reattachment returns `null` for absent, foreign or done seats;
+it never creates membership. Explicit takeover still performs `done -> join` with a fresh
 generation, even when taking over an away participant; old cleanup/recovery cannot reclaim it.
+The identity-free Square SDK refactor itself does not change the format or require artifact
+migration; see the [SDK breaking migration](square-api.md#sdk-breaking-migration-identity-free-square).
 
 ## Additive conversion from formats 5 and 4
 

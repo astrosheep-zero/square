@@ -64,8 +64,8 @@ test('participant lists share actual action and receipt times, including a fresh
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
     const projections = [
-      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
-      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000, automaticDeliveryAvailable: false }))).value.participants,
+      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000 }))).value.participants,
+      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000 }))).value.participants,
       (await cell.read(facts => catchPresence(facts, 180000))).value.participants,
     ];
     for (const participants of projections) {
@@ -219,9 +219,10 @@ test('host controls preserve the requesting actor and body', async () => {
 
 test('landings advance the actor cursor and never reuse an index', async () => {
   let now = 0;
-  const square = Square.inMemory({ markdown: '', clock: () => ++now, body: { channel: 'test', session: 'cursor' } });
+  const body = { channel: 'test', session: 'cursor' };
+  const square = Square.inMemory({ markdown: '', clock: () => ++now });
   try {
-    const alice = (await square.join('Alice')).participant;
+    const alice = (await square.join('Alice', { body })).participant;
     await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await alice.done();
     const history = (await square.history()).activities;
@@ -345,11 +346,12 @@ test('mention and listening caps reject without enumerating the roster', async (
 
 test('listener landings append only real edge changes', async () => {
   let now = 10;
-  const square = Square.inMemory({ markdown: '', clock: () => ++now, body: { channel: 'test', session: 'listener' } });
+  const body = { channel: 'test', session: 'listener' };
+  const square = Square.inMemory({ markdown: '', clock: () => ++now });
   try {
-    const caller = (await square.join('Caller')).participant;
+    const caller = (await square.join('Caller', { body })).participant;
     const first = await caller.listen('aku/riko');
-    const repeated = await (await square.participant('caller')).listen('AKU/RIKO');
+    const repeated = await (await square.participant('caller', { body })).listen('AKU/RIKO');
     assert.equal(first.activity.kind, 'listen');
     assert.equal(first.activity.target, 'aku/riko');
     assert.equal(repeated.activity, null);

@@ -140,10 +140,6 @@ export interface SquareSnapshot {
 export interface OpenOptions {
   readonly clock?: () => number;
   readonly wakeTransport?: WakeTransportPort;
-  /** Explicit execution coordinate resolved by an adapter. */
-  readonly body?: Body;
-  /** Optional wake address attached to this body. */
-  readonly wakeAddress?: WakeAddress;
 }
 export interface SquareLocation {
   readonly path?: string;
@@ -151,7 +147,6 @@ export interface SquareLocation {
   readonly env?: NodeJS.ProcessEnv;
 }
 export interface SquareAtInput extends SquareLocation, OpenOptions {
-  readonly participant?: string;
   /** A caller-owned connection; closing this Square never closes its owner. */
   readonly resources?: SquareResourceOwner;
 }
@@ -163,6 +158,8 @@ export interface SquareBuildInput extends SquareAtInput {
   readonly force?: boolean;
 }
 export interface JoinOptions extends ObservationOptions {
+  readonly body: Body;
+  readonly wakeAddress?: WakeAddress;
   readonly takeover?: boolean;
   readonly last?: number;
 }
@@ -181,7 +178,6 @@ export interface Participant {
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
-  history(query?: HistoryQuery, control?: OperationControl): Promise<HistoryResult>;
   hold(reason?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   resume(options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
@@ -190,14 +186,15 @@ export interface Participant {
   renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
   releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
-export interface BodySeat {
-  readonly participant: string;
+export interface HeldSeat {
+  readonly name: string;
   readonly generation: ActivityId;
   readonly attachment: 'attached' | 'detached';
 }
 export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'away' | 'done';
 export interface ParticipantSummary {
   readonly name: string;
+  readonly deliveryAvailable: boolean;
   readonly listening: readonly string[];
   readonly activityCount: number;
   readonly lastActiveAt?: number;
@@ -299,9 +296,9 @@ export interface SquareObservation {
   readonly held: boolean;
   readonly now: number;
   readonly participant?: string;
-  readonly automaticDeliveryAvailable: boolean;
 }
 export interface JoinObservation extends SquareObservation {
+  readonly deliveryAvailable: boolean;
   readonly entry?: EntryPresentation;
   /** The receipt succeeded, but optional recent-history/context enrichment was unavailable. */
   readonly enrichmentUnavailable?: true;
@@ -320,6 +317,7 @@ export interface ExpressObservation extends SquareObservation, ExpressionObserva
   readonly context: ExpressContext;
 }
 export interface CatchObservation extends SquareObservation, ExpressionObservation {
+  readonly deliveryAvailable: boolean;
   readonly participant: string;
   readonly presence?: CatchPresence;
   readonly enrichmentUnavailable?: true;

@@ -6,7 +6,7 @@ import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideAct } from '../dist/decisions.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
-import { Square } from '../dist/index.js';
+import { Square } from '../dist/square-api.js';
 import { persistSquare, run, withName } from './square-cli-helpers.js';
 
 function makeState(overrides = {}) {
@@ -168,15 +168,16 @@ test('body @names share the mention limit with --mention', async () => {
 });
 
 test('express through the library stores derived mention metadata', async () => {
-  const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'body-mentions' } });
+  const body = { channel: 'test', session: 'body-mentions' };
+  const square = Square.inMemory({ markdown: 'context' });
   try {
-    const alice = (await square.join('Alice')).participant;
-    const bob = (await square.join('Bob')).participant;
+    const alice = (await square.join('Alice', { body })).participant;
+    const bob = (await square.join('Bob', { body })).participant;
     const directed = await alice.express('hey @Bob and @Unknown', { force: true });
     assert.deepEqual(directed.activity.mentions, ['Bob']);
     assert.deepEqual(directed.unmatchedMentions, ['Unknown']);
     assert.equal(directed.activity.unmatchedMentions, undefined);
-    assert.equal(((await alice.history({ limit: null })).activities).at(-1).unmatchedMentions, undefined);
+    assert.equal(((await square.history({ limit: null })).activities).at(-1).unmatchedMentions, undefined);
     assert.equal(directed.activity.body, 'hey @Bob and @Unknown');
     const literal = await alice.express('hey @Unknown', { force: true });
     assert.deepEqual(literal.activity.mentions, []);
@@ -200,9 +201,9 @@ test('activityRetryCommand preserves the caller reach instead of forcing --no-me
 });
 
 test('the CLI lands matched and unmatched body @names without rewriting the body', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { body });
+    await square.join('Bob', { body });
   }, { hardCap: null });
 
   const directed = run(withName(file, 'Alice', ['express', 'hey @Bob']));

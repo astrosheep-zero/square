@@ -45,8 +45,15 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
-    const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'consumer' } });
-    const joined: Promise<JoinResult> = square.join('Alice');
+    const body = { channel: 'test', session: 'consumer' };
+    const square = Square.inMemory({ markdown: 'context' });
+    const joined: Promise<JoinResult> = square.join('Alice', { body });
+    // @ts-expect-error caller identity is required on join, not the resource
+    square.join('NoBody');
+    // @ts-expect-error the resource never captures caller identity
+    Square.inMemory({ markdown: 'context', body });
+    // @ts-expect-error participant selection requires a name and caller identity
+    square.participant('Alice');
     const participant: Promise<Participant> = joined.then(result => result.participant);
     const history: Promise<HistoryResult> = square.history({ limit: null });
     const id: ActivityId = 'act/1';
@@ -70,8 +77,9 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { Square } from '@astrosheep/square';
-    const square = Square.inMemory({ markdown: 'context', body: { channel: 'test', session: 'consumer' } });
-    const { participant: alice } = await square.join('Alice');
+    const body = { channel: 'test', session: 'consumer' };
+    const square = Square.inMemory({ markdown: 'context' });
+    const { participant: alice } = await square.join('Alice', { body });
     if (alice.name !== 'Alice') process.exit(2);
     await square.close();
     // Pi renderer imports must resolve from the consumer's supplied TUI peer.

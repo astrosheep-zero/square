@@ -23,22 +23,24 @@ async function fixture(t, extra = {}) {
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_NOW_MS: undefined };
   const resources = [];
   t.after(async () => { for (const resource of resources) await resource.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const open = async (name, options = {}) => {
-    const square = await Square.at({ path: location, env, body: { channel: 'pi', session: name }, ...options });
+  const open = async (options = {}) => {
+    const square = await Square.at({ path: location, env, ...options });
     resources.push(square);
     return square;
   };
-  const square = await Square.build({ path: location, env, markdown: 'Deferral tests', body: { channel: 'pi', session: 'Alice' },
+  const square = await Square.build({ path: location, env, markdown: 'Deferral tests',
     wakeTransport: { probe: async () => false, attempt: () => assert.fail('fixture must never perform I/O') }, ...extra });
   resources.push(square);
-  const alice = (await square.join('Alice')).participant;
-  const receiver = await open('Bob', { wakeAddress: { kind: 'paseo', address: { agentId: 'bob' } }, ...extra });
-  const bob = (await receiver.join('Bob')).participant;
+  const alice = (await square.join('Alice', { body: { channel: 'pi', session: 'Alice' } })).participant;
+  const receiver = await open(extra);
+  const bobBody = { channel: 'pi', session: 'Bob' };
+  const bobWakeAddress = { kind: 'paseo', address: { agentId: 'bob' } };
+  const bob = (await receiver.join('Bob', { body: bobBody, wakeAddress: bobWakeAddress })).participant;
   const artifact = createArtifactPort(location);
   resources.push(artifact);
   const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
   const say = async (value = metadata, mentions = ['Bob']) => (await alice.express({ body: 'ready', metadata: value, mentions, force: true })).activity;
-  return { root, location, env, square, alice, receiver, bob, artifact, seat, say, open };
+  return { root, location, env, square, alice, receiver, bob, bobWakeAddress, artifact, seat, say, open };
 }
 
 function armed(observer, timeoutMs = 2000, options = {}) {
@@ -101,22 +103,24 @@ test('local leases are independent, operation-clock bounded, delivery-only state
 });
 
 test('memory and persisted handles require captured current ownership, never a name or retired generation', async t => {
-  const memory = Square.inMemory({ markdown: 'memory', body: { channel: 'test', session: 'one' }, clock: () => 1000 });
+  const memory = Square.inMemory({ markdown: 'memory', clock: () => 1000 });
+  const body = { channel: 'test', session: 'one' };
   t.after(() => memory.close());
-  const old = (await memory.join('Local')).participant;
+  const old = (await memory.join('Local', { body })).participant;
   const lease = await old.deferDelivery({ match, durationMs: 100 });
   await old.done();
-  const fresh = (await memory.join('Local')).participant;
+  const fresh = (await memory.join('Local', { body })).participant;
   for (const work of [() => old.deferDelivery({ match, durationMs: 100 }), () => old.renewDeliveryDeferral(lease.id, 100), () => old.releaseDeliveryDeferral(lease.id)])
     await assert.rejects(work(), replaced);
   assert.equal(await fresh.renewDeliveryDeferral(lease.id, 100), null);
   const f = await fixture(t);
   const saved = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const reconnected = await f.open('Bob');
-  assert.equal(await (await reconnected.participant('Bob')).renewDeliveryDeferral(saved.id, 10000) !== null, true);
-  const foreign = await f.open('Other');
-  await assert.rejects((await foreign.participant('Bob')).releaseDeliveryDeferral(saved.id), replaced);
-  const thief = (await foreign.join('Bob', { takeover: true })).participant;
+  const reconnected = await f.open();
+  assert.equal(await (await reconnected.participant('Bob', { body: f.seat.body })).renewDeliveryDeferral(saved.id, 10000) !== null, true);
+  const foreign = await f.open();
+  const foreignBody = { channel: 'pi', session: 'Other' };
+  await assert.rejects(foreign.participant('Bob', { body: foreignBody }), replaced);
+  const thief = (await foreign.join('Bob', { body: foreignBody, takeover: true })).participant;
   await assert.rejects(f.bob.renewDeliveryDeferral(saved.id, 10000), replaced);
   assert.equal(await thief.releaseDeliveryDeferral(saved.id), false);
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryDeferrals('Bob', f.seat.generation))).value, []);
@@ -136,7 +140,7 @@ test('producer, sweep and session projection suppress OR leases without consumpt
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
   assert.deepEqual(await sweepPending({ ...input, now: Date.now(), graceMs: -1, limit: 10 }), []);
   assert.deepEqual((await sessionInbox(f.seat.body, f.env)).flatMap(member => member.notifications), []);
-  assert.equal((await f.receiver.status()).participants.find(person => person.name === 'Bob').unreadActivityCount, 1);
+  assert.equal((await f.receiver.status({ viewer: 'Bob' })).participants.find(person => person.name === 'Bob').unreadActivityCount, 1);
   assert.equal((await f.receiver.history()).activities.some(item => item.id === activity.id), true);
   assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
   await f.bob.releaseDeliveryDeferral(one.id);
@@ -241,7 +245,7 @@ test('presentation suppresses before the sink but retains successful post-sink e
 
 test('every item in a successful batch retains truthful receipts despite post-sink deferrals', async t => {
   const f = await fixture(t);
-  const cara = (await f.receiver.join('Cara')).participant;
+  const cara = (await f.receiver.join('Cara', { body: f.seat.body, wakeAddress: f.bobWakeAddress })).participant;
   const first = await f.say(metadata, ['Bob', 'Cara']);
   const second = await f.say(metadata, ['Bob', 'Cara']);
   let sends = 0;
@@ -324,7 +328,7 @@ test('pre-sink cancellation and rejected sinks release custody without a success
 
 test('a successful batch settles every rendered item after cancellation without replay', async t => {
   const f = await fixture(t);
-  await f.receiver.join('Cara');
+  await f.receiver.join('Cara', { body: f.seat.body, wakeAddress: f.bobWakeAddress });
   const activities = [await f.say(metadata, ['Bob', 'Cara']), await f.say(metadata, ['Bob', 'Cara'])];
   const controller = new AbortController();
   let effects = 0;
@@ -392,8 +396,9 @@ test('a final batch sink excludes a newly deferred peer item and receipts only t
 
 test('a matching lease affects only its recipient, not other current recipients', async t => {
   const f = await fixture(t);
-  const caraSquare = await f.open('Cara', { wakeAddress: { kind: 'paseo', address: { agentId: 'cara' } } });
-  await caraSquare.join('Cara');
+  const caraSquare = await f.open();
+  await caraSquare.join('Cara', { body: { channel: 'pi', session: 'Cara' },
+    wakeAddress: { kind: 'paseo', address: { agentId: 'cara' } } });
   await f.bob.deferDelivery({ match, durationMs: 10000 });
   await f.say(metadata, ['Bob', 'Cara']);
   const recipients = [];

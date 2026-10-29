@@ -1,4 +1,4 @@
-import { SquareError, sameBody, sameName, validateBody, validateName, type Body, type Seat } from './model.js';
+import { SquareError, validateBody, validateName, type Body, type Seat } from './model.js';
 import type { ArtifactWriteAuthority, SeatRef } from './ports.js';
 
 export function requireBody(body: Body | undefined): Body {
@@ -19,12 +19,4 @@ export function asSeatRef(seat: Seat): SeatRef {
 
 export function participantAuthority(seat: Seat): ArtifactWriteAuthority {
   return { kind: 'participant', seat: asSeatRef(seat) };
-}
-
-export function requireSeat(seat: Seat | undefined, body: Body | undefined, participant: string): Seat {
-  if (seat === undefined || !sameName(seat.participant, participant))
-    throw new SquareError('already_joined', `${participant} needs a current participant handle; join first`);
-  if (!sameBody(seat.body, requireBody(body)))
-    throw new SquareError('already_joined', `${participant} is not held by this body`);
-  return seat;
 }

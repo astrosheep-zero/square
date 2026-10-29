@@ -153,6 +153,8 @@ export type InternalSquareErrorCode = SquareErrorCode
   | 'pending_peer';
 
 export interface SquareErrorFacts {
+  /** Copyable recovery for a missing, detached or foreign seat. */
+  join?: string;
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
   /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */

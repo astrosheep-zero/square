@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-import { Square } from '../dist/index.js';
+import { Square } from '../dist/square-api.js';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 export const CLI = path.join(ROOT, 'dist', 'square.js');
@@ -137,17 +137,18 @@ export function tickingClock(start = 0, step = 1000) {
 export async function persistSquare(fill, options = {}) {
   const file = tempSquare();
   const time = tickingClock(options.start ?? 0);
+  const body = options.body ?? { channel: 'codex', session: path.resolve(file) };
+  const wakeAddress = options.wakeAddress;
   const square = await Square.build({
     path: file,
     markdown: options.markdown ?? '## Topic\n\nTesting v2',
     hardCap: 'hardCap' in options ? options.hardCap : 3,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
     clock: options.manualClock ? time.now : time.tick,
-    body: options.body ?? { channel: 'codex', session: path.resolve(file) },
     env: testEnv({ CODEX_THREAD_ID: path.resolve(file) }, file),
   });
   try {
-    await fill({ square, time, file });
+    await fill({ square, time, file, body, wakeAddress });
   } finally {
     await square.close();
   }

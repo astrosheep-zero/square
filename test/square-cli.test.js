@@ -6,9 +6,9 @@ import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact.js';
 import { formatActivityId } from '../dist/square-core.js';
-import { squareInput } from '../dist/cli/context.js';
+import { squareInput, commandIdentity } from '../dist/cli/context.js';
+import { Square } from '../dist/square-api.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
-import { Square } from '../dist/index.js';
 import {
   ROOT,
   run,
@@ -21,7 +21,7 @@ import {
 } from './square-cli-helpers.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
 
-test('CLI input derives an explicit body from each harness coordinate', () => {
+test('CLI passes harness identity to operations rather than the resource', () => {
   const coordinates = [
     ['CLAUDE_CODE_SESSION_ID', 'claude-code', 'claude-session'],
     ['CODEX_THREAD_ID', 'codex', 'codex-session'],
@@ -29,9 +29,7 @@ test('CLI input derives an explicit body from each harness coordinate', () => {
     ['PI_SESSION_ID', 'pi', 'pi-session'],
     ['PASEO_AGENT_ID', 'paseo', 'paseo-agent'],
   ];
-  const inputFor = (env) => squareInput({
-    command: 'join', cwd: '/square-cli-test', env, squarePath: '/square-cli-test.square', name: 'Alice', homeDir: '/tmp',
-  });
+  const inputFor = commandIdentity;
 
   for (const [variable, channel, session] of coordinates) {
     const input = inputFor({ [variable]: ` ${session} ` });
@@ -63,7 +61,7 @@ test('CLI read-only opens need no identity; participant writes do', async () => 
   }));
   try {
     assert.equal((await square.snapshot()).participants.length, 0);
-    await assert.rejects(square.join('Alice'), /explicit body: channel and session/);
+    await assert.rejects(square.join('Alice', {}), /explicit body: channel and session/);
   } finally { await square.close(); }
 });
 
@@ -99,9 +97,9 @@ test('participants renders roster names without mention syntax', () => {
 });
 
 test('bare activities land without an audience and listeners receive later bare activity', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    await square.join('Bob');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    await square.join('Bob', { body, wakeAddress });
   });
   const bareWithoutListener = run(withName(file, 'Alice', ['express', 'bare thought']));
   assert.equal(bareWithoutListener.status, 0, bareWithoutListener.stderr);
@@ -153,8 +151,8 @@ test('catch limit is bounded and mention is boolean', () => {
 });
 
 test('listener commands do not rejoin a participant who already left', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const bob = (await square.join('Bob', { body, wakeAddress })).participant;
     await bob.done();
   });
   const before = run(withPath(file, ['history', '--no-truncate']));
@@ -450,10 +448,9 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   assert.deepEqual(fs.readFileSync(file), before, 'archive reading must not claim or consume');
   const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
   assert.equal(caught.status, 2, caught.stdout);
-  assert.match(caught.stderr, /already stands here — another session holds the name/);
-  assert.match(caught.stderr, /If this is your name to reclaim, --kick banishes the one standing here so you can step in/);
+  assert.match(caught.stderr, /not held by this body/);
   assert.doesNotMatch(caught.stderr, /error/i);
-  assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join --kick`));
+  assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join`));
   assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
   const artifact = createArtifactPort(file);
   try {
@@ -544,8 +541,8 @@ test('unknown participant errors end with the join recovery command', () => {
 });
 
 test('an unknown recipient errors with the roster command instead of a join', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
   });
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
@@ -556,8 +553,8 @@ test('an unknown recipient errors with the roster command instead of a join', as
 });
 
 test('status offers the full history read only when the latest body is clipped', async () => {
-  const short = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
+  const short = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
     await alice.express('short words', { force: true });
   }, { hardCap: 10 });
   const unclipped = run(withName(short, 'Alice', ['status']));
@@ -566,8 +563,8 @@ test('status offers the full history read only when the latest body is clipped',
   assert.doesNotMatch(unclipped.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
 
   // A short body that merely says "more chars" must not look clipped.
-  const literal = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
+  const literal = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
     await alice.express('the phrase more chars fits without clipping', { force: true });
   }, { hardCap: 10 });
   const literalStatus = run(withName(literal, 'Alice', ['status']));
@@ -575,8 +572,8 @@ test('status offers the full history read only when the latest body is clipped',
   assert.match(literalStatus.stdout, /more chars fits without clipping/);
   assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
 
-  const clipped = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
+  const clipped = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
     await alice.express('x'.repeat(260), { force: true });
   }, { hardCap: 10 });
   const clippedStatus = run(withName(clipped, 'Alice', ['status']));
@@ -607,8 +604,8 @@ test('doctor --fix is not a command', async () => {
 });
 
 test('catch conflicts and removed modes are refused while bare catch is the default now', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
   });
   const rejected = [
     ['catch', '--now', '--idle', '1s'],
@@ -628,9 +625,9 @@ test('catch conflicts and removed modes are refused while bare catch is the defa
 });
 
 test('bare catch takes pending activity now and consumes it', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    await square.join('Alice');
-    const bob = (await square.join('Bob')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    await square.join('Alice', { body, wakeAddress });
+    const bob = (await square.join('Bob', { body, wakeAddress })).participant;
     await bob.express('hello Alice', { mentions: ['Alice'] });
   });
   const caught = run(withName(file, 'Alice', ['catch']));
@@ -702,8 +699,8 @@ test('join rejects removed exhaustive history and bounds --last', async () => {
 });
 
 test('CLI activity selectors accept only canonical textual ids', async () => {
-  const file = await persistSquare(async ({ square }) => {
-    const alice = (await square.join('Alice')).participant;
+  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
+    const alice = (await square.join('Alice', { body, wakeAddress })).participant;
     await alice.express('anchor', { force: true, reach: 'bell' });
   });
 

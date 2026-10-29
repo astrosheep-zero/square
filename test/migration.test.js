@@ -22,11 +22,12 @@ async function preAttachment(t, version) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `square-format${version}-`));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'offline.square');
-  const input = { path: file, env: { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') }, body: { channel: 'test', session: 'offline' } };
+  const input = { path: file, env: { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') } };
+  const body = { channel: 'test', session: 'offline' };
   const square = await Square.build({ ...input, markdown: 'offline fixture' });
-  const alice = (await square.join('Alice')).participant;
-  const bob = (await square.join('Bob')).participant;
-  const departed = await square.join('Departed');
+  const alice = (await square.join('Alice', { body })).participant;
+  const bob = (await square.join('Bob', { body })).participant;
+  const departed = await square.join('Departed', { body });
   await departed.participant.done();
   const activity = (await alice.express({ body: 'preserve', metadata: { source: { kind: 'example' } }, mentions: ['Bob'], force: true })).activity;
   if (version === 5) await bob.deferDelivery({ match: { fields: [{ path: ['other'], equals: true }] }, durationMs: 1000 });
@@ -49,15 +50,15 @@ async function preAttachment(t, version) {
     db.exec('ALTER TABLE seats DROP COLUMN attachment;');
     // Formats 4/5 retained a completed coordinate after done. It must not become restore authority.
     db.prepare('INSERT INTO seats(participant_key_json,participant_json,channel_json,session_json,agent_json,generation_json,wake_address_json) VALUES(?,?,?,?,NULL,?,NULL)')
-      .run(JSON.stringify('departed'), JSON.stringify('Departed'), JSON.stringify(input.body.channel), JSON.stringify(input.body.session), JSON.stringify(departed.activity.id));
+      .run(JSON.stringify('departed'), JSON.stringify('Departed'), JSON.stringify(body.channel), JSON.stringify(body.session), JSON.stringify(departed.activity.id));
     if (version === 4) db.exec('DROP TABLE delivery_deferrals;');
     db.exec(`PRAGMA user_version=${version};`);
   });
-  return { file, input };
+  return { file, input, body };
 }
 
 for (const version of [5, 4]) test(`explicit format ${version} -> 6 preserves every fact and revision; only existing seats become attached`, async t => {
-  const { file, input } = await preAttachment(t, version);
+  const { file, input, body } = await preAttachment(t, version);
   const before = digest(file), previous = tables(file);
   await assert.rejects(Square.at(input), error => error.facts?.reason === 'migration_required');
   assert.equal(digest(file), before);
@@ -71,8 +72,8 @@ for (const version of [5, 4]) test(`explicit format ${version} -> 6 preserves ev
   assert.deepEqual(after, previous);
   assert.equal(inspect(file, db => db.prepare('PRAGMA user_version').get().user_version), CURRENT_USER_VERSION);
   const square = await Square.at(input);
-  assert.deepEqual((await square.bodySeats()).map(seat => [seat.participant, seat.attachment]), [['Alice', 'attached'], ['Bob', 'attached']]);
-  assert.equal((await square.implicitJoin('Departed')).state, 'done');
+  assert.deepEqual((await square.seatsOf(body)).map(seat => [seat.name, seat.attachment]), [['Alice', 'attached'], ['Bob', 'attached']]);
+  assert.equal((await square.reattach('Departed', { body })), null);
   assert.equal((await square.participants()).participants.find(p => p.name === 'Departed').presence, 'done');
   await square.close();
   assert.deepEqual((await diagnoseSquare(input)).problems, []);

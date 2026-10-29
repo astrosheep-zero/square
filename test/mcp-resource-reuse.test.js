@@ -20,7 +20,7 @@ async function fixture(label, participant = 'rei') {
     ...process.env, SQUARE_INDEX: index, CODEX_THREAD_ID: body.session, SQUARE_NOW_MS: '1000',
     SQUARE_DISABLE_PASEO_WAKE: '1',
   };
-  const built = await Square.build({ path: squarePath, markdown: 'reuse scene', env, body });
+  const built = await Square.build({ path: squarePath, markdown: 'reuse scene', env });
   await built.close();
   return { cwd, squarePath, env, body, participant };
 }
@@ -49,8 +49,8 @@ function countCloses(t, squarePath) {
   return () => closed;
 }
 
-function serverFor({ cwd, squarePath, env, body, participant }) {
-  return createSquareMcpServer({ cwd, env, path: squarePath, body, participant });
+function serverFor({ cwd, squarePath, env, body }) {
+  return createSquareMcpServer({ cwd, env, path: squarePath, body });
 }
 
 async function connect(server) {
@@ -64,7 +64,7 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   const { cwd, squarePath, env, body, participant } = await fixture('mcp');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = serverFor({ cwd, squarePath, env, body, participant });
+  const server = serverFor({ cwd, squarePath, env, body });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
@@ -81,8 +81,8 @@ test('one MCP server opens one connection for many tool calls', async (t) => {
   // Closing the server closes the connection: a later open starts from scratch.
   await server.close();
   assert.equal(opened(), 1);
-  const fresh = await Square.at({ cwd, env: { ...env }, path: squarePath, body, participant: 'other' });
-  await fresh.join('other');
+  const fresh = await Square.at({ cwd, env: { ...env }, path: squarePath });
+  await fresh.join('other', { body });
   await fresh.close();
   assert.equal(opened(), 2);
 });
@@ -91,7 +91,7 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
   const { cwd, squarePath, env, body, participant } = await fixture('concurrent');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = serverFor({ cwd, squarePath, env, body, participant });
+  const server = serverFor({ cwd, squarePath, env, body });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
@@ -114,7 +114,7 @@ test('concurrent MCP tool calls share one connection successfully', async (t) =>
 test('MCP shutdown waits for an idle catch before releasing the connection', async (t) => {
   const { cwd, squarePath, env, body, participant } = await fixture('shutdown');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const server = serverFor({ cwd, squarePath, env, body, participant });
+  const server = serverFor({ cwd, squarePath, env, body });
   const client = await connect(server);
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   await call('join', { as: participant });
@@ -129,16 +129,16 @@ test('MCP shutdown waits for an idle catch before releasing the connection', asy
 });
 
 test('a shared resource owner saves one connection open per request Square', async (t) => {
-  const { cwd, squarePath, env, body, participant } = await fixture('measure', 'rei');
+  const { cwd, squarePath, env, participant } = await fixture('measure', 'rei');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const rounds = 8;
-  const context = { cwd, path: squarePath, env, body, participant };
+  const context = { cwd, path: squarePath, env };
   const opened = countConnections(t, squarePath);
 
   const baselineStart = Date.now();
   for (let index = 0; index < rounds; index += 1) {
     const square = await Square.at(context);
-    try { await square.status(); }
+    try { await square.status({ viewer: participant }); }
     finally { await square.close(); }
   }
   const baselineMs = Date.now() - baselineStart;
@@ -148,7 +148,7 @@ test('a shared resource owner saves one connection open per request Square', asy
   const sharedStart = Date.now();
   for (let index = 0; index < rounds; index += 1) {
     const square = await Square.at({ ...context, resources });
-    try { await square.status(); }
+    try { await square.status({ viewer: participant }); }
     finally { await square.close(); }
   }
   const sharedMs = Date.now() - sharedStart;
@@ -158,14 +158,14 @@ test('a shared resource owner saves one connection open per request Square', asy
 });
 
 test('a resource owner lends one connection, refuses a second location, and closes once', async (t) => {
-  const { cwd, squarePath, body } = await fixture('owner');
+  const { cwd, squarePath } = await fixture('owner');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const owner = createSquareResourceOwner();
   const artifact = owner.artifact(squarePath);
   assert.equal(owner.artifact(path.join(cwd, '.', 'square.square')), artifact, 'same path resolves to one connection');
   assert.throws(() => owner.artifact(path.join(cwd, 'other.square')), /already holds/);
 
-  const borrowed = await Square.at({ path: squarePath, env: { SQUARE_INDEX: path.join(cwd, 'index.ndjsonl') }, resources: owner, body });
+  const borrowed = await Square.at({ path: squarePath, env: { SQUARE_INDEX: path.join(cwd, 'index.ndjsonl') }, resources: owner });
   await borrowed.close();
   assert.ok((await artifact.read((facts) => facts.header())).value.nextActIndex >= 0, 'closing a borrowed view leaves the connection open');
 
@@ -183,9 +183,9 @@ test('a cancelled borrowed request never closes or poisons the owner connection'
   await artifact.read(facts => facts.header());
   const controller = new AbortController();
   controller.abort(new Error('request cancelled, owner remains'));
-  await assert.rejects(Square.at({ path: squarePath, env, body, resources }, { signal: controller.signal }), /request cancelled/);
-  const next = await Square.at({ path: squarePath, env, body, resources });
-  await next.join('Alive');
+  await assert.rejects(Square.at({ path: squarePath, env, resources }, { signal: controller.signal }), /request cancelled/);
+  const next = await Square.at({ path: squarePath, env, resources });
+  await next.join('Alive', { body });
   await next.close();
   assert.equal((await artifact.read(facts => facts.participant('Alive').joined)).value, true);
 });
@@ -195,7 +195,7 @@ test('a transport disconnect releases the connection even without server.close()
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
   const closed = countCloses(t, squarePath);
-  const server = serverFor({ cwd, squarePath, env, body, participant });
+  const server = serverFor({ cwd, squarePath, env, body });
   const client = await connect(server);
   t.after(async () => { await server.close().catch(() => undefined); });
 
@@ -211,7 +211,7 @@ test('reused connections keep per-call participants and harness sessions separat
   const { cwd, squarePath, env, body, participant } = await fixture('sessions');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const opened = countConnections(t, squarePath);
-  const server = serverFor({ cwd, squarePath, env, body, participant });
+  const server = serverFor({ cwd, squarePath, env, body });
   const client = await connect(server);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args, meta) => client.callTool({ name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });

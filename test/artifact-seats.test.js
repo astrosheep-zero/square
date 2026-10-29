@@ -188,38 +188,26 @@ test('done removes seat authority, and rejoin/takeover replace it atomically', a
   });
 });
 
- test('implicit joins return a generation-fenced handle for new and existing participants', async t => {
+ test('reattached handles retain generation fencing without reviving departed names', async t => {
   const { SqliteSquare } = await import('../dist/sqlite-square.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-implicit-seat-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-reattach-seat-'));
   const location = path.join(dir, 'shared.square');
   const { createSquareFile } = await import('../dist/artifact.js');
   await createSquareFile(location, empty());
-  const body = { channel: 'test', session: 'implicit' };
-  const square = await SqliteSquare.at({ path: location, env: {}, body });
+  const body = { channel: 'test', session: 'owner' };
+  const square = await SqliteSquare.at({ path: location, env: {} });
   t.after(async () => { await square.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  const newlyJoined = await square.implicitJoin('Ivy');
-  assert.equal(newlyJoined.state, 'joined');
-  assert.ok(newlyJoined.participant);
-  const first = await newlyJoined.participant.express('from implicit join');
-  assert.equal(first.activity.body, 'from implicit join');
-  const bea = (await square.join('Bea')).participant;
-  await bea.express('from a second participant', { mentions: ['Ivy'] });
-  const caught = await newlyJoined.participant.catch();
-  assert.deepEqual(caught.activities.map(item => item.body), ['from a second participant']);
-
-  const active = await square.implicitJoin('Ivy');
-  assert.equal(active.state, 'active');
-  assert.ok(active.participant);
-  const second = await active.participant.express('from active implicit handle');
-  assert.equal(second.activity.body, 'from active implicit handle');
-  await bea.express('a fresh activity for active handle', { mentions: ['Ivy'] });
-  assert.deepEqual((await active.participant.catch()).activities.map(item => item.body), ['a fresh activity for active handle']);
-
-  const other = await SqliteSquare.at({ path: location, env: {}, body: { channel: 'test', session: 'takeover' } });
-  t.after(() => other.close());
-  await assert.rejects(other.implicitJoin('Ivy'), /held by another body/);
-  await other.join('Ivy', { takeover: true });
-  await assert.rejects(newlyJoined.participant.express('stale handle'), /replaced|held by this body/);
+  assert.equal(await square.reattach('Ivy', { body }), null);
+  const ivy = (await square.join('Ivy', { body })).participant;
+  const generation = (await square.seatsOf(body))[0].generation;
+  await square.detach('Ivy', { body, generation });
+  const active = await square.reattach('Ivy', { body });
+  assert.equal((await square.seatsOf(body))[0].generation, generation);
+  assert.equal((await active.express('from restored handle')).activity.body, 'from restored handle');
+  await active.done();
+  assert.equal(await square.reattach('Ivy', { body }), null);
+  await square.join('Ivy', { body });
+  await assert.rejects(ivy.express('stale handle'), { code: 'already_joined' });
 });
 
  test('cancellation captures the current head and does not suppress later or replacement activity', async t => {

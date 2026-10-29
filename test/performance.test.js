@@ -60,9 +60,9 @@ async function stateWithHistory(unrelatedSays, participants = 96) {
 test('catch hydrates only its page while the remaining count is a bounded fact read', async t => {
   const { cell, p0 } = await stateWithHistory(900);
   const { counters, artifact } = instrumentCell(cell);
-  const square = await resourceWithArtifact(t, artifact, p0.body, () => 2_000);
+  const square = await resourceWithArtifact(t, artifact, () => 2_000);
   try {
-    const caught = await (await square.participant('P0')).catch();
+    const caught = await (await square.participant('P0', { body: p0.body })).catch();
     assert.equal(caught.activities.length, 10);
     assert.equal(caught.remaining, 890);
     assert.deepEqual(counters.hydrated.flat(), Array.from({ length: 10 }, (_value, index) => index + 97));
@@ -82,8 +82,8 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
     const { cell, p0 } = await stateWithHistory(unrelated);
     const { counters, artifact } = instrumentCell(cell);
     try {
-      const square = await resourceWithArtifact(t, artifact, p0.body, () => 2_000);
-      const caught = await (await square.participant('P0')).catch();
+      const square = await resourceWithArtifact(t, artifact, () => 2_000);
+      const caught = await (await square.participant('P0', { body: p0.body })).catch();
       measurements.push({
         delivered: caught.activities.length,
         remaining: caught.remaining,
@@ -105,10 +105,10 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
 test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
   const { cell, p0 } = await stateWithHistory(900, 1);
   const { counters, artifact } = instrumentCell(cell);
-  const square = await resourceWithArtifact(t, artifact, p0.body, () => 100_000);
+  const square = await resourceWithArtifact(t, artifact, () => 100_000);
   const measurements = () => structuredClone(counters);
   try {
-    const participant = await square.participant('P0');
+    const participant = await square.participant('P0', { body: p0.body });
     const outcome = await participant.catch({ observe: true });
     const caught = outcome.observation;
     const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
@@ -149,9 +149,10 @@ test('catch fences selection and captures the page facts in its receipt transact
   const cell = createRealArtifactPort(':memory:', { hardCap: 5, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const artifact = { ...cell };
-  const resource = await resourceWithArtifact(t, artifact, bodyFor('owner'));
-  const alice = (await resource.join('Alice')).participant;
-  const bob = (await resource.join('Bob')).participant;
+  const body = bodyFor('owner');
+  const resource = await resourceWithArtifact(t, artifact);
+  const alice = (await resource.join('Alice', { body })).participant;
+  const bob = (await resource.join('Bob', { body })).participant;
   await alice.express('first for Bob', { force: true, mentions: ['Bob'] });
   await alice.express('second for Bob', { force: true, mentions: ['Bob'] });
   const bobSeat = (await cell.read(facts => facts.seat('Bob'))).value;
@@ -204,9 +205,10 @@ test('a capped idle catch through the shared SDK owner hydrates no bodies and wr
   const cell = createRealArtifactPort(':memory:', { hardCap: 1, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const { counters, artifact } = instrumentCell(cell);
-  const resource = await resourceWithArtifact(t, artifact, bodyFor('p0'));
-  await resource.join('Alice');
-  const participant = (await resource.join('P0')).participant;
+  const body = bodyFor('p0');
+  const resource = await resourceWithArtifact(t, artifact);
+  await resource.join('Alice', { body });
+  const participant = (await resource.join('P0', { body })).participant;
   await participant.express('only say', { force: true });
   const before = (await cell.read(facts => facts.receiptAssignments())).value;
   counters.hydrated = [];

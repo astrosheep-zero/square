@@ -140,7 +140,7 @@ function classifyPresence(participants: readonly ParticipantSummary[], now: numb
     classificationByName: Object.fromEntries(participants.map((participant) => [participant.name, participant.presence === 'done' ? 'done'
       : participant.presence === 'never-joined' ? 'not-joined' : participant.presence === 'away' ? 'away' : hereNames.has(participant.name) ? 'here' : 'lingering'])) };
 }
-type ParticipantQueryContext = Pick<SquareObservation, 'location' | 'now' | 'automaticDeliveryAvailable'>;
+type ParticipantQueryContext = Pick<SquareObservation, 'location' | 'now'>;
 export function queryParticipants(facts: SquareRead, context: ParticipantQueryContext, observe = false): ParticipantsResult {
   const participants = coreParticipants(facts, context.now);
   return { participants, ...(!observe ? {} : { observation: { ...context, ...classifyPresence(participants, context.now),
@@ -180,7 +180,7 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
   return {
     ...data,
     observation: {
-      location: context.location, automaticDeliveryAvailable: context.automaticDeliveryAvailable,
+      location: context.location,
       ...classifyPresence(participants, context.now), standingCount,
       knownParticipantCount: participants.length, viewer: canonicalViewer,
       ...(canonicalViewer === '' ? {} : { participant: canonicalViewer }),

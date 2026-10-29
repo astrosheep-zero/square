@@ -30,11 +30,11 @@ async function fixture(t, text = 'hello @Bob', envOverrides = {}) {
   const squarePath = path.join(root, 'S.square');
   const endpoint = path.join(root, 'in.sock');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_DISABLE_PASEO_WAKE: '1', ...envOverrides };
-  const author = await Square.build({ path: squarePath, markdown: 'test', env, body: authorBody, participant: 'Alice' });
-  try { await author.join('Alice'); }
+  const author = await Square.build({ path: squarePath, markdown: 'test', env });
+  try { await author.join('Alice', { body: authorBody }); }
   finally { await author.close(); }
-  const bob = await Square.at({ path: squarePath, env, body: claudeBody, participant: 'Bob' });
-  try { await bob.join('Bob'); }
+  const bob = await Square.at({ path: squarePath, env });
+  try { await bob.join('Bob', { body: claudeBody }); }
   finally { await bob.close(); }
 
   const frames = [];
@@ -97,18 +97,18 @@ async function setWakeAddress(f, wakeAddress, participant = 'Bob', location = f.
 }
 
 async function landSay(f, text, mentions = ['Bob'], location = f.squarePath) {
-  const square = await Square.at({ path: location, env: f.env, body: f.authorBody, participant: 'Alice' });
+  const square = await Square.at({ path: location, env: f.env });
   try {
-    const result = await (await square.participant()).express(text, { force: true, mentions });
+    const result = await (await square.participant('Alice', { body: f.authorBody })).express(text, { force: true, mentions });
     return Number(result.activity.id.slice('act/'.length));
   } finally { await square.close(); }
 }
 
 async function seedSquare(f, location, body, text, participant = 'Bob') {
-  const author = await Square.build({ path: location, markdown: 'test', env: f.env, body: f.authorBody, participant: 'Alice' });
-  try { await author.join('Alice'); } finally { await author.close(); }
-  const member = await Square.at({ path: location, env: f.env, body, participant });
-  try { await member.join(participant); } finally { await member.close(); }
+  const author = await Square.build({ path: location, markdown: 'test', env: f.env });
+  try { await author.join('Alice', { body: f.authorBody }); } finally { await author.close(); }
+  const member = await Square.at({ path: location, env: f.env });
+  try { await member.join(participant, { body }); } finally { await member.close(); }
   const index = await landSay(f, text, [participant], location);
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint } }, participant, location);
   return index;
@@ -260,8 +260,8 @@ test('reconciliation preserves the native seat address and an unknown attempt is
   assert.equal(await recordClaudeDeliveryStatus({ provider: 'claude', sessionId: f.coordinate.sessionId,
     messageId: original.correlation.messageId, eventId: randomUUID(), state: 'held', reason: 'no-mode-asserted', observedAt: Date.now() }, f.env), true);
   const scoped = { ...f.env, CLAUDE_CODE_SESSION_ID: f.coordinate.sessionId };
-  const square = await Square.at({ path: f.squarePath, env: scoped, body: claudeBody, participant: 'Bob' });
-  try { await (await square.participant()).express('*waves*', { force: true, noMention: true }); }
+  const square = await Square.at({ path: f.squarePath, env: scoped });
+  try { await (await square.participant('Bob', { body: claudeBody })).express('*waves*', { force: true, noMention: true }); }
   finally { await square.close(); }
   const reconciled = await f.bridge({ operation: 'reconcile', endpoint: f.coordinate.endpoint });
   assert.equal(reconciled.bindings.length, 1);
@@ -276,9 +276,9 @@ test('reconciliation preserves the native seat address and an unknown attempt is
   assert.equal(held.nativeObservations[0].reason, 'no-mode-asserted');
   // Withdrawal may expose a fallback for future attention, never replay unknown bytes.
   await f.bridge({ operation: 'reconcile', endpoint: 'relative.sock' });
-  const fallback = await Square.at({ path: f.squarePath, env: scoped, body: claudeBody,
-    wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } });
-  try { await fallback.join('Bob'); } finally { await fallback.close(); }
+  const fallback = await Square.at({ path: f.squarePath, env: scoped });
+  try { await fallback.join('Bob', { body: claudeBody, wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }); }
+  finally { await fallback.close(); }
   assert.equal((await seatFor(f)).wakeAddress.kind, 'paseo');
   await dispatch(f);
   assert.equal((await currentEvidence(f)).filter(row => row.kind === 'wake').length, 1);
@@ -467,8 +467,8 @@ test('a stale native payload cannot present a replacement artifact seat', async 
   const text = await payload(f);
   const prior = await seatFor(f);
   const replacementBody = { channel: 'claude-code', session: 'replacement-session' };
-  const replacement = await Square.at({ path: f.squarePath, env: f.env, body: replacementBody, participant: 'Bob' });
-  try { await replacement.join('Bob', { takeover: true }); }
+  const replacement = await Square.at({ path: f.squarePath, env: f.env });
+  try { await replacement.join('Bob', { body: replacementBody, takeover: true }); }
   finally { await replacement.close(); }
   assert.deepEqual(await stored(f, text), { recognized: true, current: false });
   const current = await seatFor(f);
@@ -482,8 +482,8 @@ test('done retains native token recognition without current authority or present
   await dispatch(f);
   const text = await payload(f);
   const prior = await seatFor(f);
-  const square = await Square.at({ path: f.squarePath, env: f.env, body: claudeBody, participant: 'Bob' });
-  try { await (await square.participant()).done(); }
+  const square = await Square.at({ path: f.squarePath, env: f.env });
+  try { await (await square.participant('Bob', { body: claudeBody })).done(); }
   finally { await square.close(); }
   const before = await evidence(f, prior.generation);
   assert.equal(await seatFor(f), undefined);
@@ -519,8 +519,8 @@ test('a mixed current and inactive native frame vetoes every token before any si
 test('pinned session end cannot retire a replacement artifact seat', supported, async t => {
   const f = await fixture(t);
   const replacementBody = { channel: 'claude-code', session: 'replacement-session' };
-  const replacement = await Square.at({ path: f.squarePath, env: f.env, body: replacementBody, participant: 'Bob' });
-  try { await replacement.join('Bob', { takeover: true }); }
+  const replacement = await Square.at({ path: f.squarePath, env: f.env });
+  try { await replacement.join('Bob', { body: replacementBody, takeover: true }); }
   finally { await replacement.close(); }
   const result = await f.bridge({ operation: 'end', bindings: f.start.bindings, endedAt: Date.now() });
   assert.deepEqual(result.retired, []);
@@ -532,13 +532,13 @@ test('pinned session end cannot retire a replacement artifact seat', supported, 
 
 test('late Claude memberships reconcile, cancellation covers committed joins, and end is participant-scoped', supported, async t => {
   const f = await fixture(t);
-  const late = await Square.at({ path: f.squarePath, env: f.env, body: claudeBody, participant: 'Late' });
-  try { await late.join('Late'); }
+  const late = await Square.at({ path: f.squarePath, env: f.env });
+  try { await late.join('Late', { body: claudeBody }); }
   finally { await late.close(); }
   const reconciled = await f.bridge({ operation: 'reconcile' });
   assert.equal(reconciled.bindings.length, 2);
-  const after = await Square.at({ path: f.squarePath, env: f.env, body: claudeBody, participant: 'After' });
-  try { await after.join('After'); }
+  const after = await Square.at({ path: f.squarePath, env: f.env });
+  try { await after.join('After', { body: claudeBody }); }
   finally { await after.close(); }
   const cancelled = await f.bridge({ operation: 'cancel', bindings: reconciled.bindings,
     cancelledBindings: reconciled.bindings, cancelAt: Date.now() });
@@ -561,8 +561,8 @@ test('a prior cancellation cutoff cannot suppress a replacement generation on re
   const cancelledAt = Date.now();
   await f.bridge({ operation: 'cancel', bindings: f.start.bindings, cancelledBindings: f.start.bindings, cancelAt: cancelledAt });
   const prior = await seatFor(f);
-  const replacement = await Square.at({ path: f.squarePath, env: f.env, body: claudeBody, participant: 'Bob' });
-  try { await replacement.join('Bob', { takeover: true }); }
+  const replacement = await Square.at({ path: f.squarePath, env: f.env });
+  try { await replacement.join('Bob', { body: claudeBody, takeover: true }); }
   finally { await replacement.close(); }
   const current = await seatFor(f);
   assert.notEqual(current.generation, prior.generation);
@@ -643,8 +643,8 @@ test('a retired child-agent candidate is discovered by session and recognized wi
   const text = await payload(f, 'act/2', childPath);
   const before = await evidenceIn(childPath, 'Bob', childSeat.generation);
 
-  const child = await Square.at({ path: childPath, env: f.env, body: childBody, participant: 'Bob' });
-  try { await (await child.participant()).done(); } finally { await child.close(); }
+  const child = await Square.at({ path: childPath, env: f.env });
+  try { await (await child.participant('Bob', { body: childBody })).done(); } finally { await child.close(); }
 
   assert.equal(await seatIn(childPath), undefined);
   assert.deepEqual(await sessionInbox(childBody, f.env), []);

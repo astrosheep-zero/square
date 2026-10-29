@@ -200,8 +200,8 @@ export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessE
   for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
     if (signal.aborted) return;
     const { Square } = await import('../../square-api.js');
-    const square = await Square.at({ path: location, env, body: seat.body, participant: seat.participant });
-    try { await square.endOwnedSession(seat.participant, sessionId, seat.generation, seat.body); }
+    const square = await Square.at({ path: location, env });
+    try { await square.endHeld(seat.participant, { body: seat.body, generation: seat.generation }); }
     finally { await square.close(); }
   }
 }

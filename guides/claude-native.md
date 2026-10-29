@@ -24,7 +24,7 @@ An absent/broken endpoint is unavailable; it does not consume Square activity.
 Native delivery is preferred, including under Paseo. CLI and call-local MCP Codex
 joins register the native queue for their thread. Claude and OpenCode receivers
 register their native wake addresses only through their loaded integrations. An
-ordinary reconnect or implicit join cannot replace a current native address with a
+ordinary reconnect or reattachment cannot replace a current native address with a
 generic Paseo proposal. Addresses belong to the artifact seat generation, not an
 expiring routes table: explicit receiver withdrawal permits fallback, and a new
 seat generation cannot inherit the previous generation's native registration.
@@ -103,10 +103,11 @@ Host end is not a participant departure: no `done` lands, and membership, listen
 read horizon and generation remain intact. Catch ownership, deferrals and wake readiness
 are cleared; the participant appears away and keeps accumulating unread audience without
 proactive delivery. Before arming a receiver, start/resume discovers the exact Body's
-standing seats through `bodySeats()` and reattaches only detached ones. One failed seat
-or location does not block the others. New/forked Bodies restore nothing. Neither a
-voluntary `done` nor a takeover is revived; there is no completed-seat recovery path or
-timeout that turns away into done. See [participant-ownership.md](participant-ownership.md).
+standing seats through `seatsOf(body)` and restores only detached ones with
+`reattach(name, {body, wakeAddress?})`. One failed seat or location does not block the
+others. New/forked Bodies restore nothing. Neither a voluntary `done` nor a takeover is
+revived; there is no completed-seat recovery path or timeout that turns away into done.
+See [participant-ownership.md](participant-ownership.md).
 
 ## Body, admission, and presentation
 

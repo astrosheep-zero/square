@@ -17,19 +17,12 @@ export function resolveKnownName(facts: SquareRead, name: string): string {
   return known;
 }
 export interface DecideJoinResult { joinedName: string; addParticipant: boolean; joinAct?: TimedAct<'join'> }
-export interface DecideImplicitJoinResult { joinedName: string; state: 'joined' | 'active' | 'done'; joinAct?: TimedAct<'join'> }
 export function decideJoin(facts: SquareRead, name: string, now: number): DecideJoinResult {
   validateName(name);
   const current = facts.participant(name);
   const joinedName = current?.name ?? name;
   return current?.joined ? { joinedName, addParticipant: false }
     : { joinedName, addParticipant: current === undefined, joinAct: { kind: 'join', actor: joinedName, at: now } };
-}
-export function decideImplicitJoin(facts: SquareRead, name: string, now: number): DecideImplicitJoinResult {
-  validateName(name);
-  const current = facts.participant(name);
-  return current === undefined ? { joinedName: name, state: 'joined', joinAct: { kind: 'join', actor: name, at: now } }
-    : { joinedName: current.name, state: current.joined ? 'active' : 'done' };
 }
 function validateActivityName(name: string): void {
   try { validateName(name); }
@@ -202,7 +195,7 @@ export function coreParticipants(facts: SquareRead, now: number): ParticipantSum
       if (seenAt !== undefined) lastActiveAt = Math.max(lastActiveAt ?? -Infinity, seenAt);
     }
     return {
-      name: current.name,
+      name: current.name, deliveryAvailable: facts.seat(current.name)?.wakeAddress !== undefined,
       listening: facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target),
       activityCount: current.sayCount, lastActiveAt,
       presence: current.done ? 'done' : !current.joined ? 'never-joined' : facts.seat(current.name)?.attachment === 'detached' ? 'away'
