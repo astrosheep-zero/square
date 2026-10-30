@@ -15,11 +15,6 @@ const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map((match) => match[1]!); }
 export function nativePayload(token: string, preview: string): string { return `[square-inbox:${token}]\n${preview}\n[/square-inbox:${token}]`; }
 function nativeSupported(route: WakeRoute): boolean { return route.address.loaded === 'true' && !!route.address.endpoint; }
-function sameAddress(left: Readonly<Record<string, string>> | undefined, right: Readonly<Record<string, string>>): boolean {
-  if (left === undefined) return false;
-  const keys = Object.keys(left);
-  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
-}
 function hashPayload(payload: string): string { return createHash('sha256').update(payload).digest('hex'); }
 
 interface NativePreview {
@@ -90,8 +85,7 @@ function currentPayload(facts: SquareRead, request: WakeRequest): string | undef
   const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
   if (seat === undefined || seat.attachment !== 'attached' || evidence === undefined || seat.generation !== evidence.generation
     || seat.generation !== request.seat.generation || seat.owner !== request.seat.owner
-    || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
-    || seat.wakeAddress?.kind !== 'claude-native' || !sameAddress(seat.wakeAddress.address, request.route.address)) return undefined;
+    || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)) return undefined;
   const native = previewFacts(facts, request);
   if (native === undefined) return undefined;
   const payload = nativePayload(request.claimToken!, native.payload);
