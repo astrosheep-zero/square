@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { once } from 'node:events';
 import { runClaudeMod } from '../claude-mod.js';
-import { runCodexHookAsync } from '../codex-hook.js';
+import { runCodexHook } from '../codex-hook.js';
 import { isSquareError } from '../model.js';
 import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
 import {
@@ -497,4 +497,4 @@ function hookCommand(runHook: (input: string) => string | Promise<string>): Comm
 }
 
 export const claudeModCommand = hookCommand(runClaudeMod);
-export const codexHookCommand = hookCommand(runCodexHookAsync);
+export const codexHookCommand = hookCommand(runCodexHook);

@@ -1,16 +1,16 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5, "statusMessage": "Square" }] }
     ],
     "SessionResume": [
-      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5, "statusMessage": "Square" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 3 }] }
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 3, "statusMessage": "Square" }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "square codex-hook", "timeout": 5, "statusMessage": "Square" }] }
     ],
     "PostToolUse": [
       {
@@ -19,7 +19,7 @@
             "type": "command",
             "command": "square codex-hook",
             "timeout": 5,
-            "statusMessage": "square-codex-hook"
+            "statusMessage": "Square"
           }
         ]
       }
@@ -31,7 +31,7 @@
             "type": "command",
             "command": "square codex-hook",
             "timeout": 5,
-            "statusMessage": "square-codex-hook"
+            "statusMessage": "Square"
           }
         ]
       }

@@ -29,6 +29,5 @@ export const SQUARE_IDENTITY = Object.freeze({
   cliName: 'square',
   pluginId: 'square@astrosheep',
   hookCommand: 'square codex-hook',
-  hookMarker: 'square-codex-hook',
   clientName: 'astrosheep_square',
 });

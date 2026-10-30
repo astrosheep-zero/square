@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { Square } from '../dist/square-api.js';
 import { detachSessionSeats, restoreSessionSeats } from '../dist/session-lifecycle.js';
-import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
+import { codexHookResponse, runCodexHook } from '../dist/codex-hook.js';
 import { codexQueueEligible } from '../dist/codex-boundary-state.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
 import { rememberSquarePath } from '../dist/square-index.js';
@@ -141,17 +141,17 @@ test('Claude and Pi startup do not create artifact seats without an explicit joi
 
 test('Codex SessionEnd detaches and SessionResume restores without startup auto-entry', { concurrency: false }, async t => {
   const f = await fixture(t);
-  const start = await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: f.root,
+  const start = await runCodexHook(JSON.stringify({ session_id: 'hook-session', cwd: f.root,
     hook_event_name: 'SessionStart', source: 'startup' }), f.env);
   assert.equal(start, '');
   assert.deepEqual(await artifactFacts(f.squarePath, facts => facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items), []);
   await joinAt(f.squarePath, 'manual', "codex" + ":" + ('hook-session'), f.env);
-  const end = await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: f.root,
+  const end = await runCodexHook(JSON.stringify({ session_id: 'hook-session', cwd: f.root,
     hook_event_name: 'SessionEnd' }), f.env);
   assert.equal(end, '');
   assert.deepEqual(await artifactFacts(f.squarePath, facts => facts.activityHeads({}, { edge: 'oldest', limit: 20 }).items.map(activity => activity.kind)), ['join']);
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('manual').attachment), 'detached');
-  await runCodexHookAsync(JSON.stringify({ session_id: 'hook-session', cwd: f.root, hook_event_name: 'SessionResume' }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: 'hook-session', cwd: f.root, hook_event_name: 'SessionResume' }), f.env);
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('manual').attachment), 'attached');
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('manual').wakeAddress.kind), 'codex-queue');
   assert.equal(await artifactFacts(f.squarePath, facts => facts.seat('manual').wakeAddress.address.threadId), 'hook-session');
@@ -174,15 +174,15 @@ test('Codex Stop records a boundary without reading or presenting pending attent
 test('Codex boundary eligibility follows Stop, non-Stop, and SessionEnd', { concurrency: false }, async t => {
   const f = await fixture(t);
   const thread = 'boundary-thread';
-  await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionStart', cwd: f.root }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: thread, hook_event_name: 'SessionStart', cwd: f.root }), f.env);
   assert.equal(await codexQueueEligible(thread, f.env), false);
-  await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), f.env);
   assert.equal(await codexQueueEligible(thread, f.env), true);
-  await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'PostToolUse' }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: thread, hook_event_name: 'PostToolUse' }), f.env);
   assert.equal(await codexQueueEligible(thread, f.env), false);
-  await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: thread, hook_event_name: 'Stop' }), f.env);
   assert.equal(await codexQueueEligible(thread, f.env), true);
-  await runCodexHookAsync(JSON.stringify({ session_id: thread, hook_event_name: 'SessionEnd' }), f.env);
+  await runCodexHook(JSON.stringify({ session_id: thread, hook_event_name: 'SessionEnd' }), f.env);
   assert.equal(await codexQueueEligible(thread, f.env), false);
 });
 

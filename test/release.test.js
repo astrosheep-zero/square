@@ -21,7 +21,9 @@ test('generated release artifacts expose the current identity and supported host
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
   for (const event of ['SessionStart', 'SessionResume', 'UserPromptSubmit', 'SessionEnd', 'PostToolUse', 'Stop']) {
-    assert.equal(codexHooks.hooks[event][0].hooks[0].command, 'square codex-hook');
+    const hook = codexHooks.hooks[event][0].hooks[0];
+    assert.equal(hook.command, 'square codex-hook');
+    assert.equal(hook.statusMessage, 'Square');
   }
   const paseoPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'paseo', 'paseo-plugin.json'), 'utf8'));
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');

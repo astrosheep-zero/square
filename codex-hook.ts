@@ -9,7 +9,7 @@ import { codexWakeAddress } from './codex-address.js';
 import { PRIVILEGED_HOOK_BUDGET_MS, sweepPrivilegedPending } from './notifications.js';
 import type { WakeTransports } from './notifications.js';
 
-export interface CodexHookInput { session_id?: unknown; hook_event_name?: unknown; cwd?: unknown; source?: unknown }
+export interface CodexHookInput { session_id?: unknown; hook_event_name?: unknown; cwd?: unknown }
 export type HookTrace = (line: string) => void;
 export const CODEX_HOOK_BUDGET_MS = 4500;
 const defaultTrace: HookTrace = (line) => { process.stderr.write(`${line}\n`); };
@@ -54,5 +54,3 @@ export async function runCodexHook(inputText: string, env: NodeJS.ProcessEnv = p
   const result = await codexHookResponse(input as CodexHookInput, sessionInbox, env);
   return result === undefined ? '' : `${JSON.stringify(result)}\n`;
 }
-
-export const runCodexHookAsync = runCodexHook;

@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { readCodexBoundary, recordCodexBoundary } from '../dist/codex-boundary-state.js';
-import { codexHookResponse, runCodexHookAsync } from '../dist/codex-hook.js';
+import { codexHookResponse, runCodexHook } from '../dist/codex-hook.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { Square } from '../dist/square-api.js';
 import { sessionInbox } from '../dist/inbox.js';
@@ -41,7 +41,7 @@ test('Codex hook budgets cancel boundary and end records while the lock stays he
     assert.ok(Date.now() - startedAt < 300, 'Stop must settle near its 60ms budget');
     assert.equal(held, true);
 
-    await assert.rejects(runCodexHookAsync(JSON.stringify({
+    await assert.rejects(runCodexHook(JSON.stringify({
       session_id: 'thread', hook_event_name: 'SessionEnd', cwd: root,
     }), env), { name: 'AbortError' });
     assert.equal(held, true);
