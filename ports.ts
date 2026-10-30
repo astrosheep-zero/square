@@ -58,6 +58,8 @@ export interface DirectedFilter {
   readonly beforeIndex?: number;
   readonly throughIndex?: number;
   readonly unseenOnly?: true;
+  /** Exact own-property scalar equalities, applied before paging or counting. */
+  readonly metadataMatch?: MetadataMatch;
   readonly senders?: readonly string[];
   readonly attentionOnly?: true;
 }

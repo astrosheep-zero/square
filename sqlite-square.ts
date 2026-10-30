@@ -15,7 +15,7 @@ import { expressHint } from './hints.js';
 import { ATTENTION_BODY_MAX } from './attention-presentation.js';
 import { asSeatRef, participantAuthority, requireOwner, requireJoinName } from './seats.js';
 import { recoveryObservation, entryPresentation, queryStatus, queryParticipants, catchPresence,
-  parseRequiredActivityId, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
+  parseRequiredActivityId, toPublicActivity, toPerceivedActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
 import { rememberSquarePath, squareIndexPath } from './square-index.js';
 import { deliverPending } from './delivery-operations.js';
@@ -33,7 +33,7 @@ import type {
   ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
   SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
   RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, StreamRecord, Activity, PerceivedActivity, ExpressInput,
-  ChannelSendInput, ChannelSendResult,
+  ChannelSendInput, ChannelSendResult, PendingOptions, PendingResult, AckResult, ActivityId,
 } from './square-facade.js';
 
 export type * from './square-facade.js';
@@ -319,6 +319,36 @@ export class SqliteSquare {
         if (leaseId !== undefined) await releaseWatchLease(square.artifact, seat!, leaseId).catch(() => undefined);
       }
     }
+    async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
+      checkControl(control);
+      const limit = options.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
+      const match = options.match === undefined ? undefined : validateMetadataMatch(options.match);
+      const square = this.owner;
+      return (await square.artifact.read(facts => {
+        assertCurrentSeat(facts, asSeatRef(this.seat));
+        const filter = { unseenOnly: true as const, ...(match === undefined ? {} : { metadataMatch: match }) };
+        const heads = facts.directed(this.name, filter, { edge: 'oldest', limit });
+        const activities = facts.activities(heads.items.map(head => head.index))
+          .map(activity => toPerceivedActivity(facts, activity, this.name));
+        return { activities, remaining: facts.directedCount(this.name, filter) - activities.length };
+      }, control?.signal)).value;
+    }
+    async ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult> {
+      checkControl(control);
+      if (!Array.isArray(ids)) throw new SquareError('invalid_args', 'Ack requires an array of activity IDs.');
+      const indexes = [...new Set(Array.from(ids, parseRequiredActivityId))], square = this.owner;
+      return (await square.artifact.transactAs(participantAuthority(this.seat), facts => {
+        for (const index of indexes) {
+          if (facts.directedAt(this.name, index) === undefined)
+            throw new SquareError('invalid_args', `${formatActivityId(index)} is not addressed to you.`, {
+              reason: 'not_addressed', activityId: formatActivityId(index),
+            });
+        }
+        return { consumed: facts.markSeen(this.name, indexes, square.clock()) };
+      }, control?.signal)).value;
+    }
     async deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral> {
       checkControl(control);
       const match = validateMetadataMatch(input?.match), duration = validateDeferralDuration(input?.durationMs);
@@ -390,7 +420,7 @@ export class SqliteSquare {
       const standing = facts.roster().filter(p => p.joined), resolvedTo: string[] = [], missing: string[] = [];
       for (const target of unique) {
         const recipient = standing.find(p => sameName(p.name, target));
-        if (recipient === undefined || facts.seat(recipient.name)?.attachment !== 'attached') missing.push(target);
+        if (recipient === undefined) missing.push(target);
         else resolvedTo.push(recipient.name);
       }
       if (missing.length > 0) throw new SquareError('invalid_args', `Channel recipients are not standing: ${missing.join(', ')}`, {

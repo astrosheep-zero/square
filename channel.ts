@@ -5,11 +5,11 @@ import { harnessSessionSources, type HarnessSessionChannel } from './participant
 import type { SquareResourceOwner, WakeTransportPort } from './ports.js';
 import { Square } from './square-api.js';
 import type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, MetadataMatch,
-  OperationControl, Owner, Participant, WakeAddress } from './square-facade.js';
+  OperationControl, Owner, Participant, WakeAddress, PendingOptions, PendingResult, AckResult } from './square-facade.js';
 import { squareLocation } from './square-location.js';
 
 export { harnessOwner, decodeHarnessOwner, localUserOwner } from './owner.js';
-export type { ActivityDelivery, ActivityMetadata, ChannelTruncate } from './square-facade.js';
+export type { ActivityDelivery, ActivityMetadata, ChannelTruncate, PerceivedActivity, PendingOptions, PendingResult, AckResult } from './square-facade.js';
 export type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, MetadataMatch,
   OperationControl, Owner, WakeAddress, SquareResourceOwner, WakeTransportPort, HarnessSessionChannel };
 
@@ -99,6 +99,12 @@ export class ChannelEndpoint {
   get name(): string { return this.participant.name; }
   get generation(): ActivityId { return this.participant.generation; }
 
+  pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult> {
+    return this.participant.pending(options, control);
+  }
+  ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult> {
+    return this.participant.ack(ids, control);
+  }
   async leave(control?: OperationControl): Promise<void> { await this.participant.done(undefined, {}, control); }
   deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral> {
     return this.participant.deferDelivery(input, control);

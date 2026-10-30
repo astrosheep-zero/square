@@ -557,6 +557,27 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         }
         if (filter.attentionOnly)
             base.sql += " AND d.route IN ('mention','reply','bell')";
+        if (filter.metadataMatch !== undefined) {
+            // Walk object keys rather than JSON-path strings: dots, quotes and array-like
+            // keys are literal, and arrays must never act as metadata objects.
+            base.sql += ` AND NOT EXISTS (
+                SELECT 1 FROM json_each(?) field WHERE NOT EXISTS (
+                    WITH RECURSIVE walk(value,type,depth) AS (
+                        SELECT json_extract(a.payload_json,'$.metadata'),json_type(a.payload_json,'$.metadata'),0
+                        UNION ALL
+                        SELECT child.value,child.type,walk.depth+1
+                        FROM walk JOIN json_each(CASE WHEN walk.type='object' THEN walk.value ELSE '{}' END) child
+                          ON child.key=json_extract(field.value,'$.path['||walk.depth||']')
+                        WHERE walk.depth<json_array_length(field.value,'$.path')
+                    )
+                    SELECT 1 FROM walk WHERE depth=json_array_length(field.value,'$.path')
+                      AND (type=json_type(field.value,'$.equals')
+                        OR type IN ('integer','real') AND json_type(field.value,'$.equals') IN ('integer','real'))
+                      AND value IS json_extract(field.value,'$.equals')
+                )
+            )`;
+            base.args.push(encode(filter.metadataMatch.fields));
+        }
         return base;
     }
     function directedHead(row: Row, recipient: string): DirectedHead {

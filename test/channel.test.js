@@ -126,6 +126,49 @@ test('endpoint custody, generation fencing and index publication share the exist
   assert.deepEqual(await channel.endpointsOf(owner), []);
 });
 
+test('send retains detached recipients without waking them and rejects missing or departed recipients atomically', async t => {
+  const attempts = [];
+  const { channel, square } = await fixture(t, { wakeTransport: {
+    async attempt(request, _timeout, beforeSend) {
+      assert.equal(await beforeSend(), true);
+      attempts.push(request.participant);
+      return { outcome: 'accepted' };
+    },
+  } });
+  const route = name => ({ kind: 'paseo', address: { agentId: `test-${name}` } });
+  const alice = await channel.attach('Alice', { owner: 'test:alice', wakeAddress: route('alice') });
+  const bob = await channel.attach('Bob', { owner: 'test:bob', wakeAddress: route('bob') });
+  assert.equal(await channel.detach('Bob', { owner: 'test:bob', generation: bob.generation }), true);
+  const send = { from: 'Coordinator', to: [alice.name, bob.name], body: 'retained while away', metadata };
+  const sent = await channel.send(send);
+  assert.deepEqual(sent.to, ['Alice', 'Bob']);
+  assert.deepEqual(attempts, ['Alice'], 'attachment gates proactive wake, not addressed landing');
+  const away = (await square.participants()).participants.find(p => p.name === 'Bob');
+  assert.equal(away.presence, 'away');
+  assert.equal(away.unreadActivityCount, 1);
+  const evidence = (await square.artifact.read(facts => ({
+    receipt: facts.receipt('Bob', parseActivityId(sent.id)),
+    deliveries: facts.deliveryEvidence('Bob', bob.generation),
+  }))).value;
+  assert.deepEqual(evidence, { receipt: undefined, deliveries: [] });
+  await assert.rejects(bob.pending({ match }), error => error.code === 'already_joined');
+  const restored = await channel.reattach('Bob', { owner: 'test:bob' });
+  assert.equal(restored.generation, bob.generation);
+  const pending = await restored.pending({ match });
+  assert.deepEqual(pending.activities.map(a => a.id), [sent.id]);
+  assert.equal(pending.activities[0].body, send.body);
+  assert.deepEqual(await restored.ack([sent.id]), { consumed: 1 });
+  assert.deepEqual(await restored.pending({ match }), { activities: [], remaining: 0 });
+  const before = await square.history({ limit: null });
+  await assert.rejects(channel.send({ ...send, to: ['Alice', 'Missing'] }), error => error.facts.reason === 'not_standing');
+  assert.deepEqual(await square.history({ limit: null }), before);
+  await restored.leave();
+  const departed = await square.history({ limit: null });
+  await assert.rejects(channel.send(send), error => error.facts.reason === 'not_standing');
+  assert.deepEqual(await square.history({ limit: null }), departed);
+  assert.deepEqual(attempts, ['Alice'], 'refused recipient batches land and wake nobody');
+});
+
 test('unjoined send targets only explicit recipients; boundary hooks present the sent body and consume automatically', async t => {
   const { channel, square, env } = await fixture(t);
   const owner = harnessOwner({ channel: 'pi', session: 'channel-boundary' });
@@ -270,10 +313,7 @@ test('send validation and unavailable targets reject atomically, and cancellatio
   abort.abort(new Error('cancel channel send'));
   await assert.rejects(channel.send(send, { signal: abort.signal }), /cancel channel send/);
   assert.deepEqual(await square.history({ limit: null }), before);
-  await channel.detach('Recipient', { owner: 'test:recipient', generation: recipient.generation });
-  await assert.rejects(channel.send(send), error => error.facts.reason === 'not_standing');
-  const absent = await channel.reattach('Recipient', { owner: 'test:recipient' });
-  await absent.leave();
+  await recipient.leave();
   await assert.rejects(channel.send(send), error => error.facts.reason === 'not_standing');
 });
 

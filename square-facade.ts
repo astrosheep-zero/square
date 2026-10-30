@@ -87,6 +87,20 @@ export interface CatchOptions extends ObservationOptions {
   readonly limit?: number;
   readonly replace?: boolean;
 }
+export interface PendingOptions {
+  readonly match?: MetadataMatch;
+  /** Oldest first; defaults to 100, maximum 100. */
+  readonly limit?: number;
+}
+export interface PendingResult {
+  readonly activities: readonly PerceivedActivity[];
+  /** Matching unconsumed activities outside this page. */
+  readonly remaining: number;
+}
+export interface AckResult {
+  /** Newly consumed addressed IDs; repeated acknowledgement is a no-op. */
+  readonly consumed: number;
+}
 export type CatchReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
 export interface CatchResult {
   readonly activities: readonly PerceivedActivity[];
@@ -184,6 +198,8 @@ export interface Participant {
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
+  pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
+  ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral>;

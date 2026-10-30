@@ -211,7 +211,7 @@ their landed directed activities and adds `perception` and the landing route `vi
 (`mention`, `reply`, `attention`, or `bell`). Perception follows the viewer's actual landed audience;
 `via` is absent when no directed route exists. Stream starts at a bounded tail or after an `ActivityId`
 like `act/12`; it never consumes activity.
-Participant owns `express`, `catch`, `listen`, `unlisten`, `ignore`, `listening`, `done`,
+Participant owns `express`, `catch`, `pending`, `ack`, `listen`, `unlisten`, `ignore`, `listening`, `done`,
 `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral`. History belongs only to
 Square; there is no `Participant.history`.
 
@@ -271,6 +271,62 @@ Operations that accept an `OperationControl` use a final argument with `signal` 
 `onProgress`. Listener/lifecycle operations take optional observation options before that argument;
 participant selection, seat discovery and host cleanup methods do not take an `OperationControl`.
 
+## Pending query and exact acknowledgement
+
+`Participant.pending(options?, control?)` and `Participant.ack(ids, control?)` separate a read-only
+query from explicit consumption. `ChannelEndpoint` from `@astrosheep/square/channel` exposes the
+identical methods by forwarding to its captured Participant; it has no independent inbox or storage.
+
+`Channel.send` / `Square.send` address joined members, including detached members. Attachment gates
+proactive wake, not landing: a detached recipient retains its unread addressed activity without a
+wake and can query/ack it after reattachment. Recipient validation remains all-or-nothing; a missing
+or departed recipient rejects the entire send without landing activity or waking other recipients.
+
+```ts
+import type { ChannelEndpoint, MetadataMatch } from '@astrosheep/square/channel';
+
+async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
+  for (;;) {
+    const page = await endpoint.pending({ match });
+    if (page.activities.length === 0) break;
+    // Process the entire page successfully before acknowledging its exact IDs.
+    for (const activity of page.activities) await processNotice(activity);
+    const { consumed } = await endpoint.ack(page.activities.map(activity => activity.id));
+    // consumed may be smaller if another consumer acknowledged some IDs first.
+  }
+}
+```
+
+- `pending({match?, limit?} = {}, control?)` returns
+  `{activities: readonly PerceivedActivity[], remaining: number}`. It selects only landed,
+  addressed, unconsumed says, oldest first. Body, metadata, delivery information, perception and
+  route use the same public records as catch; bodies are full stored bodies, not clipped previews.
+- Limit defaults to 100 and must be an integer from 1 through 100. The optional `MetadataMatch`
+  uses exactly the nested own-property scalar equality semantics described below (AND across fields).
+  Storage applies addressedness, consumption and metadata matching **before** limiting.
+  `remaining` counts matching unconsumed activities outside the returned page, in the same read
+  transaction. It is not the global unread count or a durable cursor.
+- A pending query consumes nothing, changes no read horizon and writes no delivery/presentation
+  evidence. Deferrals, catch leases, cancellation and prior clipped presentation do not hide these
+  explicit reads. Like catch, pending includes historical addressed receipt holes before a rejoin;
+  it is not the proactive delivery eligibility query.
+- `ack(ids: readonly ActivityId[], control?)` returns `{consumed: number}`, the count of newly
+  consumed exact IDs. It validates that **every** supplied ID is addressed to this participant before
+  recording any receipts. Malformed, nonexistent or unaddressed IDs reject the whole batch with
+  `invalid_args` (`reason: 'not_addressed'` for valid but unaddressed IDs). There is no implicit prefix
+  acknowledgement, no match reselection and no requirement for an earlier pending call.
+- Duplicate IDs, repeated acknowledgement and an empty array are idempotent. Existing receipt
+  timestamps remain unchanged. Acknowledgement uses the same sparse receipts as catch/full
+  presentation, so it removes those IDs from pending and ordinary catch, but exact catch remains
+  repeatable. It does **not** assert wake acceptance or presentation and writes no such evidence.
+- Both operations require their captured current owner, generation and attached seat; even an empty
+  query/ack cannot reuse a detached, retired or replaced handle. No storage format change is needed.
+  Cancellation before the receipt transaction prevents consumption; a committed ack is not undone.
+- To drain all matching notices, keep querying and acknowledging pages until an **empty** page.
+  Acknowledging one page exposes the next without a cursor. Do not silently stop after the default
+  page or treat a snapshot `remaining: 0` as proof that concurrent producers have stopped. Query and
+  ack are separate operations, not an exclusive claim or an exactly-once external-effect guarantee.
+
 ## Temporary proactive delivery deferral
 
 SDK Participants expose three operations. There are no CLI/MCP/Pi authoring
@@ -307,9 +363,9 @@ try {
   releasing one cannot end another. A captured current owner/join generation is required for every
   mutation. Stale handles retain the ownership refusal; done/takeover/rejoin retire old leases.
 - Lease writes change delivery revision, not conversation history. They do not create a receipt,
-  change audience or unread counts, hide an archive record, or prohibit explicit catch. Catch alone
-  consumes normally; a caught record is not replayed when a deferral ends. The catch lease is a
-  separate, single quiet-wait lease with its existing filters and lifecycle.
+  change audience or unread counts, hide an archive record, or prohibit explicit catch/pending/ack.
+  Catch and ack consume normally; a consumed record is not replayed when a deferral ends. The catch
+  lease is a separate, single quiet-wait lease with its existing filters and lifecycle.
 - Producer/sweep, atomic claims, session/native projections, final pre-send checks and proactive
   presentation all share current-generation unexpired matching. Suppressed items get no seen or
   presented receipt. An active pending observer rechecks on release and the earliest relevant
@@ -339,8 +395,8 @@ or history/status presentation annotations.
 Express captures optional unread context before the attempt: the latest five directed,
 unseen activities after the current join, each preview capped at 400 Unicode characters,
 plus the count outside that preview. It hydrates only that page, not the entire cursor suffix.
-This is a nonconsuming preview even when a short body fits in full; only `catch` or the
-normal full-notification presentation path consumes it. Count and time facts come
+This is a nonconsuming preview even when a short body fits in full; consumption requires `catch`,
+explicit `ack`, or the normal full-notification presentation path. Count and time facts come
 from the committed transaction. Listener and lifecycle observations likewise use their mutation's
 facts, with no postcommit context read. Join uses its mutation's essential facts and treats optional
 entry/history enrichment as best-effort: `observation.enrichmentUnavailable` is explicit and the
