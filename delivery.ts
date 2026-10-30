@@ -1,4 +1,4 @@
-import type { DirectedNotificationRoute, StoredAct, WatchLease } from './model.js';
+import type { DirectedNotificationRoute, WatchLease } from './model.js';
 import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeRequest } from './ports.js';
 import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 import { parseActivityId } from './square-core.js';
@@ -8,12 +8,6 @@ import type { Attempt } from './delivery-attempts.js';
 import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
-export type SayItem = StoredAct & { kind: 'say' };
-export interface PlannedNotification {
-  item: SayItem;
-  recipient: string;
-  route: DirectedNotificationRoute;
-}
 /** Exact stored activity projection for transports that send an awareness reminder. */
 export function wakePreview(facts: SquareRead, request: WakeRequest): string | undefined {
   const index = parseActivityId(request.activity);
@@ -75,14 +69,6 @@ export function pendingHeads(facts: SquareRead, name: string): DirectedHead[] {
     afterIndex = page.items.at(-1)!.index;
   }
   return heads;
-}
-
-/** Complete recipient projection, assembled inside its one transaction. */
-export function pendingNotifications(facts: SquareRead, name: string): PlannedNotification[] {
-  const heads = pendingHeads(facts, name), recipient = heads[0]?.recipient ?? name;
-  const routes = new Map(heads.map((head) => [head.index, head.route]));
-  return facts.activities(heads.map((head) => head.index)).flatMap((item) => item.kind === 'say'
-    ? [{ item, recipient, route: routes.get(item.index)! }] : []);
 }
 
 export interface PendingScan {

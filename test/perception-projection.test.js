@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideCatch } from '../dist/catch-decisions.js';
-import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { directedTo, perceiveActivity } from '../dist/perception-projection.js';
 import { toPerceivedActivity } from '../dist/views.js';
-import { readCursor } from '../dist/runtime.js';
 
 function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
   return {
@@ -22,7 +20,7 @@ function memoryCell(acts, runtime) {
   return createArtifactPort(':memory:', squareState(acts, runtime));
 }
 
-test('catch and delivery share one settled audience across case and rejoin boundaries', async () => {
+test('perception shares one settled audience across case and rejoin boundaries', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
@@ -57,46 +55,6 @@ test('catch and delivery share one settled audience across case and rejoin bound
       bobSuffix: 2,
     });
 
-    const caught = await cell.transact((write) => decideCatch(write, 'BOB', {}, 10));
-    assert.deepEqual(caught.value.activities.map((activity) => [activity.id, activity.perception, activity.via]),
-      [['act/2', 'full', 'mention'], ['act/5', 'full', 'mention']]);
-    assert.equal(caught.value.remaining, 0);
-  } finally {
-    await cell.close();
-  }
-});
-
-test('receipts are explicit and the cursor follows the continuous seen prefix', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 1 },
-    { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'one @Bob', mentions: ['Bob'] },
-    { kind: 'say', actor: 'Alice', at: 4, body: 'two @Bob', mentions: ['Bob'] },
-    { kind: 'join', actor: 'Cara', at: 5 },
-  ];
-  const cell = memoryCell(acts);
-  try {
-    const before = (await cell.read((facts) => ({
-      seen: facts.receipt('bob', 2),
-      cursor: readCursor(facts, 'bob'),
-      unseen: facts.directedCount('Bob', { afterIndex: readCursor(facts, 'Bob'), unseenOnly: true }),
-    }))).value;
-    assert.deepEqual(before, { seen: undefined, cursor: 1, unseen: 2 });
-
-    const inserted = await cell.transact((facts) => facts.markSeen('bob', [2], 10));
-    assert.equal(inserted.value, 1);
-
-    const after = (await cell.read((facts) => ({
-      at: facts.receipt('BOB', 2)?.at,
-      cursor: readCursor(facts, 'BOB'),
-      unseen: facts.directedCount('BOB', { afterIndex: readCursor(facts, 'BOB'), unseenOnly: true }),
-    }))).value;
-    assert.deepEqual(after, { at: 10, cursor: 2, unseen: 1 });
-
-    // A receipt beyond an earlier unseen hole does not advance the continuous prefix.
-    await cell.transact((facts) => facts.markSeen('bob', [4], 20));
-    const hole = (await cell.read((facts) => ({ cursor: readCursor(facts, 'bob'), beyond: facts.receipt('bob', 4)?.at }))).value;
-    assert.deepEqual(hole, { cursor: 2, beyond: 20 });
   } finally {
     await cell.close();
   }

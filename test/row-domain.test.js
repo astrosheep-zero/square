@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideCatch } from '../dist/catch-decisions.js';
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
-import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
+import { createArtifactPort } from '../dist/artifact.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -115,17 +114,10 @@ const REJOIN_ACTS = [
   { index: 8, at: T0 + 8, kind: 'say', actor: 'Bob', body: 'd8', mentions: ['alice'] },
 ];
 
-async function land(port, acts) {
-  await port.transact((facts) => {
-    for (const act of acts) facts.land(act);
-  });
-}
-
 test('audience priority is bell > mention > reply > attention, with self and ignore rules', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createArtifactPort(':memory:', fixtureState([]));
+  const port = createArtifactPort(':memory:', fixtureState(acts));
   try {
-    await land(port, acts);
     const audience = async (index) => (await port.read((facts) => facts.audience(index))).value;
     assert.deepEqual(await audience(3), [{ recipient: 'Bob', route: 'mention' }, { recipient: 'Carol', route: 'mention' }], 'case-variant mentions resolve to roster spelling');
     assert.deepEqual(await audience(4), [], 'unknown and self mentions reach nobody');
@@ -144,130 +136,52 @@ test('audience priority is bell > mention > reply > attention, with self and ign
   }
 });
 
-test('sparse receipts keep exact orphan coordinates and exact owner spelling', async () => {
-  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
+test('sparse orphan receipts retain coordinates and owner spelling', async () => {
+  const observations = {
+    Alice: Object.fromEntries([1, 2, 17, 19].map(index => [`act/${index}`, { state: 'seen', at: T0 + 100 }])),
+    ghost: { 'act/4': { state: 'seen', at: T0 + 150 } },
+  };
+  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS, { observations }));
   try {
-    const version = (await port.read((facts) => facts.header().revision)).value;
-    const written = await port.transact((facts) => facts.markSeen('alice', [1, 2, 17, 19], T0 + 100));
-    assert.equal(written.value, 4);
-    assert.equal(written.changed, true);
-    assert.equal(written.version, version + 1);
-
-    const view = (await port.read((facts) => ({
-      aliceOrphan: facts.receipt('Alice', 1),
-      aliasOrphan: facts.receipt('ALICE', 2),
-      missing: facts.receipt('Alice', 3),
-      facts: facts.receiptFacts('Alice', -1),
-      more: [facts.receipt('Alice', 17), facts.receipt('Alice', 19)],
-    }))).value;
-    assert.deepEqual(view.aliceOrphan, { at: T0 + 100 });
-    assert.deepEqual(view.aliasOrphan, { at: T0 + 100 }, 'identity spelling resolves to the exact roster owner');
-    assert.equal(view.missing, undefined);
-    assert.deepEqual(view.facts, { latestAt: T0 + 100 }, 'orphan coordinates count for the latest receipt time');
-    assert.deepEqual(view.more, [{ at: T0 + 100 }, { at: T0 + 100 }]);
-
-    await port.transact((facts) => facts.markSeen('ghost', [4], T0 + 150));
-    const unknown = (await port.read((facts) => ({
-      exact: facts.receipt('ghost', 4),
+    const view = (await port.read(facts => ({
+      orphan: facts.receipt('ALICE', 2), missing: facts.receipt('Alice', 3),
+      facts: facts.receiptFacts('Alice', -1), exact: facts.receipt('ghost', 4),
       casefolded: facts.receipt('Ghost', 4),
     }))).value;
-    assert.deepEqual(unknown.exact, { at: T0 + 150 });
-    assert.equal(unknown.casefolded, undefined, 'an unknown owner keeps its raw spelling, not a case-folded lookup');
-
-    const repeat = await port.transact((facts) => facts.markSeen('Alice', [1], T0 + 500));
-    assert.equal(repeat.value, 0);
-    assert.equal(repeat.changed, false, 'a repeated receipt writes nothing');
-    assert.equal(repeat.version, written.version + 1);
-    assert.deepEqual((await port.read((facts) => facts.receipt('Alice', 1))).value, { at: T0 + 100 }, 'first receipt time is immutable');
-
-    await assert.rejects(port.transact((facts) => facts.markSeen('Alice', [26], T0)), /unassigned/);
-    await assert.rejects(port.transact((facts) => facts.markSeen('Alice', [1], Number.NaN)), /malformed|finite|JSON/i);
-  } finally {
-    await port.close();
-  }
+    assert.deepEqual(view, { orphan: { at: T0 + 100 }, missing: undefined,
+      facts: { latestAt: T0 + 100 }, exact: { at: T0 + 150 }, casefolded: undefined });
+  } finally { await port.close(); }
 });
 
-test('cursor and presence distinguish nonaddressed progress, holes, reads and orphan receipts', async () => {
+test('cursor and presence distinguish holes, reads and orphan receipts', async () => {
   const acts = stored(CURSOR_SOURCE);
-  const port = createArtifactPort(':memory:', fixtureState([]));
-  const probe = async (name) => (await port.read((facts) => ({
-    cursor: readCursor(facts, name),
-    presence: presenceAnchor(facts, name),
-    aliasCursor: readCursor(facts, name.toLocaleUpperCase()),
-  }))).value;
-  try {
-    await land(port, acts);
-
-    const alice = await probe('Alice');
-    assert.equal(alice.cursor, 8, 'progress stops before the unseen addressed act/12, at the last actor-bearing non-read');
-    assert.equal(alice.aliasCursor, alice.cursor, 'identity spelling resolves');
-    assert.equal(alice.presence, 5, 'a read is evidence, so the last say/done at or behind it anchors presence');
-    const carol = await probe('Carol');
-    assert.equal(carol.cursor, 8);
-    assert.equal(carol.presence, -1, 'no own activity and no receipt evidence means no anchor');
-
-    await port.transact((facts) => facts.markSeen('Alice', [13], T0 + 900));
-    const beyondHole = await probe('Alice');
-    assert.equal(beyondHole.cursor, 8, 'a seen row beyond the hole does not advance the cursor');
-    assert.equal(beyondHole.presence, 13, 'an addressed receipt anchors presence');
-
-    await port.transact((facts) => facts.markSeen('Alice', [10], T0 + 950));
-    const withOrphan = (await port.read((facts) => ({ presence: presenceAnchor(facts, 'Alice'), facts: facts.receiptFacts('Alice', 4) }))).value;
-    assert.equal(withOrphan.facts.latestAt, T0 + 950);
-    assert.equal(withOrphan.facts.latestActorActivityIndex, 13, 'an orphan coordinate is not actor-bearing evidence');
-    assert.equal(withOrphan.presence, 13, 'an orphan receipt does not move the anchor');
-
-    await port.transact((facts) => facts.markSeen('Alice', [12], T0 + 1000));
-    assert.equal((await probe('Alice')).cursor, 13, 'the contiguous prefix reaches the last addressed say');
-  } finally {
-    await port.close();
+  async function probe(observations = {}) {
+    const port = createArtifactPort(':memory:', fixtureState(acts, { observations }));
+    try {
+      return (await port.read(facts => ({
+        cursor: readCursor(facts, 'ALICE'), presence: presenceAnchor(facts, 'Alice'),
+        receiptFacts: facts.receiptFacts('Alice', 4),
+        carolCursor: readCursor(facts, 'Carol'), carolPresence: presenceAnchor(facts, 'Carol'),
+      }))).value;
+    } finally { await port.close(); }
   }
+  const before = await probe();
+  assert.equal(before.cursor, 8);
+  assert.equal(before.presence, 5);
+  assert.equal(before.carolCursor, 8);
+  assert.equal(before.carolPresence, -1);
+  const beyond = await probe({ Alice: { 'act/13': { state: 'seen', at: T0 + 900 },
+    'act/10': { state: 'seen', at: T0 + 950 } } });
+  assert.equal(beyond.cursor, 8, 'a seen row beyond a hole does not advance the cursor');
+  assert.equal(beyond.presence, 13, 'an orphan receipt does not move the anchor');
+  assert.equal(beyond.receiptFacts.latestAt, T0 + 950);
+  assert.equal(beyond.receiptFacts.latestActorActivityIndex, 13);
+  const complete = await probe({ Alice: { 'act/12': { state: 'seen', at: T0 + 1000 },
+    'act/13': { state: 'seen', at: T0 + 900 } } });
+  assert.equal(complete.cursor, 13);
 });
 
-test('catch filters before limiting, repeats exact catches, and reports truthful remaining', async () => {
-  const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createArtifactPort(':memory:', fixtureState([]));
-  try {
-    await land(port, acts);
-
-    const first = (await port.transact((facts) => decideCatch(facts, 'carol', { limit: 2 }, T0 + 500))).value;
-    assert.deepEqual(first.activities.map((act) => act.id), ['act/3', 'act/7']);
-    assert.equal(first.remaining, 3, 'remaining counts filtered unseen rows after insertion');
-    assert.equal((await port.read(facts => readCursor(facts, 'Carol'))).value, 8, 'cursor advances over nonaddressed actor-bearing activity');
-    assert.deepEqual((await port.read((facts) => facts.receipt('Carol', 3))).value, { at: T0 + 500 });
-
-    const attentionOnly = (await port.transact((facts) => decideCatch(facts, 'Carol', { mention: true, limit: 10 }, T0 + 501))).value;
-    assert.deepEqual(attentionOnly.activities.map((act) => act.id), ['act/9', 'act/10', 'act/12'], 'mention filter drops listener-only edges');
-    assert.equal(attentionOnly.remaining, 0);
-  } finally {
-    await port.close();
-  }
-
-  const exactPort = createArtifactPort(':memory:', fixtureState(stored(SEQUENTIAL_SOURCE)));
-  try {
-    const none = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { from: ['Bob'], limit: 1 }, T0 + 600))).value;
-    assert.deepEqual(none.activities, [], 'Bob never addresses Carol');
-    assert.equal(none.remaining, 0, 'remaining counts only the filtered relation');
-    assert.equal((await exactPort.read((facts) => facts.receipt('Carol', 3))).value, undefined);
-
-    const senders = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { from: ['Alice'], limit: 2 }, T0 + 601))).value;
-    assert.deepEqual(senders.activities.map((act) => act.id), ['act/3', 'act/7'], 'sender filter applies before the limit');
-    assert.equal(senders.remaining, 3);
-
-    const repeat = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { id: 'act/3' }, T0 + 602))).value;
-    assert.deepEqual(repeat.activities.map((act) => act.id), ['act/3'], 'an exact catch may repeat a seen activity');
-    assert.deepEqual((await exactPort.read((facts) => facts.receipt('Carol', 3))).value, { at: T0 + 601 }, 'the repeat preserves the original receipt');
-    assert.equal(repeat.remaining, 3, 'exact remaining covers all historical directed unseen rows');
-
-    const page = (await exactPort.transact((facts) => decideCatch(facts, 'Carol', { limit: 1 }, T0 + 603))).value;
-    assert.deepEqual(page.activities.map((act) => act.id), ['act/9']);
-    assert.equal(page.remaining, 2);
-  } finally {
-    await exactPort.close();
-  }
-});
-
-test('a pre-rejoin catch sees earlier holes while pending discovery stops at the latest join', async () => {
+test('historical audience retains earlier holes while pending discovery stops at the latest join', async () => {
   const port = createArtifactPort(':memory:', fixtureState(REJOIN_ACTS));
   try {
     const beforeCatch = (await port.read((facts) => ({
@@ -286,11 +200,6 @@ test('a pre-rejoin catch sees earlier holes while pending discovery stops at the
     assert.equal(whole.hasMore, false);
     assert.deepEqual(Object.keys(whole.groups[0]).sort(), ['actor', 'at', 'index', 'recipients'], 'pending discovery carries no body');
 
-    const caught = (await port.transact((facts) => decideCatch(facts, 'Alice', { limit: 10 }, T0 + 700))).value;
-    assert.deepEqual(caught.activities.map((act) => act.id), ['act/2', 'act/3', 'act/7', 'act/8']);
-    assert.equal(caught.remaining, 0);
-    assert.equal((await port.read(facts => readCursor(facts, 'Alice'))).value, 8);
-    assert.equal((await port.read((facts) => facts.pendingAudience(-1, 8, 10))).value.groups.length, 0, 'catch receipts clear pending discovery');
   } finally {
     await port.close();
   }

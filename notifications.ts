@@ -9,8 +9,6 @@ import { createArtifactPort } from './artifact.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';
 import type { WakeTransportPort } from './ports.js';
 
-export type { PlannedNotification } from './delivery.js';
-
 export const PRIVILEGED_HOOK_BUDGET_MS = 3000;
 
 export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {

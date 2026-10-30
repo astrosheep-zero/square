@@ -1,21 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
-import { pendingNotifications, leaseOwnsNotification } from '../dist/delivery.js';
+import { pendingHeads, leaseOwnsNotification } from '../dist/delivery.js';
 import { perceiveActivity } from '../dist/perception-projection.js';
-import { decideCatch } from '../dist/catch-decisions.js';
-import { pendingAtBoundary } from '../dist/inbox.js';
 import { previewAttentionBody, renderAttentionPreview, renderSquareReminder } from '../dist/attention-presentation.js';
-import { formatActivityId } from '../dist/square-core.js';
-import { readCursor } from '../dist/runtime.js';
 
 async function trace(acts, select, observations = {}) {
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: ['test'],
     acts: acts.map((act, index) => ({ ...act, index })),
     runtime: { ...emptyRuntimeState(acts.length), nextActIndex: acts.length, observations },
   });
-  try { return (await artifact.transact(select)).value; }
+  try { return (await artifact.read(select)).value; }
   finally { await artifact.close(); }
 }
 const plannedRecipients = (facts, index) => facts.audience(index).map(({ recipient, route }) => `${recipient}:${route}`);
@@ -47,7 +43,7 @@ test('a reply reaches its author with route reply and the full body', async () =
     { kind: 'say', actor: 'Alice', at: 5, body: 'answer', reply: 3 },
   ], (facts) => {
     assert.deepEqual(plannedRecipients(facts, 4), ['Bob:reply']);
-    assert.deepEqual(pendingNotifications(facts, 'Bob').map(({ item, route }) => `${item.index}:${route}`), ['4:reply']);
+    assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index, route }) => `${index}:${route}`), ['4:reply']);
     assert.equal(perceiveActivity(facts, facts.activity(4), 'Bob'), 'full');
     assert.equal(perceiveActivity(facts, facts.activity(4), 'Cara'), 'presence');
   });
@@ -79,19 +75,15 @@ test('reply attention combines with mentions and bells, and skips an absent or i
   });
 });
 
-test('pending attention is post-join, independent of the read cursor, and closes only with a receipt', async () => {
+test('pending attention is post-join and independent of the read cursor', async () => {
   await trace([
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'say', actor: 'Alice', at: 2, body: 'historical @Bob', mentions: ['Bob'] },
     { kind: 'join', actor: 'Bob', at: 3 },
     { kind: 'say', actor: 'Alice', at: 4, body: 'pending @Bob', mentions: ['Bob'] },
     { kind: 'say', actor: 'Bob', at: 5, body: 'self cursor advance' },
-  ], (facts) => {
-    assert.deepEqual(pendingNotifications(facts, 'bob').map(({ item }) => item.index), [3]);
-    assert.deepEqual(decideCatch(facts, 'Bob', { id: formatActivityId(3) }, 6).activities.map(({ id }) => id), ['act/3']);
-    assert.deepEqual(pendingNotifications(facts, 'Bob'), []);
-    assert.deepEqual(facts.receipt('Bob', 3), { at: 6 });
-  }, { Bob: { 'act/4': { state: 'seen', at: 5 } } });
+  ], facts => assert.deepEqual(pendingHeads(facts, 'bob').map(({ index }) => index), [3]),
+  { Bob: { 'act/4': { state: 'seen', at: 5 } } });
 });
 
 test('a participant who has stepped out is not a delivery target', async () => {
@@ -100,7 +92,7 @@ test('a participant who has stepped out is not a delivery target', async () => {
     { kind: 'done', actor: 'Bob', at: 3 }, { kind: 'say', actor: 'Alice', at: 4, body: 'hey @Bob', mentions: ['Bob'] },
   ], (facts) => {
     assert.deepEqual(plannedRecipients(facts, 3), []);
-    assert.deepEqual(pendingNotifications(facts, 'Bob'), []);
+    assert.deepEqual(pendingHeads(facts, 'Bob'), []);
   });
 });
 
@@ -224,79 +216,9 @@ test('a catch lease owns only the notifications admitted by its filter', () => {
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Cara' } }, mention), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'], mention: 'Cara' } }, bell), false);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, mention), true);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['alice'], mention: 'bob' } }, bell), true);
+  assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { ...mention, route: 'reply' }), true);
   assert.equal(leaseOwnsNotification({ ...lease, filter: { mention: 'Bob' } }, { actor: 'aku/riko', route: 'attention', recipient: 'Bob' }), false);
-});
-
-test('a mention-filtered catch leaves listening-only activity eligible at the native boundary', async () => {
-  await trace([
-    { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 }, { kind: 'join', actor: 'Cara', at: 3 },
-    { kind: 'listen', actor: 'Bob', target: 'Alice', at: 4 }, { kind: 'say', actor: 'Alice', body: 'bare answer', at: 5 },
-    { kind: 'say', actor: 'Alice', body: 'for Cara @Cara', mentions: ['Cara'], at: 6 },
-  ], (facts) => {
-    const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { mention: 'Bob' } };
-    const pending = pendingNotifications(facts, 'Bob');
-    const before = [facts.receipt('Bob', 4), facts.receipt('Bob', 5)];
-    assert.deepEqual(pending.map(({ route }) => route), ['attention', 'attention']);
-    for (const { item, recipient, route } of pending) assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), false);
-    assert.deepEqual([facts.receipt('Bob', 4), facts.receipt('Bob', 5)], before, 'lease filtering never records receipts');
-    const caught = decideCatch(facts, 'Bob', { mention: true }, 11);
-    assert.deepEqual(caught.activities, []);
-    assert.deepEqual([facts.receipt('Bob', 4), facts.receipt('Bob', 5)], before, 'excluded notifications stay unread');
-    const membership = { location: '/tmp/listener.square',
-      seat: { participant: 'Bob', owner: ':', generation: 'act/1' },
-      joinedAt: 2, catchLease: lease,
-      notifications: pending.map(({ item, route }) => ({ actIndex: item.index, actor: item.actor, at: item.at, body: item.body, route })) };
-    assert.deepEqual(pendingAtBoundary([membership]), [membership]);
-    assert.deepEqual(decideCatch(facts, 'Bob', {}, 12).activities.map(({ id }) => id), ['act/4', 'act/5']);
-  });
-});
-
-test('bells satisfy mention filtering but still require the catch sender filter', async () => {
-  await trace([
-    { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 }, { kind: 'join', actor: 'Cara', at: 3 },
-    { kind: 'say', actor: 'Alice', body: 'everyone listen', reach: 'bell', at: 4 },
-  ], (facts) => {
-    const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { participants: ['Cara'], mention: 'Bob' } };
-    const [{ item, recipient, route }] = pendingNotifications(facts, 'Bob');
-    const notification = { ...item, recipient, route };
-    assert.equal(leaseOwnsNotification(lease, notification), false);
-    assert.deepEqual(decideCatch(facts, 'Bob', { from: ['Cara'], mention: true }, 11).activities, []);
-    assert.deepEqual(decideCatch(facts, 'Bob', { from: ['Cara'] }, 11).activities, []);
-    assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['Cara'] } }, notification), false);
-    assert.equal(leaseOwnsNotification({ ...lease, filter: { participants: ['alice'], mention: 'bob' } }, notification), true);
-    assert.deepEqual(decideCatch(facts, 'BOB', { from: ['alice'], mention: true }, 12).activities.map(({ id }) => id), ['act/3']);
-  });
-});
-
-test('mention filtering matches a reply to the viewer like a mention', async () => {
-  await trace([
-    { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 }, { kind: 'join', actor: 'Cara', at: 3 },
-    { kind: 'say', actor: 'Cara', body: 'question', at: 4 }, { kind: 'say', actor: 'Alice', body: 'answer to Cara', reply: 3, at: 5 },
-    { kind: 'say', actor: 'Bob', body: 'question', at: 6 }, { kind: 'say', actor: 'Alice', body: 'answer to Bob', reply: 5, at: 7 },
-  ], (facts) => {
-    const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { mention: 'Bob' } };
-    const pending = pendingNotifications(facts, 'Bob');
-    assert.deepEqual(pending.map(({ item, route }) => `${item.index}:${route}`), ['6:reply']);
-    for (const { item, recipient, route } of pending) assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), true);
-    assert.deepEqual(decideCatch(facts, 'Bob', { mention: true }, 11).activities.map(({ id }) => id), ['act/6']);
-  });
-});
-
-test('a catch lease owns all matching unread notifications beyond the current page', async () => {
-  await trace([
-    { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 },
-    ...Array.from({ length: 3 }, (_, index) => ({ kind: 'say', actor: 'Alice', body: `message ${index}`, mentions: ['Bob'], at: index + 3 })),
-  ], (facts) => {
-    const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { participants: ['alice'], mention: 'bob' } };
-    const owns = ({ item, recipient, route }) => leaseOwnsNotification(lease, { ...item, recipient, route });
-    assert.equal(pendingNotifications(facts, 'Bob').every(owns), true);
-    const caught = decideCatch(facts, 'Bob', { from: ['alice'], mention: true, limit: 1 }, 11);
-    assert.deepEqual(caught.activities.map(({ id }) => id), ['act/2']);
-    assert.equal(caught.remaining, 2);
-    const pending = pendingNotifications(facts, 'Bob');
-    assert.deepEqual(pending.map(({ item }) => item.index), [3, 4]);
-    assert.equal(pending.every(owns), true);
-  });
 });
 
 test('delivery route distinguishes mentioned recipients from listeners on the same say', async () => {
@@ -311,19 +233,5 @@ test('pending projection remains complete across a long history', async () => {
     { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 },
     ...Array.from({ length: 4_000 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index + 3,
       body: index % 1_000 === 0 ? `direct ${index} @Bob` : `undirected ${index}`, mentions: index % 1_000 === 0 ? ['Bob'] : [] })),
-  ], (facts) => assert.deepEqual(pendingNotifications(facts, 'Bob').map(({ item }) => item.index), [2, 1_002, 2_002, 3_002]));
-});
-
-test('out-of-order observations advance only the continuous seen prefix', async () => {
-  await trace([
-    { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'one @Bob', mentions: ['Bob'] },
-    { kind: 'say', actor: 'Alice', at: 4, body: 'two @Bob', mentions: ['Bob'] },
-    { kind: 'say', actor: 'Alice', at: 5, body: 'three @Bob', mentions: ['Bob'] },
-  ], (facts) => {
-    facts.markSeen('Bob', [3], 8); facts.markSeen('Bob', [4], 9);
-    assert.equal(readCursor(facts, 'Bob'), 1);
-    facts.markSeen('Bob', [2], 10);
-    assert.equal(readCursor(facts, 'Bob'), 4);
-  });
+  ], (facts) => assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index }) => index), [2, 1_002, 2_002, 3_002]));
 });

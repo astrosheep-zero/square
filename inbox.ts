@@ -6,7 +6,7 @@ import { type VersionObserver } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
-import { pendingHead, pendingNotifications, leaseOwnsNotification } from './delivery.js';
+import { pendingHead, pendingHeads, leaseOwnsNotification } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 
@@ -169,12 +169,14 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
         const header = facts.header();
         let cached = cache?.get(location);
         if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
-          cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => ({
-            ...membership, notifications: pendingNotifications(facts, membership.seat.participant).map(({ item, route }) => ({
-              actIndex: item.index, actor: item.actor, at: item.at, body: item.body ?? '(structured activity)', route,
-              ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
-            })),
-          })) };
+          cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => {
+            const heads = pendingHeads(facts, membership.seat.participant);
+            const routes = new Map(heads.map(head => [head.index, head.route]));
+            return { ...membership, notifications: facts.activities(heads.map(head => head.index)).flatMap(item => item.kind === 'say'
+              ? [{ actIndex: item.index, actor: item.actor, at: item.at, body: item.body ?? '(structured activity)',
+                route: routes.get(item.index)!, ...(item.delivery === undefined ? {} : { delivery: item.delivery }) }]
+              : []) };
+          }) };
         }
         // Cache conversation content, never leases or delivery eligibility: evidence can change
         // without a conversation revision and must not force body hydration or self-wake retries.
