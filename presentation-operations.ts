@@ -5,6 +5,7 @@ import type { PresentationResult, PresentPendingInput, SquareRead } from './port
 import { pendingHead, sameJoin } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { asSeatRef } from './seats.js';
+import { preparePresentation, presentPrepared } from './delivery-effects.js';
 
 /** Prepare custody before any external effect. A batch prepares every included item first. */
 export async function preparePendingPresentation(input: Omit<PresentPendingInput, 'sink'>) {
@@ -29,57 +30,51 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
       && sameJoin(facts, participant);
   };
   const claimToken = randomUUID();
-  const claimed = await input.artifact.claimDelivery({ seat: ref, activity: formatActivityId(index), kind: 'presentation',
-    at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, input.signal).catch(() => ({ status: 'stale' as const }));
-  if (claimed.status !== 'acquired') return undefined;
-
-  let effectObserved = false, released = false;
-  return {
-    activity: item,
-    async eligible(): Promise<boolean> {
-      return (await input.artifact.read(facts => owns(facts) && input.current?.(facts) !== false
-        && pendingHead(facts, participant.name, index) !== undefined
-        && deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) === undefined,
-      input.signal).catch(() => undefined))?.value === true;
+  return preparePresentation({
+    payload: item, coverage: input.markSeen === false ? 'clipped' : 'full',
+    port: {
+      async claim(signal) {
+        const claimed = await input.artifact.claimDelivery({ seat: ref, activity: formatActivityId(index), kind: 'presentation',
+          at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, signal).catch(() => ({ status: 'stale' as const }));
+        return claimed.status === 'acquired' ? { token: claimToken, ordinal: claimed.attemptN } : undefined;
+      },
+      async current(signal) {
+        return (await input.artifact.read(facts => owns(facts) && input.current?.(facts) !== false
+          && pendingHead(facts, participant.name, index) !== undefined
+          && deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) === undefined,
+        signal ?? input.signal)).value;
+      },
+      async settle(claim, completion) {
+        const success = completion.outcome === 'presented' || completion.outcome === 'clipped';
+        const { value } = await input.artifact.settleAs({ kind: 'participant', seat: ref }, facts => {
+          // Captured ownership fences truth; post-effect policy/cancellation cannot veto it.
+          if (!owns(facts)) return false;
+          if (!facts.completeDelivery({ seat: ref, activity: formatActivityId(index), claimToken: claim.token,
+            outcome: completion.outcome, at: success ? input.now ?? Date.now() : Date.now(),
+            ...(completion.reason === 'threw' ? { message: completion.error instanceof Error ? completion.error.message : String(completion.error) } : {}),
+          })) return false;
+          if (completion.outcome === 'presented') facts.markSeen(participant.name, [index], input.now ?? Date.now());
+          return true;
+        }).catch(error => {
+          if (!success || isSquareError(error) && error.code === 'already_joined') return { value: false };
+          throw error;
+        });
+        return value;
+      },
     },
-    async release(outcome: 'released' | 'failed' = 'released', message?: string): Promise<void> {
-      if (effectObserved || released) return;
-      released = true;
-      await input.artifact.settleAs({ kind: 'participant', seat: ref }, facts => facts.completeDelivery({
-        seat: ref, activity: formatActivityId(index), claimToken, outcome, at: Date.now(),
-        ...(message === undefined ? {} : { message }),
-      })).catch(() => false);
-    },
-    async recordPresented(): Promise<PresentationResult> {
-      // Success is an observed external fact, not another eligibility decision. Neither
-      // post-effect cancellation nor a new deferral can erase it and authorize replay.
-      effectObserved = true;
-      const outcome = input.markSeen === false ? 'clipped' : 'presented';
-      const { value: committed } = await input.artifact.settleAs({ kind: 'participant', seat: ref }, facts => {
-        if (!owns(facts)) return false;
-        if (!facts.completeDelivery({ seat: ref, activity: formatActivityId(index), claimToken, outcome, at: input.now ?? Date.now() })) return false;
-        if (input.markSeen !== false) facts.markSeen(participant.name, [index], input.now ?? Date.now());
-        return true;
-      }).catch(error => {
-        if (isSquareError(error) && error.code === 'already_joined') return { value: false };
-        throw error;
-      });
-      return committed ? { presented: true, activity: item } : { presented: false };
-    },
-  };
+  }, { signal: input.signal });
 }
 
-/** Eligibility precedes the sink; only captured ownership fences its truthful completion. */
+/** Square sinks explicitly classify rejection as failed; the public effect core defaults to unknown. */
 export async function presentPending(input: PresentPendingInput): Promise<PresentationResult> {
   const prepared = await preparePendingPresentation(input);
   if (prepared === undefined) return { presented: false };
-  try {
-    if (!await prepared.eligible() || input.signal?.aborted) return { presented: false };
-    try { await input.sink.present(prepared.activity); }
-    catch (error) {
-      await prepared.release('failed', error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-    return await prepared.recordPresented();
-  } finally { await prepared.release(); }
+  const report = await presentPrepared(prepared, activity => input.sink.present(activity), {
+    signal: input.signal, classifyError: () => 'failed',
+  });
+  if (report.observation.kind === 'threw') throw report.observation.error;
+  const result = report.settlements[0]!.result;
+  if (result.persistence.status === 'error') throw result.persistence.error;
+  return report.observation.kind === 'returned' && result.persistence.status === 'recorded'
+    ? { presented: true, activity: prepared.payload } : { presented: false };
 }

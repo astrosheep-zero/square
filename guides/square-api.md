@@ -4,7 +4,12 @@
 exports the public `{at, build, inMemory}` entrypoints and `type Square`; `square.ts` remains the
 executable CLI entrypoint.
 For audience computation without opening a square, see the [attention primitive](attention-primitive.md).
-For transaction-scoped attempt custody without Square storage, see the [delivery primitives](delivery-primitives.md).
+For transaction-scoped attempt custody and the storage-independent dispatch/prepared presentation
+lifecycles used by Square's actual adapters, see the [delivery primitives](delivery-primitives.md).
+Full presentation settlement atomically completes its captured attempt and full-consumption receipts;
+clipped previews record no full receipt. Cancellation/deferral is pre-effect policy, never a veto of a
+successful sink. The public primitive distinguishes sink observations from refused/failed persistence;
+Square retains its existing result shapes and explicit failed classification for rejected sinks.
 For caller-owned item admission and sparse consumption, see the [receive primitive](receive-primitive.md).
 `square-facade.ts` contains only public types. There is no separate operation factory, policy
 dispatcher or `{data, projection}` envelope.

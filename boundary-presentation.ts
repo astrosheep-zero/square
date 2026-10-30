@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { withFileLock } from './file-lock.js';
 import { createArtifactPort } from './artifact.js';
 import { preparePendingPresentation } from './presentation-operations.js';
+import { presentPreparedBatch } from './delivery-effects.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
 import type { Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
@@ -82,44 +83,39 @@ async function presentPendingAtBoundaryUnlocked<T>(
   const artifacts = new Map<string, SquareArtifactPort>();
   const claims: { key: string; claim: NonNullable<Awaited<ReturnType<typeof preparePendingPresentation>>> }[] = [];
   try {
-    // Claim the entire candidate batch before its one external effect. No later item needs
-    // a new claim (and new eligibility decision) after its bytes have already been rendered.
-    for (const entry of renderBoundary(pending).complete) {
-      const { location, seat } = entry.membership;
-      let artifact = artifacts.get(location);
-      if (artifact === undefined) {
-        // This boundary owns the connection until all effect evidence/cleanup has settled.
-        // Request cancellation travels with pre-effect operations, not that lifetime.
-        artifact = createArtifactPort(location);
-        artifacts.set(location, artifact);
+    try {
+      // Enumeration owns discovery/connections only; returned handles belong to the common runner.
+      for (const entry of renderBoundary(pending).complete) {
+        const { location, seat } = entry.membership;
+        let artifact = artifacts.get(location);
+        if (artifact === undefined) {
+          // Keep connections alive through all signal-independent settlement/cleanup.
+          artifact = createArtifactPort(location);
+          artifacts.set(location, artifact);
+        }
+        for (const index of entry.actIndexes) {
+          const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
+            activity: index, seat, markSeen: entry.markSeen, signal });
+          if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, index), claim });
+        }
       }
-      for (const index of entry.actIndexes) {
-        const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
-          activity: index, seat, markSeen: entry.markSeen, signal });
-        if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, index), claim });
-      }
-    }
-    const eligible = new Set<string>();
-    for (const { key, claim } of claims) if (await claim.eligible()) eligible.add(key);
-    const fresh = renderBoundary(pending.map(membership => ({ ...membership,
-      notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
-    })));
-    const included = new Set(fresh.complete.flatMap(entry => entry.actIndexes.map(index => pendingKey(entry.membership, index))));
-    if (included.size === 0 || signal?.aborted) return undefined;
-    const rendered = claims.filter(({ key }) => included.has(key));
-    let result: T;
-    try { result = await present(fresh.context); }
-    catch (error) {
-      await Promise.all(rendered.map(({ claim }) => claim.release('failed', error instanceof Error ? error.message : String(error))));
+    } catch (error) {
+      // Transfer has not happened: enumeration must abandon any custody already acquired.
+      await Promise.all(claims.map(({ claim }) => claim.release()));
       throw error;
     }
-    // These are successful sink effects, not fresh delivery attempts. Settle the entire
-    // rendered set before closing any connection, even if one member's settlement fails.
-    const settlements = await Promise.allSettled(rendered.map(({ claim }) => claim.recordPresented()));
-    for (const settlement of settlements) if (settlement.status === 'rejected') throw settlement.reason;
-    return result;
+    const report = await presentPreparedBatch(claims.map(({ claim }) => claim), eligibleClaims => {
+      const eligible = new Set(claims.filter(({ claim }) => eligibleClaims.includes(claim)).map(({ key }) => key));
+      const fresh = renderBoundary(pending.map(membership => ({ ...membership,
+        notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
+      })));
+      const included = new Set(fresh.complete.flatMap(entry => entry.actIndexes.map(index => pendingKey(entry.membership, index))));
+      return { payload: fresh.context, included: claims.filter(({ key }) => included.has(key)).map(({ claim }) => claim) };
+    }, present, { signal, classifyError: () => 'failed' });
+    if (report.observation.kind === 'threw') throw report.observation.error;
+    for (const { result } of report.settlements) if (result.persistence.status === 'error') throw result.persistence.error;
+    return report.observation.kind === 'returned' ? report.observation.value : undefined;
   } finally {
-    await Promise.all(claims.map(({ claim }) => claim.release()));
     await Promise.all([...artifacts.values()].map(artifact => artifact.close()));
   }
 }

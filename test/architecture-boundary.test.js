@@ -155,11 +155,20 @@ test('pure landing depends only on domain facts, syntax, and standalone attentio
   assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
-test('delivery custody leaf is storage-independent and the public delivery entry only reexports it', () => {
-  assert.deepEqual(moduleEdges('delivery-attempts.ts', productionSources.get('delivery-attempts.ts')), []);
+test('delivery leaves are dependency-free; real dispatch and single/batch adapters compose the public effect owner', () => {
+  for (const file of ['delivery-attempts.ts', 'delivery-effects.ts'])
+    assert.deepEqual(moduleEdges(file, productionSources.get(file)), []);
   const entry = moduleEdges('delivery-primitives.ts', productionSources.get('delivery-primitives.ts'));
   assert.ok(entry.length > 0);
-  assert.ok(entry.every(edge => edge.module === './delivery-attempts.js'));
+  assert.ok(entry.every(edge => ['./delivery-attempts.js', './delivery-effects.js'].includes(edge.module)));
+  for (const [file, bindings] of [
+    ['delivery-operations.ts', ['dispatchEffect']],
+    ['presentation-operations.ts', ['preparePresentation', 'presentPrepared']],
+    ['boundary-presentation.ts', ['presentPreparedBatch']],
+  ]) {
+    const effects = moduleEdges(file, productionSources.get(file)).find(edge => edge.module === './delivery-effects.js');
+    for (const binding of bindings) assert.ok(effects?.names.includes(binding), `${file} uses ${binding}`);
+  }
 });
 
 test('receive is a dependency-free leaf composed by production landing and catch', () => {

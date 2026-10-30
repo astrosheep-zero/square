@@ -1,9 +1,11 @@
 # Delivery custody primitives
 
-`@astrosheep/square/delivery` provides synchronous, storage-independent attempt transitions and
-suppression predicates. It does not open a square, interpret identities, dispatch effects, consume
-activity, or schedule retries. Square's SQLite adapter uses this same state machine with its existing
-tables; ownership, membership, cancellation and delivery-deferral gates stay outside it.
+`@astrosheep/square/delivery` provides storage-independent attempt transitions, suppression predicates,
+and four bound effect functions: `dispatchEffect`, `preparePresentation`, `presentPrepared`, and
+`presentPreparedBatch`. It does not open a square, interpret identities, own transactions, or schedule
+retries. Square's actual dispatch, single presentation and boundary batch adapters compose these same
+lifecycles; its SQLite adapter uses the attempt transitions with existing tables. Ownership, membership,
+cancellation and delivery-deferral policy remain in the bound application capability.
 
 ## Bind a series inside a transaction
 
@@ -43,9 +45,10 @@ settleAttempt(rows, {
 });
 ```
 
-The example omits effect execution deliberately. Commit a successful claim before doing external I/O;
-settle its exact token in a new transaction after observing the result. Authority fencing, final
-eligibility checks, timeouts and the meaning of external proof remain the application's responsibility.
+The example shows only transaction-scoped transitions. Commit a successful claim before external I/O;
+settle its exact token in a new transaction after observing the result. The bound effect capability
+below connects those operations without introducing a generic transaction runtime. Authority fencing,
+currentness policy and the meaning of external proof remain the application's responsibility.
 An `accepted` dispatch is not proof of presentation or consumption. Only the responsible presentation
 boundary may assert `presented`; consuming an item is a separate application operation.
 
@@ -84,3 +87,94 @@ Presentation `presented`, `clipped`, `unknown`, or live `dispatching` blocks dis
 presentation dispatching alone does not. Automatic dispatch additionally requires no dispatch
 `accepted`, `unknown`, or `dispatching`; even expired dispatch custody blocks automatic replay.
 These are preselection predicates, not substitutes for a transactional claim or application gates.
+
+
+## Bound effects: one captured capability, four functions
+
+`EffectPort<C>` is bound by the caller to **one captured work item / recipient / authority / purpose**.
+It exposes only:
+
+- `claim(signal?)`: the application's existing atomic claim, returning `{ token, ordinal }` or
+  `undefined` when busy, terminal, stale or deferred. The runner does not claim the attempt twice.
+- `current(signal?)`: pre-effect policy; a rejected check is unverifiable and treated as false.
+- `settle(claim, completion)`: one captured settlement operation, with no request signal. Return true
+  only when it commits, false when not recorded (not necessarily stale), or throw on persistence error.
+
+The application owns tokens, leases, semantic timestamps, authority, proof/diagnostic payloads and
+resource lifetimes. There is no public transaction type, series-key codec or extra persisted lifecycle.
+`Settlement<C>` keeps the selected completion separate from persistence: `recorded`, `not-recorded`,
+or `error` with the original error. Observations are never erased by persistence refusal/error.
+
+### Dispatch
+
+```ts
+import { dispatchEffect, type EffectPort, type DispatchCompletion } from '@astrosheep/square/delivery';
+
+declare const port: EffectPort<DispatchCompletion>; // bound claim/current/settle
+// A sender must check its absolute deadline/cancellation immediately before external mutation.
+const report = await dispatchEffect(port, async context => {
+  if (!await context.beforeSend()) return { outcome: 'not-capable' };
+  if (context.signal?.aborted || Date.now() >= context.deadline) return { outcome: 'unknown' };
+  // Call the application's transport here, passing the remaining budget and captured claim.
+  return { outcome: 'accepted', data: { proof: 'application acknowledgement' } };
+}, { timeoutMs: 5000 });
+```
+
+`dispatchEffect` owns claim → initial currentness → send → settlement. Cancellation suppresses
+pre-effect work. It starts its timer immediately before invoking the sender, not during claim,
+initial policy reads or persistence. Exactly one returned/thrown/timeout decision is frozen before
+settlement. A sender exception defaults to `unknown`, not failed; returned `not-capable` releases
+custody. A denied final gate releases with `not-current / final` under the sender's obligation to
+obey it. No automatic retry occurs.
+
+`beforeSend()` is **policy currentness, not an elapsed-budget gate**. A stalled policy check may
+return true after the outer timeout. The sender must recheck `deadline` and `signal` after that await
+and immediately before I/O; true does not authorize a late send. Outer timeout stays unknown even
+when no I/O is known to have started. Late gates and late promise results cannot rewrite the frozen
+settlement. Separately correlated native proof may still use the attempt transition's permitted late
+unknown → accepted path; the timed-out runner does not reconcile itself.
+
+### Prepared presentation
+
+`preparePresentation({ payload, coverage, port }, { signal? })` acquires custody without running a
+sink. A returned `PreparedPresentation<P>` exposes `payload`, pre-effect `eligible(signal?)`, and
+promise-cached `release()` for abandonment. It is a local one-shot capability, not a durable row and
+not a public success writer.
+
+`presentPrepared(handle, sink, control?)` specializes the batch lifecycle to one item.
+`presentPreparedBatch(handles, render, sink, control?)` takes all supplied custody before its first
+await. It rejects duplicate, foreign or used handles before any effect, checks eligibility, then calls
+synchronous side-effect-free `render(eligible)` returning `{ payload, included }`. Included handles
+must be a unique exact subset of those eligible handles; invalid rendering releases custody and
+rejects without presentation evidence. No included items means no sink call.
+
+Cancellation is checked immediately before the one sink invocation. There is **no presentation timer**
+and no post-effect cancellation, deferral or currentness veto. The runner awaits the sink and marks
+**all included handles** effect-observed before starting asynchronous settlements. Full coverage
+settles `presented`; clipped coverage settles `clipped`. A thrown sink defaults to `unknown`;
+`classifyError` may explicitly return `failed` (classifier failure stays unknown). Unused handles are
+released, all sibling settlements and cleanup drain even on persistence failure, and later cleanup
+cannot overwrite success or uncertainty.
+
+### Mandatory atomic full-consumption settlement
+
+The presentation binding's single `settle` operation must enforce:
+
+| Completion | Atomic persistence |
+| --- | --- |
+| `presented` | Complete the captured attempt **and all captured full-consumption receipts in the same transaction**. Return true only when the combined operation commits. |
+| `clipped` | Complete the attempt; no full-consumption receipt. |
+| `failed`, `unknown`, `released` | Complete the attempt; no success consumption receipt. |
+
+If receipt writing throws, both receipt writes and attempt completion must roll back. Do not reselect
+items or split `complete` and `recordConsumed` into separately awaited callbacks. Captured ownership
+still fences settlement; request cancellation and new delivery deferrals do not. TypeScript cannot
+supply isolation for a caller, so this is a mandatory port contract, tested in Square's real transaction.
+
+Presentation reports distinguish observed sink behavior from durable persistence. A returned sink
+with `not-recorded` or `error` still returned successfully; that alone proves only the supplied sink's
+documented effect, not model consumption or human display. Square explicitly classifies its existing
+rejected sinks as failed and rethrows the original exception after draining. Its single result stays
+`{ presented: true, activity }` only on recorded success, false on ownership refusal; unexpected
+success-settlement errors propagate. Batch returns its original sink value after all settlements,
+with the same error propagation. No schema, storage format or public Square result changes are needed.

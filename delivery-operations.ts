@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { type Seat, type WakeRoute } from './model.js';
-import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, WakeRequest, WakeTransportPort, SeatRef } from './ports.js';
+import type { DirectedHead, SquareArtifactPort, DeliverPendingInput, WakeRequest } from './ports.js';
 import { pendingHead, pendingHeads, pendingRecipients, presentationBlocksWake } from './delivery.js';
 import { asSeatRef } from './seats.js';
 import { freshWatchLease } from './runtime.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { leaseOwnsNotification } from './delivery.js';
+import { dispatchEffect } from './delivery-effects.js';
 
 function routeFor(location: string, seat: Seat, now: number): WakeRoute | undefined {
   if (seat.attachment !== 'attached' || seat.wakeAddress === undefined) return undefined;
@@ -49,23 +50,6 @@ async function currentness(artifact: SquareArtifactPort, request: WakeRequest, n
   return value;
 }
 
-async function attemptWakeWithin(
-  transport: WakeTransportPort,
-  request: WakeRequest,
-  timeoutMs: number,
-  beforeSend: () => Promise<boolean>,
-): Promise<import('./ports.js').WakeOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<import('./ports.js').WakeOutcome>((resolve) => {
-    timer = setTimeout(() => resolve({ outcome: 'unknown', diagnostic: 'transport timeout' }), timeoutMs);
-  });
-  try {
-    return await Promise.race([transport.attempt(request, timeoutMs, beforeSend), timeout]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
 interface Candidate {
   readonly seat: Seat;
   readonly head: DirectedHead;
@@ -82,14 +66,6 @@ async function candidates(artifact: SquareArtifactPort, requested?: number, now 
     });
   });
   return value;
-}
-
-function releaseClaim(artifact: SquareArtifactPort, seat: SeatRef, activity: ActivityId, claimToken: string,
-  signature: string, message?: string, diagnostic?: unknown): Promise<boolean> {
-  return artifact.completeDelivery({ seat, activity, claimToken, outcome: 'released', at: Date.now(), signature,
-    ...(message === undefined ? {} : { message }),
-    ...(diagnostic === undefined ? {} : { diagnostic: safeJson(diagnostic) }),
-  }).catch(() => false);
 }
 
 function safeJson(value: unknown): import('./model.js').JsonValue {
@@ -133,50 +109,43 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
 
     const claimToken = randomUUID();
     const leaseMs = input.timeoutMs ?? 5000;
-    const claim = await input.artifact.claimDelivery({ seat: request.seat, activity: request.activity, kind: 'wake',
-      route: seat.wakeAddress, at: input.now ?? Date.now(), leaseMs, claimToken }).catch(() => ({ status: 'stale' as const }));
-    if (claim.status !== 'acquired') return;
-    const withClaim = { ...request, claimToken, attemptN: claim.attemptN };
-    let final: Currentness | undefined;
-    let suppressed = false;
-    const beforeSend = async () => {
-      try {
-        final = await currentness(input.artifact, withClaim, input.now ?? Date.now());
-        suppressed = !final.current;
-      } catch { suppressed = true; }
-      return !suppressed;
-    };
-
-    let before: Currentness | undefined;
-    try { before = await currentness(input.artifact, withClaim, input.now ?? Date.now()); } catch { /* unverifiable */ }
-    if (!before?.current) {
-      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
-        before === undefined ? 'Square delivery state could not be verified.' : 'The notification is no longer current.', before);
-      return;
-    }
-
-    let outcome: import('./ports.js').WakeOutcome;
-    try { outcome = await attemptWakeWithin(input.transport, withClaim, leaseMs, beforeSend); }
-    catch (error) { outcome = { outcome: 'unknown', diagnostic: error instanceof Error ? error.message : String(error) }; }
-    if (suppressed) {
-      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'pre_send_revalidation_failed',
-        'The notification changed before the final send check.', final ?? { observationAvailable: false });
-      return;
-    }
-
-    if (outcome.outcome === 'not-capable') {
-      await releaseClaim(input.artifact, request.seat, request.activity, claimToken, 'transport_not_capable', undefined, outcome.diagnostic);
-      return;
-    }
-
-    const mapped = outcome.outcome === 'accepted' ? 'accepted'
-      : outcome.outcome === 'unknown' ? 'unknown' : 'failed';
-    await input.artifact.completeDelivery({ seat: request.seat, activity: request.activity, claimToken,
-      outcome: mapped, at: Date.now(),
-      ...('signature' in outcome && outcome.signature !== undefined ? { signature: outcome.signature } : {}),
-      ...('message' in outcome && outcome.message !== undefined ? { message: outcome.message } : {}),
-      ...('diagnostic' in outcome && outcome.diagnostic !== undefined ? { diagnostic: safeJson(outcome.diagnostic) } : {}),
-    }).catch(() => false);
+    let snapshot: Currentness | undefined;
+    await dispatchEffect({
+      async claim() {
+        const claim = await input.artifact.claimDelivery({ seat: request.seat, activity: request.activity, kind: 'wake',
+          route: seat.wakeAddress, at: input.now ?? Date.now(), leaseMs, claimToken }).catch(() => ({ status: 'stale' as const }));
+        return claim.status === 'acquired' ? { token: claimToken, ordinal: claim.attemptN } : undefined;
+      },
+      async current() {
+        snapshot = undefined;
+        snapshot = await currentness(input.artifact, request, input.now ?? Date.now());
+        return snapshot.current;
+      },
+      async settle(claim, completion) {
+        let fields: { signature?: string; message?: string; diagnostic?: unknown } = {};
+        if (completion.reason === 'not-current') fields = {
+          signature: 'pre_send_revalidation_failed',
+          message: completion.phase === 'final' ? 'The notification changed before the final send check.'
+            : snapshot === undefined ? 'Square delivery state could not be verified.' : 'The notification is no longer current.',
+          diagnostic: snapshot ?? (completion.phase === 'final' ? { observationAvailable: false } : undefined),
+        };
+        else if (completion.reason === 'timeout') fields = { diagnostic: 'transport timeout' };
+        else if (completion.reason === 'threw') fields = { diagnostic: completion.error instanceof Error ? completion.error.message : String(completion.error) };
+        else if (completion.reason === 'not-capable') fields = {
+          signature: 'transport_not_capable', diagnostic: (completion.data as { diagnostic?: unknown } | undefined)?.diagnostic,
+        };
+        else if (completion.reason === 'returned') fields = completion.data as typeof fields;
+        return input.artifact.completeDelivery({ seat: request.seat, activity: request.activity, claimToken: claim.token,
+          outcome: completion.outcome, at: Date.now(),
+          ...(fields.signature === undefined ? {} : { signature: fields.signature }),
+          ...(fields.message === undefined ? {} : { message: fields.message }),
+          ...(fields.diagnostic === undefined ? {} : { diagnostic: safeJson(fields.diagnostic) }),
+        }).catch(() => false);
+      },
+    }, async ({ claim, timeoutMs, beforeSend }) => {
+      const outcome = await input.transport.attempt({ ...request, claimToken: claim.token, attemptN: claim.ordinal }, timeoutMs, beforeSend);
+      return { outcome: outcome.outcome, data: outcome };
+    }, { timeoutMs: leaseMs });
   };
   const groups = receivers.values();
   const settled = await Promise.allSettled(Array.from({ length: Math.min(4, receivers.size) }, async () => {

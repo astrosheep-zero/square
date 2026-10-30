@@ -51,8 +51,11 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     void route;
   `);
   fs.writeFileSync(path.join(fixture, 'delivery-consumer.ts'), `
+    import assert from 'node:assert/strict';
     import { claimAttempt, prepareAttempt, settleAttempt, automaticDispatchEligible,
-      presentationBlocksDispatch, type Attempt, type AttemptRows, type DeliveryPurpose, type AttemptOutcome } from '@astrosheep/square/delivery';
+      presentationBlocksDispatch, dispatchEffect, preparePresentation, presentPrepared, presentPreparedBatch,
+      type EffectPort, type DispatchCompletion, type PresentationCompletion, type PreparedPresentation,
+      type Attempt, type AttemptRows, type DeliveryPurpose, type AttemptOutcome } from '@astrosheep/square/delivery';
     const stores = new Map<string, Map<string, Attempt<{ proof?: string }>>>();
     // These opaque coordinates belong to the consumer, not Square's identity codec.
     const seriesKey = 'tenant:east/item:7/authority:random';
@@ -72,6 +75,36 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const eligible: boolean = automaticDispatchEligible(rows.list(), 3);
     const blocked: boolean = presentationBlocksDispatch(rows.list(), 3);
     void eligible; void blocked;
+    // Installed effects need neither Square storage nor its identities. Binding owns custody.
+    const captured: unknown[] = [];
+    function effectPort<C>(): EffectPort<C> {
+      return {
+        claim: async () => ({ token: 'application-token', ordinal: 4 }),
+        current: async () => true,
+        settle: async (claim, completion) => { captured.push({ claim, completion }); return true; },
+      };
+    }
+    const dispatched = await dispatchEffect(effectPort<DispatchCompletion>(), async context => {
+      assert.equal(await context.beforeSend(), true);
+      assert.equal(context.claim.ordinal, 4);
+      return { outcome: 'accepted', data: 'consumer-proof' };
+    }, { timeoutMs: 1000 });
+    assert.equal(dispatched.observation.kind, 'returned');
+    assert.equal(dispatched.settlement?.persistence.status, 'recorded');
+    async function prepared(payload: string, coverage: 'full' | 'clipped' = 'full'): Promise<PreparedPresentation<string>> {
+      return (await preparePresentation({ payload, coverage, port: effectPort<PresentationCompletion>() }))!;
+    }
+    const single = await prepared('single');
+    const shown = await presentPrepared(single, value => value.toUpperCase());
+    assert.deepEqual(shown.observation, { kind: 'returned', value: 'SINGLE' });
+    const batch = [await prepared('full'), await prepared('preview', 'clipped')];
+    const shownBatch = await presentPreparedBatch(batch, included => ({
+      payload: included.map(item => item.payload).join('+'), included,
+    }), value => value);
+    assert.deepEqual(shownBatch.observation, { kind: 'returned', value: 'full+preview' });
+    assert.deepEqual(shownBatch.settlements.map(item => item.result.completion.outcome), ['presented', 'clipped']);
+    assert.equal((await single.release()).completion.outcome, 'presented');
+    assert.equal(captured.length, 4);
   `);
   fs.writeFileSync(path.join(fixture, 'receive-consumer.ts'), `
     import assert from 'node:assert/strict';
@@ -166,6 +199,8 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   ]);
   assert.equal(typecheck.status, 0, typecheck.stderr || typecheck.stdout || typecheck.error?.message);
 
+  const delivered = run(process.execPath, [path.join(fixture, 'compiled', 'delivery-consumer.js')], { cwd: fixture });
+  assert.equal(delivered.status, 0, delivered.stderr);
   const received = run(process.execPath, [path.join(fixture, 'compiled', 'receive-consumer.js')], { cwd: fixture });
   assert.equal(received.status, 0, received.stderr);
 
