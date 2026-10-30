@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { isSquareError } from './model.js';
+import { isSquareError, SquareError } from './model.js';
 import { requireOwner, requireJoinName, selectOwnSeat, CATCH_DEFAULT_LIMIT, type Square } from './square-api.js';
 import type {
   Owner, WakeAddress, ActivityId, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult,
@@ -44,6 +44,13 @@ function tool<S extends z.ZodRawShape>(name: string, description: string, shape:
       const receipt = await run(square, operationArgs as z.output<z.ZodObject<S>>, control, identity);
       return render(receipt as JsonObject, operationArgs) ?? '';
     } };
+}
+
+export function squareToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.SQUARE_TOOLS?.trim().toLowerCase();
+  if (raw === undefined || raw === '' || raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false' || raw === 'none') return false;
+  throw new SquareError('invalid_args', 'Invalid SQUARE_TOOLS: expected 0, 1, true, false, or none.');
 }
 
 export const SQUARE_TOOL_INSTRUCTIONS = 'Join once. Then express to speak, and catch to take in what reached you. History looks back without taking anything in.';

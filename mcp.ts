@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from './square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled, squareToolFailure, squareToolFailureText } from './square-tools.js';
 import { operationEnv } from './participant-identity.js';
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
@@ -21,13 +21,14 @@ export type SquareMcpServer = McpServer;
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
   const { owner: configuredOwner, wakeAddress, ...resourceOptions } = options;
   const baseEnv = { ...(resourceOptions.env ?? process.env) };
+  const toolsEnabled = squareToolsEnabled(baseEnv);
   const resources = createSquareResourceOwner();
   // Calls to the configured square borrow one server-owned connection.
   const inFlight = new Set<Promise<unknown>>();
   const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
-    instructions: SQUARE_TOOL_INSTRUCTIONS,
+    ...(toolsEnabled ? { instructions: SQUARE_TOOL_INSTRUCTIONS } : {}),
   });
-  for (const tool of SQUARE_TOOLS) {
+  if (toolsEnabled) for (const tool of SQUARE_TOOLS) {
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
       const call = (async () => {
         let square: Square | undefined;

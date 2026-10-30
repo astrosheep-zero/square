@@ -3,7 +3,7 @@ import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
 import { Square, harnessOwner } from '../../dist/square-api.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
@@ -141,7 +141,7 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
 }
 
 export default function squarePiExtension(pi) {
-  for (const tool of SQUARE_TOOLS) {
+  if (squareToolsEnabled(process.env)) for (const tool of SQUARE_TOOLS) {
     pi.registerTool({
       name: `square_${tool.name}`,
       label: `Square ${tool.name}`,
