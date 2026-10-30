@@ -46,7 +46,6 @@
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
-    "square-v1": "npm:@astrosheep/square@0.3.70",
     "typescript": "^5.8",
     "ws": "^8.21.3"
   },
