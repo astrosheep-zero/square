@@ -30,7 +30,7 @@ rg -n 'validateSquareState|exportSqliteState|initializeSqlite|writeSquareSnapsho
 - `square-state.ts` retains legacy validation for the separately implemented migration and test oracle. Normal v1 recognition validates framing and refuses with `migration_required`; it never decodes v1 history. Common per-activity validation is also used by the row codec.
 - `artifact.ts::readSquareSnapshot` and `square-sqlite.ts::exportSqliteState` are explicit export/integrity capabilities. Doctor intentionally reads all authority and compares maintained indices against a rebuild. Neither is a hot-runtime fallback.
 - `createSquareSnapshot` initializes a new artifact. `writeSquareSnapshot/writeSquareFile` are explicit build `--force`/fixture import, not whole-state transaction callbacks. Existing v1 still refuses before destructive work. `initializeSqlite` also supplies the migration's shared rebuild; it calls the same `deriveLanding`, not another production fold.
-- Public SDK `snapshot().delivered()` copies raw receipt assignments into a detached exact-owner Set; it does not retain a query or transaction capability and copies no activity history.
+- Historical (retired SDK API): `snapshot().delivered()` copied raw receipt assignments into a detached exact-owner Set; it does not retain a query or transaction capability and copies no activity history.
 - `.state` matches elsewhere are participant/admission states, transport outcomes or Claude's native `$.state` API, not artifact snapshots. `packages/agent-delivery` remains untouched.
 - `square_snapshot` in the benchmark is instrumentation for detecting forbidden legacy reads, not a runtime path.
 

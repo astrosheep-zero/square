@@ -58,7 +58,7 @@ test('CLI read-only opens need no identity; participant writes do', async () => 
     command: 'status', cwd: ROOT, env: {}, squarePath: file, name: 'Alice', homeDir: os.homedir(),
   }));
   try {
-    assert.equal((await square.snapshot()).participants.length, 0);
+    assert.equal((await square.participants()).participants.length, 0);
     await assert.rejects(square.join('Alice', {}), /explicit owner/);
   } finally { await square.close(); }
 });
@@ -310,14 +310,14 @@ test('build defaults to unlimited, accepts its explicit spelling, and rejects th
   const withoutCap = run(['--location', defaulted, 'build'], { input: 'default unlimited\n' });
   assert.equal(withoutCap.status, 0, withoutCap.stderr);
   const defaultSquare = await Square.at({ path: defaulted });
-  assert.equal((await defaultSquare.snapshot()).hardCap, null);
+  assert.equal((await defaultSquare.status()).hardCap, null);
   await defaultSquare.close();
 
   const unlimited = tempSquare();
   const accepted = run(['--location', unlimited, 'build', '--cap', 'unlimited'], { input: 'unlimited\n' });
   assert.equal(accepted.status, 0, accepted.stderr);
   const unlimitedSquare = await Square.at({ path: unlimited });
-  assert.equal((await unlimitedSquare.snapshot()).hardCap, null);
+  assert.equal((await unlimitedSquare.status()).hardCap, null);
   await unlimitedSquare.close();
 
   const removed = run(['--location', tempSquare(), 'build', '--cap', '-1'], { input: 'removed\n' });

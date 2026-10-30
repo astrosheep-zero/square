@@ -70,7 +70,6 @@ export interface DirectedHead {
 }
 export type LandedRecipient = import('./attention.js').AudienceRecipient;
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
-export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
 export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;
 export type ArtifactWriteAuthority =
   | { readonly kind: 'send'; readonly actor: string }
@@ -153,7 +152,6 @@ export interface SquareRead {
   };
   receipt(requestedName: string, index: ActivityIndex): { readonly at: number } | undefined;
   receiptFacts(requestedName: string, afterIndex: number): ReceiptFacts;
-  receiptAssignments(): readonly ReceiptAssignment[];
   lease(requestedName: string): WatchLease | undefined;
   deliveryDeferrals(participant: string, generation: ActivityId): readonly DeliveryDeferralFact[];
 }

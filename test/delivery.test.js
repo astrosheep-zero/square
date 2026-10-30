@@ -235,13 +235,13 @@ test('a mention-filtered catch leaves listening-only activity eligible at the na
   ], (facts) => {
     const lease = { leaseId: 'catch', heartbeatAt: 10, expiresAt: 20, filter: { mention: 'Bob' } };
     const pending = pendingNotifications(facts, 'Bob');
-    const before = facts.receiptAssignments();
+    const before = [facts.receipt('Bob', 4), facts.receipt('Bob', 5)];
     assert.deepEqual(pending.map(({ route }) => route), ['attention', 'attention']);
     for (const { item, recipient, route } of pending) assert.equal(leaseOwnsNotification(lease, { ...item, recipient, route }), false);
-    assert.deepEqual(facts.receiptAssignments(), before, 'lease filtering never records receipts');
+    assert.deepEqual([facts.receipt('Bob', 4), facts.receipt('Bob', 5)], before, 'lease filtering never records receipts');
     const caught = decideCatch(facts, 'Bob', { mention: true }, 11);
     assert.deepEqual(caught.activities, []);
-    assert.deepEqual(facts.receiptAssignments(), before, 'excluded notifications stay unread');
+    assert.deepEqual([facts.receipt('Bob', 4), facts.receipt('Bob', 5)], before, 'excluded notifications stay unread');
     const membership = { location: '/tmp/listener.square',
       seat: { participant: 'Bob', owner: ':', generation: 'act/1' },
       joinedAt: 2, catchLease: lease,

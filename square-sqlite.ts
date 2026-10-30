@@ -709,7 +709,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const k = encode(owner(name)), r = one('SELECT MAX(at) AS latest FROM receipts WHERE owner_json=?', [k])!, e = one('SELECT MAX(r.act_index) AS latest FROM receipts r JOIN activities a ON a.act_index=r.act_index WHERE r.owner_json=? AND r.act_index>? AND a.actor_json IS NOT NULL', [k, integer(afterIndex, -1)])!;
             return immutable({ ...(r.latest === null ? {} : { latestAt: finite(r.latest) }), ...(e.latest === null ? {} : { latestActorActivityIndex: integer(e.latest) }) });
         },
-        receiptAssignments: () => immutable(all('SELECT owner_json,act_index FROM receipts ORDER BY owner_json,act_index').map(r => ({ owner: decoded(r.owner_json, true), index: integer(r.act_index) }))),
         deliveryDeferrals(name, generation) {
             const canonical = owner(name);
             const current = read.seat(canonical);

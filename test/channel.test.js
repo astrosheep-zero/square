@@ -140,7 +140,7 @@ test('unjoined send targets only explicit recipients; boundary hooks present the
   assert.equal((await sessionInbox(owner, env))[0].notifications[0].body, body);
   const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
   assertFull(presented, sent);
-  assert.equal((await square.snapshot()).delivered('Recipient', sent.id), true);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), true);
   assert.deepEqual((await square.history({ at: [sent.id] })).activities[0].metadata, metadata);
   assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('must not replay'), undefined, env), undefined);
 });
@@ -170,13 +170,13 @@ for (const native of ['claude-code', 'opencode']) test(`${native} native hook co
   await channel.attach('Recipient', { owner: harnessOwner({ channel: native, session }), wakeAddress });
   const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', body, truncate: false, metadata });
   assert.ok(sentPayload, 'send invokes the supplied transport');
-  assert.equal((await square.snapshot()).delivered('Recipient', sent.id), false, 'accepted wake alone is not consumption');
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), false, 'accepted wake alone is not consumption');
   if (native === 'claude-code') {
     assert.deepEqual(await observeClaudeDelivery(session, sentPayload, 'stored', env), { recognized: true, current: true });
   } else {
     await observeOpenCodeContext(session, [{ id: correlation.token, role: 'user', content: [{ type: 'text', text: sentPayload }] }], env, new AbortController().signal);
   }
-  assert.equal((await square.snapshot()).delivered('Recipient', sent.id), true);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), true);
 });
 
 test('attached senders with unread messages bypass Agora gates, caps, throttle and sayCount', async t => {
@@ -215,13 +215,13 @@ test('deferral leases match persisted metadata and release restores boundary eli
   assert.equal(attempts, 1, 'matching direct metadata blocks proactive dispatch, not unrelated messages');
   const page = await sessionInbox(owner, env);
   assert.equal(page[0].notifications.some(note => note.actIndex === parseActivityId(deferred.id)), false);
-  assert.equal((await square.snapshot()).delivered('Recipient', deferred.id), false);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(deferred.id.slice(4))))).value), false);
   assert.equal(await endpoint.releaseDeliveryDeferral(lease.id), true);
   assert.equal(await endpoint.releaseDeliveryDeferral(lease.id), false);
   assert.equal(await endpoint.renewDeliveryDeferral(lease.id, 1000), null);
   const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
   assertFull(presented, deferred);
-  assert.equal((await square.snapshot()).delivered('Recipient', deferred.id), true);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(deferred.id.slice(4))))).value), true);
 });
 
 test('send preserves full body in history, stores truncated preview when clipped, and unifies two-layer ack', async t => {
@@ -246,7 +246,7 @@ test('send preserves full body in history, stores truncated preview when clipped
     const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
     assertFull(presented, sent);
     assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('notification ack blocks replay'), undefined, env), undefined);
-    assert.equal((await square.snapshot()).delivered('Recipient', sent.id), !clipped);
+    assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), !clipped);
   }
 });
 

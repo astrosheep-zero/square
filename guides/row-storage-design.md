@@ -1,5 +1,7 @@
 # Row-oriented artifact design
 
+> Historical design: the public SDK `Square.snapshot()` and its closure were retired. Snapshot-specific proposals below record the design at the time, not the current API.
+
 **Historical accepted design for artifact format 2.** The current runtime uses format 3 for the
 `unlisten` event; see [Square API](square-api.md#artifact-format-and-explicit-migration) for current
 format/migration behavior. The schema and delivery-stage terms below record the original row-storage
@@ -428,7 +430,9 @@ No production structure below carries `.state`, all `.activities`, or a deferred
 | public Square.snapshot().delivered(name,id) | explicit receiptAssignments + detached roster resolution + small header/status in ONE read txn, as below. Other production callers must not use this for count/standing. |
 | doctor / explicit import/export tests | full selected-row validation and replay comparison of indices; detached result includes standing count, not state for CLI header. Legacy validator lives only in explicit migration/test oracle. No automatic repair. |
 
-### Public SDK snapshot closure
+### Public SDK snapshot closure (retired)
+
+This historical design described the removed SDK `Square.snapshot()` API; it is no longer supported.
 
 Keep synchronous arbitrary `delivered(name,id)`. `snapshot()` intentionally copies ALL raw receipt assignments into a private detached Set keyed by JSON.stringify([rawOwner,index]), along with an immutable nameKey->first-roster-spelling map. Closure validates/parses id with current parseRequiredActivityId, resolves `map[nameKey(name)] ?? name`, and tests that exact owner/index set. This covers dormant raw owner keys, orphan assigned coordinates, unknown-name fallback, and arbitrary later calls after port close. It does not query a DB or retain SquareRead. Later writes do not alter this snapshot. No receipt times/activity bodies are copied. This O(receipts) exception is necessary for the existing synchronous API, and is limited to explicit SDK snapshot calls; lifecycle/status/poll/render use narrower helpers.
 

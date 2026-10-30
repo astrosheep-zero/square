@@ -14,7 +14,7 @@ import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
 import { ATTENTION_BODY_MAX } from './attention-presentation.js';
 import { asSeatRef, participantAuthority, requireOwner, requireJoinName } from './seats.js';
-import { recoveryObservation, entryPresentation, snapshot, queryStatus, queryParticipants, catchPresence,
+import { recoveryObservation, entryPresentation, queryStatus, queryParticipants, catchPresence,
   parseRequiredActivityId, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
 import { rememberSquarePath, squareIndexPath } from './square-index.js';
@@ -489,7 +489,6 @@ export class SqliteSquare {
     if (seat !== null) await this.publishSeat(owner);
     return seat === null ? null : this.handle(seat);
   }
-  async snapshot(control?: OperationControl) { return (await this.artifact.read(facts => snapshot(facts, this.clock()), control?.signal)).value; }
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
     if (query.limit !== undefined && query.limit !== null && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT))
       throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);

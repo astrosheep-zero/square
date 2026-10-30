@@ -197,7 +197,7 @@ shared dispatcher's timeout or retry policy.
 
 ## One set of operations and defaults
 
-Square owns `history`, `status`, `participants`, `snapshot`, `stream`, and recovery observations.
+Square owns `history`, `status`, `participants`, `stream`, and recovery observations.
 A file-backed `stream` follows the path with a fresh artifact read for each page, so atomic file
 replacement is visible even while the resource holds its original connection. Its iterator owns
 its observation lifetime: `return()` interrupts a pending pull; closing a local Square does not close

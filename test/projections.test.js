@@ -7,7 +7,7 @@ import { createSquareFile } from '../dist/artifact.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { Square } from '../dist/square-api.js';
 import { resolveKnownName } from '../dist/decisions.js';
-import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, snapshot, queryStatus, streamProjection } from '../dist/views.js';
+import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/views.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 
@@ -51,7 +51,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
   state.hardCap = 5;
   const { square, reads, cell } = measuredSquare(state);
   try {
-    const before = (await cell.read((facts) => facts.receiptAssignments())).value;
+    const before = await cell.revision();
     assert.equal((await square.artifact.read(facts => resolveKnownName(facts, 'BOB'))).value, 'Bob');
     const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'BOB', square.clock()))).value;
     assert.deepEqual(recovered, {
@@ -61,7 +61,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     });
     assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
     assert.deepEqual(reads.ordinals, []);
-    assert.deepEqual((await cell.read((facts) => facts.receiptAssignments())).value, before);
+    assert.deepEqual(await cell.revision(), before);
   } finally { await cell.close(); }
 });
 
@@ -252,7 +252,7 @@ test('status keeps one filtered roster and ignores read activities when selectin
   state.throttlePerMinute = 3;
   const { square, cell } = measuredSquare(state);
   try {
-    const before = (await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value;
+    const before = (await cell.read((facts) => ({ header: facts.header(), roster: facts.roster() }))).value;
     const { observation: projection, ...data } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice', true))).value;
     assert.deepEqual(data, {
       hardCap: 7, throttlePerMinute: 3, now: 100_000, listening: [],
@@ -273,15 +273,10 @@ test('status keeps one filtered roster and ignores read activities when selectin
     assert.equal(Object.hasOwn(projection, 'status'), false);
     assert.equal(Object.hasOwn(projection, 'participants'), false);
     assert.equal(Object.hasOwn(projection, 'now'), false);
-    const snap = (await square.artifact.read(facts => snapshot(facts, queryContext.now))).value;
-    assert.deepEqual(snap.participants, [
-      { name: 'Alice', presence: 'active', listening: [] },
-      { name: 'Gone', presence: 'done', listening: [] },
-    ]);
     const roster = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
     assert.deepEqual(roster.participants.map((p) => p.name), ['Alice', 'Gone', 'Reserved']);
     assert.equal(Object.hasOwn(roster.observation, 'participants'), false);
-    assert.deepEqual((await cell.read((facts) => ({ header: facts.header(), roster: facts.roster(), receipts: facts.receiptAssignments() }))).value, before);
+    assert.deepEqual((await cell.read((facts) => ({ header: facts.header(), roster: facts.roster() }))).value, before);
   } finally { await cell.close(); }
 });
 
@@ -293,24 +288,6 @@ test('observed lifecycle renders its committed public activity and listener keep
   const listened = await alice.listen('Bob', { observe: true });
   assert.equal(listened.observation.target, 'Bob');
   assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);
-});
-
-test('SDK delivered closure detaches exact raw assignments including orphan coordinates', async () => {
-  const acts = [{ kind: 'join', actor: 'Bob', at: 0, index: 0 }, { kind: 'say', actor: 'Bob', at: 1, index: 5, body: 'own' }];
-  const { square, cell } = measuredSquare(fixture(acts, {
-    Bob: { 'act/3': { state: 'seen', at: 10 } },
-    bob: { 'act/4': { state: 'seen', at: 11 } },
-    Unknown: { 'act/2': { state: 'seen', at: 12 } },
-  }));
-  const detached = (await square.artifact.read(facts => snapshot(facts, square.clock()))).value;
-  await cell.transact((facts) => facts.markSeen('Bob', [5], 20));
-  await cell.close();
-  assert.equal(detached.delivered('BOB', 'act/3'), true);
-  assert.equal(detached.delivered('bob', 'act/4'), false);
-  assert.equal(detached.delivered('Unknown', 'act/2'), true);
-  assert.equal(detached.delivered('unknown', 'act/2'), false);
-  assert.equal(detached.delivered('Bob', 'act/5'), false);
-  assert.throws(() => detached.delivered('Bob', 'bad'), /Invalid activity id/);
 });
 
 test('recipient stream advances a raw page without bodies and retains seen pre-rejoin history', async () => {
@@ -347,7 +324,7 @@ test('presence classifications and nearby watch participants are settled by proj
   state.runtime.leases.Watcher = { leaseId: 'watching', heartbeatAt: now, expiresAt: now + 60_000 };
   const { square, reads, cell } = measuredSquare(state);
   try {
-    const before = (await cell.read((facts) => ({ receipts: facts.receiptAssignments(), lease: facts.lease('Watcher'), header: facts.header() }))).value;
+    const before = (await cell.read((facts) => ({ lease: facts.lease('Watcher'), header: facts.header() }))).value;
     const { observation: participants } = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
     const { observation: status } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'Recent', true))).value;
     assert.deepEqual(participants.classificationByName, { Old: 'lingering', Watcher: 'here', Lingering: 'lingering', Recent: 'here', Done: 'done' });
@@ -360,6 +337,6 @@ test('presence classifications and nearby watch participants are settled by proj
     assert.deepEqual(new Set(presence.participants.map((participant) => participant.name)), new Set(['Watcher', 'Lingering', 'Recent', 'Done']));
     assert.equal(presence.now, now);
     assert.deepEqual({ batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length }, bodyReads);
-    assert.deepEqual((await cell.read((facts) => ({ receipts: facts.receiptAssignments(), lease: facts.lease('Watcher'), header: facts.header() }))).value, before);
+    assert.deepEqual((await cell.read((facts) => ({ lease: facts.lease('Watcher'), header: facts.header() }))).value, before);
   } finally { await cell.close(); }
 });

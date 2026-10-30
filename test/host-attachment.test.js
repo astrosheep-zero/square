@@ -106,7 +106,7 @@ test('away is projected without history; audience accumulates and survives exact
     assert.equal(result.observation.standingCount, 2);
     assert.equal(result.observation.classificationByName.Bob, 'away');
   }
-  assert.equal((await f.square.snapshot()).participants.find(p => p.name === 'Bob').presence, 'away');
+  assert.equal((await f.square.participants()).participants.find(p => p.name === 'Bob').presence, 'away');
   const suspended = f.bob;
   const reconnected = await f.square.join('Bob', { owner: f.body, wakeAddress: f.wakeAddress });
   assert.equal(reconnected.kind, 'reconnected');

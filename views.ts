@@ -7,7 +7,7 @@ import { perceiveActivity } from './perception-projection.js';
 import { compileSearchPattern } from './search.js';
 import type {
   Activity, ArchiveRecord, PerceivedActivity, HistoryQuery, HistoryContinuation,
-  ParticipantSummary, PresenceClassification, ParticipantsResult, SquareSnapshot,
+  ParticipantSummary, PresenceClassification, ParticipantsResult,
   EntryPresentation, StatusResult, SquareObservation, CatchPresence,
 } from './square-facade.js';
 
@@ -107,15 +107,6 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
 }
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
   return activities.flatMap((activity) => activity.kind === 'read' ? [] : [toPublicActivity(activity)]);
-}
-export function snapshot(facts: SquareRead, now: number): SquareSnapshot {
-  const header = facts.header();
-  const names = new Map(facts.roster().map((p) => [nameKey(p.name), p.name]));
-  const receipts = new Set(facts.receiptAssignments().map((r) => JSON.stringify([r.owner, r.index])));
-  return { context: [...header.preamble, ...header.warmup].join('\n'), actCount: facts.activityCount({ kinds: NON_READ }), hardCap: header.hardCap,
-    ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
-    participants: coreParticipants(facts, now).filter((p) => p.presence !== 'never-joined').map(({ name, presence, listening }) => ({ name, presence, listening })),
-    delivered(name: string, id: ActivityId) { return receipts.has(JSON.stringify([names.get(nameKey(name)) ?? name, parseRequiredActivityId(id)])); } };
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
   const known = resolveKnownName(facts, name);

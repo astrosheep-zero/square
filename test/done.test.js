@@ -23,13 +23,13 @@ test('done rejects supplied bodies without changing participation or history', a
       await assert.rejects(() => alice.done(body), rejectsDoneBody);
       assert.deepEqual((await square.history({ limit: 100 })).activities, before);
       assert.deepEqual((await alice.listening()).listening, ['Bob']);
-      assert.equal((await square.snapshot()).participants.find((participant) => participant.name === 'Alice').presence, 'active');
+      assert.equal((await square.participants()).participants.find((participant) => participant.name === 'Alice').presence, 'active');
     }
     const result = await alice.done();
     assert.equal(result.activity.kind, 'done');
     assert.equal(result.activity.body, undefined);
     assert.equal(Object.hasOwn(result.activity, 'body'), false);
-    assert.deepEqual((await square.snapshot()).participants.find((participant) => participant.name === 'Alice').listening, []);
+    assert.deepEqual((await square.participants()).participants.find((participant) => participant.name === 'Alice').listening, []);
   } finally {
     await square.close();
   }

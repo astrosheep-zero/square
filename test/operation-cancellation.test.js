@@ -23,10 +23,10 @@ async function tempDirectory(prefix) {
 
 test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
   const square = Square.inMemory({ markdown: 'context' });
-  const before = await square.snapshot();
+  const before = await square.history({ limit: null });
   await assert.rejects(() => square.join('Alice', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
   await assert.rejects(() => square.reattach('Bob', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
-  assert.equal((await square.snapshot()).actCount, before.actCount);
+  assert.deepEqual(await square.history({ limit: null }), before);
   await square.close();
 });
 

@@ -42,26 +42,25 @@ test('build persists a square that reopens through the facade', async () => {
     markdown: '## Topic\n\nTesting v2',
     hardCap: 3,
   });
-  const snapshot = await square.snapshot();
-  assert.equal(snapshot.hardCap, 3);
-  assert.equal(snapshot.actCount, 0);
-  assert.match(snapshot.context, /## Topic/);
-  assert.match(snapshot.context, /Testing v2/);
+  assert.equal((await square.status()).hardCap, 3);
+  assert.deepEqual((await square.history({ limit: null })).activities, []);
   await closeSquare(square);
 
   const persisted = (await readSquareSnapshot(squarePath)).state;
   assert.equal(persisted.hardCap, 3);
+  assert.match(persisted.preamble.join("\n"), /## Topic/);
+  assert.match(persisted.preamble.join("\n"), /Testing v2/);
   assert.deepEqual(persisted.acts, []);
 
   const reopened = await Square.at({ path: squarePath });
-  assert.equal((await reopened.snapshot()).hardCap, 3);
+  assert.equal((await reopened.status()).hardCap, 3);
   assert.deepEqual(((await reopened.history({ limit: null })).activities).map((activity) => activity.id), []);
   await closeSquare(reopened);
 });
 
 test('build defaults to an unlimited cap and rejects a non-positive hardCap', async () => {
   const unlimited = Square.inMemory({ markdown: 'default unlimited' });
-  assert.equal((await unlimited.snapshot()).hardCap, null);
+  assert.equal((await unlimited.status()).hardCap, null);
   await closeSquare(unlimited);
 
   assert.throws(
@@ -74,7 +73,7 @@ test('joining an unknown participant records one join activity and derives the r
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   assert.equal(alice.name, 'Alice');
-  const snapshot = await square.snapshot();
+  const snapshot = await square.participants();
   assert.deepEqual(snapshot.participants.map((participant) => participant.name), ['Alice']);
   assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => ({ kind: activity.kind, actor: activity.actor })), [
     { kind: 'join', actor: 'Alice' },
@@ -249,13 +248,13 @@ test('history remains read-only until catch writes a delivery receipt', async ()
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
-  assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), false);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   await square.history({ limit: 100 });
   await square.history({ grep: 'please check' });
-  assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), false);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   const caught = await bob.catch();
   assert.equal(caught.activities[0].body, 'hello @Bob please check');
-  assert.equal((await square.snapshot()).delivered('Bob', expressed.activity.id), true);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), true);
   assert.deepEqual((await bob.catch()).activities, []);
   await closeSquare(square);
 });
@@ -377,7 +376,7 @@ test('a reply to an author who left lands and reports the author is not here', a
   await closeSquare(square);
 });
 
-test('snapshot counts only people still in the square and tracks done participants', async () => {
+test('status counts only people still in the square and tracks done participants', async () => {
   const square = Square.inMemory({ markdown: 'context', hardCap: 100, clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
@@ -386,7 +385,7 @@ test('snapshot counts only people still in the square and tracks done participan
   }
   await bob.done();
   await alice.express('last activity @Alice', { force: true, mentions: ['Alice'] });
-  const snapshot = await square.snapshot();
+  const snapshot = await square.status();
   assert.equal(snapshot.hardCap, 100);
   assert.equal(snapshot.participants.filter((participant) => ['active', 'watching'].includes(participant.presence)).length, 1);
   assert.equal(snapshot.participants.filter((participant) => participant.presence === 'done').length, 1);

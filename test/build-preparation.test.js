@@ -23,9 +23,8 @@ test('file, memory and public builds share configuration and guide preparation',
   let file;
   try {
     file = await Square.build({ path: filePath, env: {}, ...options });
-    const { delivered: memoryDelivered, ...memoryFacts } = await memory.snapshot();
-    const { delivered: fileDelivered, ...fileFacts } = await file.snapshot();
-    assert.deepEqual(memoryFacts, fileFacts);
+    assert.equal((await memory.status()).hardCap, (await file.status()).hardCap);
+    assert.equal((await memory.status()).throttlePerMinute, (await file.status()).throttlePerMinute);
     assert.deepEqual((await readSquareSnapshot(filePath)).state, expected);
     const appPath = path.join(dir, 'public.square');
     const result = await Square.build({ path: appPath, env: {}, ...options, template: 'architect' });

@@ -124,7 +124,7 @@ test('exact canonical receipts, immutable first timestamps and small-value no-op
     });
     assert.equal(unchanged.changed, false);
     assert.deepEqual(unchanged.value, { at: 1.5 });
-    assert.equal((await port.read(r => r.receiptAssignments())).value[0].owner, 'Alice');
+    assert.deepEqual((await port.read(r => r.receipt('Alice', 0))).value, { at: 1.5 });
     assert.equal((await port.transactAs({ kind: 'participant', seat: alice }, w => w.removeLease('Alice', 'one'))).value, true);
   }
 });

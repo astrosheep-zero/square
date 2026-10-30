@@ -32,7 +32,7 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
     { kind: 'say', actor: 'Cara', at: 3, body: 'still pending', mentions: ['Bob'] },
     { kind: 'say', actor: 'Bob', at: 4, body: 'own activity' },
   ], 1);
-  const before = (await cell.read(facts => facts.receiptAssignments())).value, revision = await cell.revision();
+  const revision = await cell.revision();
   let reads = 0;
   artifact.read = (select, signal) => { reads++; return cell.read(facts => select(withoutBodies(facts)), signal); };
   artifact.transactAs = noWriter;
@@ -42,7 +42,6 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
   assert.deepEqual([observation.participant, observation.standingCount, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, 100, 1, 1]);
   assert.equal(reads, 2, 'one selection and one explicitly requested presence read');
   assert.equal(await cell.revision(), revision);
-  assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 3))).value, undefined);
 });
 
@@ -104,7 +103,7 @@ test('empty catch validates caller, filters, limits, and semantic time without a
     if (at === -0.5) assert.equal((await participant.catch({ observe: true })).observation.now, at);
     else await assert.rejects(participant.catch(), { code: 'invalid_args' });
   }
-  assert.equal((await cell.read(facts => facts.receiptAssignments())).value.length, 0);
+  assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
 });
 
 test('catch propagates cancellation through probe and writer but keeps a committed receipt result', async t => {

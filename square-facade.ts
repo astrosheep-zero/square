@@ -142,15 +142,6 @@ export interface HistoryResult {
   readonly activities: readonly Activity[];
   readonly observation?: HistoryObservation;
 }
-export interface SquareSnapshot {
-  readonly context: string;
-  readonly actCount: number;
-  readonly hardCap: number | null;
-  readonly throttlePerMinute?: number;
-  readonly participants: readonly Pick<ParticipantSummary, 'name' | 'presence' | 'listening'>[];
-  delivered(name: string, id: ActivityId): boolean;
-}
-
 export interface OpenOptions {
   readonly clock?: () => number;
   readonly wakeTransport?: WakeTransportPort | false;

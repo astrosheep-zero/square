@@ -4,7 +4,6 @@ import test from 'node:test';
 import { decideCatch } from '../dist/catch-decisions.js';
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
-import { snapshot } from '../dist/views.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -159,25 +158,21 @@ test('sparse receipts keep exact orphan coordinates and exact owner spelling', a
       aliasOrphan: facts.receipt('ALICE', 2),
       missing: facts.receipt('Alice', 3),
       facts: facts.receiptFacts('Alice', -1),
-      assignments: facts.receiptAssignments(),
+      more: [facts.receipt('Alice', 17), facts.receipt('Alice', 19)],
     }))).value;
     assert.deepEqual(view.aliceOrphan, { at: T0 + 100 });
     assert.deepEqual(view.aliasOrphan, { at: T0 + 100 }, 'identity spelling resolves to the exact roster owner');
     assert.equal(view.missing, undefined);
     assert.deepEqual(view.facts, { latestAt: T0 + 100 }, 'orphan coordinates count for the latest receipt time');
-    assert.deepEqual(view.assignments, [
-      { owner: 'Alice', index: 1 }, { owner: 'Alice', index: 2 }, { owner: 'Alice', index: 17 }, { owner: 'Alice', index: 19 },
-    ]);
+    assert.deepEqual(view.more, [{ at: T0 + 100 }, { at: T0 + 100 }]);
 
     await port.transact((facts) => facts.markSeen('ghost', [4], T0 + 150));
     const unknown = (await port.read((facts) => ({
       exact: facts.receipt('ghost', 4),
       casefolded: facts.receipt('Ghost', 4),
-      assignments: facts.receiptAssignments().filter((row) => row.index === 4),
     }))).value;
     assert.deepEqual(unknown.exact, { at: T0 + 150 });
     assert.equal(unknown.casefolded, undefined, 'an unknown owner keeps its raw spelling, not a case-folded lookup');
-    assert.deepEqual(unknown.assignments, [{ owner: 'ghost', index: 4 }]);
 
     const repeat = await port.transact((facts) => facts.markSeen('Alice', [1], T0 + 500));
     assert.equal(repeat.value, 0);
@@ -312,28 +307,4 @@ test('history context selects neighboring existing positions across gaps', async
   } finally {
     await port.close();
   }
-});
-
-test('the detached snapshot closure answers exactly, survives later writes and close', async () => {
-  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
-  await port.transact((facts) => {
-    facts.markSeen('Alice', [25], T0 + 900);
-    facts.markSeen('ghost', [1], T0 + 950);
-  });
-  const captured = (await port.read(facts => snapshot(facts, T0 + 1000))).value;
-
-  assert.equal(captured.delivered('alice', 'act/25'), true);
-  assert.equal(captured.delivered('Alice', 'act/25'), true);
-  assert.equal(captured.delivered('Alice', 'act/24'), false);
-  assert.equal(captured.delivered('ghost', 'act/1'), true);
-  assert.equal(captured.delivered('Ghost', 'act/1'), false, 'the closure keeps the raw owner key, not a folded one');
-  assert.throws(() => captured.delivered('Alice', 'act/-1'), /activity id/i);
-
-  await port.transact((facts) => facts.markSeen('Alice', [20], T0 + 1100));
-  assert.equal(captured.delivered('Alice', 'act/20'), false, 'a later write does not alter the captured snapshot');
-  assert.equal((await port.read(facts => snapshot(facts, T0 + 1000))).value.delivered('Alice', 'act/20'), true);
-
-  await port.close();
-  assert.equal(captured.delivered('Alice', 'act/25'), true);
-  assert.equal(captured.delivered('ghost', 'act/1'), true);
 });
