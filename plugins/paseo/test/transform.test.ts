@@ -139,14 +139,14 @@ test("square activity envelopes take their route line from attributes or from th
 
 test("a voice line yields speaker marks, not the stored route prose", () => {
   assert.deepEqual(parseSquareVoice("● kuro spoke · you're listening", "· design · aoi · act/104"),
-    { glyph: "●", speaker: "kuro", bell: false, actId: "act/104" });
+    { speaker: "kuro", bell: false, actId: "act/104" });
   assert.deepEqual(parseSquareVoice("○ rei rang the bell"),
-    { glyph: "○", speaker: "rei", bell: true, actId: undefined });
+    { speaker: "rei", bell: true, actId: undefined });
   assert.deepEqual(parseSquareVoice("◎ aoi answered you", "· design · act/12"),
-    { glyph: "◎", speaker: "aoi", bell: false, actId: "act/12" });
-  // A bare activity keeps its first line: no glyph, and the first word is still the speaker.
+    { speaker: "aoi", bell: false, actId: "act/12" });
+  // A bare activity keeps its first line: the first word is still the speaker.
   assert.deepEqual(parseSquareVoice("nobody in particular"),
-    { glyph: "●", speaker: "nobody", bell: false, actId: undefined });
+    { speaker: "nobody", bell: false, actId: undefined });
   assert.deepEqual(parseSquareVoice(undefined, "· design · act/12"),
-    { glyph: "●", speaker: undefined, bell: false, actId: "act/12" });
+    { speaker: undefined, bell: false, actId: "act/12" });
 });

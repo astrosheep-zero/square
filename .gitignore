@@ -4,5 +4,6 @@ node_modules/
 dist/
 .keiyaku/*
 !.keiyaku/settings.json
+!.keiyaku/debts/
 .pi/
 reference/paseo/

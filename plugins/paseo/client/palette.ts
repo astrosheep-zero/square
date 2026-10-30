@@ -1,40 +1,50 @@
 import type { PluginTheme } from "@getpaseo/plugin";
+import { MARBLE_DARK, MARBLE_LIGHT } from "./marble";
 
 /**
- * Square's own courtyard palette: Carrara marble (grey-white stone with a
- * slate-blue vein), deliberately no relative of notesoup's warm parchment or
+ * Square's own courtyard palette: veinless honed stone (muted grey light, charcoal dark) and a
+ * slate seal ■ — everything half a step down, the quiet card on the timeline, deliberately no relative of notesoup's warm parchment or
  * pi-meantime's neutral carbon. Every token here is opaque and self-contained — the card and
  * Markdown never borrow the host's surface ramp or accent, only its appearance
  * (read from the host ink) and its accentForeground, which paints text on top
  * of an accent fill.
  */
 const DARK = {
-  surface0: "#14171b", // inset / code
-  surface1: "#1c2126", // card
-  surface2: "#14171b", // inset / code
-  border: "#2e353d",
-  foreground: "#e8edf3",
-  foregroundMuted: "#8b96a3",
-  accent: "#8ea8c3", // plaza ■ / links
+  surface0: "#15171a", // inset / code
+  surface1: "#1a1d20", // card (charcoal stone)
+  surface2: "#15171a", // inset / code
+  border: "#2b2f34",
+  foreground: "#dde1e6",
+  foregroundMuted: "#858b94",
+  accent: "#8298ad", // plaza ■ / links
 } as const;
 
 const LIGHT = {
-  surface0: "#e7ecf1",
-  surface1: "#f2f5f9", // cool marble white
-  surface2: "#e7ecf1",
-  border: "#d2dae3",
-  foreground: "#181d24",
-  foregroundMuted: "#67737f",
-  accent: "#4b6582",
+  surface0: "#e9ebee",
+  surface1: "#f4f5f6", // card (grey stone)
+  surface2: "#e9ebee",
+  border: "#e0e2e5",
+  foreground: "#2b2e33",
+  foregroundMuted: "#90959c",
+  accent: "#56687e",
 } as const;
 
-const VOICE = { dark: "#8b96a3", light: "#67737f" } as const; // grey: only the ■ carries colour
+const TILE = 512;
+
+/** Web-only surface: react-native-web passes these through as inline CSS. */
+const STONE = {
+  // A slab resting on the page: one darker cut along the bottom edge, a tight contact shadow, no sheen.
+  dark: { image: `url(${MARBLE_DARK})`, edge: "#34393f", boxShadow: "0 1px 0 rgba(0,0,0,0.3), 0 4px 10px -6px rgba(0,0,0,0.55)", inlay: "inset 0 0 0 0.5px rgba(0,0,0,0.4)" },
+  light: { image: `url(${MARBLE_LIGHT})`, edge: "#c9ccd1", boxShadow: "0 1px 0 rgba(24,26,30,0.04), 0 4px 10px -6px rgba(24,26,30,0.18)", inlay: "inset 0 0 0 0.5px rgba(0,0,0,0.26)" },
+} as const;
 
 export interface SquarePalette {
   /** Complete theme for the card and its Markdown surfaces. */
   theme: PluginTheme;
-  /** The filled ● speaker dot; the hollow ○ keeps the muted ink instead. */
-  voice: string;
+  /** Marble card surface for the web host, cut from the tile at `seed`; native keeps the flat surface1. */
+  stone(seed: string): { backgroundImage: string; backgroundSize: string; backgroundPosition: string; borderBottomColor: string; boxShadow: string };
+  /** Web-only: the ■ set into the stone. */
+  inlay: { boxShadow: string };
 }
 
 /** Paseo theme colors are hex (#RGB or #RRGGBB). */
@@ -57,6 +67,19 @@ export function squarePalette(theme: PluginTheme): SquarePalette {
       statusWarning: theme.colors.statusWarning,
       statusDanger: theme.colors.statusDanger,
     } },
-    voice: dark ? VOICE.dark : VOICE.light,
+    stone: seed => {
+      // Each card shows its own patch of the slab, so neighbours never repeat a vein.
+      let hash = 2166136261;
+      for (const char of seed) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+      const { image, edge, boxShadow } = dark ? STONE.dark : STONE.light;
+      return {
+        backgroundImage: image,
+        backgroundSize: `${TILE}px ${TILE}px`,
+        backgroundPosition: `${-((hash >>> 0) % TILE)}px ${-((hash >>> 9) % TILE)}px`,
+        borderBottomColor: edge,
+        boxShadow,
+      };
+    },
+    inlay: { boxShadow: (dark ? STONE.dark : STONE.light).inlay },
   };
 }

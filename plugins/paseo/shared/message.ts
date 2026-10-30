@@ -50,7 +50,7 @@ export function parseSquareBlocks(text: string): SquareBlock[] {
   return blocks;
 }
 
-export interface SquareVoice { glyph: string; speaker?: string; bell: boolean; actId?: string }
+export interface SquareVoice { speaker?: string; bell: boolean; actId?: string }
 
 // A voice line is chrome for the card: `● rei rang the bell` names who, how, and which
 // activity. Route prose is parsed into those marks, never rendered as narration.
@@ -58,7 +58,6 @@ export function parseSquareVoice(actorLine?: string, metaLine?: string): SquareV
   const line = actorLine?.trim() ?? "";
   const cleaned = line.replace(/^[●○◎◆■·]\s*/, "").trim();
   return {
-    glyph: /^[●○◎·]/.exec(line)?.[0] ?? "●",
     speaker: /\S+/.exec(cleaned)?.[0],
     bell: /rang the bell/i.test(cleaned),
     actId: /act\/\d+/.exec(metaLine ?? "")?.[0],

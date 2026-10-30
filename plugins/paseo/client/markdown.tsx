@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { Platform, Text, View, type TextStyle, type ViewStyle } from "react-native";
+import { Platform, StyleSheet, Text, View, type TextStyle } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Lexer, lexer, type Token, type Tokens } from "marked";
 
@@ -9,6 +9,7 @@ function makeStyles(colors: PluginTheme["colors"]) {
   return {
     block: { gap: 6 },
     text: { color: colors.foreground, fontSize: 13, lineHeight: 19 },
+    lead: { color: colors.accent, fontWeight: "600" as const },
     strong: { fontWeight: "500" as const, color: colors.foreground },
     em: { color: colors.foregroundMuted, fontStyle: "italic" as const },
     del: { color: colors.foregroundMuted, textDecorationLine: "line-through" as const },
@@ -117,7 +118,7 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
       default: {
         const block = token as Tokens.Generic;
         return (
-          <Text key={key} style={[styles.text, textStyle]}>
+          <Text key={key} selectable={Platform.OS === "web"} style={[styles.text, textStyle]}>
             {renderInlines(block.tokens ?? Lexer.lexInline(block.text ?? block.raw), styles, key)}
           </Text>
         );
@@ -126,24 +127,79 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
   });
 }
 
+/** The speaker run into the start of a line: the seal's blue, then the words. */
+function Lead({ name, styles }: { name: string; styles: Styles }) {
+  return <Text style={styles.lead}>{name}{"  "}</Text>;
+}
+
 /** One line (or a few) of Markdown, inline only: the collapsed preview on a notification card. */
-export function SquareInline({ text, theme, numberOfLines, style }: {
+export function SquareInline({ text, theme, numberOfLines, lead }: {
   text: string;
   theme: PluginTheme;
   numberOfLines?: number;
-  style?: TextStyle;
+  lead?: string;
 }) {
   const styles = useMemo(() => makeStyles(theme.colors), [theme.colors]);
   return (
-    <Text numberOfLines={numberOfLines} style={[styles.text, style]}>
+    <Text numberOfLines={numberOfLines} style={styles.text}>
+      {lead !== undefined && <Lead name={lead} styles={styles} />}
       {renderInlines(Lexer.lexInline(text), styles, "inline")}
     </Text>
   );
 }
 
-/** A body of Markdown: no envelope, no route line — the words only, indented by the card. */
-export function SquareMarkdownBody({ text, theme, style }: { text: string; theme: PluginTheme; style?: ViewStyle }) {
+/** A paragraph that is one *emphasis* and nothing else is an action, not a line. */
+const isAction = (token: Token): token is Tokens.Paragraph =>
+  token.type === "paragraph" && children(token).length === 1 && children(token)[0]!.type === "em";
+
+/** A bell or an action is stage direction: a caption on a hairline across the full width. */
+export function SquareCue({ label, theme }: { label: ReactNode; theme: PluginTheme }) {
+  const rule = { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border };
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 2 }}>
+      <View style={rule} />
+      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, lineHeight: 16, letterSpacing: 0.4 }}>{label}</Text>
+      <View style={rule} />
+    </View>
+  );
+}
+
+/**
+ * A body of Markdown: no envelope, no route line — the words only, at full width.
+ * `lead` runs the speaker into the first line; `actor` names whoever performs an action.
+ */
+export function SquareMarkdownBody({ text, theme, lead, actor }: {
+  text: string;
+  theme: PluginTheme;
+  lead?: string;
+  actor?: string;
+}) {
   const styles = useMemo(() => makeStyles(theme.colors), [theme.colors]);
-  const tokens = useMemo(() => lexer(text), [text]);
-  return <View style={[styles.block, style]}>{renderBlocks(tokens, styles, "body")}</View>;
+  const tokens = useMemo(() => lexer(text).filter(token => token.type !== "space"), [text]);
+  let pending = lead;
+  const nodes = tokens.map((token, index) => {
+    const key = `body-${index}`;
+    if (isAction(token)) {
+      const words = renderInlines(children(children(token)[0]!), styles, key);
+      return <SquareCue key={key} theme={theme} label={actor === undefined ? words : <>{actor} {words}</>} />;
+    }
+    if (pending === undefined) return renderBlocks([token], styles, key);
+    const name = pending;
+    pending = undefined;
+    if (token.type === "paragraph") {
+      return (
+        <Text key={key} selectable={Platform.OS === "web"} style={styles.text}>
+          <Lead name={name} styles={styles} />
+          {renderInlines(children(token), styles, key)}
+        </Text>
+      );
+    }
+    return [<Text key={`${key}-lead`} style={styles.text}><Lead name={name} styles={styles} /></Text>, ...renderBlocks([token], styles, key)];
+  });
+  return (
+    <View style={styles.block}>
+      {nodes}
+      {pending !== undefined && <Text style={styles.text}><Lead name={pending} styles={styles} /></Text>}
+    </View>
+  );
 }
