@@ -1,6 +1,7 @@
 import type { Act, ActivityId, Owner, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
 import type { AttemptOutcome } from './delivery-attempts.js';
 import type { MetadataMatch, DeliveryDeferralFact } from './delivery-deferral.js';
+import type { ActivitySearch } from './square-facade.js';
 
 export type ActivityIndex = number;
 export interface SquareHeader {
@@ -50,16 +51,14 @@ export interface ActivityFilter {
   readonly actors?: readonly string[];
   readonly actorMatch?: 'identity' | 'exact';
   readonly afterAt?: number;
+  /** Shared query predicates, applied before paging or counting. */
+  readonly metadataMatch?: MetadataMatch;
+  readonly search?: ActivitySearch;
 }
 export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
 export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
-export interface DirectedFilter {
-  readonly afterIndex?: number;
-  readonly beforeIndex?: number;
-  readonly throughIndex?: number;
+export interface DirectedFilter extends Omit<ActivityFilter, 'actors' | 'actorMatch'> {
   readonly unseenOnly?: true;
-  /** Exact own-property scalar equalities, applied before paging or counting. */
-  readonly metadataMatch?: MetadataMatch;
   readonly senders?: readonly string[];
   readonly attentionOnly?: true;
 }

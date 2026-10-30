@@ -158,12 +158,17 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   `);
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
-    import { Channel, type ChannelEndpoint, type PendingOptions, type PendingResult, type AckResult } from '@astrosheep/square/channel';
+    import { Channel, type ChannelEndpoint, type ActivityQuery, type PendingOptions, type PendingResult, type AckResult } from '@astrosheep/square/channel';
     async function readAndAck(endpoint: ChannelEndpoint, participant: Participant) {
-      const options: PendingOptions = { match: { fields: [{ path: ['job', 'id'], equals: 7 }] }, limit: 100 };
+      const filter: ActivityQuery = { at: ['act/1'], from: ['keiyaku-notice'],
+        match: { fields: [{ path: ['job', 'id'], equals: 7 }] },
+        search: { text: 'outcome', mode: 'literal' }, cursor: { id: 'act/0', direction: 'after' } };
+      const options: PendingOptions = { ...filter, limit: 100 };
       const page: PendingResult = await endpoint.pending(options);
       const ack: AckResult = await endpoint.ack(page.activities.map(activity => activity.id));
       const same: PendingResult = await participant.pending(options);
+      const archive: Promise<HistoryResult> = square.history(filter);
+      void archive;
       await participant.ack(same.activities.map(activity => activity.id));
       return ack.consumed + page.remaining;
     }

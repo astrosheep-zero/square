@@ -351,8 +351,11 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
   if (before !== undefined && after !== undefined) fail('--before and --after cannot be combined.');
   return {
-    query: { limit, from: participants, since, after, before, at: at.length === 0 ? undefined : at,
-      contextBefore: beforeContext, contextAfter: afterContext, mention, grep, fixed, order },
+    query: { limit, from: participants.length === 0 ? undefined : participants, since,
+      cursor: after !== undefined ? { id: after, direction: 'after' } : before === undefined ? undefined : { id: before, direction: 'before' },
+      at: at.length === 0 ? undefined : at,
+      contextBefore: beforeContext, contextAfter: afterContext, mention, order,
+      search: grep !== undefined ? { text: grep, mode: 'regex' } : fixed === undefined ? undefined : { text: fixed, mode: 'literal' } },
     noTruncate, format,
     continuationArgs: historyContinuationArgs(argv),
   };

@@ -176,8 +176,7 @@ function historyQueryArgs(query: HistoryQuery): string[] {
   if (query.contextBefore !== undefined) args.push('-B', String(query.contextBefore));
   if (query.contextAfter !== undefined) args.push('-A', String(query.contextAfter));
   if (query.mention !== undefined) args.push('--mention', query.mention);
-  if (query.grep !== undefined) args.push('--grep', query.grep);
-  if (query.fixed !== undefined) args.push('--fixed', query.fixed);
+  if (query.search !== undefined) args.push(query.search.mode === 'regex' ? '--grep' : '--fixed', query.search.text);
   if (query.order !== undefined) args.push('--order', query.order);
   return args;
 }
@@ -191,10 +190,10 @@ export function renderHistoryResult(
   if (projection === undefined) return undefined;
   const query = options.query ?? {};
   const noTruncate = options.noTruncate === true;
-  const pattern = query.grep ?? query.fixed;
-  const output = pattern === undefined || pattern === ''
+  const search = query.search;
+  const output = search === undefined
     ? renderHistoryProjection(projection, projection.visibleActivities, noTruncate, squarePath)
-    : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, noTruncate, squarePath, pattern, query.fixed !== undefined, () => 'full');
+    : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, noTruncate, squarePath, search.text, search.mode === 'literal', () => 'full');
   const next = projection.continuation;
   const base = options.continuationArgs ?? historyQueryArgs(query);
   const continuation = next === undefined ? '' : `\n\n${historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;

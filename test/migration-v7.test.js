@@ -92,14 +92,14 @@ test('explicit format 7 -> 8 drops obsolete activity identities while preserving
 
   const square = await Square.at(input);
   try {
-    assert.deepEqual((await square.history({ after: 'act/3', limit: null })).activities.map(act => act.id), ['act/5']);
-    assert.deepEqual((await square.history({ before: 'act/4', limit: null })).activities.map(act => act.id), ['act/0', 'act/1', 'act/2']);
-    const page = await square.history({ after: 'act/1', limit: 1, observe: true });
+    assert.deepEqual((await square.history({ cursor: { id: 'act/3', direction: 'after' }, limit: null })).activities.map(act => act.id), ['act/5']);
+    assert.deepEqual((await square.history({ cursor: { id: 'act/4', direction: 'before' }, limit: null })).activities.map(act => act.id), ['act/0', 'act/1', 'act/2']);
+    const page = await square.history({ cursor: { id: 'act/1', direction: 'after' }, limit: 1, observe: true });
     assert.deepEqual(page.activities.map(act => act.id), ['act/2']);
     assert.deepEqual(page.observation.continuation, { direction: 'after', cursor: 'act/2', limit: 1 });
-    assert.deepEqual((await square.history({ after: page.observation.continuation.cursor, limit: 1 })).activities.map(act => act.id), ['act/5']);
+    assert.deepEqual((await square.history({ cursor: { id: page.observation.continuation.cursor, direction: 'after' }, limit: 1 })).activities.map(act => act.id), ['act/5']);
     assert.deepEqual((await square.history({ at: ['act/5'], contextBefore: 1 })).activities.map(act => act.id), ['act/2', 'act/5']);
-    assert.deepEqual((await square.history({ after: 'act/7', limit: null })).activities, []);
+    assert.deepEqual((await square.history({ cursor: { id: 'act/7', direction: 'after' }, limit: null })).activities, []);
     const stream = square.stream({ start: { kind: 'after', after: 'act/3' } })[Symbol.asyncIterator]();
     try { assert.equal((await stream.next()).value.id, 'act/5'); }
     finally { await stream.return(); }

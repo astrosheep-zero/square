@@ -172,13 +172,13 @@ export class Bridge {
 
   private async nextActivities(): Promise<readonly Activity[]> {
     const cursor = asActivityId(this.state.cursor);
-    if (cursor !== undefined) return (await this.square.history({ after: cursor, limit: PAGE })).activities;
+    if (cursor !== undefined) return (await this.square.history({ cursor: { id: cursor, direction: 'after' }, limit: PAGE })).activities;
     // A bridge that first started on an empty square has no cursor yet. Read the whole
     // archive from its newest end, so nothing that landed while it was stopped is skipped.
     const pages: (readonly Activity[])[] = [];
     let before: ActivityId | undefined;
     for (;;) {
-      const page = (await this.square.history(before === undefined ? { limit: PAGE } : { before, limit: PAGE })).activities;
+      const page = (await this.square.history({ cursor: before === undefined ? undefined : { id: before, direction: 'before' }, limit: PAGE })).activities;
       pages.push(page);
       if (page.length < PAGE) return pages.reverse().flat();
       before = page[0]!.id;

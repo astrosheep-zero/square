@@ -7,6 +7,8 @@ import { deriveLanding, landingFacts, type LandingWriter } from './square-domain
 import { claimAttempt, prepareAttempt, settleAttempt, type Attempt, type AttemptRows } from './delivery-attempts.js';
 import { legacyRowFramingIssue, legacyActivitySchema } from './square-legacy-framing.js';
 import { receive, recordConsumed } from './receive.js';
+import { formatActivityId } from './square-core.js';
+import { compileSearchPattern } from './search.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -517,6 +519,30 @@ function activitySelection(filter: ActivityFilter, alias = 'a'): Selection {
             add(`${alias}.${column} IN (SELECT value FROM json_each(?))`, encode(values));
         }
     }
+    if (filter.metadataMatch !== undefined) {
+        // Walk literal object keys, never JSON-path strings or array indexes.
+        terms.push(`NOT EXISTS (
+            SELECT 1 FROM json_each(?) field WHERE NOT EXISTS (
+                WITH RECURSIVE walk(value,type,depth) AS (
+                    SELECT json_extract(${alias}.payload_json,'$.metadata'),json_type(${alias}.payload_json,'$.metadata'),0
+                    UNION ALL
+                    SELECT child.value,child.type,walk.depth+1
+                    FROM walk JOIN json_each(CASE WHEN walk.type='object' THEN walk.value ELSE '{}' END) child
+                      ON child.key=json_extract(field.value,'$.path['||walk.depth||']')
+                    WHERE walk.depth<json_array_length(field.value,'$.path')
+                )
+                SELECT 1 FROM walk WHERE depth=json_array_length(field.value,'$.path')
+                  AND (type=json_type(field.value,'$.equals')
+                    OR type IN ('integer','real') AND json_type(field.value,'$.equals') IN ('integer','real'))
+                  AND value IS json_extract(field.value,'$.equals')
+            )
+        )`);
+        args.push(encode(filter.metadataMatch.fields));
+    }
+    if (filter.search !== undefined) {
+        terms.push(`square_search(?,?,${alias}.act_index,${alias}.actor_json,json_extract(${alias}.payload_json,'$.body'))=1`);
+        args.push(filter.search.mode, filter.search.text);
+    }
     return { sql: terms.length ? terms.join(' AND ') : '1', args };
 }
 function pageRows<T>(rows: Row[], page: IndexPage, decode: (row: Row) => T): FactPage<T> {
@@ -543,12 +569,28 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     const all = (sql: string, args: readonly SQLInputValue[] = []): Row[] => db.prepare(sql).all(...args) as Row[];
     const one = (sql: string, args: readonly SQLInputValue[] = []): Row | undefined => db.prepare(sql).get(...args) as Row | undefined;
     const run = (sql: string, args: readonly SQLInputValue[] = []): number => Number(db.prepare(sql).run(...args).changes);
+    let searchRegistered = false;
+    function selectActivity(filter: ActivityFilter): Selection {
+        if (filter.search !== undefined && !searchRegistered) {
+            const patterns = new Map<string, RegExp>();
+            db.function('square_search', { deterministic: true }, (mode, text, index, actor, body) => {
+                const key = encode([mode, text]);
+                let pattern = patterns.get(key);
+                if (pattern === undefined) {
+                    pattern = compileSearchPattern(string(text), mode === 'literal');
+                    patterns.set(key, pattern);
+                }
+                return Number([formatActivityId(integer(index)), decoded(actor, true), body === null ? '' : string(body)]
+                    .some(field => pattern.test(field)));
+            });
+            searchRegistered = true;
+        }
+        return activitySelection(filter);
+    }
     const owner = (requested: string): string => read.participant(requested)?.name ?? requested;
     const attentionRows = (condition: string, args: SQLInputValue[]) => all(`SELECT t.*,p.name_json FROM attention t JOIN participants p ON p.name_key_json=t.listener_key_json WHERE ${condition} ORDER BY t.since_index`, args).map(attention);
     function directedSelection(recipient: string, filter: DirectedFilter): Selection {
-        const p = read.participant(recipient), base = activitySelection({
-            afterIndex: filter.afterIndex, beforeIndex: filter.beforeIndex, throughIndex: filter.throughIndex, actors: filter.senders
-        });
+        const p = read.participant(recipient), base = selectActivity({ ...filter, actors: filter.senders });
         base.sql += ' AND d.recipient_key_json=?';
         base.args.push(p ? key(p.name) : '');
         if (filter.unseenOnly) {
@@ -557,27 +599,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         }
         if (filter.attentionOnly)
             base.sql += " AND d.route IN ('mention','reply','bell')";
-        if (filter.metadataMatch !== undefined) {
-            // Walk object keys rather than JSON-path strings: dots, quotes and array-like
-            // keys are literal, and arrays must never act as metadata objects.
-            base.sql += ` AND NOT EXISTS (
-                SELECT 1 FROM json_each(?) field WHERE NOT EXISTS (
-                    WITH RECURSIVE walk(value,type,depth) AS (
-                        SELECT json_extract(a.payload_json,'$.metadata'),json_type(a.payload_json,'$.metadata'),0
-                        UNION ALL
-                        SELECT child.value,child.type,walk.depth+1
-                        FROM walk JOIN json_each(CASE WHEN walk.type='object' THEN walk.value ELSE '{}' END) child
-                          ON child.key=json_extract(field.value,'$.path['||walk.depth||']')
-                        WHERE walk.depth<json_array_length(field.value,'$.path')
-                    )
-                    SELECT 1 FROM walk WHERE depth=json_array_length(field.value,'$.path')
-                      AND (type=json_type(field.value,'$.equals')
-                        OR type IN ('integer','real') AND json_type(field.value,'$.equals') IN ('integer','real'))
-                      AND value IS json_extract(field.value,'$.equals')
-                )
-            )`;
-            base.args.push(encode(filter.metadataMatch.fields));
-        }
         return base;
     }
     function directedHead(row: Row, recipient: string): DirectedHead {
@@ -643,7 +664,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return r ? activity(r) : undefined;
         },
         activityHeads(filter, page) {
-            const s = activitySelection(filter), limit = pageLimit(page);
+            const s = selectActivity(filter), limit = pageLimit(page);
             return pageRows(all(`SELECT a.act_index,a.at,a.kind,a.actor_json,a.actor_key_json,a.reach,a.reply_index FROM activities a WHERE ${s.sql} ORDER BY a.act_index ${page.edge === 'newest' ? 'DESC' : 'ASC'} LIMIT ?`, [...s.args, limit]), page, head);
         },
         activities(indexes) {
@@ -651,7 +672,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return immutable(all('SELECT * FROM activities WHERE act_index IN (SELECT value FROM json_each(?)) ORDER BY act_index', [encode(indexes)]).map(activity));
         },
         activityCount(filter) {
-            const s = activitySelection(filter);
+            const s = selectActivity(filter);
             return integer(one(`SELECT COUNT(*) AS n FROM activities a WHERE ${s.sql}`, s.args)!.n);
         },
         contextIndexes(centers, before, after) {

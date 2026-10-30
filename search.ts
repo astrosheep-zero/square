@@ -1,7 +1,6 @@
-// Shared activity-body search semantics for filtering and presentation.
-// Regex mode intentionally uses JavaScript's built-in engine: patterns come from
-// the local CLI user and are not treated as a hostile multi-tenant input. Use
-// --fixed for literal text; do not claim regex mode has ReDoS protection.
+// Shared case-insensitive search semantics for storage filtering and presentation.
+// Regex mode intentionally uses JavaScript's built-in engine, without a ReDoS
+// timeout. Callers should use literal mode for plain text and avoid untrusted regexes.
 
 import { SquareError } from './model.js';
 
@@ -11,7 +10,7 @@ export function compileSearchPattern(pattern: string, fixed: boolean): RegExp {
     return new RegExp(pattern, 'i');
   } catch (err) {
     const detail = err instanceof Error ? err.message.replace(/^Invalid regular expression:\s*/i, '') : 'invalid expression';
-    throw new SquareError('invalid_args', `Invalid --grep regex: ${detail}`);
+    throw new SquareError('invalid_args', `Invalid search regex: ${detail}`);
   }
 }
 

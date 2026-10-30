@@ -9,7 +9,8 @@ import type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral,
 import { squareLocation } from './square-location.js';
 
 export { harnessOwner, decodeHarnessOwner, localUserOwner } from './owner.js';
-export type { ActivityDelivery, ActivityMetadata, ChannelTruncate, PerceivedActivity, PendingOptions, PendingResult, AckResult } from './square-facade.js';
+export type { ActivityDelivery, ActivityMetadata, ActivityQuery, ActivitySearch, ActivityCursor,
+  ChannelTruncate, PerceivedActivity, PendingOptions, PendingResult, AckResult } from './square-facade.js';
 export type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, MetadataMatch,
   OperationControl, Owner, WakeAddress, SquareResourceOwner, WakeTransportPort, HarnessSessionChannel };
 

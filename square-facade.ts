@@ -87,8 +87,23 @@ export interface CatchOptions extends ObservationOptions {
   readonly limit?: number;
   readonly replace?: boolean;
 }
-export interface PendingOptions {
+export interface ActivitySearch {
+  readonly text: string;
+  readonly mode: 'literal' | 'regex';
+}
+export interface ActivityCursor {
+  readonly id: ActivityId;
+  readonly direction: 'before' | 'after';
+}
+/** Shared filters; absent arrays are unrestricted, empty arrays match nothing. */
+export interface ActivityQuery {
+  readonly at?: readonly ActivityId[];
+  readonly from?: readonly string[];
   readonly match?: MetadataMatch;
+  readonly search?: ActivitySearch;
+  readonly cursor?: ActivityCursor;
+}
+export interface PendingOptions extends ActivityQuery {
   /** Oldest first; defaults to 100, maximum 100. */
   readonly limit?: number;
 }
@@ -137,18 +152,12 @@ export interface OperationFailureDetail {
 export interface OperationError extends Error {
   readonly operation?: OperationFailureDetail;
 }
-export interface HistoryQuery extends ObservationOptions {
+export interface HistoryQuery extends ActivityQuery, ObservationOptions {
   /** Ten by default; null explicitly reads the full archive. */
   readonly limit?: number | null;
   readonly order?: 'asc' | 'desc';
-  readonly before?: ActivityId;
-  readonly after?: ActivityId;
-  readonly grep?: string;
-  readonly fixed?: string;
-  readonly from?: readonly string[];
   readonly mention?: string;
   readonly since?: number;
-  readonly at?: readonly ActivityId[];
   readonly contextBefore?: number;
   readonly contextAfter?: number;
 }

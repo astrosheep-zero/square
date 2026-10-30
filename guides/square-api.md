@@ -231,8 +231,8 @@ Square; there is no `Participant.history`.
   ordering, consumption or permissions. A current participant may temporarily defer proactive delivery
   by exact metadata match through the SDK lease API below. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
-  metadata JSON. There is no archive metadata filter, query language or index; CLI `--metadata <json>` is the only
-  metadata input flag.
+  metadata JSON. SDK history and pending queries accept exact metadata matches; there is no query
+  language or metadata index. CLI `--metadata <json>` remains an express input flag.
 - Catch returns `{activities, remaining, reason, hint?, observation?}`. Each activity includes
   viewer-relative `perception` and `via`. Reasons are `drained`, `idle`, `capped`, `quorum`,
   `replaced`, or `already-active`. Omitted/zero idle is immediate; positive idle uses the single
@@ -271,6 +271,48 @@ Operations that accept an `OperationControl` use a final argument with `signal` 
 `onProgress`. Listener/lifecycle operations take optional observation options before that argument;
 participant selection, seat discovery and host cleanup methods do not take an `OperationControl`.
 
+## Shared history and pending filters
+
+`HistoryQuery` and `PendingOptions` extend the same exported `ActivityQuery`:
+
+```ts
+interface ActivityQuery {
+  at?: readonly ActivityId[];
+  from?: readonly string[];
+  match?: MetadataMatch;
+  search?: { text: string; mode: 'literal' | 'regex' };
+  cursor?: { id: ActivityId; direction: 'before' | 'after' };
+}
+```
+
+- Filters combine with AND. IDs in `at` and senders in `from` each combine with OR; an absent array
+  is unrestricted, while an explicitly empty array matches nothing. `at` is an exact ID selection;
+  only history can expand those IDs with `contextBefore` / `contextAfter`.
+- Sender names use case-insensitive identity matching and need not belong to a joined participant.
+  Direct senders such as `keiyaku-notice` can be queried without inventing membership. A valid but
+  unmatched sender returns no activities, not an unknown-participant error.
+- `match` uses the same nested own-property, exact type-sensitive scalar equalities as deferrals.
+  `search` tests each activity's ID, sender and body independently, case-insensitively. Literal mode
+  treats regex characters as plain text; regex mode uses JavaScript's built-in regular expressions,
+  without a ReDoS timeout. Search text must be nonempty and regex syntax must be valid. History
+  searches says and departures, not joins; pending always selects addressed, unconsumed says.
+- A cursor is an exclusive activity-ID boundary, independent of `limit`: before excludes the anchor
+  and everything newer; after excludes the anchor and everything older. No consumption is involved.
+  Storage applies the shared filters before limiting and uses the same predicates for counts.
+- History keeps its archive-specific `order`, `mention`, `since` and context options. By default it
+  selects the newest page and returns it oldest first; an after cursor selects the oldest following
+  page. `order: 'desc'` reverses the selected page, not which activities belong to it. Numeric limits
+  stay 1–100, default ten; `limit: null` reads all matches. Exact/context history keeps its existing
+  implicit full-window selection with a 100-activity bound unless a numeric limit is supplied.
+- Pending always selects oldest first, including with a before cursor. Its default and maximum page
+  size remain 100, and `remaining` counts matching unconsumed activities beyond that page within
+  the supplied cursor boundary. It has no history context, ordering or audience override.
+
+The SDK accepts only `search` and `cursor`, not the removed `grep` / `fixed` / `before` / `after`
+fields. CLI flags and tool arguments keep those familiar spellings and translate at the adapter
+boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--after act/12` becomes
+`cursor: {id: 'act/12', direction: 'after'}`. The artifact format and stored activities do not change.
+
 ## Pending query and exact acknowledgement
 
 `Participant.pending(options?, control?)` and `Participant.ack(ids, control?)` separate a read-only
@@ -297,15 +339,14 @@ async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
 }
 ```
 
-- `pending({match?, limit?} = {}, control?)` returns
+- `pending(query: PendingOptions = {}, control?)` returns
   `{activities: readonly PerceivedActivity[], remaining: number}`. It selects only landed,
   addressed, unconsumed says, oldest first. Body, metadata, delivery information, perception and
   route use the same public records as catch; bodies are full stored bodies, not clipped previews.
-- Limit defaults to 100 and must be an integer from 1 through 100. The optional `MetadataMatch`
-  uses exactly the nested own-property scalar equality semantics described below (AND across fields).
-  Storage applies addressedness, consumption and metadata matching **before** limiting.
-  `remaining` counts matching unconsumed activities outside the returned page, in the same read
-  transaction. It is not the global unread count or a durable cursor.
+- Limit defaults to 100 and must be an integer from 1 through 100. The shared filters above are
+  available alongside that limit. Storage applies addressedness, consumption and all supplied
+  filters **before** limiting. `remaining` counts matching unconsumed activities outside the returned
+  page in the same read transaction. It is not the global unread count or a durable cursor.
 - A pending query consumes nothing, changes no read horizon and writes no delivery/presentation
   evidence. Deferrals, catch leases, cancellation and prior clipped presentation do not hide these
   explicit reads. Like catch, pending includes historical addressed receipt holes before a rejoin;
@@ -323,8 +364,10 @@ async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
   query/ack cannot reuse a detached, retired or replaced handle. No storage format change is needed.
   Cancellation before the receipt transaction prevents consumption; a committed ack is not undone.
 - To drain all matching notices, keep querying and acknowledging pages until an **empty** page.
-  Acknowledging one page exposes the next without a cursor. Do not silently stop after the default
-  page or treat a snapshot `remaining: 0` as proof that concurrent producers have stopped. Query and
+  Acknowledging one page exposes the next without a cursor. For read-only pagination instead, pass
+  `cursor: {id: page.activities.at(-1)!.id, direction: 'after'}` with the same filters; earlier pages
+  stay unconsumed. Do not silently stop after the default page or treat a snapshot `remaining: 0`
+  as proof that concurrent producers have stopped. Query and
   ack are separate operations, not an exclusive claim or an exactly-once external-effect guarantee.
 
 ## Temporary proactive delivery deferral

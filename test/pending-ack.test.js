@@ -82,6 +82,58 @@ test('storage matching uses exact nested own-property scalar equalities and AND 
   await assert.rejects(endpoint.pending({ limit: 0 }), error => error.code === 'invalid_args');
 });
 
+test('history and pending share exact IDs, unjoined senders, metadata, search and read-only cursor filters', async t => {
+  const { channel, square, endpoint } = await fixture(t);
+  await channel.attach('Other', { owner: 'test:other' });
+  const send = (body, extra = {}) => channel.send({ from: 'keiyaku-notice', to: 'Recipient',
+    body, metadata: { job: { id: 7 } }, ...extra });
+  const older = await send('unrelated older body');
+  const first = await send('Result [7] alpha'), second = await send('result [7] beta');
+  const literalDistractor = await send('result 7 is not the literal bracketed text');
+  await send('result [7] wrong metadata', { metadata: { job: { id: 8 } } });
+  await send('result [7] wrong sender', { from: 'Coordinator' });
+  const foreign = await send('result [7] other recipient', { to: 'Other' });
+  const query = { from: ['KEIYAKU-NOTICE'], match, search: { text: 'result [7]', mode: 'literal' } };
+  const oldest = await endpoint.pending({ ...query, limit: 1 });
+  assert.deepEqual(ids(oldest), [first.id]);
+  assert.equal(oldest.remaining, 1);
+  const next = await endpoint.pending({ ...query, cursor: { id: first.id, direction: 'after' }, limit: 1 });
+  assert.deepEqual(ids(next), [second.id]);
+  assert.equal(next.remaining, 0);
+  assert.deepEqual(ids(await endpoint.pending({ ...query, cursor: { id: second.id, direction: 'before' } })), [first.id]);
+  assert.deepEqual(ids(await square.history({ ...query, mention: 'Recipient', limit: 1 })), [second.id], 'history keeps newest-page selection');
+  assert.deepEqual(ids(await square.history({ ...query, mention: 'Recipient', cursor: { id: first.id, direction: 'after' }, limit: 1 })), [second.id]);
+  assert.deepEqual(ids(await square.history({ ...query, limit: null })), [first.id, second.id, foreign.id], 'archive has no implicit recipient filter');
+  for (const filter of [{ at: [] }, { from: [] }, { from: ['NeverJoined'] }]) {
+    assert.deepEqual(ids(await square.history(filter)), []);
+    assert.deepEqual(await endpoint.pending(filter), { activities: [], remaining: 0 });
+  }
+  const exact = { ...query, at: [foreign.id, second.id, first.id], search: { text: `^${first.id}$|^${second.id}$`, mode: 'regex' } };
+  assert.deepEqual(ids(await square.history(exact)), [first.id, second.id]);
+  assert.deepEqual(ids(await endpoint.pending(exact)), [first.id, second.id]);
+  assert.deepEqual(ids(await endpoint.pending({ ...query, search: { text: '^keiyaku-notice$', mode: 'regex' } })),
+    [older.id, first.id, second.id, literalDistractor.id]);
+  assert.equal((await square.participants()).participants.some(p => p.name === 'keiyaku-notice'), false);
+  assert.deepEqual(ids(await endpoint.pending(query)), [first.id, second.id], 'cursor reads never consume earlier pages');
+});
+
+test('shared query validation rejects malformed filters on both reads and search continuation counts only selected kinds', async t => {
+  const { square, endpoint, participant } = await fixture(t);
+  const sent = await participant.express('hello');
+  const selected = await square.history({ search: { text: 'Recipient', mode: 'literal' }, limit: 1, observe: true });
+  assert.deepEqual(ids(selected), [sent.activity.id]);
+  assert.equal(selected.observation.totalMatches, 1);
+  assert.equal(selected.observation.continuation, undefined, 'matching join is excluded by the search relation');
+  for (const query of [
+    { search: { text: '[', mode: 'regex' } },
+    { search: { text: '', mode: 'literal' } },
+    { cursor: { id: 'act/01', direction: 'after' } },
+  ]) {
+    for (const read of [input => square.history(input), input => endpoint.pending(input)])
+      await assert.rejects(read(query), error => error.code === 'invalid_args');
+  }
+});
+
 test('ack consumes exact addressed IDs atomically and idempotently without presentation evidence', async t => {
   let now = 1000;
   const { channel, square, endpoint, participant } = await fixture(t, () => now);

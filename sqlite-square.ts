@@ -1,6 +1,7 @@
 import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
+import { activityQueryFilter } from './activity-query.js';
 import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
 import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation } from './square-location.js';
@@ -321,14 +322,13 @@ export class SqliteSquare {
     }
     async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
       checkControl(control);
-      const limit = options.limit ?? 100;
+      const limit = options.limit === undefined ? 100 : options.limit;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
         throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
-      const match = options.match === undefined ? undefined : validateMetadataMatch(options.match);
-      const square = this.owner;
+      const { actors, ...query } = activityQueryFilter(options), square = this.owner;
       return (await square.artifact.read(facts => {
         assertCurrentSeat(facts, asSeatRef(this.seat));
-        const filter = { unseenOnly: true as const, ...(match === undefined ? {} : { metadataMatch: match }) };
+        const filter = { ...query, senders: actors, unseenOnly: true as const };
         const heads = facts.directed(this.name, filter, { edge: 'oldest', limit });
         const activities = facts.activities(heads.items.map(head => head.index))
           .map(activity => toPerceivedActivity(facts, activity, this.name));
@@ -522,8 +522,8 @@ export class SqliteSquare {
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
     if (query.limit !== undefined && query.limit !== null && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT))
       throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
-    if (query.grep !== undefined && query.fixed !== undefined) throw new SquareError('invalid_args', 'History cannot combine regular-expression and literal search');
-    if (query.grep === '' || query.fixed === '') throw new SquareError('invalid_args', 'History search requires non-empty text');
+    if (query.order !== undefined && query.order !== 'asc' && query.order !== 'desc')
+      throw new SquareError('invalid_args', 'History order must be asc or desc.');
     if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
     for (const count of [query.contextBefore, query.contextAfter])
       if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');

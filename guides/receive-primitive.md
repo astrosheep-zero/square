@@ -81,8 +81,8 @@ primitive entrypoints without constructing Square.
 
 Square uses these functions for production landing, catch and `markSeen` (including explicit
 `Participant.ack`) against its existing activity, audience and receipt tables. `Participant.pending`
-uses the same addressed/unconsumed relation without writing receipts; optional metadata matching
-is applied by storage before the page limit. Numeric activity indexes stay
+uses the same addressed/unconsumed relation without writing receipts; its shared exact-ID, sender,
+metadata, search and cursor filters are applied by storage before the page limit. Numeric activity indexes stay
 internal keys; the primitive does not know Square IDs. Square retains validation,
 limits, filtering, perception, ownership, leases, hints and error mapping. The
 empty-catch read probe does not hydrate or acquire a writer; a nonempty probe is

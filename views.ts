@@ -4,7 +4,7 @@ import { SquareError, nameKey, type StoredAct } from './model.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
 import { inSquareCount } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
-import { compileSearchPattern } from './search.js';
+import { activityQueryFilter } from './activity-query.js';
 import type {
   Activity, ArchiveRecord, PerceivedActivity, HistoryQuery, HistoryContinuation,
   ParticipantSummary, PresenceClassification, ParticipantsResult,
@@ -41,28 +41,25 @@ export function parseRequiredActivityId(id: ActivityId): number {
   return index;
 }
 
-/** Compile the public query directly to typed selectors; only search hydrates unselected bodies. */
+/** History adds archive context and ordering to the shared storage-side query predicates. */
 export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: number | null, kinds: ActivityFilter['kinds'], presentation = true) {
-  if (query.before !== undefined && query.after !== undefined) throw new SquareError('invalid_args', 'History cannot combine before and after cursors');
-  const afterIndex = query.after === undefined ? undefined : parseRequiredActivityId(query.after);
-  const beforeIndex = query.before === undefined ? undefined : parseRequiredActivityId(query.before);
-  const actors = (query.from ?? []).map((name) => resolveKnownName(facts, name));
+  const shared = activityQueryFilter(query, ['observe', 'order', 'mention', 'since', 'contextBefore', 'contextAfter']);
+  const { afterIndex } = shared;
   const recipient = query.mention == null ? undefined : resolveKnownName(facts, query.mention);
-  const pattern = query.grep ?? query.fixed;
-  const search = pattern === undefined || pattern === '' ? undefined : compileSearchPattern(pattern, query.grep === undefined);
   if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new SquareError('invalid_args', 'History limit must be a positive integer');
   const filter: ActivityFilter = {
-    ...(actors.length === 0 ? {} : { actors }), afterIndex, beforeIndex, afterAt: query.since,
-    ...(query.at?.length ? { indexes: facts.contextIndexes(query.at.map(parseRequiredActivityId), query.contextBefore ?? 0, query.contextAfter ?? 0) } : {}),
-    kinds: search === undefined ? kinds : ['say', 'done'],
+    ...shared, afterAt: query.since,
+    ...(shared.indexes === undefined ? {} : { indexes: facts.contextIndexes(shared.indexes, query.contextBefore ?? 0, query.contextAfter ?? 0) }),
+    kinds: query.search === undefined ? kinds : ['say', 'done'],
   };
   let selected: readonly ActivityHead[], totalMatches: number, publicBefore = false, publicAfter = false;
-  if (recipient === undefined && search === undefined && limit !== null && limit <= PAGE_SIZE) {
+  if (recipient === undefined && limit !== null && limit <= PAGE_SIZE) {
     selected = facts.activityHeads(filter, { edge: afterIndex === undefined ? 'newest' : 'oldest', limit }).items;
     totalMatches = facts.activityCount(filter);
     if (presentation) {
       const publicHeads = selected.filter((head) => ARCHIVE.has(head.kind));
-      const publicFilter = { ...filter, kinds: [...ARCHIVE] as ActivityFilter['kinds'] };
+      const publicFilter = { ...filter, kinds: filter.kinds === undefined
+        ? [...ARCHIVE] as ActivityFilter['kinds'] : filter.kinds.filter(kind => ARCHIVE.has(kind)) };
       publicBefore = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, beforeIndex: publicHeads[0].index }) > 0;
       publicAfter = publicHeads.length > 0 && facts.activityCount({ ...publicFilter, afterIndex: publicHeads.at(-1)!.index }) > 0;
     }
@@ -73,13 +70,10 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
     while (true) {
       const source = recipient === undefined
         ? facts.activityHeads({ ...filter, afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE })
-        : facts.directed(recipient, { afterIndex: cursor, beforeIndex }, { edge: 'oldest', limit: PAGE_SIZE });
+        : facts.directed(recipient, { ...filter, senders: filter.actors, afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE });
       const heads = recipient === undefined ? source.items as readonly ActivityHead[] : source.items.length === 0 ? []
         : facts.activityHeads({ ...filter, indexes: source.items.map((head) => head.index).filter((index) => filter.indexes === undefined || filter.indexes.includes(index)) }, { edge: 'oldest', limit: PAGE_SIZE }).items;
-      const matches = search === undefined ? undefined : new Set(facts.activities(heads.map((head) => head.index)).filter((act) =>
-        [formatActivityId(act.index), act.actor ?? '', 'body' in act ? act.body ?? '' : ''].some((field) => search.test(field))).map((act) => act.index));
       for (const head of heads) {
-        if (matches !== undefined && !matches.has(head.index)) continue;
         totalMatches++;
         if (presentation && ARCHIVE.has(head.kind)) { firstPublic = Math.min(firstPublic, head.index); lastPublic = head.index; }
         if (limit === null || afterIndex === undefined || page.length < limit) page.push(head);

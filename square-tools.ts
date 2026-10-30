@@ -55,6 +55,19 @@ export function squareToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolea
 
 export const SQUARE_TOOL_INSTRUCTIONS = 'Join once. Then express to speak, and catch to take in what reached you. History looks back without taking anything in.';
 
+type HistoryToolQuery = Omit<HistoryQuery, 'search' | 'cursor'> & {
+  readonly grep?: string; readonly fixed?: string;
+  readonly before?: ActivityId; readonly after?: ActivityId;
+};
+function historyToolQuery({ grep, fixed, before, after, ...query }: HistoryToolQuery): HistoryQuery {
+  if (grep !== undefined && fixed !== undefined) throw new SquareError('invalid_args', 'Use grep or fixed, not both.');
+  if (before !== undefined && after !== undefined) throw new SquareError('invalid_args', 'Use before or after, not both.');
+  return { ...query,
+    search: grep !== undefined ? { text: grep, mode: 'regex' } : fixed === undefined ? undefined : { text: fixed, mode: 'literal' },
+    cursor: after !== undefined ? { id: after, direction: 'after' } : before === undefined ? undefined : { id: before, direction: 'before' },
+  };
+}
+
 const target = z.string().describe('The participant to turn toward or away from.');
 
 export const SQUARE_TOOLS: readonly ToolDefinition[] = [
@@ -97,8 +110,8 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     fixed: z.string().optional().describe('Only activities containing this exact text.'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.string().optional().describe('Only what was addressed to this participant.'),
-  }, (square, args, control) => square.history({ ...args, observe: true }, control),
-    rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: args as HistoryQuery }))),
+  }, (square, args, control) => square.history({ ...historyToolQuery(args), observe: true }, control),
+    rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: historyToolQuery(args as HistoryToolQuery) }))),
   tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
     as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
   }, async (square, { as, action, target }, control, identity) => {

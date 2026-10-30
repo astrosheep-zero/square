@@ -117,12 +117,11 @@ test('unknown participant errors identify only the requested name', async () => 
   const { cell, square } = memorySquare({ acts: [{ kind: 'join', actor: 'Alice', at: 1 }] });
   const unknown = 'Eve';
   const cases = [
-    () => selectedHistory(square, { from: [unknown] }),
     () => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
     () => cell.read((facts) => decideCatch(facts, unknown, {}, 2)),
   ];
 
-  const expectedReasons = ['never_joined', 'not_standing', 'never_joined'];
+  const expectedReasons = ['not_standing', 'never_joined'];
   for (const [index, attempt] of cases.entries()) {
     await assert.rejects(attempt, (error) => {
       assert.match(error.message, /^@Eve (?:has never stepped into this square|is not standing in this square)/);
@@ -429,9 +428,9 @@ test('activity history grep searches ids, participant names, and bodies', async 
     ],
   });
   try {
-    assert.deepEqual((await selectedHistory(square, { grep: '^act/2$' })).map((item) => item.body), ['first inventory @Bob']);
-    assert.deepEqual((await selectedHistory(square, { grep: '^Bob$' })).map((item) => item.body), ['facts only @Alice']);
-    assert.deepEqual((await selectedHistory(square, { grep: 'act/2|facts only' })).map((item) => item.id), ['act/2', 'act/3']);
+    assert.deepEqual((await selectedHistory(square, { search: { text: '^act/2$', mode: 'regex' } })).map((item) => item.body), ['first inventory @Bob']);
+    assert.deepEqual((await selectedHistory(square, { search: { text: '^Bob$', mode: 'regex' } })).map((item) => item.body), ['facts only @Alice']);
+    assert.deepEqual((await selectedHistory(square, { search: { text: 'act/2|facts only', mode: 'regex' } })).map((item) => item.id), ['act/2', 'act/3']);
   } finally {
     await cell.close();
   }

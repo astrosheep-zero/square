@@ -727,7 +727,7 @@ test('history grep centers snippets on late, multiline, and fixed matches', asyn
 
   const invalid = run(withPath(file, ['history', '--grep', '[']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.notEqual(invalid.status, 0);
-  assert.match(invalid.stderr, /Invalid --grep regex/);
+  assert.match(invalid.stderr, /Invalid search regex/);
 
   const literal = run(withPath(file, ['history', '--fixed', '[']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(literal.status, 0, literal.stderr);

@@ -250,7 +250,7 @@ test('history remains read-only until catch writes a delivery receipt', async ()
   const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   await square.history({ limit: 100 });
-  await square.history({ grep: 'please check' });
+  await square.history({ search: { text: 'please check', mode: 'regex' } });
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   const caught = await bob.catch();
   assert.equal(caught.activities[0].body, 'hello @Bob please check');
@@ -265,21 +265,21 @@ test('history grep searches ids, participant names, and bodies and honors limit 
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   await alice.express('first inventory @Bob', { force: true, mentions: ['Bob'] });
   await bob.express('facts only @Alice', { force: true, mentions: ['Alice'] });
-  assert.equal(((await square.history({ grep: '^act/2$' })).activities)[0].body, 'first inventory @Bob');
-  assert.equal(((await square.history({ grep: '^Bob$' })).activities)[0].body, 'facts only @Alice');
+  assert.equal(((await square.history({ search: { text: '^act/2$', mode: 'regex' } })).activities)[0].body, 'first inventory @Bob');
+  assert.equal(((await square.history({ search: { text: '^Bob$', mode: 'regex' } })).activities)[0].body, 'facts only @Alice');
   assert.deepEqual(
-    ((await square.history({ grep: 'act/2|facts only', limit: 2 })).activities).map((activity) => activity.id),
+    ((await square.history({ search: { text: 'act/2|facts only', mode: 'regex' }, limit: 2 })).activities).map((activity) => activity.id),
     ['act/2', 'act/3'],
   );
   for (let index = 0; index < 12; index += 1) {
     await alice.express(`needle ${index} @Alice`, { force: true, mentions: ['Alice'] });
   }
   assert.deepEqual(
-    ((await square.history({ grep: 'needle', limit: 3 })).activities).map((activity) => activity.body),
+    ((await square.history({ search: { text: 'needle', mode: 'regex' }, limit: 3 })).activities).map((activity) => activity.body),
     ['needle 9 @Alice', 'needle 10 @Alice', 'needle 11 @Alice'],
   );
   assert.deepEqual(
-    ((await square.history({ grep: 'needle', limit: 3, order: 'desc' })).activities).map((activity) => activity.body),
+    ((await square.history({ search: { text: 'needle', mode: 'regex' }, limit: 3, order: 'desc' })).activities).map((activity) => activity.body),
     ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice'],
   );
   await closeSquare(square);
