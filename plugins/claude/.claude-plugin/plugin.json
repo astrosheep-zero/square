@@ -1,6 +1,6 @@
 {
   "name": "square",
-  "version": "0.3.100",
+  "version": "0.3.101",
   "description": "Native Claude Code inbox delivery for Square participants",
   "types": "./types.d.ts",
   "author": {
