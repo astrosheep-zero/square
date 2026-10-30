@@ -43,13 +43,13 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   for (const entry of queued) {
     const { membership, notification } = entry;
     const block = renderAttentionPreview({
-        squarePath: membership.location,
-        actIndex: notification.actIndex,
-        recipient: membership.seat.participant,
-        actor: notification.actor,
-        route: notification.route,
-        body: notification.body,
-        delivery: notification.delivery,
+      squarePath: membership.location,
+      actIndex: notification.actIndex,
+      recipient: membership.seat.participant,
+      actor: notification.actor,
+      route: notification.route,
+      body: notification.body,
+      delivery: notification.delivery,
     });
     if (notification.delivery?.mode !== 'direct') {
       remainingAgora -= 1;
