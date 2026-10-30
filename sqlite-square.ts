@@ -7,7 +7,7 @@ import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { activityMetadataHasContent, InternalSquareError, SquareError, isSquareError, nameKey, sameName, validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
-import { coreDone, coreIgnore, coreListen, coreListening, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
+import { attentionChange, coreDone, coreListening, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { expressionContext } from './activity-feed.js';
@@ -206,7 +206,7 @@ export class SqliteSquare {
       checkControl(control);
       const seat = this.seat, now = square.clock();
       return (await square.artifact.transactAs(participantAuthority(seat), facts => {
-        const act = verb === 'listen' ? coreListen(facts, name, target, now) : verb === 'ignore' ? coreIgnore(facts, name, target, now) : coreUnlisten(facts, name, target, now);
+        const act = attentionChange(facts, verb, name, target, now);
         const activity = act === undefined ? null : toPublicActivity(facts.land(act));
         return { activity, ...(!options.observe ? {} : { observation: {
           ...square.observation(inSquareCount(facts), name, now), participant: name,

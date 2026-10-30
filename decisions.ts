@@ -148,7 +148,7 @@ export function coreDone(facts: SquareRead, name: string, body: string, now: num
   requireStanding(current);
   return { kind: 'done', actor: current.name, at: now };
 }
-function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore' | 'unlisten', actor: string, target: string, now: number): TimedAct<'listen' | 'ignore' | 'unlisten'> | undefined {
+export function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore' | 'unlisten', actor: string, target: string, now: number): TimedAct<'listen' | 'ignore' | 'unlisten'> | undefined {
   const current = resolveStanding(facts, actor);
   validateName(target);
   requireStanding(current);
@@ -160,9 +160,6 @@ function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore' | 'unliste
   }
   return existing?.kind === kind ? undefined : { kind, actor: current.name, target, at: now };
 }
-export function coreListen(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'listen', actor, target, now); }
-export function coreIgnore(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'ignore', actor, target, now); }
-export function coreUnlisten(facts: SquareRead, actor: string, target: string, now: number) { return attentionChange(facts, 'unlisten', actor, target, now); }
 export function coreListening(facts: SquareRead, actor: string): readonly string[] {
   const current = resolveStanding(facts, actor);
   return facts.attention(current.name).filter((item) => item.kind === 'listen').map((item) => item.target);

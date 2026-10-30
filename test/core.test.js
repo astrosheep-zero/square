@@ -4,7 +4,7 @@ import test from 'node:test';
 import { expressionContext } from '../dist/activity-feed.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideCatch } from '../dist/catch-decisions.js';
-import { coreIgnore, coreListen, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
+import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { Square } from '../dist/square-api.js';
@@ -263,14 +263,14 @@ test('listener decisions are idempotent and preserve active target spelling orde
   ] });
   try {
     assert.deepEqual(
-      (await joined.cell.read((facts) => coreListen(facts, 'caller', 'aku/Riko/7a', 2))).value,
+      (await joined.cell.read((facts) => attentionChange(facts, 'listen', 'caller', 'aku/Riko/7a', 2))).value,
       { kind: 'listen', actor: 'Caller', target: 'aku/Riko/7a', at: 2 },
     );
     const readings = (await listeningCell.cell.read((facts) => ({
-      repeated: coreListen(facts, 'Caller', 'AKU/riko/7A', 4),
+      repeated: attentionChange(facts, 'listen', 'Caller', 'AKU/riko/7A', 4),
       listening: coreListening(facts, 'caller'),
-      ignored: coreIgnore(facts, 'Caller', 'AKU/RIKO/7A', 5),
-      missing: coreIgnore(facts, 'Caller', 'aku/missing', 5),
+      ignored: attentionChange(facts, 'ignore', 'Caller', 'AKU/RIKO/7A', 5),
+      missing: attentionChange(facts, 'ignore', 'Caller', 'aku/missing', 5),
     }))).value;
     assert.equal(readings.repeated, undefined);
     assert.deepEqual(readings.listening, ['aku/Riko/7a', 'aku/Momo']);
@@ -309,12 +309,12 @@ test('mention and listening caps reject without enumerating the roster', async (
     assert.equal(deduplicated.type, 'sent');
 
     await assert.rejects(
-      () => listeningCell.cell.read((facts) => coreListen(facts, 'Caller', targets[10], 20)),
+      () => listeningCell.cell.read((facts) => attentionChange(facts, 'listen', 'Caller', targets[10], 20)),
       (error) => error.code === 'invalid_args'
         && error.message === 'A participant can listen to at most 10 others'
         && !error.message.includes(targets[0])
     );
-    assert.equal((await listeningCell.cell.read((facts) => coreListen(facts, 'Caller', 'TARGET0', 20))).value, undefined);
+    assert.equal((await listeningCell.cell.read((facts) => attentionChange(facts, 'listen', 'Caller', 'TARGET0', 20))).value, undefined);
   } finally {
     await mentionsCell.cell.close();
     await listeningCell.cell.close();
