@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
-import { createArtifactPort as createRealArtifactPort } from '../dist/artifact.js';
-import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
@@ -22,7 +21,6 @@ function instrumentCell(cell) {
     artifact: {
       ...cell,
       read: (select, signal) => { counters.reads += 1; return cell.read((facts) => select(wrap(facts)), signal); },
-      transact: (change, signal) => { counters.transacts += 1; return cell.transact((facts) => change(wrap(facts)), signal); },
       transactAs: (authority, change, signal) => { counters.transacts += 1; return cell.transactAs(authority, (facts) => change(wrap(facts)), signal); },
     },
   };
@@ -33,23 +31,21 @@ function bodyFor(name) { return "test" + ":" + (name.toLowerCase()); }
 async function establishSeat(cell, participant, at) {
   const body = bodyFor(participant);
   return (await cell.transactAs({ kind: 'join', participant, owner: body }, (facts) => {
-    const joined = facts.land({ kind: 'join', actor: participant, at });
-    const seat = { participant, owner: body, generation: `act/${joined.index}`, attachment: 'attached' };
-    facts.storeSeat(seat);
-    return seat;
+    facts.land({ kind: 'join', actor: participant, at });
+    return facts.seat(participant);
   })).value;
 }
 
-/** The caller's seat comes from its own join authority; the rest of the history is seeded raw. */
+/** Seed each participant and sender through their own authority. */
 async function stateWithHistory(unrelatedSays, participants = 96) {
   const cell = createArtifactPort(':memory:', {
     hardCap: null, preamble: [], warmup: ['test'], acts: [],
     runtime: { nextActIndex: 0, observations: {}, leases: {} },
   });
-  await cell.transact((facts) => facts.land({ kind: 'join', actor: 'Alice', at: 0 }));
+  const alice = await establishSeat(cell, 'Alice', 0);
   const p0 = await establishSeat(cell, 'P0', 1);
-  await cell.transact((facts) => {
-    for (let index = 1; index < participants; index++) facts.land({ kind: 'join', actor: `P${index}`, at: index + 1 });
+  for (let index = 1; index < participants; index++) await establishSeat(cell, `P${index}`, index + 1);
+  await cell.transactAs({ kind: 'participant', seat: alice }, (facts) => {
     for (let index = 0; index < unrelatedSays; index++) {
       facts.land({ kind: 'say', actor: 'Alice', at: index + 100, body: `dispatch ${index} @P0`, mentions: ['P0'] });
     }
@@ -146,7 +142,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
 });
 
 test('catch fences selection and captures the page facts in its receipt transaction', async t => {
-  const cell = createRealArtifactPort(':memory:', { hardCap: 5, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+  const cell = createArtifactPort(':memory:', { hardCap: 5, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const artifact = { ...cell };
   const body = bodyFor('owner');
@@ -170,7 +166,7 @@ test('catch fences selection and captures the page facts in its receipt transact
   const interrupted = await bob.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
   assert.equal(interrupted.reason, 'replaced');
   assert.equal(replaced, true);
-  assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, [], 'a replaced lease cannot insert a receipt');
+  assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined, 'a replaced lease cannot insert a receipt');
 
   artifact.transactAs = async (authority, change, signal) => {
     const result = await cell.transactAs(authority, change, signal);
@@ -200,18 +196,20 @@ test('catch fences selection and captures the page facts in its receipt transact
 });
 
 test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async t => {
-  const cell = createRealArtifactPort(':memory:', { hardCap: 1, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
+  const cell = createArtifactPort(':memory:', { hardCap: 1, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const { counters, artifact } = instrumentCell(cell);
   const body = bodyFor('p0');
   const resource = await resourceWithArtifact(t, artifact);
-  await resource.join('Alice', { owner: body });
+  const alice = (await resource.join('Alice', { owner: body })).participant;
   const participant = (await resource.join('P0', { owner: body })).participant;
+  await alice.express('pending for P0', { force: true, mentions: ['P0'] });
   await participant.express('only say', { force: true });
-  const before = (await cell.read(facts => facts.receiptAssignments())).value;
+  const before = (await cell.read(facts => facts.receipt('P0', 2))).value;
+  assert.equal(before, undefined);
   counters.hydrated = [];
   const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-  assert.deepEqual(caught, { activities: [], remaining: 0, reason: 'capped' });
+  assert.deepEqual(caught, { activities: [], remaining: 1, reason: 'capped' });
   assert.equal(counters.hydrated.flat().length, 0);
-  assert.deepEqual((await cell.read(facts => facts.receiptAssignments())).value, before);
+  assert.equal((await cell.read(facts => facts.receipt('P0', 2))).value, before);
 });

@@ -50,7 +50,6 @@ export function createTestArtifactPort(locationOrState, initialState) {
   return {
     read: select => Promise.resolve().then(() => run(false, select)),
     transact: change => Promise.resolve().then(() => run(true, change)),
-    transactAs: (_authority, change) => Promise.resolve().then(() => run(true, change)),
     revision: () => Promise.resolve().then(() => run(false, facts => facts.header().revision)).then(result => result.value),
     close: async () => { if (!closed) { closed = true; database.close(); } },
   };

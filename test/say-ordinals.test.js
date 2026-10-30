@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { createSqliteDriver, initializeSqlite } from '../dist/square-sqlite.js';
 
 function state() {
@@ -20,8 +20,9 @@ function state() {
       { kind: 'listen', actor: 'Alice', target: 'Bob', at: 8, index: 27 },
       { kind: 'say', actor: 'Bob', body: 'second', at: 9, index: 30 },
       { kind: 'done', actor: 'Bob', at: 10, index: 33 },
+      { kind: 'done', actor: 'Alice', at: 10, index: 34 },
     ],
-    runtime: { nextActIndex: 34, observations: {}, leases: {} },
+    runtime: { nextActIndex: 35, observations: {}, leases: {} },
   };
 }
 
@@ -34,12 +35,16 @@ test('say ordinals preserve lifetime prefix numbering across gaps, case changes,
   })).value;
   assert.deepEqual(original, { 2: 1, 9: 2, 12: 1, 23: 3, 30: 2 });
   assert.throws(() => { original[23] = 100; }, TypeError);
-  await cell.transact((facts) => {
+  const seat = (await cell.transactAs({ kind: 'join', participant: 'Alice', owner: 'test:alice' }, facts => {
+    facts.land({ kind: 'join', actor: 'Alice', at: 11 });
+    return facts.seat('Alice');
+  })).value;
+  await cell.transactAs({ kind: 'participant', seat }, (facts) => {
     assert.deepEqual(facts.sayOrdinals([23]), { 23: 3 });
-    const next = facts.land({ kind: 'say', actor: 'ALICE', body: 'fourth', at: 11 });
+    const next = facts.land({ kind: 'say', actor: 'ALICE', body: 'fourth', at: 12 });
     assert.deepEqual(facts.sayOrdinals([2, 23, next.index]), { 2: 1, 23: 3, [next.index]: 4 });
   });
-  assert.deepEqual((await cell.read((facts) => facts.sayOrdinals([23, 34]))).value, { 23: 3, 34: 4 });
+  assert.deepEqual((await cell.read((facts) => facts.sayOrdinals([23, 36]))).value, { 23: 3, 36: 4 });
   assert.deepEqual(original, { 2: 1, 9: 2, 12: 1, 23: 3, 30: 2 });
 });
 
