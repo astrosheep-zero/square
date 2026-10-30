@@ -3,6 +3,8 @@ import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPor
 import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 import { parseActivityId } from './square-core.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
+import { automaticDispatchEligible, presentationBlocksDispatch } from './delivery-attempts.js';
+import type { Attempt } from './delivery-attempts.js';
 import { matchesCatchSelection } from './catch-selection.js';
 
 export type { DirectedNotificationRoute } from './model.js';
@@ -31,17 +33,18 @@ export interface RoutedNotification {
   recipient: string;
 }
 
+function custody(evidence: readonly DeliveryEvidence[]): Pick<Attempt<unknown>, 'purpose' | 'outcome' | 'expiresAt'>[] {
+  return evidence.map(row => ({ purpose: row.kind === 'wake' ? 'dispatch' : 'presentation', outcome: row.outcome, expiresAt: row.expiresAt }));
+}
+
 /** Presentation custody blocks a wake, independently of native wake acceptance. */
 export function presentationBlocksWake(evidence: readonly DeliveryEvidence[], now: number): boolean {
-  return evidence.some((row) => row.kind === 'presentation'
-    && (row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
-      || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)));
+  return presentationBlocksDispatch(custody(evidence), now);
 }
 
 /** Preselection only: an expired wake dispatch is uncertain, never safe automatic replay. */
 export function automaticWakeEligible(evidence: readonly DeliveryEvidence[], now: number): boolean {
-  return !presentationBlocksWake(evidence, now) && !evidence.some((row) => row.kind === 'wake'
-    && (row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'dispatching'));
+  return automaticDispatchEligible(custody(evidence), now);
 }
 
 /** Notification pending is not cursor suffix or historical catch membership. */

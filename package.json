@@ -50,6 +50,10 @@
     "ws": "^8.21.3"
   },
   "exports": {
+    "./delivery": {
+      "types": "./dist/delivery-primitives.d.ts",
+      "default": "./dist/delivery-primitives.js"
+    },
     "./receive": {
       "types": "./dist/receive.d.ts",
       "default": "./dist/receive.js"

@@ -155,6 +155,13 @@ test('pure landing depends only on domain facts, syntax, and standalone attentio
   assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
+test('delivery custody leaf is storage-independent and the public delivery entry only reexports it', () => {
+  assert.deepEqual(moduleEdges('delivery-attempts.ts', productionSources.get('delivery-attempts.ts')), []);
+  const entry = moduleEdges('delivery-primitives.ts', productionSources.get('delivery-primitives.ts'));
+  assert.ok(entry.length > 0);
+  assert.ok(entry.every(edge => edge.module === './delivery-attempts.js'));
+});
+
 test('receive is a dependency-free leaf composed by production landing and catch', () => {
   assert.deepEqual(moduleEdges('receive.ts', productionSources.get('receive.ts')), []);
   for (const [file, binding] of [['square-sqlite.ts', 'receive'], ['square-sqlite.ts', 'recordConsumed'], ['catch-decisions.ts', 'consumeReceived'], ['catch-decisions.ts', 'selectReceivedHeads']]) {

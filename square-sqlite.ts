@@ -4,6 +4,7 @@ import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, Activity
 import type { DeliveryDeferralFact } from './delivery-deferral.js';
 import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
+import { claimAttempt, prepareAttempt, settleAttempt, type Attempt, type AttemptRows } from './delivery-attempts.js';
 import { legacyRowFramingIssue, legacyActivitySchema } from './square-legacy-framing.js';
 import { receive, recordConsumed } from './receive.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
@@ -411,8 +412,7 @@ function nativeCorrelation(value: unknown): NonNullable<DeliveryEvidence['correl
         ...(item.messageId === undefined ? {} : { messageId: item.messageId as string }),
         ...(item.payloadHash === undefined ? {} : { payloadHash: item.payloadHash as string }) });
 }
-function deliveryEvidence(row: Row): DeliveryEvidence {
-    const payload = object(json(row.payload_json));
+function deliveryEvidence(row: Row, payload = object(json(row.payload_json))): DeliveryEvidence {
     const participant = decoded(row.participant_json, true);
     requireFact(row.participant_key_json === key(participant));
     const generation = activityId(decoded(row.generation_json, true));
@@ -582,7 +582,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const args: SQLInputValue[] = [key(participant), encode(generation)];
             const filter = activityIndex === undefined ? '' : ' AND act_index=?';
             if (activityIndex !== undefined) args.push(integer(Number(activityIndex.slice(4))));
-            return immutable(all(`SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=?${filter} ORDER BY act_index,kind,attempt_n`, args).map(deliveryEvidence));
+            return immutable(all(`SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=?${filter} ORDER BY act_index,kind,attempt_n`, args).map(row => deliveryEvidence(row)));
         },
         deliveryByToken(claimToken) {
             const row = one('SELECT * FROM delivery_evidence WHERE claim_token_json=?', [encode(claimToken)]);
@@ -878,6 +878,41 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return count > 0;
         },
     };
+    type Payload = Record<string, unknown>;
+    function attempt(row: Row): Attempt<Payload> {
+        const data = object(json(row.payload_json)), evidence = deliveryEvidence(row, data);
+        return { purpose: evidence.kind === 'wake' ? 'dispatch' : 'presentation', token: evidence.claimToken ?? '',
+            ordinal: evidence.attemptN, outcome: evidence.outcome, at: evidence.at, expiresAt: evidence.expiresAt, data };
+    }
+    function attemptRows(seat: SeatRef, index: number, kind: DeliveryEvidence['kind'], known?: Attempt<Payload>): AttemptRows<Payload> & { evidence(value: Attempt<Payload>): DeliveryEvidence } {
+        const scope = [key(seat.participant), encode(seat.generation), index, kind];
+        let sources: Row[] = [];
+        return {
+            list() {
+                sources = all('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? ORDER BY attempt_n DESC', scope);
+                return sources.map(attempt);
+            },
+            evidence(value) {
+                const source = sources.find(row => row.attempt_n === value.ordinal)!;
+                return deliveryEvidence({ ...source, outcome: value.outcome, at: value.at, expires_at: value.expiresAt ?? null }, value.data);
+            },
+            byToken(token) {
+                if (known?.token === token) return known;
+                const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? AND claim_token_json=?', [...scope, encode(token)]);
+                return row === undefined ? undefined : attempt(row);
+            },
+            insert(value) {
+                run('INSERT INTO delivery_evidence(participant_key_json,participant_json,generation_json,act_index,kind,attempt_n,outcome,at,expires_at,claim_token_json,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                    [scope[0], encode(seat.participant), scope[1], index, kind, value.ordinal, value.outcome, value.at, value.expiresAt ?? null, encode(value.token), encode(value.data)]);
+                deliveryChanged = true;
+            },
+            replace(value) {
+                const count = run('UPDATE delivery_evidence SET outcome=?,at=?,expires_at=?,payload_json=? WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? AND attempt_n=? AND claim_token_json IS ?',
+                    [value.outcome, value.at, value.expiresAt ?? null, encode(value.data), ...scope, value.ordinal, value.token === '' ? null : encode(value.token)]);
+                if (count) deliveryChanged = true;
+            },
+        };
+    }
     const delivery = {
         claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult {
             requireFact(input.kind === 'wake' || input.kind === 'presentation');
@@ -893,37 +928,22 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             if (matchingDeferrals(read.deliveryDeferrals(currentSeat.participant, currentSeat.generation), item.metadata, input.at).length > 0) return { status: 'deferred' };
             const cancelledThrough = read.cancelledThrough(input.seat.participant, input.seat.generation);
             if (cancelledThrough !== undefined && index <= cancelledThrough) return { status: 'stale' };
-            const rows = all('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? ORDER BY attempt_n DESC', [key(input.seat.participant), encode(input.seat.generation), index, input.kind]);
-            const decoded = rows.map(deliveryEvidence);
-            const terminal = decoded.find((row) => input.kind === 'wake'
-                ? row.outcome === 'accepted' || row.outcome === 'unknown'
-                : row.outcome === 'presented' || row.outcome === 'unknown');
-            if (terminal !== undefined) return { status: 'terminal', evidence: terminal };
-            const dispatching = decoded.find((row) => row.outcome === 'dispatching');
-            if (dispatching !== undefined && (dispatching.expiresAt === undefined || dispatching.expiresAt > input.at)) return { status: 'busy', evidence: dispatching };
-            if (dispatching !== undefined) {
-                const updated = { ...dispatching, outcome: 'unknown' as const, at: input.at, expiresAt: undefined, diagnostic: 'interrupted dispatch' };
-                const source = rows.find((row) => row.attempt_n === dispatching.attemptN)!;
-                run('UPDATE delivery_evidence SET outcome=?,at=?,expires_at=NULL,payload_json=? WHERE participant_key_json=? AND generation_json=? AND act_index=? AND kind=? AND attempt_n=?', ['unknown', input.at, encode({ ...object(json(source.payload_json)), diagnostic: 'interrupted dispatch' }), key(input.seat.participant), encode(input.seat.generation), index, input.kind, dispatching.attemptN]);
-                deliveryChanged = true;
-                return { status: 'terminal', evidence: updated };
-            }
-            const attemptN = (decoded[0]?.attemptN ?? -1) + 1;
-            const payload = input.route === undefined ? {} : { route: input.route };
-            const expiry = finite(input.at + leaseMs);
-            run('INSERT INTO delivery_evidence(participant_key_json,participant_json,generation_json,act_index,kind,attempt_n,outcome,at,expires_at,claim_token_json,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [key(input.seat.participant), encode(input.seat.participant), encode(input.seat.generation), index, input.kind, attemptN, 'dispatching', input.at, expiry, encode(input.claimToken), encode(payload)]);
-            deliveryChanged = true;
-            return { status: 'acquired', claimToken: input.claimToken, attemptN };
+            const rows = attemptRows(input.seat, index, input.kind);
+            const result = claimAttempt({ ...rows, replace(value) {
+                rows.replace({ ...value, data: { ...value.data, diagnostic: 'interrupted dispatch' } });
+            } }, { purpose: input.kind === 'wake' ? 'dispatch' : 'presentation', token: input.claimToken,
+                at: input.at, leaseMs, data: input.route === undefined ? {} : { route: input.route } });
+            if (result.status === 'acquired') return { status: 'acquired', claimToken: result.token, attemptN: result.ordinal };
+            const evidence = result.interrupted ? { ...result.evidence, data: { ...result.evidence.data, diagnostic: 'interrupted dispatch' } } : result.evidence;
+            return { status: result.status, evidence: rows.evidence(evidence) };
         },
         prepareDelivery(input: DeliveryPreparation): boolean {
             const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
             if (row === undefined || row.outcome !== 'dispatching') return false;
-            const correlation = nativeCorrelation(input.correlation);
-            const payload = object(json(row.payload_json));
+            const previous = attempt(row), correlation = nativeCorrelation(input.correlation), payload = previous.data;
             if (stableJson(payload.correlation ?? null) === stableJson(correlation)) return true;
-            const count = run('UPDATE delivery_evidence SET payload_json=? WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [encode({ ...payload, correlation }), key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);
-            if (count) deliveryChanged = true;
-            return count > 0;
+            return prepareAttempt(attemptRows(input.seat, integer(row.act_index), row.kind as DeliveryEvidence['kind'], previous),
+                { token: input.claimToken, data: { ...payload, correlation } });
         },
         completeDelivery(input: DeliveryCompletion): boolean {
             const index = activityIndex(input.activity);
@@ -932,13 +952,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             string(input.claimToken, true);
             const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND act_index=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), index, encode(input.claimToken)]);
             if (row === undefined) return false;
-            if (row.outcome === 'accepted' && input.outcome === 'accepted') return true;
-            if (row.outcome !== 'dispatching' && !(row.outcome === 'unknown' && input.outcome === 'accepted')) return false;
-            const previous = object(json(row.payload_json));
-            const payload = { ...previous, ...(input.signature === undefined ? {} : { signature: input.signature }), ...(input.message === undefined ? {} : { message: input.message }), ...(input.diagnostic === undefined ? {} : { diagnostic: input.diagnostic }), ...(input.correlation === undefined ? {} : { correlation: input.correlation }) };
-            const count = run('UPDATE delivery_evidence SET outcome=?,at=?,expires_at=NULL,payload_json=? WHERE participant_key_json=? AND generation_json=? AND act_index=? AND claim_token_json=?', [input.outcome, input.at, encode(payload), key(input.seat.participant), encode(input.seat.generation), index, encode(input.claimToken)]);
-            if (count) deliveryChanged = true;
-            return count > 0;
+            const previous = attempt(row);
+            const payload = { ...previous.data, ...(input.signature === undefined ? {} : { signature: input.signature }), ...(input.message === undefined ? {} : { message: input.message }), ...(input.diagnostic === undefined ? {} : { diagnostic: input.diagnostic }), ...(input.correlation === undefined ? {} : { correlation: input.correlation }) };
+            return settleAttempt(attemptRows(input.seat, index, row.kind as DeliveryEvidence['kind'], previous),
+                { token: input.claimToken, outcome: input.outcome, at: input.at, data: payload });
         },
         observeNativeDelivery(input: { readonly seat: SeatRef; readonly claimToken: string; readonly observation: NonNullable<DeliveryEvidence['nativeObservations']>[number] }): boolean {
             const row = one('SELECT * FROM delivery_evidence WHERE participant_key_json=? AND generation_json=? AND claim_token_json=?', [key(input.seat.participant), encode(input.seat.generation), encode(input.claimToken)]);

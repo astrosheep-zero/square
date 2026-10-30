@@ -50,6 +50,29 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const route: AudienceRoute | undefined = audience[0]?.route;
     void route;
   `);
+  fs.writeFileSync(path.join(fixture, 'delivery-consumer.ts'), `
+    import { claimAttempt, prepareAttempt, settleAttempt, automaticDispatchEligible,
+      presentationBlocksDispatch, type Attempt, type AttemptRows, type DeliveryPurpose, type AttemptOutcome } from '@astrosheep/square/delivery';
+    const stores = new Map<string, Map<string, Attempt<{ proof?: string }>>>();
+    // These opaque coordinates belong to the consumer, not Square's identity codec.
+    const seriesKey = 'tenant:east/item:7/authority:random';
+    const records = new Map<string, Attempt<{ proof?: string }>>();
+    stores.set(seriesKey, records);
+    const rows: AttemptRows<{ proof?: string }> = {
+      list: () => [...records.values()].sort((a, b) => b.ordinal - a.ordinal),
+      byToken: token => records.get(token),
+      insert: row => { records.set(row.token, row); },
+      replace: row => { records.set(row.token, row); },
+    };
+    const purpose: DeliveryPurpose = 'dispatch';
+    const outcome: AttemptOutcome = 'accepted';
+    claimAttempt(rows, { purpose, token: 'my-token', at: 1, leaseMs: 100, data: {} });
+    prepareAttempt(rows, { token: 'my-token', data: { proof: 'prepared' } });
+    settleAttempt(rows, { token: 'my-token', outcome, at: 2, data: { proof: 'ack' } });
+    const eligible: boolean = automaticDispatchEligible(rows.list(), 3);
+    const blocked: boolean = presentationBlocksDispatch(rows.list(), 3);
+    void eligible; void blocked;
+  `);
   fs.writeFileSync(path.join(fixture, 'receive-consumer.ts'), `
     import assert from 'node:assert/strict';
     import { receive, selectReceivedHeads, consumeReceived, recordConsumed, ReceiveError,
@@ -138,6 +161,7 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     '--types', 'node', '--typeRoots', path.join(root, 'node_modules', '@types'),
     path.join(fixture, 'consumer.ts'),
     path.join(fixture, 'attention-consumer.ts'),
+    path.join(fixture, 'delivery-consumer.ts'),
     path.join(fixture, 'receive-consumer.ts'),
   ]);
   assert.equal(typecheck.status, 0, typecheck.stderr || typecheck.stdout || typecheck.error?.message);
@@ -154,6 +178,30 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     assert.deepEqual(second, [{ recipient: 'west:alice', route: 'bell' }, { recipient: 'east:alice', route: 'bell' }]);
   `], { cwd: fixture, encoding: 'utf8' });
   assert.equal(attention.status, 0, attention.stderr);
+
+  const delivery = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { claimAttempt, prepareAttempt, settleAttempt, automaticDispatchEligible } from '@astrosheep/square/delivery';
+    import assert from 'node:assert/strict';
+    const scopes = new Map();
+    function bind(opaque) {
+      const values = new Map(); scopes.set(opaque, values);
+      return { list: () => [...values.values()].sort((a, b) => b.ordinal - a.ordinal),
+        byToken: token => values.get(token), insert: row => values.set(row.token, row), replace: row => values.set(row.token, row) };
+    }
+    const east = bind('east:item#7:authority/a'), west = bind('west:item#7:authority/b');
+    const input = { purpose: 'dispatch', token: 'same-local-token', at: 1, leaseMs: 10, data: {} };
+    assert.equal(claimAttempt(east, input).status, 'acquired');
+    assert.equal(claimAttempt(west, input).status, 'acquired');
+    assert.equal(prepareAttempt(east, { token: input.token, data: { native: 'proof' } }), true);
+    assert.equal(settleAttempt(east, { token: input.token, outcome: 'accepted', at: 2, data: { ack: true } }), true);
+    const evidence = east.byToken(input.token);
+    assert.equal(settleAttempt(east, { token: input.token, outcome: 'accepted', at: 3, data: {} }), true);
+    assert.equal(east.byToken(input.token), evidence);
+    assert.equal(automaticDispatchEligible(east.list(), 20), false);
+    assert.equal(claimAttempt(west, { ...input, at: 11 }).evidence.outcome, 'unknown');
+    assert.equal(automaticDispatchEligible(west.list(), 20), false);
+  `], { cwd: fixture, encoding: 'utf8' });
+  assert.equal(delivery.status, 0, delivery.stderr);
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import * as api from '@astrosheep/square';

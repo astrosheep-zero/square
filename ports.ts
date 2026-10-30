@@ -1,4 +1,5 @@
 import type { Act, ActivityId, Owner, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
+import type { AttemptOutcome } from './delivery-attempts.js';
 import type { MetadataMatch, DeliveryDeferralFact } from './delivery-deferral.js';
 
 export type ActivityIndex = number;
@@ -81,7 +82,7 @@ export interface DeliveryEvidence {
   readonly generation: ActivityId;
   readonly activity: ActivityId;
   readonly kind: 'wake' | 'presentation';
-  readonly outcome: 'dispatching' | 'accepted' | 'failed' | 'unknown' | 'released' | 'presented' | 'clipped';
+  readonly outcome: AttemptOutcome;
   readonly attemptN: number;
   readonly at: number;
   readonly expiresAt?: number;
