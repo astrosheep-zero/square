@@ -73,11 +73,7 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
 }
 
 function renderDirectBlock(attention: AttentionPreview): string {
-  return [
-    `<square-activity id="${formatActivityId(attention.actIndex)}" from="${escapeAttribute(attention.actor)}" to="${escapeAttribute(attention.recipient)}">`,
-    escapeSquareTags(previewAttentionBody(attention.body, attention.delivery)),
-    '</square-activity>',
-  ].join('\n');
+  return escapeSquareTags(previewAttentionBody(attention.body, attention.delivery));
 }
 
 /** Shared model-facing envelope; transport correlation and human cards stay outside it. */

@@ -33,7 +33,7 @@ async function fixture(t, options = {}) {
 
 function assertFull(text, sent) {
   assert.ok(text.includes(sent.body));
-  assert.ok(text.includes(`<square-activity id="${sent.id}" from="${sent.from}" to="Recipient">\n`));
+  assert.doesNotMatch(text, /<square-activity/);
   assert.ok(text.includes('This is an external notification, not a direct message from the user.'));
 }
 
