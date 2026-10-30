@@ -1,4 +1,4 @@
-import { formatActivityId } from './square-core.js';
+import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
 import { validateMetadataMatch, validateDeferralDuration, validateDeferralId } from './delivery-deferral.js';
@@ -6,7 +6,7 @@ import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
+import { activityMetadataHasContent, InternalSquareError, SquareError, isSquareError, nameKey, sameName, validateActivityDelivery, validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
 import { coreDone, coreIgnore, coreListen, coreListening, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
@@ -32,6 +32,7 @@ import type {
   ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
   SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
   RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, StreamRecord, Activity, PerceivedActivity, ExpressInput,
+  ChannelSendInput, ChannelSendResult,
 } from './square-facade.js';
 
 export type * from './square-facade.js';
@@ -130,6 +131,7 @@ export class SqliteSquare {
   // them into a second context.
   private static readonly ParticipantHandle = class implements Participant {
     constructor(readonly name: string, private readonly owner: SqliteSquare, private readonly seat: Seat) { }
+    get generation() { return this.seat.generation; }
 
     async express(bodyOrInput: string | undefined | ExpressInput, optionsOrControl: ExpressOptions | OperationControl = {}, operationControl?: OperationControl): Promise<ExpressResult> {
       const square = this.owner;
@@ -358,6 +360,44 @@ export class SqliteSquare {
       }, control?.signal)).value;
     }
   };
+
+  /** Direct messages use explicit recipients, not participant expression admission or body attention. */
+  async send(input: ChannelSendInput, control?: OperationControl): Promise<ChannelSendResult> {
+    checkControl(control);
+    const { from, to, body, envelope } = input;
+    if (typeof from !== 'string') throw new SquareError('invalid_args', 'Channel sender must be a name.');
+    validateName(from);
+    const targets = typeof to === 'string' ? [to] : to;
+    if (!Array.isArray(targets) || targets.length < 1 || targets.length > MAX_IDENTITY_SET_SIZE)
+      throw new SquareError('invalid_args', `Channel needs between 1 and ${MAX_IDENTITY_SET_SIZE} recipients.`);
+    const unique: string[] = [];
+    for (const target of targets) {
+      if (typeof target !== 'string') throw new SquareError('invalid_args', 'Channel recipients must be names.');
+      validateName(target);
+      if (!unique.some(name => sameName(name, target))) unique.push(target);
+    }
+    if (typeof body !== 'string' || body.trim() === '') throw new SquareError('invalid_args', 'Channel body must be non-empty.');
+    const metadata = validateActivityMetadata(input.metadata);
+    const delivery = validateActivityDelivery({ mode: 'direct', ...(envelope === undefined ? {} : { envelope }) })!;
+    const { stored, resolvedTo } = (await this.artifact.transactAs({ kind: 'send', actor: from }, facts => {
+      const standing = facts.roster().filter(p => p.joined), resolvedTo: string[] = [], missing: string[] = [];
+      for (const target of unique) {
+        const recipient = standing.find(p => sameName(p.name, target));
+        if (recipient === undefined || facts.seat(recipient.name)?.attachment !== 'attached') missing.push(target);
+        else resolvedTo.push(recipient.name);
+      }
+      if (missing.length > 0) throw new SquareError('invalid_args', `Channel recipients are not standing: ${missing.join(', ')}`, {
+        reason: 'not_standing', targets: missing, activityUnsent: true,
+      });
+      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body,
+        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery, mentions: resolvedTo }), resolvedTo };
+    }, control?.signal)).value;
+    if (this.wakeTransport !== undefined)
+      await deliverPending({ artifact: this.artifact, transport: this.wakeTransport, location: this.deliveryLocation,
+        activity: stored.index, now: stored.at }).catch(() => undefined);
+    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo,
+      ...(envelope === undefined ? {} : { envelope }), ...(stored.kind !== 'say' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
+  }
 
   async participant(name: string, { owner }: { readonly owner: Owner }): Promise<Participant> {
     validateName(name);

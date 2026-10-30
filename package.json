@@ -51,6 +51,10 @@
     "ws": "^8.21.3"
   },
   "exports": {
+    "./channel": {
+      "types": "./dist/channel.d.ts",
+      "default": "./dist/channel.js"
+    },
     "./delivery": {
       "types": "./dist/delivery-primitives.d.ts",
       "default": "./dist/delivery-primitives.js"

@@ -35,6 +35,10 @@ test('generated release artifacts expose the current identity and supported host
   // Square compiles the shared package source, including its OpenCode leaf, so the
   // SDK must resolve at build time; it is never a runtime dependency of Square.
   assert.equal(packageJson.devDependencies['@opencode/client'], '2.0.20');
+  assert.deepEqual(packageJson.exports['./channel'], {
+    types: './dist/channel.d.ts',
+    default: './dist/channel.js',
+  });
   assert.deepEqual(packageJson.exports['./paseo'], {
     types: './dist/paseo.d.ts',
     default: './dist/paseo.js',
@@ -123,6 +127,8 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/codex/.codex-plugin/plugin.json',
     'plugins/codex/hooks/hooks.json',
     'dist/codex-hook.js',
+    'dist/channel.js',
+    'dist/channel.d.ts',
     'dist/codex-queue.js',
     ...['codex', 'codex-cli', 'codex-hook', 'codex-boundary', 'codex-endpoint', 'codex-queue', 'file-lock']
       .flatMap((name) => ['js', 'd.ts'].map((ext) => `dist/packages/agent-delivery/src/${name}.${ext}`)),
@@ -156,6 +162,21 @@ if(specifier.includes('@opencode/') || context.parentURL?.includes('/@opencode/'
 return next(specifier,context);
 }`);
   fs.writeFileSync(path.join(fixture, 'register.mjs'), `import {register} from 'node:module';register('./no-sdk.mjs',import.meta.url);`);
+  // Resolve the public subpath as an outside consumer, without any installed SDKs.
+  fs.mkdirSync(path.join(fixture, 'node_modules', '@astrosheep'), { recursive: true });
+  fs.symlinkSync(shipped, path.join(fixture, 'node_modules', '@astrosheep', 'square'), 'dir');
+  fs.writeFileSync(path.join(fixture, 'channel.mjs'), `import {Channel, ChannelEndpoint, resolveHarnessSession, harnessOwner} from '@astrosheep/square/channel';
+const channel = Channel.inMemory();
+try {
+  const recipient = await channel.attach('Worker', {owner:harnessOwner({channel:'pi',session:'packed'})});
+  if (!(recipient instanceof ChannelEndpoint)) throw new Error('missing endpoint export');
+  const sent = await channel.send({from:'Coordinator',to:'Worker',body:'packed channel'});
+  console.log(JSON.stringify({sent,identity:resolveHarnessSession({PI_SESSION_ID:'packed'})}));
+} finally {await channel.close();}`);
+  const channel = JSON.parse((await run(process.execPath, ['--import', './register.mjs', 'channel.mjs'], { cwd: fixture, timeout: 5000 })).stdout);
+  assert.deepEqual(channel.sent.to, ['Worker']);
+  assert.equal(channel.sent.from, 'Coordinator');
+  assert.equal(channel.identity.owner, 'pi:packed');
   const received = once(server, 'frame');
   fs.writeFileSync(path.join(fixture, 'consumer.mjs'), `import {connect} from './package/${entryPath}';
 const agent = await connect({harness:'claude',sessionId:'root-pack-target',endpoint:${JSON.stringify(endpoint)},timeoutMs:1000});

@@ -1,7 +1,7 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Owner, StoredAct, WakeAddress, ActivityMetadata, ActivityDelivery, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { Owner, StoredAct, WakeAddress, ActivityMetadata, ActivityDelivery, DeliveryEnvelope, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
@@ -50,6 +50,21 @@ export interface ExpressResult {
   /** Occasional participant-facing nudge; not part of the activity. */
   readonly hint?: string;
   readonly observation?: ExpressObservation;
+}
+export interface ChannelSendInput {
+  readonly from: string;
+  readonly to: string | readonly string[];
+  readonly body: string;
+  readonly envelope?: DeliveryEnvelope;
+  readonly metadata?: ActivityMetadata;
+}
+export interface ChannelSendResult {
+  readonly id: ActivityId;
+  readonly at: number;
+  readonly from: string;
+  readonly to: readonly string[];
+  readonly envelope?: DeliveryEnvelope;
+  readonly metadata?: ActivityMetadata;
 }
 export interface ListenerChangeResult {
   readonly activity: Activity | null;
@@ -169,6 +184,7 @@ export interface JoinResult {
 }
 export interface Participant {
   readonly name: string;
+  readonly generation: ActivityId;
   express(body: string | undefined, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
   express(input: ExpressInput, control?: OperationControl): Promise<ExpressResult>;
   listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
