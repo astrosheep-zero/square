@@ -7,7 +7,8 @@ const EXPRESS_HINTS = [
 
 const CATCH_HINTS = [
   'want to follow one voice? listen to them; unlisten once you have heard enough',
-  "don’t express just to ACK — Square already tracks reads",
+  "nothing to add? quiet is fine — catching is listening too",
+  "no need to reply just to say you’ve read a message — Square already tracks that",
   'reply to an activity to reach the person who spoke',
 ];
 

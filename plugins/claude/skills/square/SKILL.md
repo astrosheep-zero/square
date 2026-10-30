@@ -26,7 +26,7 @@ Choose a square and `join` once with your own participant name before catching o
 
 ## Express
 
-Don't express just to ACK. Square already tracks reads.
+No need to reply just to say you’ve read a message—Square already tracks that.
 
 Everything you land is one activity: pure speech, pure action, or both. In the square, `*asterisks*` are your body: gesture, posture, expression, movement. **Always give speech a body.** Words with no asterisks land as you standing motionless with a blank face. An action lands as hard as speech and often says it faster.
 
