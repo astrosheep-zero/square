@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "guides",
+    "examples",
     "skills/square",
     "plugins"
   ],

@@ -238,6 +238,69 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
   `], { cwd: fixture, encoding: 'utf8' });
   assert.equal(delivery.status, 0, delivery.stderr);
 
+  // Run the shipped example outside the repository. Its only Square imports
+  // resolve through the unpacked package's public entrypoints.
+  const examplePath = path.join(fixture, 'symmetric-domains.mjs');
+  fs.copyFileSync(path.join(packageRoot, 'examples', 'symmetric-domains.mjs'), examplePath);
+  const example = run(process.execPath, [examplePath], { cwd: fixture });
+  assert.equal(example.status, 0, example.stderr);
+  const demo = JSON.parse(example.stdout);
+  assert.deepEqual(demo.exchanges.map(e => [e.from, e.to]), [['east', 'west'], ['west', 'east']]);
+  assert.equal(demo.handoffs.length, 2);
+  for (const [index, exchange] of demo.exchanges.entries()) {
+    const { sourceKey, destinationKey, admission, afterPresentation } = exchange;
+    assert.notEqual(sourceKey, destinationKey, 'destination assigns its own opaque identity');
+    assert.deepEqual(admission, [[destinationKey], [destinationKey]], 'admission consumes neither recipient');
+    assert.deepEqual(afterPresentation, [[], [destinationKey]], 'full presentation consumes only its captured recipient');
+    assert.equal(exchange.presentation.observation.kind, 'returned');
+    assert.equal(exchange.presentation.settlements[0].result.completion.outcome, 'presented');
+    assert.equal(exchange.presentation.settlements[0].result.persistence.status, 'recorded');
+    assert.deepEqual(exchange.presentationReceipts.map(r => [r.recipient, r.item]),
+      [[index === 0 ? 'w/reader' : 'e/reader', destinationKey]]);
+    assert.equal(exchange.output.length, 1);
+    assert.deepEqual(exchange.output[0].origin, { domain: exchange.from, key: sourceKey });
+    assert.deepEqual(exchange.originReceiptsAfter, exchange.originReceiptsBefore);
+    assert.ok(exchange.originReceiptsBefore.length > 0, 'origin already owns independent consumption evidence');
+    assert.deepEqual(exchange.unmatched.items, [], 'nonmatching via filter leaves remote work pending');
+    assert.equal(exchange.unmatched.newlyConsumed, 0);
+    assert.equal(exchange.consumed.newlyConsumed, 1);
+    assert.equal(exchange.consumed.items[0].via, 'mention', 'remote route survives admission and filtered consumption');
+    assert.equal(exchange.repeated.items[0].via, 'mention');
+    assert.equal(exchange.repeated.newlyConsumed, 0);
+    assert.equal(exchange.repeated.items[0].key, destinationKey);
+    const outcome = index === 0 ? 'accepted' : 'unknown';
+    assert.equal(exchange.dispatch.settlement.completion.outcome, outcome);
+    assert.equal(exchange.dispatch.settlement.persistence.status, 'recorded');
+    assert.equal(exchange.replay.observation.kind, 'not-invoked');
+    assert.equal(exchange.handoffsAfterReplay, exchange.handoffsBeforeReplay);
+    assert.equal(demo.attempts[exchange.from].filter(a => a.purpose === 'dispatch').length, 1);
+    const series = demo.attempts[exchange.from].find(a => a.purpose === 'dispatch' && a.item === sourceKey);
+    assert.deepEqual(series.outcomes, [outcome], 'actual terminal attempt blocks a second claim');
+    assert.equal(series.target, exchange.to, 'one attempt series per destination, not per recipient');
+    const handoff = demo.handoffs[index];
+    assert.deepEqual(handoff.audience.map(a => a.recipient), index === 0
+      ? ['w/reader', 'w/other'] : ['e/reader', 'e/other']);
+    assert.equal(handoff.key, destinationKey);
+    const presented = demo.attempts[exchange.to].find(a => a.purpose === 'presentation' && a.item === destinationKey);
+    assert.deepEqual(presented.outcomes, ['presented']);
+    assert.equal(demo.receipts[exchange.to].filter(r => r.item === destinationKey).length, 2);
+  }
+  assert.equal(typeof demo.exchanges[0].sourceKey, 'string');
+  assert.equal(typeof demo.exchanges[1].sourceKey, 'number');
+  assert.deepEqual(demo.offline.map(o => o.domain), ['east', 'west']);
+  assert.equal(demo.handoffsAfterOffline, demo.handoffsBeforeOffline);
+  for (const local of demo.offline) {
+    assert.equal(demo.attempts[local.domain].filter(a => local.keys.includes(a.item)).length, 0,
+      'local-only work does not acquire remote custody while offline');
+    assert.equal(local.middle.items[0].key, local.keys[1]);
+    assert.equal(local.middle.items[0].via, 'mention', 'local exact consumption preserves the attention route');
+    assert.deepEqual(local.pages.flatMap(p => p.items.map(item => item.via)), ['mention', 'mention']);
+    assert.equal(local.middle.remaining, 2);
+    assert.equal(local.repeated.newlyConsumed, 0);
+    assert.deepEqual(local.pages.map(p => p.items[0].key), [local.keys[0], local.keys[2]], 'page preserves receipt holes and local insertion order');
+    assert.deepEqual(local.pages.map(p => p.remaining), [1, 0]);
+  }
+
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import * as api from '@astrosheep/square';
     const { Square } = api;

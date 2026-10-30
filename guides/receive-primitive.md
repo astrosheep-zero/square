@@ -73,7 +73,9 @@ Storage errors propagate unchanged; they still require caller rollback.
 
 This is not a remote message protocol, replay envelope, permission system,
 ordering service, billing ledger or exactly-once external effect guarantee.
-Delivery attempts and presentation are separate from consumption.
+Delivery attempts and presentation are separate from consumption. The
+[symmetric domains example](symmetric-domains.md) composes all three public
+primitive entrypoints without constructing Square.
 
 ## Square composition
 

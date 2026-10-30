@@ -27,3 +27,6 @@ The caller decides whether a bell's recipient snapshot is local or global, and w
 that snapshot is authoritative. Square supplies its standing participants and
 incoming relationships at landing, inside its persistence transaction. The result
 is computed attention, separate from delivery and consumption.
+
+For an installed consumer composing this with receive and delivery in two equal,
+independent domains, see the [symmetric domains example](symmetric-domains.md).
