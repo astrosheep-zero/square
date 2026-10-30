@@ -378,18 +378,13 @@ export class SqliteSquare {
       if (!unique.some(name => sameName(name, target))) unique.push(target);
     }
     if (typeof body !== 'string' || body.trim() === '') throw new SquareError('invalid_args', 'Channel body must be non-empty.');
-    let sentBody = body.replace(/\r\n/g, '\n');
-    if (typeof truncate === 'function') {
-      const out = truncate(sentBody);
-      if (typeof out !== 'string' || out.trim() === '')
-        throw new SquareError('invalid_args', 'Channel truncate must return a non-empty string.');
-      sentBody = out.replace(/\r\n/g, '\n');
-    } else if (truncate !== false && truncate !== Number.POSITIVE_INFINITY) {
-      if (!Number.isSafeInteger(truncate) || truncate < 1)
-        throw new SquareError('invalid_args', 'Channel truncate must be false, a positive integer, or a function.');
-      if (sentBody.length > truncate)
-        sentBody = `${sentBody.slice(0, truncate).trimEnd()}… (truncated ${sentBody.length - truncate} chars)`;
-    }
+    if (truncate !== false && (!Number.isSafeInteger(truncate) || truncate < 1))
+      throw new SquareError('invalid_args', 'Channel truncate must be false or a positive integer.');
+    const fullBody = body.replace(/\r\n/g, '\n');
+    const preview = truncate !== false && fullBody.length > truncate
+      ? `${fullBody.slice(0, truncate).trimEnd()}… (truncated ${fullBody.length - truncate} chars)`
+      : undefined;
+    const delivery = preview === undefined ? { mode: 'direct' as const } : { mode: 'direct' as const, preview };
     const metadata = validateActivityMetadata(input.metadata);
     const { stored, resolvedTo } = (await this.artifact.transactAs({ kind: 'send', actor: from }, facts => {
       const standing = facts.roster().filter(p => p.joined), resolvedTo: string[] = [], missing: string[] = [];
@@ -401,13 +396,13 @@ export class SqliteSquare {
       if (missing.length > 0) throw new SquareError('invalid_args', `Channel recipients are not standing: ${missing.join(', ')}`, {
         reason: 'not_standing', targets: missing, activityUnsent: true,
       });
-      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body: sentBody,
-        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery: { mode: 'direct' }, mentions: resolvedTo }), resolvedTo };
+      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body: fullBody,
+        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery, mentions: resolvedTo }), resolvedTo };
     }, control?.signal)).value;
     if (this.wakeTransport !== undefined)
       await deliverPending({ artifact: this.artifact, transport: this.wakeTransport, location: this.deliveryLocation,
         activity: stored.index, now: stored.at }).catch(() => undefined);
-    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo, body: sentBody,
+    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo, body: preview ?? fullBody,
       ...(stored.kind !== 'say' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
   }
 

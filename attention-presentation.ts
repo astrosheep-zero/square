@@ -16,14 +16,15 @@ export interface AttentionPreview {
 }
 
 export function previewAttentionBody(body: string, delivery?: ActivityDelivery): string {
-  const compact = body.replace(/\r\n/g, '\n');
-  if (delivery?.mode === 'direct') return compact;
-  if (compact.length <= ATTENTION_BODY_MAX) return compact;
+  const compact = (delivery?.mode === 'direct' ? delivery.preview ?? body : body).replace(/\r\n/g, '\n');
+  if (delivery?.mode === 'direct' || compact.length <= ATTENTION_BODY_MAX) return compact;
   return `${compact.slice(0, ATTENTION_BODY_MAX).trimEnd()}…`;
 }
 
 export function attentionBodyIsClipped(body: string, delivery?: ActivityDelivery): boolean {
-  return delivery?.mode !== 'direct' && body.replace(/\r\n/g, '\n').length > ATTENTION_BODY_MAX;
+  return delivery?.mode === 'direct'
+    ? delivery.preview !== undefined
+    : body.replace(/\r\n/g, '\n').length > ATTENTION_BODY_MAX;
 }
 
 export function displayAttentionPath(squarePath: string): string {
@@ -74,7 +75,7 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
 function renderDirectBlock(attention: AttentionPreview): string {
   return [
     `<square-activity id="${formatActivityId(attention.actIndex)}" from="${escapeAttribute(attention.actor)}" to="${escapeAttribute(attention.recipient)}">`,
-    escapeSquareTags(attention.body.replace(/\r\n/g, '\n')),
+    escapeSquareTags(previewAttentionBody(attention.body, attention.delivery)),
     '</square-activity>',
   ].join('\n');
 }

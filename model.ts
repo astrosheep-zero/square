@@ -11,17 +11,25 @@ export type JsonValue = null | boolean | number | string | readonly JsonValue[] 
 export type ActivityMetadata = Readonly<Record<string, JsonValue>>;
 export interface ActivityDelivery {
   readonly mode: 'direct';
+  readonly preview?: string;
 }
 
 export function validateActivityDelivery(value: unknown): ActivityDelivery | undefined {
   if (value === undefined) return undefined;
   if (value !== null && typeof value === 'object'
     && [Object.prototype, null].includes(Object.getPrototypeOf(value))
-    && Reflect.ownKeys(value).length === 1) {
+    && Object.getOwnPropertySymbols(value).length === 0) {
+    const keys = Object.getOwnPropertyNames(value);
     const mode = Object.getOwnPropertyDescriptor(value, 'mode');
-    if (mode?.enumerable && 'value' in mode && mode.value === 'direct') return { mode: 'direct' };
+    const preview = Object.getOwnPropertyDescriptor(value, 'preview');
+    if (mode?.enumerable && 'value' in mode && mode.value === 'direct') {
+      if (keys.length === 1) return { mode: 'direct' };
+      if (keys.length === 2 && preview?.enumerable && 'value' in preview
+        && typeof preview.value === 'string' && preview.value.trim() !== '')
+        return { mode: 'direct', preview: preview.value };
+    }
   }
-  throw new SquareError('invalid_args', "Activity delivery must be { mode: 'direct' }.");
+  throw new SquareError('invalid_args', "Activity delivery must be { mode: 'direct', preview?: string }.");
 }
 
 export const ACTIVITY_METADATA_MAX_BYTES = 16 * 1024;

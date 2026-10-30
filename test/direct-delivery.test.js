@@ -135,9 +135,11 @@ test('delivery validation accepts only a plain direct mode object before commit'
   const f = await fixture(t);
   assert.equal(validateActivityDelivery(undefined), undefined);
   assert.deepEqual(validateActivityDelivery(delivery), delivery);
+  assert.deepEqual(validateActivityDelivery({ mode: 'direct', preview: 'short…' }), { mode: 'direct', preview: 'short…' });
   assert.deepEqual(validateActivityDelivery(Object.assign(Object.create(null), delivery)), delivery);
   const specs = [null, [], Symbol('delivery'), () => delivery, new Date(), {}, { mode: 'agora' },
-    { mode: 'direct', unknown: true }, { mode: 'direct', [Symbol('hidden')]: true },
+    { mode: 'direct', unknown: true }, { mode: 'direct', preview: '' }, { mode: 'direct', preview: '  ' }, { mode: 'direct', preview: 1 },
+    { mode: 'direct', [Symbol('hidden')]: true },
     Object.create(delivery), Object.defineProperty({ mode: 'direct' }, 'hidden', { value: true }),
     Object.defineProperty({}, 'mode', { value: 'direct' }),
     Object.defineProperty({}, 'mode', { enumerable: true, get() { assert.fail('accessor was invoked'); } })];

@@ -210,7 +210,7 @@ test('deferral leases match persisted metadata and release restores boundary eli
   const renewed = await endpoint.renewDeliveryDeferral(lease.id, 2000);
   assert.equal(renewed.id, lease.id);
   assert.equal(renewed.expiresAt, new Date(now + 2000).toISOString());
-  const deferred = await channel.send({ from: 'Coordinator', to: 'Recipient', body, metadata });
+  const deferred = await channel.send({ from: 'Coordinator', to: 'Recipient', body, truncate: false, metadata });
   await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'unmatched metadata', metadata: { job: { id: 8 } } });
   assert.equal(attempts, 1, 'matching direct metadata blocks proactive dispatch, not unrelated messages');
   const page = await sessionInbox(owner, env);
@@ -224,30 +224,29 @@ test('deferral leases match persisted metadata and release restores boundary eli
   assert.equal((await square.snapshot()).delivered('Recipient', deferred.id), true);
 });
 
-test('send normalizes and truncates once before persisting and returning the final direct body', async t => {
+test('send preserves full body in history, stores truncated preview when clipped, and unifies two-layer ack', async t => {
   const { channel, square, env } = await fixture(t);
   const owner = harnessOwner({ channel: 'pi', session: 'channel-truncation' });
   await channel.attach('Recipient', { owner });
   const source = 'a\r\n' + 'x'.repeat(230), normalized = source.replace(/\r\n/g, '\n');
-  for (const [input, expected] of [
-    [{ body: source }, 'a\n' + 'x'.repeat(198) + '… (truncated 32 chars)'],
-    [{ body: 'x'.repeat(200) }, 'x'.repeat(200)],
-    [{ body: 'short\r\ntext' }, 'short\ntext'],
-    [{ body: source, truncate: false }, normalized],
-    [{ body: source, truncate: Infinity }, normalized],
-    [{ body: 'abc  \r\nrest', truncate: 5 }, 'abc… (truncated 5 chars)'],
-    [{ body: source, truncate: 1 }, 'a… (truncated 231 chars)'],
-    [{ body: source, truncate: 1000 }, normalized],
-    [{ body: source, truncate: text => { assert.equal(text, normalized); return 'result\r\n' + text; } }, 'result\n' + normalized],
+  for (const [input, fullExpected, previewExpected, clipped] of [
+    [{ body: source }, normalized, 'a\n' + 'x'.repeat(198) + '… (truncated 32 chars)', true],
+    [{ body: 'x'.repeat(200) }, 'x'.repeat(200), 'x'.repeat(200), false],
+    [{ body: 'short\r\ntext' }, 'short\ntext', 'short\ntext', false],
+    [{ body: source, truncate: false }, normalized, normalized, false],
+    [{ body: 'abc  \r\nrest', truncate: 5 }, 'abc  \nrest', 'abc… (truncated 5 chars)', true],
+    [{ body: source, truncate: 1 }, normalized, 'a… (truncated 231 chars)', true],
+    [{ body: source, truncate: 1000 }, normalized, normalized, false],
   ]) {
     const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', ...input });
-    assert.equal(sent.body, expected);
+    assert.equal(sent.body, previewExpected);
     const stored = (await square.history({ at: [sent.id] })).activities[0];
-    assert.equal(stored.body, expected);
-    assert.deepEqual(stored.delivery, { mode: 'direct' });
+    assert.equal(stored.body, fullExpected);
+    assert.deepEqual(stored.delivery, clipped ? { mode: 'direct', preview: previewExpected } : { mode: 'direct' });
     const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
     assertFull(presented, sent);
-    assert.equal((await square.snapshot()).delivered('Recipient', sent.id), true);
+    assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('notification ack blocks replay'), undefined, env), undefined);
+    assert.equal((await square.snapshot()).delivered('Recipient', sent.id), !clipped);
   }
 });
 
@@ -261,12 +260,9 @@ test('send validation and unavailable targets reject atomically, and cancellatio
     { to: null }, { to: ['Recipient', 7] }, { to: ['bad name'] }, { body: '' }, { body: ' \n ' }, { body: null },
     { metadata: [] }, { metadata: { value: undefined } },
   ]) await assert.rejects(channel.send({ ...send, ...change }), invalid);
-  for (const truncate of [null, true, 0, -1, 1.5, NaN, -Infinity, Number.MAX_SAFE_INTEGER + 1, '200', {}, [], Symbol('truncate')])
+  for (const truncate of [null, true, 0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, '200', () => 'x', {}, [], Symbol('truncate')])
     await assert.rejects(channel.send({ ...send, truncate }), error => error.code === 'invalid_args'
-      && error.message === 'Channel truncate must be false, a positive integer, or a function.');
-  for (const out of ['', ' \r\n ', undefined, null, 7, {}, Promise.resolve('async')])
-    await assert.rejects(channel.send({ ...send, truncate: () => out }), error => error.code === 'invalid_args'
-      && error.message === 'Channel truncate must return a non-empty string.');
+      && error.message === 'Channel truncate must be false or a positive integer.');
   await assert.rejects(channel.send({ ...send, to: ['Recipient', 'Missing'] }), error => error.code === 'invalid_args'
     && error.facts.reason === 'not_standing' && error.facts.activityUnsent && assert.deepEqual(error.facts.targets, ['Missing']) === undefined);
   assert.deepEqual(await square.history({ limit: null }), before);

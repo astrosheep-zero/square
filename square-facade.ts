@@ -51,7 +51,7 @@ export interface ExpressResult {
   readonly hint?: string;
   readonly observation?: ExpressObservation;
 }
-export type ChannelTruncate = number | false | ((body: string) => string);
+export type ChannelTruncate = number | false;
 export interface ChannelSendInput {
   readonly from: string;
   readonly to: string | readonly string[];
