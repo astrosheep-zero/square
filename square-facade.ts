@@ -1,11 +1,11 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Owner, StoredAct, WakeAddress, ActivityMetadata, ActivityDelivery, DeliveryEnvelope, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { Owner, StoredAct, WakeAddress, ActivityMetadata, ActivityDelivery, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { Owner, WakeAddress, ActivityMetadata, ActivityDelivery, DeliveryEnvelope, JsonValue, DirectedNotificationRoute } from './model.js';
+export type { Owner, WakeAddress, ActivityMetadata, ActivityDelivery, JsonValue, DirectedNotificationRoute } from './model.js';
 /** Indexed archive event, including read bookkeeping. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -51,11 +51,12 @@ export interface ExpressResult {
   readonly hint?: string;
   readonly observation?: ExpressObservation;
 }
+export type ChannelTruncate = number | false | ((body: string) => string);
 export interface ChannelSendInput {
   readonly from: string;
   readonly to: string | readonly string[];
   readonly body: string;
-  readonly envelope?: DeliveryEnvelope;
+  readonly truncate?: ChannelTruncate;
   readonly metadata?: ActivityMetadata;
 }
 export interface ChannelSendResult {
@@ -63,7 +64,7 @@ export interface ChannelSendResult {
   readonly at: number;
   readonly from: string;
   readonly to: readonly string[];
-  readonly envelope?: DeliveryEnvelope;
+  readonly body: string;
   readonly metadata?: ActivityMetadata;
 }
 export interface ListenerChangeResult {

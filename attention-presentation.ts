@@ -71,35 +71,20 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
   ].join('\n');
 }
 
-function escapeDeliveryTags(text: string, tag: string): string {
-  return text.replace(/\r\n/g, '\n').replace(new RegExp(`<(\\/?)(square-[a-z0-9-]*|system-reminder|${tag})(?=[\\s>/]|$)`, 'gi'), '<\\$1$2');
-}
-
 function renderDirectBlock(attention: AttentionPreview): string {
-  const envelope = attention.delivery?.envelope;
-  const tag = envelope?.tag ?? 'agent-message';
-  const attributes = {
-    id: formatActivityId(attention.actIndex), from: attention.actor, to: attention.recipient,
-    ...envelope?.attributes,
-  };
-  const content = [
-    ...(envelope?.summary === undefined ? [] : [escapeDeliveryTags(envelope.summary, tag)]),
-    escapeDeliveryTags(attention.body, tag),
-  ].join('\n\n');
-  return [`<${tag} ${Object.entries(attributes).map(([key, value]) => `${key}="${escapeAttribute(value)}"`).join(' ')}>`, content, `</${tag}>`].join('\n');
+  return [
+    `<square-activity id="${formatActivityId(attention.actIndex)}" from="${escapeAttribute(attention.actor)}" to="${escapeAttribute(attention.recipient)}">`,
+    escapeSquareTags(attention.body.replace(/\r\n/g, '\n')),
+    '</square-activity>',
+  ].join('\n');
 }
 
 /** Shared model-facing envelope; transport correlation and human cards stay outside it. */
 export function renderSquareReminder(previews: readonly string[], deliveries: readonly (ActivityDelivery | undefined)[] = []): string {
   if (previews.length === 0) return '';
-  const direct = deliveries.filter(item => item?.mode === 'direct');
-  const sharedHeader = direct[0]?.envelope?.header;
-  const header = direct.length === 0
-    ? 'This is an external reminder from Square, not a direct message from the user.'
-    : direct.length === deliveries.length && sharedHeader !== undefined
-      && direct.every(item => item?.envelope?.header === sharedHeader)
-      ? escapeDeliveryTags(sharedHeader, direct[0]?.envelope?.tag ?? 'agent-message')
-      : 'This is an external notification, not a direct message from the user.';
+  const header = deliveries.some(item => item?.mode === 'direct')
+    ? 'This is an external notification, not a direct message from the user.'
+    : 'This is an external reminder from Square, not a direct message from the user.';
   return [
     '',
     '<system-reminder>',

@@ -9,7 +9,7 @@ import type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral,
 import { squareLocation } from './square-location.js';
 
 export { harnessOwner, decodeHarnessOwner, localUserOwner } from './owner.js';
-export type { ActivityDelivery, ActivityMetadata, DeliveryEnvelope } from './square-facade.js';
+export type { ActivityDelivery, ActivityMetadata, ChannelTruncate } from './square-facade.js';
 export type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, MetadataMatch,
   OperationControl, Owner, WakeAddress, SquareResourceOwner, WakeTransportPort, HarnessSessionChannel };
 

@@ -9,57 +9,19 @@ export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type ActivityMetadata = Readonly<Record<string, JsonValue>>;
-export interface DeliveryEnvelope {
-  readonly tag?: string;
-  readonly header?: string;
-  readonly summary?: string;
-  readonly label?: string;
-  readonly attributes?: Readonly<Record<string, string>>;
-}
-
 export interface ActivityDelivery {
   readonly mode: 'direct';
-  readonly envelope?: DeliveryEnvelope;
 }
 
-/** Only declarative, bounded JSON may control a delivery envelope. */
 export function validateActivityDelivery(value: unknown): ActivityDelivery | undefined {
   if (value === undefined) return undefined;
-  const fail = (): never => { throw new SquareError('invalid_args', 'Activity delivery must be a bounded direct envelope.'); };
-  const record = (item: unknown, allowed?: readonly string[]): Record<string, unknown> => {
-    if (item === null || typeof item !== 'object' || Array.isArray(item)
-      || ![Object.prototype, null].includes(Object.getPrototypeOf(item))
-      || Object.getOwnPropertySymbols(item).length > 0) return fail();
-    for (const key of Object.getOwnPropertyNames(item)) {
-      const descriptor = Object.getOwnPropertyDescriptor(item, key)!;
-      if (!descriptor.enumerable || !('value' in descriptor) || (allowed !== undefined && !allowed.includes(key))) fail();
-    }
-    return item as Record<string, unknown>;
-  };
-  const text = (item: unknown, min: number, max: number): item is string =>
-    typeof item === 'string' && item.length >= min && item.length <= max && !/[\u0000-\u001f\u007f-\u009f]/u.test(item);
-  const delivery = record(value, ['mode', 'envelope']);
-  if (delivery.mode !== 'direct') fail();
-  if (Object.hasOwn(delivery, 'envelope')) {
-    const envelope = record(delivery.envelope, ['tag', 'header', 'summary', 'label', 'attributes']);
-    if (Object.hasOwn(envelope, 'tag')) {
-      const tag = envelope.tag;
-      if (!text(tag, 1, 64) || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(tag)
-        || tag === 'system-reminder' || tag.startsWith('square-')) fail();
-    }
-    for (const key of ['header', 'summary', 'label'])
-      if (Object.hasOwn(envelope, key) && !text(envelope[key], 1, 512)) fail();
-    if (Object.hasOwn(envelope, 'attributes')) {
-      const attributes = record(envelope.attributes);
-      if (Object.keys(attributes).length > 16) fail();
-      for (const [key, item] of Object.entries(attributes)) {
-        if (!/^[a-z][a-z0-9_-]*$/.test(key) || key.length > 64 || ['id', 'from', 'to'].includes(key)
-          || !text(item, 0, 512)) fail();
-      }
-    }
+  if (value !== null && typeof value === 'object'
+    && [Object.prototype, null].includes(Object.getPrototypeOf(value))
+    && Reflect.ownKeys(value).length === 1) {
+    const mode = Object.getOwnPropertyDescriptor(value, 'mode');
+    if (mode?.enumerable && 'value' in mode && mode.value === 'direct') return { mode: 'direct' };
   }
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 4096) fail();
-  return value as ActivityDelivery;
+  throw new SquareError('invalid_args', "Activity delivery must be { mode: 'direct' }.");
 }
 
 export const ACTIVITY_METADATA_MAX_BYTES = 16 * 1024;

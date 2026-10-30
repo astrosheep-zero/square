@@ -6,12 +6,13 @@ import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { activityMetadataHasContent, InternalSquareError, SquareError, isSquareError, nameKey, sameName, validateActivityDelivery, validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
+import { activityMetadataHasContent, InternalSquareError, SquareError, isSquareError, nameKey, sameName, validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
 import { coreDone, coreIgnore, coreListen, coreListening, coreUnlisten, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
+import { ATTENTION_BODY_MAX } from './attention-presentation.js';
 import { asSeatRef, participantAuthority, requireOwner, requireJoinName } from './seats.js';
 import { recoveryObservation, entryPresentation, snapshot, queryStatus, queryParticipants, catchPresence,
   parseRequiredActivityId, toPublicActivity, publicActivities, selectHistory, NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
@@ -364,7 +365,7 @@ export class SqliteSquare {
   /** Direct messages use explicit recipients, not participant expression admission or body attention. */
   async send(input: ChannelSendInput, control?: OperationControl): Promise<ChannelSendResult> {
     checkControl(control);
-    const { from, to, body, envelope } = input;
+    const { from, to, body, truncate = ATTENTION_BODY_MAX } = input;
     if (typeof from !== 'string') throw new SquareError('invalid_args', 'Channel sender must be a name.');
     validateName(from);
     const targets = typeof to === 'string' ? [to] : to;
@@ -377,8 +378,19 @@ export class SqliteSquare {
       if (!unique.some(name => sameName(name, target))) unique.push(target);
     }
     if (typeof body !== 'string' || body.trim() === '') throw new SquareError('invalid_args', 'Channel body must be non-empty.');
+    let sentBody = body.replace(/\r\n/g, '\n');
+    if (typeof truncate === 'function') {
+      const out = truncate(sentBody);
+      if (typeof out !== 'string' || out.trim() === '')
+        throw new SquareError('invalid_args', 'Channel truncate must return a non-empty string.');
+      sentBody = out.replace(/\r\n/g, '\n');
+    } else if (truncate !== false && truncate !== Number.POSITIVE_INFINITY) {
+      if (!Number.isSafeInteger(truncate) || truncate < 1)
+        throw new SquareError('invalid_args', 'Channel truncate must be false, a positive integer, or a function.');
+      if (sentBody.length > truncate)
+        sentBody = `${sentBody.slice(0, truncate).trimEnd()}… (truncated ${sentBody.length - truncate} chars)`;
+    }
     const metadata = validateActivityMetadata(input.metadata);
-    const delivery = validateActivityDelivery({ mode: 'direct', ...(envelope === undefined ? {} : { envelope }) })!;
     const { stored, resolvedTo } = (await this.artifact.transactAs({ kind: 'send', actor: from }, facts => {
       const standing = facts.roster().filter(p => p.joined), resolvedTo: string[] = [], missing: string[] = [];
       for (const target of unique) {
@@ -389,14 +401,14 @@ export class SqliteSquare {
       if (missing.length > 0) throw new SquareError('invalid_args', `Channel recipients are not standing: ${missing.join(', ')}`, {
         reason: 'not_standing', targets: missing, activityUnsent: true,
       });
-      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body,
-        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery, mentions: resolvedTo }), resolvedTo };
+      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body: sentBody,
+        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery: { mode: 'direct' }, mentions: resolvedTo }), resolvedTo };
     }, control?.signal)).value;
     if (this.wakeTransport !== undefined)
       await deliverPending({ artifact: this.artifact, transport: this.wakeTransport, location: this.deliveryLocation,
         activity: stored.index, now: stored.at }).catch(() => undefined);
-    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo,
-      ...(envelope === undefined ? {} : { envelope }), ...(stored.kind !== 'say' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
+    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo, body: sentBody,
+      ...(stored.kind !== 'say' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
   }
 
   async participant(name: string, { owner }: { readonly owner: Owner }): Promise<Participant> {

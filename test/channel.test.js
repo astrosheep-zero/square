@@ -16,7 +16,6 @@ import { nativePayload, observeClaudeDelivery } from '../dist/claude-delivery.js
 import { observeOpenCodeContext } from '../dist/plugins/opencode/delivery.js';
 
 const body = 'Full direct message @unmatched @Other\n' + '正文'.repeat(2600) + '\nTHE END';
-const envelope = { tag: 'job-result', header: 'A worker delivered a result.', summary: 'Build done', label: 'Worker', attributes: { job: '7' } };
 const metadata = { job: { id: 7, kind: 'result' } };
 const match = { fields: [{ path: ['job', 'id'], equals: 7 }] };
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -33,9 +32,9 @@ async function fixture(t, options = {}) {
 }
 
 function assertFull(text, sent) {
-  assert.ok(text.includes(body));
-  assert.ok(text.includes(`<job-result id="${sent.id}" from="${sent.from}" to="Recipient" job="7">\nBuild done\n\n`));
-  assert.ok(text.includes(envelope.header));
+  assert.ok(text.includes(sent.body));
+  assert.ok(text.includes(`<square-activity id="${sent.id}" from="${sent.from}" to="Recipient">\n`));
+  assert.ok(text.includes('This is an external notification, not a direct message from the user.'));
 }
 
 test('harness resolution derives every coordinate and native-first precedence from the shared order', () => {
@@ -127,13 +126,13 @@ test('endpoint custody, generation fencing and index publication share the exist
   assert.deepEqual(await channel.endpointsOf(owner), []);
 });
 
-test('unjoined send targets only explicit recipients; boundary hooks present full envelopes and consume automatically', async t => {
+test('unjoined send targets only explicit recipients; boundary hooks present the sent body and consume automatically', async t => {
   const { channel, square, env } = await fixture(t);
   const owner = harnessOwner({ channel: 'pi', session: 'channel-boundary' });
   await channel.attach('Recipient', { owner });
   await channel.attach('Other', { owner: 'test:other' });
-  const sent = await channel.send({ from: 'Coordinator', to: ['recipient', 'RECIPIENT'], body, envelope, metadata });
-  assert.deepEqual(sent, { id: 'act/2', at: sent.at, from: 'Coordinator', to: ['Recipient'], envelope, metadata });
+  const sent = await channel.send({ from: 'Coordinator', to: ['recipient', 'RECIPIENT'], body, truncate: false, metadata });
+  assert.deepEqual(sent, { id: 'act/2', at: sent.at, from: 'Coordinator', to: ['Recipient'], body, metadata });
   const { participants } = await square.participants();
   assert.deepEqual(participants.map(p => p.name).sort(), ['Other', 'Recipient']);
   assert.equal(participants.find(p => p.name === 'Other').pendingMentionCount, 0);
@@ -146,7 +145,7 @@ test('unjoined send targets only explicit recipients; boundary hooks present ful
   assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('must not replay'), undefined, env), undefined);
 });
 
-for (const native of ['claude-code', 'opencode']) test(`${native} native hook correlation presents Channel sends with full body and envelope`, async t => {
+for (const native of ['claude-code', 'opencode']) test(`${native} native hook correlation presents Channel sends in the fixed boundary`, async t => {
   let sentPayload, correlation;
   const session = `channel-${native}`;
   const wakeAddress = native === 'claude-code'
@@ -158,7 +157,7 @@ for (const native of ['claude-code', 'opencode']) test(`${native} native hook co
       routeKind: wakeAddress.kind, address: wakeAddress.address, actIndex: parseActivityId(request.activity), now: Date.now(),
     }))).value;
     assert.equal(preview.clipped, false);
-    assertFull(preview.payload, { id: request.activity, from: 'Coordinator' });
+    assertFull(preview.payload, { id: request.activity, from: 'Coordinator', body });
     sentPayload = native === 'claude-code' ? nativePayload(request.claimToken, preview.payload) : preview.payload;
     correlation = native === 'claude-code'
       ? { harness: 'claude', token: request.claimToken, messageId: 'channel-native', payloadHash: hash(sentPayload) }
@@ -169,7 +168,7 @@ for (const native of ['claude-code', 'opencode']) test(`${native} native hook co
   } };
   const { channel, square, env } = await fixture(t, { wakeTransport: transport });
   await channel.attach('Recipient', { owner: harnessOwner({ channel: native, session }), wakeAddress });
-  const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', body, envelope, metadata });
+  const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', body, truncate: false, metadata });
   assert.ok(sentPayload, 'send invokes the supplied transport');
   assert.equal((await square.snapshot()).delivered('Recipient', sent.id), false, 'accepted wake alone is not consumption');
   if (native === 'claude-code') {
@@ -211,8 +210,8 @@ test('deferral leases match persisted metadata and release restores boundary eli
   const renewed = await endpoint.renewDeliveryDeferral(lease.id, 2000);
   assert.equal(renewed.id, lease.id);
   assert.equal(renewed.expiresAt, new Date(now + 2000).toISOString());
-  const deferred = await channel.send({ from: 'Coordinator', to: 'Recipient', body, envelope, metadata });
-  await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'unmatched metadata', envelope, metadata: { job: { id: 8 } } });
+  const deferred = await channel.send({ from: 'Coordinator', to: 'Recipient', body, metadata });
+  await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'unmatched metadata', metadata: { job: { id: 8 } } });
   assert.equal(attempts, 1, 'matching direct metadata blocks proactive dispatch, not unrelated messages');
   const page = await sessionInbox(owner, env);
   assert.equal(page[0].notifications.some(note => note.actIndex === parseActivityId(deferred.id)), false);
@@ -225,6 +224,33 @@ test('deferral leases match persisted metadata and release restores boundary eli
   assert.equal((await square.snapshot()).delivered('Recipient', deferred.id), true);
 });
 
+test('send normalizes and truncates once before persisting and returning the final direct body', async t => {
+  const { channel, square, env } = await fixture(t);
+  const owner = harnessOwner({ channel: 'pi', session: 'channel-truncation' });
+  await channel.attach('Recipient', { owner });
+  const source = 'a\r\n' + 'x'.repeat(230), normalized = source.replace(/\r\n/g, '\n');
+  for (const [input, expected] of [
+    [{ body: source }, 'a\n' + 'x'.repeat(198) + '… (truncated 32 chars)'],
+    [{ body: 'x'.repeat(200) }, 'x'.repeat(200)],
+    [{ body: 'short\r\ntext' }, 'short\ntext'],
+    [{ body: source, truncate: false }, normalized],
+    [{ body: source, truncate: Infinity }, normalized],
+    [{ body: 'abc  \r\nrest', truncate: 5 }, 'abc… (truncated 5 chars)'],
+    [{ body: source, truncate: 1 }, 'a… (truncated 231 chars)'],
+    [{ body: source, truncate: 1000 }, normalized],
+    [{ body: source, truncate: text => { assert.equal(text, normalized); return 'result\r\n' + text; } }, 'result\n' + normalized],
+  ]) {
+    const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', ...input });
+    assert.equal(sent.body, expected);
+    const stored = (await square.history({ at: [sent.id] })).activities[0];
+    assert.equal(stored.body, expected);
+    assert.deepEqual(stored.delivery, { mode: 'direct' });
+    const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
+    assertFull(presented, sent);
+    assert.equal((await square.snapshot()).delivered('Recipient', sent.id), true);
+  }
+});
+
 test('send validation and unavailable targets reject atomically, and cancellation before landing leaves no activity', async t => {
   const { channel, square } = await fixture(t);
   const recipient = await channel.attach('Recipient', { owner: 'test:recipient' });
@@ -233,8 +259,14 @@ test('send validation and unavailable targets reject atomically, and cancellatio
   for (const change of [
     { from: '' }, { from: 'bad name' }, { from: 7 }, { to: [] }, { to: Array(MAX_IDENTITY_SET_SIZE + 1).fill('Recipient') },
     { to: null }, { to: ['Recipient', 7] }, { to: ['bad name'] }, { body: '' }, { body: ' \n ' }, { body: null },
-    { metadata: [] }, { metadata: { value: undefined } }, { envelope: { tag: 'system-reminder' } },
+    { metadata: [] }, { metadata: { value: undefined } },
   ]) await assert.rejects(channel.send({ ...send, ...change }), invalid);
+  for (const truncate of [null, true, 0, -1, 1.5, NaN, -Infinity, Number.MAX_SAFE_INTEGER + 1, '200', {}, [], Symbol('truncate')])
+    await assert.rejects(channel.send({ ...send, truncate }), error => error.code === 'invalid_args'
+      && error.message === 'Channel truncate must be false, a positive integer, or a function.');
+  for (const out of ['', ' \r\n ', undefined, null, 7, {}, Promise.resolve('async')])
+    await assert.rejects(channel.send({ ...send, truncate: () => out }), error => error.code === 'invalid_args'
+      && error.message === 'Channel truncate must return a non-empty string.');
   await assert.rejects(channel.send({ ...send, to: ['Recipient', 'Missing'] }), error => error.code === 'invalid_args'
     && error.facts.reason === 'not_standing' && error.facts.activityUnsent && assert.deepEqual(error.facts.targets, ['Missing']) === undefined);
   assert.deepEqual(await square.history({ limit: null }), before);
