@@ -107,7 +107,7 @@ test('joining contributes one canonical lifecycle activity for an unknown partic
   const { cell } = memorySquare();
   try {
     const result = (await cell.read((facts) => decideJoin(facts, 'Alice', 100))).value;
-    assert.deepEqual(result, { joinedName: 'Alice', addParticipant: true, joinAct: { kind: 'join', actor: 'Alice', at: 100 } });
+    assert.deepEqual(result, { kind: 'join', actor: 'Alice', at: 100 });
   } finally {
     await cell.close();
   }
@@ -371,7 +371,7 @@ test('admission refuses capped, throttled and quota-exhausted says', async () =>
   ] });
   try {
     const decide = (cell, now, extra = {}) => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'again', force: true, now, ...extra })).then((result) => result.value);
-    assert.deepEqual(await decide(capped.cell, 20), { type: 'capped', count: 1, hardCap: 1 });
+    assert.deepEqual(await decide(capped.cell, 20), { type: 'capped' });
     const throttledDecision = await decide(throttled.cell, 1000);
     assert.equal(throttledDecision.type, 'throttled');
     assert.equal(throttledDecision.delayMs, 10 + 60000 - 1000);

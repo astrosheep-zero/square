@@ -452,9 +452,9 @@ export class SqliteSquare {
           kind = 'reconnected';
         }
         if (kind !== 'reconnected') {
-          const decision = decideJoin(facts, participant, now);
-          if (decision.joinAct === undefined) throw new SquareError('already_joined', `${participantIdentity(participant)} could not be joined`);
-          activity = toPublicActivity(facts.land(decision.joinAct));
+          const joinAct = decideJoin(facts, participant, now);
+          if (joinAct === undefined) throw new SquareError('already_joined', `${participantIdentity(participant)} could not be joined`);
+          activity = toPublicActivity(facts.land(joinAct));
         }
         const seat = facts.seat(participant);
         if (seat === undefined) throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');

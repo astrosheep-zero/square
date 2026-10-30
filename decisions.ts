@@ -16,13 +16,10 @@ export function resolveKnownName(facts: SquareRead, name: string): string {
   if (known === undefined) throw new SquareError('invalid_args', `${participantIdentity(name)} has never stepped into this square`, { reason: 'never_joined' });
   return known;
 }
-export interface DecideJoinResult { joinedName: string; addParticipant: boolean; joinAct?: TimedAct<'join'> }
-export function decideJoin(facts: SquareRead, name: string, now: number): DecideJoinResult {
+export function decideJoin(facts: SquareRead, name: string, now: number): TimedAct<'join'> | undefined {
   validateName(name);
   const current = facts.participant(name);
-  const joinedName = current?.name ?? name;
-  return current?.joined ? { joinedName, addParticipant: false }
-    : { joinedName, addParticipant: current === undefined, joinAct: { kind: 'join', actor: joinedName, at: now } };
+  return current?.joined ? undefined : { kind: 'join', actor: current?.name ?? name, at: now };
 }
 function validateActivityName(name: string): void {
   try { validateName(name); }
@@ -50,7 +47,7 @@ function requireStanding(current: ParticipantFact): void {
 export type ActDecision =
   | ({ type: 'sent'; act: TimedAct } & Pick<ExpressResult, 'replyAuthorNotHere' | 'unmatchedMentions'>)
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
-  | { type: 'capped'; count: number; hardCap: number }
+  | { type: 'capped' }
   | { type: 'throttled'; delayMs: number }
   | { type: 'bell_quota'; nextAt: number };
 
@@ -123,7 +120,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body?: strin
   // Preserve admission priority after metadata validation.
   if (current.done) throw activityRefusal('already_done', `${name} is already done`);
   if (!current.joined) throw activityRefusal('not_joined', `${name} has not joined this square`);
-  if (header.hardCap !== null && current.sayCount >= header.hardCap) return { type: 'capped', count: current.sayCount, hardCap: header.hardCap };
+  if (header.hardCap !== null && current.sayCount >= header.hardCap) return { type: 'capped' };
   if (reach === 'bell') {
     const recent = facts.recentSayTimes(now - 3600000, 1, name, true);
     if (recent.length > 0) return { type: 'bell_quota', nextAt: recent[0] + 3600000 };
