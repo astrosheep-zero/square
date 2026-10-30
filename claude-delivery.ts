@@ -150,7 +150,8 @@ export async function observeClaudeDelivery(sessionId: string, text: string, ope
           activity: row.evidence.activity, claimToken: request.claimToken!, outcome: 'accepted', at: Date.now() })).catch(() => ({ value: false }));
       if (!admitted.value) return { recognized, current: false };
       if (operation === 'stored') await presentPending({ artifact: row.artifact, location: request.location,
-        participant: request.participant, activity: request.activity, seat: request.seat, sink: { present() {} },
+        // Claude's stored event consumes even Agora previews; retain that contract for both modes.
+        participant: request.participant, activity: request.activity, seat: request.seat, markSeen: true, sink: { present() {} },
         current: facts => currentPayload(facts, request) === payload });
     }
     return { recognized, current: true };

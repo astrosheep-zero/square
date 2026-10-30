@@ -392,7 +392,7 @@ test('manual artifact seats receive a bounded native preview; admission is not p
   assert.equal(f.nativeMessages.length, 1, 'presented activity is not replayed');
 });
 
-test('a clipped preview stays bounded and admission alone does not consume the activity', async t => {
+test('a clipped Agora preview stays bounded and only stored consumes the activity', async t => {
   const f = await fixture(t, 'x'.repeat(300));
   await dispatch(f);
   const text = await payload(f);
@@ -406,6 +406,8 @@ test('a clipped preview stays bounded and admission alone does not consume the a
   assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').outcome, 'accepted');
   await dispatch(f);
   assert.equal(f.nativeMessages.length, 1, 'admitted activity is not replayed');
+  await stored(f, text);
+  assert.equal(await seen(f), 'seen', 'Claude stored retains full consumption even for clipped Agora previews');
 });
 
 test('unmatched or rewritten native text cannot authorize admission or presentation', async t => {

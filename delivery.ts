@@ -24,8 +24,8 @@ export function wakePreview(facts: SquareRead, request: WakeRequest): string | u
     || deliveryDeferralExpiry(facts, request.seat, item.index, Date.now()) !== undefined) return undefined;
   return renderSquareReminder([renderAttentionPreview({
     squarePath: request.location, recipient: request.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)',
-  })]);
+    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)', delivery: item.delivery,
+  })], [item.delivery]);
 }
 export interface RoutedNotification {
   actor: string;

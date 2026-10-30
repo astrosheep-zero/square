@@ -1,11 +1,11 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Owner, StoredAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { Owner, StoredAct, WakeAddress, ActivityMetadata, ActivityDelivery, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+export type { Owner, WakeAddress, ActivityMetadata, ActivityDelivery, DeliveryEnvelope, JsonValue, DirectedNotificationRoute } from './model.js';
 /** Indexed archive event, including read bookkeeping. */
 export type ArchiveRecord = Readonly<StoredAct>;
 export interface Activity {
@@ -15,6 +15,7 @@ export interface Activity {
   readonly actor: string;
   readonly body?: string;
   readonly metadata?: ActivityMetadata;
+  readonly delivery?: ActivityDelivery;
   readonly mentions: readonly string[];
   readonly reach?: Reach;
   readonly target?: string;

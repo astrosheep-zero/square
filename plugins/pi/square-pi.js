@@ -41,13 +41,15 @@ function framePiMessage(content) {
 /** Renderer-only card facts for Pi and Paseo; Pi never sends `details` to the model. */
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => ({
-    square: path.basename(membership.location, '.square'),
+    square: note.delivery?.envelope?.label ?? path.basename(membership.location, '.square'),
     actor: note.actor,
     recipient: membership.seat.participant,
     route: note.route,
     act: formatActivityId(note.actIndex),
-    preview: previewAttentionBody(note.body),
-    description: renderAttentionDescription({ actor: note.actor, route: note.route }),
+    preview: previewAttentionBody(note.body, note.delivery),
+    description: note.delivery?.mode === 'direct'
+      ? note.delivery.envelope?.summary ?? `${note.actor} → ${membership.seat.participant}`
+      : renderAttentionDescription({ actor: note.actor, route: note.route }),
     body: note.body,
   })));
   if (items.length === 0) return undefined;

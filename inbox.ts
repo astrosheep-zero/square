@@ -172,6 +172,7 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
           cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => ({
             ...membership, notifications: pendingNotifications(facts, membership.seat.participant).map(({ item, route }) => ({
               actIndex: item.index, actor: item.actor, at: item.at, body: item.body ?? '(structured activity)', route,
+              ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
             })),
           })) };
         }
@@ -224,7 +225,8 @@ export function nativePendingPreview(facts: SquareRead, input: NativePendingPrev
   const item = facts.activity(input.actIndex);
   if (item?.kind !== 'say' || deliveryDeferralExpiry(facts, seat, input.actIndex, input.now) !== undefined) return undefined;
   return { payload: renderSquareReminder([renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)' })]), clipped: attentionBodyIsClipped(item.body ?? '(structured activity)') };
+    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)', delivery: item.delivery })], [item.delivery]),
+    clipped: attentionBodyIsClipped(item.body ?? '(structured activity)', item.delivery) };
 }
 
 export async function sessionInbox(owner: Owner, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<PendingMembership[]> {

@@ -1,4 +1,4 @@
-import { SquareError, formatActivityId, parseActivityId, sameName, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
+import { SquareError, formatActivityId, parseActivityId, sameName, validateActivityDelivery, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
 import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
 
@@ -20,6 +20,15 @@ export interface LandingFacts {
 
 /** The single landing transition, shared by both adapters and explicit rebuild. */
 export function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect {
+  if (activity.kind === 'say' && activity.delivery?.mode === 'direct') {
+    const audience: LandedRecipient[] = [];
+    for (const mention of activity.mentions ?? []) {
+      const recipient = facts.standing.find(item => sameName(item.name, mention))?.name;
+      if (recipient !== undefined && !audience.some(item => sameName(item.recipient, recipient)))
+        audience.push({ recipient, route: 'mention' });
+    }
+    return { activity, audience };
+  }
   const audience = activity.kind === 'say' ? resolveAudience({
     actor: activity.actor, recipients: facts.standing.map((item) => item.name),
     mentions: activity.mentions, replyAuthor: facts.replyAuthor, reach: activity.reach,
@@ -96,14 +105,14 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     throw new SquareError('invalid_args', 'Artifact writes require an explicit authority.');
   const { applyLanding, ...mutations } = writes;
   const seated = authority.kind === 'participant' || authority.kind === 'host-cleanup';
-  const expectedName = seated ? authority.seat?.participant : authority.participant;
-  if (!['participant', 'host-cleanup', 'join', 'takeover'].includes(authority.kind) || typeof expectedName !== 'string')
+  const expectedName = seated ? authority.seat?.participant : authority.kind === 'send' ? authority.actor : authority.participant;
+  if (!['participant', 'host-cleanup', 'join', 'takeover', 'send'].includes(authority.kind) || typeof expectedName !== 'string')
     throw new SquareError('invalid_args', 'Artifact write authority is malformed.');
   validateName(expectedName);
   if (seated) {
     validateOwner(authority.seat.owner);
     validateGeneration(authority.seat.generation);
-  } else {
+  } else if (authority.kind !== 'send') {
     validateOwner(authority.owner);
     if (authority.kind === 'takeover') validateGeneration(authority.expectedGeneration);
   }
@@ -133,7 +142,7 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
         throw new SquareError('already_joined', `${expectedName} is held by another owner; take it over explicitly`);
       reconnectSeat = seat;
     }
-  } else {
+  } else if (authority.kind === 'takeover') {
     const current = read.seat(expectedName);
     if (current === undefined || current.generation !== authority.expectedGeneration)
       throw new SquareError('already_joined', 'The participant seat changed before takeover.');
@@ -148,7 +157,11 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       if (!sameName(actor, expectedName))
         throw new SquareError('already_joined', 'Activity actor does not match the artifact authority.');
 
-      if (authority.kind === 'participant') {
+      if (activity.kind === 'say') validateActivityDelivery(activity.delivery);
+      if (authority.kind === 'send') {
+        if (activity.kind !== 'say' || activity.delivery?.mode !== 'direct' || activity.reach !== undefined || activity.reply !== undefined)
+          throw new SquareError('invalid_args', 'Send authority may only land direct messages without bell or reply.');
+      } else if (authority.kind === 'participant') {
         assertSeat(authority.seat);
         if (activity.kind === 'join') throw new SquareError('invalid_args', 'A participant seat can only be re-established by join.');
       } else if (authority.kind === 'host-cleanup') {
@@ -178,7 +191,7 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       applyLanding(deriveLanding(stored, landingFacts(read, stored)));
 
       if (stored.kind === 'join') {
-        if (seated) throw new SquareError('invalid_args', 'Seat authority cannot establish another seat.');
+        if (authority.kind !== 'join' && authority.kind !== 'takeover') throw new SquareError('invalid_args', 'Seat authority cannot establish another seat.');
         const seat: Seat = {
           participant: stored.actor,
           owner: authority.owner,

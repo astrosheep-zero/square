@@ -73,6 +73,7 @@ export interface ReceiptFacts { readonly latestAt?: number; readonly latestActor
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
 export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;
 export type ArtifactWriteAuthority =
+  | { readonly kind: 'send'; readonly actor: string }
   | { readonly kind: 'participant'; readonly seat: SeatRef }
   | { readonly kind: 'host-cleanup'; readonly seat: SeatRef }
   | { readonly kind: 'join'; readonly participant: string; readonly owner: Owner; readonly wakeAddress?: WakeAddress }

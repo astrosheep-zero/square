@@ -6,7 +6,7 @@ import { createArtifactPort } from './artifact.js';
 import { preparePendingPresentation } from './presentation-operations.js';
 import { presentPreparedBatch } from './delivery-effects.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
-import type { Owner, PendingMembership } from './model.js';
+import type { ActivityDelivery, Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
 import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
 export { pendingAtBoundary };
@@ -33,11 +33,14 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
     membership.notifications.map((notification) => ({ membership, notification }))
   );
   const blocks: string[] = [];
+  const agoraBlocks: string[] = [];
+  const deliveries: (ActivityDelivery | undefined)[] = [];
+  let remainingAgora = queued.filter(({ notification }) => notification.delivery?.mode !== 'direct').length;
   const complete: CompleteBoundaryMembership[] = [];
   let omitted = 0;
   const omission = (count: number) => `${count} more ${count === 1 ? 'activity' : 'activities'} not shown.`;
 
-  for (const [index, entry] of queued.entries()) {
+  for (const entry of queued) {
     const { membership, notification } = entry;
     const block = [
       renderAttentionPreview({
@@ -47,24 +50,30 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
         actor: notification.actor,
         route: notification.route,
         body: notification.body,
+        delivery: notification.delivery,
       }),
     ].join('\n');
-    const omittedAfter = omitted + queued.length - index - 1;
-    const prospective = renderSquareReminder([...blocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
-    if (prospective.length > CONTEXT_MAX) {
-      omitted += 1;
-      continue;
+    if (notification.delivery?.mode !== 'direct') {
+      remainingAgora -= 1;
+      const omittedAfter = omitted + remainingAgora;
+      const prospective = renderSquareReminder([...agoraBlocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
+      if (prospective.length > CONTEXT_MAX) {
+        omitted += 1;
+        continue;
+      }
+      agoraBlocks.push(block);
     }
     blocks.push(block);
+    deliveries.push(notification.delivery);
     complete.push({
       membership,
       actIndexes: [notification.actIndex],
-      markSeen: !attentionBodyIsClipped(notification.body),
+      markSeen: !attentionBodyIsClipped(notification.body, notification.delivery),
     });
   }
 
   return {
-    context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])]),
+    context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])], deliveries),
     complete,
   };
 }

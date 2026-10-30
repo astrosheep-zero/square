@@ -1,5 +1,5 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, validateOwner, validateActivityMetadata, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Owner, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
+import { SquareError, nameKey, isWakeRouteKind, validateOwner, validateActivityMetadata, validateActivityDelivery, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Owner, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
 import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, SeatRef, DeliveryClaimInput, DeliveryClaimResult, DeliveryCompletion, DeliveryPreparation, DeliveryEvidence } from './ports.js';
 import type { DeliveryDeferralFact } from './delivery-deferral.js';
 import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
@@ -288,7 +288,12 @@ export function validateStoredActivity(value: unknown): StoredAct {
     string(a.actor, true);
     switch (a.kind) {
         case 'say':
-            shape(a, [...common], ['body', 'mentions', 'reach', 'reply', 'metadata']);
+            shape(a, [...common], ['body', 'mentions', 'reach', 'reply', 'metadata', 'delivery']);
+            if (Object.hasOwn(a, 'delivery')) {
+                requireFact(a.delivery !== undefined, 'say delivery is malformed.');
+                try { validateActivityDelivery(a.delivery); }
+                catch { throw invalidArtifact('say delivery is malformed.'); }
+            }
             if (Object.hasOwn(a, 'body')) string(a.body);
             if (Object.hasOwn(a, 'metadata')) {
                 requireFact(a.metadata !== undefined, 'say metadata is malformed.');
@@ -325,7 +330,7 @@ export function validateStoredActivity(value: unknown): StoredAct {
 function activity(row: Row): StoredAct {
     const h = head(row), payload = object(json(row.payload_json));
     // Payload cannot shadow indexed structural columns.
-    const allowed = h.kind === 'say' ? ['body', 'mentions', 'metadata'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
+    const allowed = h.kind === 'say' ? ['body', 'mentions', 'metadata', 'delivery'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
     requireFact(Object.keys(payload).every(k => allowed.includes(k)));
     return immutable(validateStoredActivity({ ...h, ...payload }));
 }
