@@ -50,6 +50,56 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     const route: AudienceRoute | undefined = audience[0]?.route;
     void route;
   `);
+  fs.writeFileSync(path.join(fixture, 'receive-consumer.ts'), `
+    import assert from 'node:assert/strict';
+    import { receive, selectReceivedHeads, consumeReceived, recordConsumed, ReceiveError,
+      type Item, type Address, type ReceivedHead, type ReceiptRef, type Selection,
+      type ReceiveRead, type ReceiveWrite } from '@astrosheep/square/receive';
+    type Query = { via?: string };
+    let items = new Map<string, string>(), addresses: (ReceivedHead<string, string> & { recipient: string })[] = [];
+    let receipts = new Map<string, Map<string, { at: number }>>();
+    function transaction<R>(change: (tx: ReceiveWrite<string, string, string, Query>) => R): R {
+      const data = new Map(items), audience = [...addresses], seen = structuredClone(receipts);
+      const tx: ReceiveWrite<string, string, string, Query> = {
+        insertItem(item) { if (data.has(item.key)) throw Error('duplicate'); data.set(item.key, item.data); },
+        insertAddress(key, address) {
+          if (audience.some(row => row.key === key && row.recipient === address.recipient)) throw Error('duplicate');
+          audience.push({ key, ...address });
+        },
+        heads(recipient, query, options) {
+          return audience.filter(row => row.recipient === recipient && (!query.via || row.via === query.via)
+            && (!options.unconsumed || !seen.get(recipient)?.has(row.key))).slice(0, options.limit);
+        },
+        addressed: (recipient, key) => audience.find(row => row.recipient === recipient && row.key === key),
+        load: keys => new Map(keys.filter(key => data.has(key)).map(key => [key, data.get(key)!])),
+        count: (recipient, query, unconsumed) => tx.heads(recipient, query, { unconsumed, limit: Infinity }).length,
+        receipt: ref => seen.get(ref.recipient)?.get(ref.item),
+        insertReceipt(ref, at) {
+          if (seen.get(ref.recipient)?.has(ref.item)) return false;
+          if (!seen.has(ref.recipient)) seen.set(ref.recipient, new Map());
+          seen.get(ref.recipient)!.set(ref.item, { at }); return true;
+        },
+      };
+      const result = change(tx);
+      items = data; addresses = audience; receipts = seen;
+      return result;
+    }
+    const item: Item<string, string> = { key: 'opaque/⚑?z', data: 'payload' };
+    const address: Address<string> = { recipient: 'west:bob', via: 'paid-link' };
+    const selection: Selection<string, Query> = { kind: 'exact', key: item.key, remainingQuery: {} };
+    const ref: ReceiptRef<string> = { recipient: address.recipient, item: item.key };
+    transaction(tx => receive(tx, { item, audience: [address] }));
+    transaction(tx => {
+      const read: ReceiveRead<string, string, string, Query> = tx;
+      const heads: readonly ReceivedHead<string, string>[] = selectReceivedHeads(read, address.recipient, selection);
+      assert.equal(heads[0].key, item.key);
+      assert.equal(consumeReceived(tx, address.recipient, selection, 7).newlyConsumed, 1);
+      assert.equal(consumeReceived(tx, address.recipient, selection, 9).newlyConsumed, 0);
+      assert.equal(recordConsumed({ insertReceipt: tx.insertReceipt }, [ref], 10), 0);
+      assert.deepEqual(read.receipt(ref), { at: 7 });
+    });
+    assert.throws(() => transaction(tx => consumeReceived(tx, 'other', selection, 11)), ReceiveError);
+  `);
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
     const body = "test" + ":" + ('consumer');
@@ -84,12 +134,16 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     void participant; void history; void stream; void directed; void codes;
   `);
   const typecheck = run(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
-    '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+    '--outDir', path.join(fixture, 'compiled'), '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     '--types', 'node', '--typeRoots', path.join(root, 'node_modules', '@types'),
     path.join(fixture, 'consumer.ts'),
     path.join(fixture, 'attention-consumer.ts'),
+    path.join(fixture, 'receive-consumer.ts'),
   ]);
   assert.equal(typecheck.status, 0, typecheck.stderr || typecheck.stdout || typecheck.error?.message);
+
+  const received = run(process.execPath, [path.join(fixture, 'compiled', 'receive-consumer.js')], { cwd: fixture });
+  assert.equal(received.status, 0, received.stderr);
 
   const attention = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { resolveAudience } from '@astrosheep/square/attention';

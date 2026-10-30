@@ -50,6 +50,10 @@
     "ws": "^8.21.3"
   },
   "exports": {
+    "./receive": {
+      "types": "./dist/receive.d.ts",
+      "default": "./dist/receive.js"
+    },
     "./attention": {
       "types": "./dist/attention.d.ts",
       "default": "./dist/attention.js"

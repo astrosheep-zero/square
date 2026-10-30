@@ -155,6 +155,13 @@ test('pure landing depends only on domain facts, syntax, and standalone attentio
   assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
+test('receive is a dependency-free leaf composed by production landing and catch', () => {
+  assert.deepEqual(moduleEdges('receive.ts', productionSources.get('receive.ts')), []);
+  for (const [file, binding] of [['square-sqlite.ts', 'receive'], ['square-sqlite.ts', 'recordConsumed'], ['catch-decisions.ts', 'consumeReceived'], ['catch-decisions.ts', 'selectReceivedHeads']]) {
+    assert.ok(moduleEdges(file, productionSources.get(file)).some(edge => edge.module === './receive.js' && edge.names.includes(binding)), `${file} uses ${binding}`);
+  }
+});
+
 test('the artifact contract comes from ports.ts alone', () => {
   const storage = productionSources.get('artifact.ts') ?? '';
   assert.match(

@@ -5,6 +5,7 @@ import type { DeliveryDeferralFact } from './delivery-deferral.js';
 import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
 import { legacyRowFramingIssue, legacyActivitySchema } from './square-legacy-framing.js';
+import { receive, recordConsumed } from './receive.js';
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -786,7 +787,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 reach?: string;
                 reply?: number;
             };
-            run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reach ?? null, reply ?? null, encode(payload)]);
+            receive({
+                insertItem: () => { run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reach ?? null, reply ?? null, encode(payload)]); },
+                insertAddress: (item, address, order) => { run('INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route) VALUES(?,?,?,?)', [item, key(address.recipient), order, address.via]); },
+            }, { item: { key: index, data: a }, audience: effect.audience.map(r => ({ recipient: r.recipient, via: r.route })) });
             if (effect.participant) {
                 const p = effect.participant;
                 string(p.name, true);
@@ -815,7 +819,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 requireFact(t.kind === 'listen' || t.kind === 'ignore');
                 run('INSERT INTO attention(listener_key_json,target_key_json,target_json,kind,since_index) VALUES(?,?,?,?,?) ON CONFLICT(listener_key_json,target_key_json) DO UPDATE SET target_json=excluded.target_json,kind=excluded.kind,since_index=excluded.since_index', [key(t.listener), key(t.target), encode(t.target), t.kind, t.sinceIndex]);
             }
-            effect.audience.forEach((r, order) => run('INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route) VALUES(?,?,?,?)', [index, key(r.recipient), order, r.route]));
             run('UPDATE square_meta SET next_act_index=? WHERE id=1', [index + 1]);
             changed = true;
         },
@@ -823,11 +826,11 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             finite(at);
             const next = read.header().nextActIndex;
             indexes.forEach(index => requireFact(integer(index) < next, 'receipt references an unassigned activity index.'));
-            let count = 0;
-            const encoded = encode(owner(name));
-            string(owner(name), true);
-            for (const index of indexes)
-                count += run('INSERT OR IGNORE INTO receipts(owner_json,act_index,at) VALUES(?,?,?)', [encoded, index, at]);
+            const canonical = owner(name);
+            string(canonical, true);
+            const count = recordConsumed({
+                insertReceipt: (ref, time) => run('INSERT OR IGNORE INTO receipts(owner_json,act_index,at) VALUES(?,?,?)', [encode(ref.recipient), ref.item, time]) > 0,
+            }, indexes.map(item => ({ recipient: canonical, item })), at);
             if (count)
                 changed = true;
             return count;

@@ -4,6 +4,7 @@
 exports the public `{at, build, inMemory}` entrypoints and `type Square`; `square.ts` remains the
 executable CLI entrypoint.
 For audience computation without opening a square, see the [attention primitive](attention-primitive.md).
+For caller-owned item admission and sparse consumption, see the [receive primitive](receive-primitive.md).
 `square-facade.ts` contains only public types. There is no separate operation factory, policy
 dispatcher or `{data, projection}` envelope.
 
