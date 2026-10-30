@@ -19,7 +19,7 @@ export function renderPendingAtBoundary(inbox: PendingMembership[]): string {
 
 interface CompleteBoundaryMembership {
   membership: PendingMembership;
-  actIndexes: number[];
+  actIndex: number;
   markSeen: boolean;
 }
 
@@ -42,8 +42,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
 
   for (const entry of queued) {
     const { membership, notification } = entry;
-    const block = [
-      renderAttentionPreview({
+    const block = renderAttentionPreview({
         squarePath: membership.location,
         actIndex: notification.actIndex,
         recipient: membership.seat.participant,
@@ -51,8 +50,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
         route: notification.route,
         body: notification.body,
         delivery: notification.delivery,
-      }),
-    ].join('\n');
+    });
     if (notification.delivery?.mode !== 'direct') {
       remainingAgora -= 1;
       const omittedAfter = omitted + remainingAgora;
@@ -67,7 +65,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
     deliveries.push(notification.delivery);
     complete.push({
       membership,
-      actIndexes: [notification.actIndex],
+      actIndex: notification.actIndex,
       markSeen: !attentionBodyIsClipped(notification.body, notification.delivery),
     });
   }
@@ -102,11 +100,9 @@ async function presentPendingAtBoundaryUnlocked<T>(
           artifact = createArtifactPort(location);
           artifacts.set(location, artifact);
         }
-        for (const index of entry.actIndexes) {
-          const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
-            activity: index, seat, markSeen: entry.markSeen, signal });
-          if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, index), claim });
-        }
+        const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
+          activity: entry.actIndex, seat, markSeen: entry.markSeen, signal });
+        if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, entry.actIndex), claim });
       }
     } catch (error) {
       // Transfer has not happened: enumeration must abandon any custody already acquired.
@@ -118,7 +114,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
       const fresh = renderBoundary(pending.map(membership => ({ ...membership,
         notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
       })));
-      const included = new Set(fresh.complete.flatMap(entry => entry.actIndexes.map(index => pendingKey(entry.membership, index))));
+      const included = new Set(fresh.complete.map(entry => pendingKey(entry.membership, entry.actIndex)));
       return { payload: fresh.context, included: claims.filter(({ key }) => included.has(key)).map(({ claim }) => claim) };
     }, present, { signal, classifyError: () => 'failed' });
     if (report.observation.kind === 'threw') throw report.observation.error;
