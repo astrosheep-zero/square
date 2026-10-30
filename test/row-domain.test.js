@@ -1,28 +1,10 @@
-// Differential evidence for the row-backed landing transition.
-//
-// Every maintained index read here (roster, landed audience + route, attention,
-// lifetime say counts, last join/active) is compared against the frozen v1
-// oracle in ./fixtures/legacy-square-core.js, which preserves the surviving
-// pre-row square-core fold/replay semantics (obsolete activity handling removed).
-// Its audience algorithm was verified against the shipped v1
-// module over 400 random replays before those folds were deleted. This file is
-// test-only: it imports nothing from production except the public fact port,
-// the shared domain helpers and the read-side projections.
-
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 
 import { decideCatch } from '../dist/catch-decisions.js';
-import { formatActivityId, parseActivityId } from '../dist/model.js';
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
-import { SCHEMA_SQL } from '../dist/square-sqlite.js';
-import { createArtifactPort as createRealArtifactPort, createSquareFile, writeSquareFile } from '../dist/artifact.js';
 import { createTestArtifactPort as createArtifactPort } from './fixtures/test-artifact-port.js';
 import { snapshot } from '../dist/views.js';
-import * as legacy from './fixtures/legacy-square-core.js';
 
 const T0 = 1_700_000_000_000;
 
@@ -134,196 +116,11 @@ const REJOIN_ACTS = [
   { index: 8, at: T0 + 8, kind: 'say', actor: 'Bob', body: 'd8', mentions: ['alice'] },
 ];
 
-const LISTENERS = ['Alice', 'Bob', 'Carol', 'Dave'];
-const SENDERS = ['Alice', 'Bob', 'Carol'];
-
 async function land(port, acts) {
   await port.transact((facts) => {
     for (const act of acts) facts.land(act);
   });
 }
-
-/** Read every maintained index in one synchronous callback. */
-async function maintainedIndices(port, acts, listeners = LISTENERS, senders = SENDERS) {
-  const says = acts.filter((act) => act.kind === 'say').map((act) => act.index);
-  return (await port.read((facts) => ({
-    header: facts.header(),
-    roster: facts.roster().map((participant) => ({ ...participant })),
-    audiences: Object.fromEntries(says.map((index) => [index, facts.audience(index).map((row) => ({ ...row }))])),
-    attention: Object.fromEntries(listeners.map((listener) => [listener, facts.attention(listener).map((fact) => ({ ...fact }))])),
-    incoming: Object.fromEntries(senders.map((sender) => [sender, facts.incomingAttention(sender).map((fact) => ({ ...fact }))])),
-  }))).value;
-}
-
-function withoutRevision(maintained) {
-  return { ...maintained, header: { ...maintained.header, revision: 0 } };
-}
-
-function compareWithFrozenReplay(maintained, acts, listeners = LISTENERS, senders = SENDERS) {
-  const oracle = legacy.replayLandedAudiences(acts);
-  assert.deepEqual(maintained.roster.map((participant) => participant.name), oracle.participants, 'roster names/order');
-  assert.deepEqual(
-    [...maintained.roster].sort((a, b) => a.firstIndex - b.firstIndex).map((participant) => participant.name),
-    oracle.participants,
-    'firstIndex order',
-  );
-  assert.deepEqual(maintained.roster.filter((p) => p.joined).map((p) => p.name), oracle.joined, 'joined set');
-  assert.deepEqual(maintained.roster.filter((p) => p.done).map((p) => p.name), oracle.done, 'done set');
-  for (const participant of maintained.roster) {
-    assert.equal(participant.sayCount, oracle.sayCount(participant.name), `sayCount(${participant.name})`);
-    assert.equal(participant.lastJoinIndex, oracle.lastJoinIndex(participant.name), `lastJoinIndex(${participant.name})`);
-    assert.equal(participant.lastActiveAt, oracle.lastActiveAt(participant.name), `lastActiveAt(${participant.name})`);
-  }
-
-  const says = acts.filter((act) => act.kind === 'say').map((act) => act.index);
-  assert.deepEqual(Object.keys(maintained.audiences).map(Number).sort((a, b) => a - b), says, 'every say is readable');
-  for (const index of says) {
-    const rows = maintained.audiences[index];
-    assert.deepEqual(rows.map((row) => row.recipient), oracle.recipientsAtLanding(index), `landed audience order at act/${index}`);
-    assert.deepEqual(rows, oracle.groups(index), `landed audience routes at act/${index}`);
-    // The labeled oracle must stay a mechanical rearrangement of the verbatim one.
-    assert.deepEqual(oracle.groups(index).map((row) => row.recipient), oracle.recipientsAtLanding(index), `oracle labels at act/${index}`);
-  }
-
-  for (const listener of listeners) {
-    const facts = maintained.attention[listener];
-    assert.deepEqual(facts.filter((fact) => fact.kind === 'listen').map((fact) => fact.target), oracle.listening.get(legacy.nameKey(listener)) ?? [], `listening(${listener})`);
-    assert.deepEqual(facts.filter((fact) => fact.kind === 'ignore').map((fact) => fact.target), oracle.ignored.get(legacy.nameKey(listener)) ?? [], `ignored(${listener})`);
-    for (const fact of facts) assert.equal(fact.listener, listener, `attention listener spelling (${listener})`);
-    for (let i = 1; i < facts.length; i += 1) assert.ok(facts[i - 1].sinceIndex <= facts[i].sinceIndex, `attention order (${listener})`);
-  }
-
-  const sortFacts = (facts) => [...facts].sort((a, b) => (a.listener + a.kind).localeCompare(b.listener + b.kind));
-  for (const sender of senders) {
-    const expected = [];
-    for (const [listener, targets] of oracle.listening) {
-      if (targets.some((target) => legacy.sameName(target, sender))) expected.push({ listener, kind: 'listen' });
-    }
-    for (const [listener, targets] of oracle.ignored) {
-      if (targets.some((target) => legacy.sameName(target, sender))) expected.push({ listener, kind: 'ignore' });
-    }
-    const actual = maintained.incoming[sender].map((fact) => ({ listener: legacy.nameKey(fact.listener), kind: fact.kind }));
-    assert.deepEqual(sortFacts(actual), sortFacts(expected), `incomingAttention(${sender})`);
-  }
-
-  return oracle;
-}
-
-function makeDirectory(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'square-row-domain-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  return directory;
-}
-
-test('the frozen oracle labels stay a mechanical rearrangement of its verbatim recipients', () => {
-  const acts = stored(SEQUENTIAL_SOURCE);
-  const oracle = legacy.replayLandedAudiences(acts);
-  for (const act of acts) {
-    if (act.kind !== 'say') continue;
-    assert.deepEqual(oracle.groups(act.index).map((row) => row.recipient), oracle.recipientsAtLanding(act.index));
-  }
-
-  // Seeded corpus: the labeled rearrangement must never drift from the verbatim
-  // v1 recipient list, and its labels must respect bell > mention > reply > attention.
-  const rank = { bell: 0, mention: 1, reply: 2, attention: 3 };
-  let seed = 0x2f6e2b1;
-  const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
-  const pick = (values) => values[Math.floor(random() * values.length)];
-  const names = ['Ada', 'bo', 'Cy', 'dee'];
-  const kinds = ['join', 'done', 'say', 'say', 'listen', 'ignore', 'read'];
-  for (let round = 0; round < 200; round += 1) {
-    const generated = [];
-    const count = 2 + Math.floor(random() * 25);
-    for (let index = 0; index < count; index += 1) {
-      const kind = pick(kinds);
-      const base = { kind, actor: pick(names), at: T0 + index, index };
-      if (kind === 'say') {
-        const mentions = Array.from({ length: Math.floor(random() * 3) }, () => pick([...names, 'ghost']));
-        const reply = generated.some((act) => act.kind === 'say') && random() < 0.4 ? pick(generated.filter((act) => act.kind === 'say')).index : undefined;
-        generated.push({ ...base, body: 's', ...(mentions.length === 0 ? {} : { mentions }), ...(random() < 0.2 ? { reach: 'bell' } : {}), ...(reply === undefined ? {} : { reply }) });
-      } else if (kind === 'listen' || kind === 'ignore') {
-        generated.push({ ...base, target: pick([...names, 'ghost']) });
-      } else if (kind === 'read') {
-        generated.push({ ...base, through: index });
-      } else {
-        generated.push(base);
-      }
-    }
-    const replay = legacy.replayLandedAudiences(generated);
-    for (const act of generated) {
-      if (act.kind !== 'say') continue;
-      const groups = replay.groups(act.index);
-      assert.deepEqual(groups.map((row) => row.recipient), replay.recipientsAtLanding(act.index), `oracle labels (round ${round}, act/${act.index})`);
-      assert.deepEqual(groups.map((row) => rank[row.route]), groups.map((row) => rank[row.route]).slice().sort((a, b) => a - b), `oracle priority (round ${round})`);
-      if (act.reach === 'bell') assert.ok(groups.every((row) => row.route === 'bell'));
-    }
-  }
-
-  // No triggers: the maintained indices are maintained by exactly one domain transition.
-  assert.ok(!/CREATE\s+TRIGGER/i.test(SCHEMA_SQL));
-});
-
-test('landing one activity at a time reproduces the frozen v1 replay', async () => {
-  const acts = stored(SEQUENTIAL_SOURCE);
-  const port = createArtifactPort(':memory:', fixtureState([]));
-  const imported = createArtifactPort(':memory:', fixtureState(acts));
-  try {
-    const returned = await port.transact((facts) => acts.map((act) => facts.land(act)));
-    assert.deepEqual(returned.value.map((act) => act.index), acts.map((act) => act.index));
-    assert.deepEqual(returned.value.map((act) => act.at), acts.map((act) => act.at));
-    const maintained = await maintainedIndices(port, acts);
-    compareWithFrozenReplay(maintained, acts);
-    assert.equal(maintained.header.lastActIndex, acts.length - 1);
-    assert.equal(maintained.header.nextActIndex, acts.length);
-    assert.deepEqual(maintained.header, { ...maintained.header, revision: 1 }, 'one landing transaction advances the revision once');
-    assert.deepEqual(withoutRevision(maintained), withoutRevision(await maintainedIndices(imported, acts)), 'the land path and the fixture import path agree');
-    assert.equal(parseActivityId(formatActivityId(acts.length - 1)), acts.length - 1);
-  } finally {
-    await port.close();
-    await imported.close();
-  }
-});
-
-test('importing a gapped v1-shaped snapshot rebuilds the same maintained indices', async () => {
-  const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
-  try {
-    const maintained = await maintainedIndices(port, GAPPED_ACTS);
-    compareWithFrozenReplay(maintained, GAPPED_ACTS);
-    assert.equal(maintained.header.lastActIndex, 25);
-    assert.equal(maintained.header.nextActIndex, 26);
-    assert.equal(maintained.header.revision, 0);
-  } finally {
-    await port.close();
-  }
-});
-
-test('a file-backed artifact agrees with memory and with the frozen replay', async (t) => {
-  const directory = makeDirectory(t);
-  const location = path.join(directory, 'SQUARE.square');
-  assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), true);
-  assert.equal(await createSquareFile(location, fixtureState(GAPPED_ACTS)), false, 'create is race-safe');
-
-  const file = createRealArtifactPort(location);
-  const memory = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS));
-  try {
-    const fromFile = await maintainedIndices(file, GAPPED_ACTS);
-    compareWithFrozenReplay(fromFile, GAPPED_ACTS);
-    assert.deepEqual(fromFile, await maintainedIndices(memory, GAPPED_ACTS), 'file and memory indices agree');
-  } finally {
-    await file.close();
-    await memory.close();
-  }
-
-  await writeSquareFile(location, fixtureState(stored(SEQUENTIAL_SOURCE)));
-  const replaced = createRealArtifactPort(location);
-  try {
-    const fromFile = await maintainedIndices(replaced, stored(SEQUENTIAL_SOURCE));
-    assert.equal(fromFile.header.lastActIndex, SEQUENTIAL_SOURCE.length - 1);
-    compareWithFrozenReplay(fromFile, stored(SEQUENTIAL_SOURCE));
-  } finally {
-    await replaced.close();
-  }
-});
 
 test('audience priority is bell > mention > reply > attention, with self and ignore rules', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);

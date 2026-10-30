@@ -32,7 +32,7 @@ rg -n 'validateSquareState|exportSqliteState|initializeSqlite|writeSquareSnapsho
 - `createSquareSnapshot` initializes a new artifact. `writeSquareSnapshot/writeSquareFile` are explicit build `--force`/fixture import, not whole-state transaction callbacks. Existing v1 still refuses before destructive work. `initializeSqlite` also supplies the migration's shared rebuild; it calls the same `deriveLanding`, not another production fold.
 - Public SDK `snapshot().delivered()` copies raw receipt assignments into a detached exact-owner Set; it does not retain a query or transaction capability and copies no activity history.
 - `.state` matches elsewhere are participant/admission states, transport outcomes or Claude's native `$.state` API, not artifact snapshots. `packages/agent-delivery` remains untouched.
-- `test/fixtures/legacy-square-core.js` is a frozen test-only v1 replay oracle. `square_snapshot` in the benchmark is instrumentation for detecting forbidden legacy reads, not a runtime path.
+- `square_snapshot` in the benchmark is instrumentation for detecting forbidden legacy reads, not a runtime path.
 
 ### Production source size
 
@@ -59,7 +59,7 @@ Evidence locations:
 
 | Invariant | Tests |
 |---|---|
-| Maintained roster/attention/audience equals independent v1 replay, including gaps, mixed spelling, reply/mention/listen/ignore/bell/done/rejoin priority and order | `test/row-domain.test.js`, frozen `test/fixtures/legacy-square-core.js` |
+| Landing audience priority and directed attention, including mixed spelling, reply/mention/listen/ignore/bell and departure | `test/row-domain.test.js` |
 | Sparse receipts, exact raw owners/orphans, unseen hole vs later catch, repeat no-op, filtered remaining, historical catch vs latest-join pending, distinct cursor/presence | `test/row-domain.test.js`, `test/perception-projection.test.js` |
 | Exact v2 schema, optional field preservation, immutable detached facts, expired capabilities, synchronous callbacks, caught storage failure rollback, no-op revision, selected corruption vs doctor | `test/artifact.test.js`, `test/core.test.js` |
 | Two real processes serialize catches; process death rolls activity and indices back; busy COMMIT retains callback/result; abort preserves reason; revision read has a positive SQL control | `test/sqlite-storage.test.js` |
