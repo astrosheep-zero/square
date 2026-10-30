@@ -419,26 +419,14 @@ export function readSquareSnapshot(location: string, signal?: AbortSignal): Prom
 export function readSquareRevision(location: string, signal?: AbortSignal): Promise<number> {
     return inspectFile(location, db => createSqliteDriver(db).header().revision, signal);
 }
-export function observeSquareRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
-    return observeFileVersion(location, 'square-revision', async (file, signal) => {
-        try {
-            return await readSquareRevision(file, signal);
-        }
-        catch (error) {
-            abort(signal);
-            if (error instanceof InternalSquareError && error.code === 'not_found')
-                return null;
-            throw error;
-        }
-    });
-}
 export function readSquareDeliveryRevision(location: string, signal?: AbortSignal): Promise<number> {
     return inspectFile(location, db => createSqliteDriver(db).header().deliveryRevision, signal);
 }
-export function observeSquareDeliveryRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
-    return observeFileVersion(location, 'square-delivery-revision', async (file, signal) => {
+function observeRevision(location: string, revision: 'square-revision' | 'square-delivery-revision'): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+    const read = revision === 'square-revision' ? readSquareRevision : readSquareDeliveryRevision;
+    return observeFileVersion(location, revision, async (file, signal) => {
         try {
-            return await readSquareDeliveryRevision(file, signal);
+            return await read(file, signal);
         }
         catch (error) {
             abort(signal);
@@ -446,6 +434,12 @@ export function observeSquareDeliveryRevision(location: string): Promise<import(
             throw error;
         }
     });
+}
+export function observeSquareRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+    return observeRevision(location, 'square-revision');
+}
+export function observeSquareDeliveryRevision(location: string): Promise<import('./file-changes.js').VersionObserver<number | null>> {
+    return observeRevision(location, 'square-delivery-revision');
 }
 export async function diagnoseSquareFile(location: string): Promise<DiagnoseResult> {
     try {
