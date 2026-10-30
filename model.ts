@@ -212,7 +212,7 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
-export type DirectedNotificationRoute = 'mention' | 'reply' | 'attention' | 'bell';
+export type DirectedNotificationRoute = import('./attention.js').AudienceRoute;
 
 export interface InboxNotification {
   actIndex: number;

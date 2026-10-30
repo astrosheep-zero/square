@@ -50,6 +50,10 @@
     "ws": "^8.21.3"
   },
   "exports": {
+    "./attention": {
+      "types": "./dist/attention.d.ts",
+      "default": "./dist/attention.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"

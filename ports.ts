@@ -65,9 +65,9 @@ export interface DirectedHead {
   readonly at: number;
   readonly actor: string;
   readonly recipient: string;
-  readonly route: 'mention' | 'reply' | 'attention' | 'bell';
+  readonly route: import('./attention.js').AudienceRoute;
 }
-export interface LandedRecipient { readonly recipient: string; readonly route: DirectedHead['route'] }
+export type LandedRecipient = import('./attention.js').AudienceRecipient;
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export interface ReceiptAssignment { readonly owner: string; readonly index: ActivityIndex }
 export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;

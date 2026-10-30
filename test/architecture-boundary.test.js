@@ -146,12 +146,13 @@ test('artifact callbacks are synchronous typed capabilities, not replacement sna
   assert.doesNotMatch(source, /\btransact<R>|SquareState|state\?:/);
 });
 
-test('pure landing depends only on domain facts and syntax', () => {
+test('pure landing depends only on domain facts, syntax, and standalone attention', () => {
   const edges = moduleEdges('square-domain.ts', productionSources.get('square-domain.ts'));
   for (const edge of edges) {
-    assert.ok(['./model.js', './ports.js'].includes(edge.module), edge.module);
+    assert.ok(['./model.js', './ports.js', './attention.js'].includes(edge.module), edge.module);
     if (edge.module === './ports.js') assert.deepEqual(edge.names, []);
   }
+  assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
 test('the artifact contract comes from ports.ts alone', () => {

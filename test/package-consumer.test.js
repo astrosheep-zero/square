@@ -43,6 +43,13 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     fs.symlinkSync(path.join(root, 'node_modules', name), target, 'dir');
   }
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+  fs.writeFileSync(path.join(fixture, 'attention-consumer.ts'), `
+    import { resolveAudience, type AudienceInput, type AudienceRecipient, type AudienceRoute } from '@astrosheep/square/attention';
+    const input: AudienceInput = { actor: 'a:one', recipients: ['b:two'] };
+    const audience: readonly AudienceRecipient[] = resolveAudience(input);
+    const route: AudienceRoute | undefined = audience[0]?.route;
+    void route;
+  `);
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
     import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult } from '@astrosheep/square';
     const body = "test" + ":" + ('consumer');
@@ -80,8 +87,19 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     '--noEmit', '--strict', '--target', 'ESNext', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     '--types', 'node', '--typeRoots', path.join(root, 'node_modules', '@types'),
     path.join(fixture, 'consumer.ts'),
+    path.join(fixture, 'attention-consumer.ts'),
   ]);
   assert.equal(typecheck.status, 0, typecheck.stderr || typecheck.stdout || typecheck.error?.message);
+
+  const attention = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { resolveAudience } from '@astrosheep/square/attention';
+    import assert from 'node:assert/strict';
+    const first = resolveAudience({ actor: 'east:alice', recipients: ['east:bob', 'west:bob'], mentions: ['west:bob'] });
+    const second = resolveAudience({ actor: 'west:bob', recipients: ['west:alice', 'east:alice'], reach: 'bell' });
+    assert.deepEqual(first, [{ recipient: 'west:bob', route: 'mention' }]);
+    assert.deepEqual(second, [{ recipient: 'west:alice', route: 'bell' }, { recipient: 'east:alice', route: 'bell' }]);
+  `], { cwd: fixture, encoding: 'utf8' });
+  assert.equal(attention.status, 0, attention.stderr);
 
   const runtime = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import * as api from '@astrosheep/square';

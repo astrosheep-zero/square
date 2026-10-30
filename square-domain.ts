@@ -1,4 +1,5 @@
 import { SquareError, formatActivityId, parseActivityId, sameName, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
+import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
 
 export interface LandingEffect {
@@ -19,25 +20,11 @@ export interface LandingFacts {
 
 /** The single landing transition, shared by both adapters and explicit rebuild. */
 export function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect {
-  const audience: LandedRecipient[] = [];
-  if (activity.kind === 'say') {
-    const add = (requested: string, route: LandedRecipient['route']) => {
-      const recipient = facts.standing.find((item) => sameName(item.name, requested))?.name;
-      if (recipient === undefined || sameName(recipient, activity.actor)
-        || audience.some((item) => sameName(item.recipient, recipient))) return;
-      if (activity.reach !== 'bell' && facts.incoming.some((item) => item.kind === 'ignore' && sameName(item.listener, recipient))) return;
-      audience.push({ recipient, route });
-    };
-    if (activity.reach === 'bell') {
-      for (const peer of facts.standing) add(peer.name, 'bell');
-    } else {
-      for (const mention of activity.mentions ?? []) add(mention, 'mention');
-      if (facts.replyAuthor !== undefined) add(facts.replyAuthor, 'reply');
-      for (const peer of facts.standing) {
-        if (facts.incoming.some((item) => item.kind === 'listen' && sameName(item.listener, peer.name))) add(peer.name, 'attention');
-      }
-    }
-  }
+  const audience = activity.kind === 'say' ? resolveAudience({
+    actor: activity.actor, recipients: facts.standing.map((item) => item.name),
+    mentions: activity.mentions, replyAuthor: facts.replyAuthor, reach: activity.reach,
+    incoming: facts.incoming, sameIdentity: sameName,
+  }) : [];
   const actor = activity.actor;
   const previous = facts.actor ?? { name: actor, firstIndex: activity.index, joined: false, done: false, sayCount: 0 };
   const participant: ParticipantFact = {
