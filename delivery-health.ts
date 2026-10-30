@@ -85,17 +85,8 @@ export async function classifyDeliveryHealth(
       const attemptRow = evidence.findLast((row) => row.kind === 'wake' && (
         row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'failed'
       ));
-      const attempt = attemptRow === undefined || seat === undefined || attemptRow.route?.kind === undefined ? undefined : {
-        at: attemptRow.at,
-        attention: { squarePath, recipient: seat.participant, actIndex: note.index },
-        routeKind: attemptRow.route.kind,
-        outcome: attemptRow.outcome as 'accepted' | 'unknown' | 'failed',
-        attemptN: attemptRow.attemptN,
-        ...(attemptRow.signature === undefined ? {} : { signature: attemptRow.signature }),
-        ...(attemptRow.message === undefined ? {} : { message: attemptRow.message }),
-        ...(attemptRow.diagnostic === undefined ? {} : { diagnostic: attemptRow.diagnostic }),
-        ...(attemptRow.nativeObservations === undefined ? {} : { nativeObservations: attemptRow.nativeObservations }),
-      } satisfies WakeAttempt;
+      const attempt = attemptRow === undefined || seat === undefined ? undefined : deliveryAttempt(squarePath, attemptRow,
+        { squarePath, recipient: seat.participant, actIndex: note.index });
       const kind: DeliveryHealthKind = presentation
         ? 'presented-not-delivered'
         : terminal?.outcome === 'accepted'
@@ -178,11 +169,12 @@ function formatRelease(release: WakeReleaseDiagnostic, now: number): string {
   return `  · ${formatActivityId(release.attention.actIndex)} → ${displayField(participantIdentity(release.attention.recipient))} · ${route} · ${reason} · ${age}${message}${diagnostic}`;
 }
 
-function deliveryAttempt(squarePath: string, row: DeliveryEvidence): WakeAttempt | undefined {
+function deliveryAttempt(squarePath: string, row: DeliveryEvidence,
+  attention: WakeAttempt['attention'] = { squarePath, recipient: row.participant, actIndex: Number(row.activity.slice(4)) }): WakeAttempt | undefined {
   if (row.route?.kind === undefined || row.outcome === 'released' || row.outcome === 'dispatching') return undefined;
   return {
     at: row.at,
-    attention: { squarePath, recipient: row.participant, actIndex: Number(row.activity.slice(4)) },
+    attention,
     routeKind: row.route.kind,
     outcome: row.outcome as 'accepted' | 'unknown' | 'failed',
     attemptN: row.attemptN,
