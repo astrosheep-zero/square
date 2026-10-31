@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled, squareToolFailure, squareToolFailureText } from './square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, SquareExpressDrafts, squareToolsEnabled, squareToolFailure, squareToolFailureText } from './square-tools.js';
 import { operationEnv } from './participant-identity.js';
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
@@ -23,6 +23,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
   const baseEnv = { ...(resourceOptions.env ?? process.env) };
   const toolsEnabled = squareToolsEnabled(baseEnv);
   const resources = createSquareResourceOwner();
+  const drafts = new SquareExpressDrafts();
   // Calls to the configured square borrow one server-owned connection.
   const inFlight = new Set<Promise<unknown>>();
   const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
@@ -32,21 +33,30 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
       const call = (async () => {
         let square: Square | undefined;
+        let toolArgs = args as JsonObject;
+        let owner: Owner | undefined;
+        let draftToken: string | undefined;
+        let expressAttempted = false;
         try {
-          const { location } = args as JsonObject;
           const threadId = extra._meta?.threadId;
           const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
           // Claude's plugin endpoint requires the mod's call-local coordinate, never startup identity.
           const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
             ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
             : undefined;
-          const owner = claude !== undefined
+          owner = claude !== undefined
             ? harnessOwner({ channel: 'claude-code', session: claude.sessionId, ...(claude.agentId === undefined ? {} : { agent: claude.agentId }) })
             : typeof threadId === 'string' && threadId.trim()
               ? harnessOwner({ channel: 'codex', session: threadId })
               : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
                 ? harnessOwner({ channel: 'opencode', session: opencodeSessionId })
                 : configuredOwner;
+          if (tool.name === 'express') {
+            const resolved = drafts.resolve(toolArgs, owner);
+            toolArgs = resolved.args;
+            draftToken = resolved.token;
+          }
+          const { location } = toolArgs;
           const env = claude !== undefined
             ? { ...operationEnv('claude', claude.sessionId, baseEnv),
               // Preserve Claude's session + child flag semantics; an agent loop ID is not a session ID.
@@ -68,18 +78,24 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
             ? wakeAddress : undefined;
           let text: string;
-          try { text = await tool.run(square, args as JsonObject, { signal: extra.signal }, {
-            owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-              ? codexWakeAddress(threadId, env) : callWake,
-          }); }
+          try {
+            expressAttempted = tool.name === 'express';
+            text = await tool.run(square, toolArgs, { signal: extra.signal }, {
+              owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
+                ? codexWakeAddress(threadId, env) : callWake,
+            });
+            drafts.consume(draftToken);
+          }
           finally { await square.close(); }
           return { content: [{ type: 'text' as const, text }] };
         } catch (error) {
           const failure = squareToolFailure(error, extra.signal);
-          const participant = (args as JsonObject).as;
+          const participant = toolArgs.as;
+          const draft = tool.name === 'express' ? drafts.retain(toolArgs, owner, draftToken, failure, expressAttempted) : undefined;
           return { isError: true, content: [{ type: 'text' as const, text: squareToolFailureText(failure, {
             location: square?.location ?? options.path,
             participant: typeof participant === 'string' ? participant : undefined,
+            draft,
           }) }] };
         }
       })();

@@ -67,6 +67,50 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
   } finally { await close(); }
 });
 
+test('MCP retries an unsent express from an in-memory draft without repeating its arguments', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const { cwd, squarePath, env, body: owner } = await fixture();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const { client, close } = await connectedClient(createSquareMcpServer({
+    cwd, env, path: squarePath, owner,
+  }));
+  try {
+    await client.callTool({ name: 'join', arguments: { as: 'rei' } });
+    await client.callTool({ name: 'join', arguments: { as: 'bob' } });
+    const question = await client.callTool({ name: 'express', arguments: { as: 'bob', body: 'question for rei', mentions: ['rei'] } });
+    assert.equal(question.isError, undefined);
+    now += 100_000;
+    const body = 'a long answer that the model must not need to repeat\nwith every original option intact';
+    const refused = await client.callTool({ name: 'express', arguments: {
+      as: 'rei', body, mentions: ['bob'], reply: 'act/2', noMention: true,
+    } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /your words stay unsent/);
+    assert.match(refused.content[0].text, /catch the pending activity/);
+    const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
+    assert.ok(token, refused.content[0].text);
+    assert.doesNotMatch(refused.content[0].text, /a long answer/);
+    assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
+
+    await client.callTool({ name: 'catch', arguments: { as: 'rei' } });
+    const retry = await client.callTool({ name: 'express', arguments: { draft: token } });
+    assert.equal(retry.isError, undefined, retry.content[0].text);
+    const history = await client.callTool({ name: 'history', arguments: { limit: 10 } });
+    assert.match(history.content[0].text, /a long answer that the model must not need to repeat/);
+    const square = await Square.at({ path: squarePath, env });
+    try {
+      const landed = (await square.history({ limit: 1, order: 'desc' })).activities[0];
+      assert.equal(landed.body, body);
+      assert.deepEqual(landed.mentions, ['bob']);
+      assert.equal(landed.reply, 'act/2');
+    } finally { await square.close(); }
+    const consumed = await client.callTool({ name: 'express', arguments: { draft: token } });
+    assert.equal(consumed.isError, true);
+    assert.match(consumed.content[0].text, /Unknown, expired, or inaccessible/);
+  } finally { await close(); }
+});
+
 test('MCP migration refusals include the required action and recovery command', async (t) => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-migration-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));

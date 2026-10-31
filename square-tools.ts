@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { z } from 'zod/v4';
 import { isSquareError, SquareError } from './model.js';
 import { requireOwner, requireJoinName, selectOwnSeat, CATCH_DEFAULT_LIMIT, type Square } from './square-api.js';
@@ -13,6 +14,53 @@ import {
 
 export interface ToolIdentity { readonly owner?: Owner; readonly wakeAddress?: WakeAddress }
 type JsonObject = Record<string, unknown>;
+
+interface ExpressDraft {
+  readonly owner?: Owner;
+  readonly args: JsonObject;
+  readonly expiresAt: number;
+}
+
+/** Process-local recovery: FIFO 64, fixed two-hour TTL, consumed only by a successful express. */
+const EXPRESS_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
+const EXPRESS_DRAFT_LIMIT = 64;
+
+export class SquareExpressDrafts {
+  private readonly drafts = new Map<string, ExpressDraft>();
+
+  private purgeExpired(): void {
+    const now = Date.now();
+    for (const [token, draft] of this.drafts) if (draft.expiresAt <= now) this.drafts.delete(token);
+  }
+
+  resolve(args: JsonObject, owner?: Owner): { args: JsonObject; token?: string } {
+    if (args.draft === undefined) return { args };
+    this.purgeExpired();
+    if (typeof args.draft !== 'string' || Object.keys(args).length !== 1)
+      throw new SquareError('invalid_args', 'An express draft token cannot be combined with other arguments.');
+    const draft = this.drafts.get(args.draft);
+    if (draft === undefined || draft.owner !== owner)
+      throw new SquareError('invalid_args', 'Unknown, expired, or inaccessible express draft.');
+    return { args: draft.args, token: args.draft };
+  }
+
+  consume(token?: string): void {
+    if (token !== undefined) this.drafts.delete(token);
+  }
+
+  retain(args: JsonObject, owner: Owner | undefined, token: string | undefined, failure: JsonObject, expressAttempted: boolean): string | undefined {
+    const effect = (failure.operation as { expressEffect?: string } | undefined)?.expressEffect;
+    // After an attempt, only an admission or argument refusal proves that retrying cannot duplicate an activity.
+    const unsent = !expressAttempted || effect === 'unsent' || (effect === undefined && failure.code === 'invalid_args');
+    if (!unsent || effect === 'landed' || effect === 'unknown' || typeof args.body !== 'string' || args.draft !== undefined) return undefined;
+    this.purgeExpired();
+    if (token !== undefined && this.drafts.has(token)) return token;
+    const created = `dr_${crypto.randomBytes(16).toString('base64url')}`;
+    this.drafts.set(created, { owner, args, expiresAt: Date.now() + EXPRESS_DRAFT_TTL_MS });
+    if (this.drafts.size > EXPRESS_DRAFT_LIMIT) this.drafts.delete(this.drafts.keys().next().value!);
+    return created;
+  }
+}
 type Outcome = Promise<object>;
 type ToolRender = (result: JsonObject, args: JsonObject) => string | undefined;
 interface ToolDefinition {
@@ -77,15 +125,19 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     rendering((result: JoinPresentation) => renderJoinResult(result))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
-    body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
+    body: z.string().optional().describe('What you say or do. Markdown works; *asterisks* mark an action. Required unless retrying with a draft token.'),
+    draft: z.string().optional().describe('Retry a failed express kept in this process. Pass only the token; the original body and options are restored.'),
     mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
     reach: z.enum(['bell']).optional().describe('"bell" calls everyone in the square. Cannot be used with mentions.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not caught yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
-  }, async (square, { body, as, ...options }, control, identity) =>
-    (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control),
+  }, async (square, { body, draft, as, ...options }, control, identity) => {
+    if (draft !== undefined) throw new SquareError('invalid_args', 'Unknown or expired express draft.');
+    if (body === undefined) throw new SquareError('invalid_args', 'Express needs a body or a draft token.');
+    return (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control);
+  },
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
   tool('catch', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you catch no longer waits for you; history lets you look back.', {
     as: participant,
@@ -142,6 +194,15 @@ export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObj
 }
 
 /** Readable failure text with the same recovery commands the CLI offers, never raw JSON. */
-export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string } = {}): string {
-  return renderFailureLines(failure as unknown as FailureReport, { squarePath: context.location, name: context.participant }).join('\n');
+export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string; draft?: string } = {}): string {
+  const report = failure as unknown as FailureReport;
+  const lines = renderFailureLines(report, { squarePath: context.location, name: context.participant });
+  if (report.code === 'behind') lines[0] = `✕ your words stay unsent — ${report.message}`;
+  if (context.draft !== undefined) {
+    lines.push(`· draft kept in memory: ${context.draft}`);
+    lines.push(report.code === 'behind'
+      ? '· catch the pending activity, then retry express with only:'
+      : '· correct the problem above, then retry express with only:', `{ "draft": "${context.draft}" }`);
+  }
+  return lines.join('\n');
 }

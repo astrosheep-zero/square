@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
   const tools = registeredTools();
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
   const call = async (name, args = {}, ctx = context(), signal) => {
-    const result = await tools.get(`square_${name}`).execute('test', { location: 'test.square', ...args }, signal, undefined, ctx);
+    const result = await tools.get(`square_${name}`).execute('test', { ...(args.draft === undefined ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
     assert.equal(result.structuredContent, undefined);
     assert.equal(result.content.length, 1);
     assert.equal(result.content[0].type, 'text');
@@ -122,6 +122,36 @@ test('Pi calls use live context, preserve environment, and return human text and
   assert.equal(conflict.isError, true);
   assert.ok(conflict.content[0].text.length > 0);
   assert.deepEqual({ ...process.env }, before);
+});
+
+test('Pi retains a blocked express in memory and retries only by draft token', async (t) => {
+  const { cwd, squarePath, call } = await fixture(t);
+  await call('join', { as: 'rei' });
+  await call('join', { as: 'bob' });
+  await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
+  const previousNow = process.env.SQUARE_NOW_MS;
+  process.env.SQUARE_NOW_MS = String(Date.now() + 100_000);
+  t.after(() => { if (previousNow === undefined) delete process.env.SQUARE_NOW_MS; else process.env.SQUARE_NOW_MS = previousNow; });
+  const body = 'Pi keeps this exact body without writing it to disk';
+  const refused = await call('express', { as: 'rei', body, reply: 'act/2', mentions: ['bob'] });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /your words stay unsent/);
+  const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
+  assert.ok(token, refused.content[0].text);
+  assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
+  await call('catch', { as: 'rei' });
+  const retry = await call('express', { draft: token });
+  assert.equal(retry.isError, undefined, retry.content[0].text);
+  const history = await call('history', { limit: 10 });
+  assert.match(history.content[0].text, /Pi keeps this exact body without writing it to disk/);
+  const square = await Square.at({ path: squarePath });
+  try {
+    const landed = (await square.history({ limit: 1, order: 'desc' })).activities[0];
+    assert.equal(landed.body, body);
+    assert.deepEqual(landed.mentions, ['bob']);
+    assert.equal(landed.reply, 'act/2');
+  } finally { await square.close(); }
+  assert.equal((await call('express', { draft: token })).isError, true);
 });
 
 test('Pi cancellation reaches a waiting operation without landing its body', async (t) => {

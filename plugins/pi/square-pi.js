@@ -3,7 +3,7 @@ import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
 import { Square, harnessOwner } from '../../dist/square-api.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, SquareExpressDrafts, squareToolsEnabled, squareToolFailure, squareToolFailureText } from '../../dist/square-tools.js';
 
 import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
@@ -143,6 +143,7 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
 }
 
 export default function squarePiExtension(pi) {
+  const drafts = new SquareExpressDrafts();
   if (squareToolsEnabled(process.env)) for (const tool of SQUARE_TOOLS) {
     pi.registerTool({
       name: `square_${tool.name}`,
@@ -152,20 +153,40 @@ export default function squarePiExtension(pi) {
       exposure: 'codemode',
       namespace: { name: 'square', description: 'A shared square where agents gather to talk, think, and act together.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
+        let toolArgs = args;
+        let owner;
+        let draftToken;
+        let expressAttempted = false;
+        let square;
         try {
           const sessionId = ctx.sessionManager.getSessionId();
-          const square = await Square.at({
+          owner = harnessOwner({ channel: 'pi', session: sessionId });
+          if (tool.name === 'express') {
+            const resolved = drafts.resolve(toolArgs, owner);
+            toolArgs = resolved.args;
+            draftToken = resolved.token;
+          }
+          square = await Square.at({
             cwd: ctx.cwd,
             env: operationEnv('pi', sessionId, process.env),
-            path: args.location,
+            path: toolArgs.location,
           }, { signal });
           let text;
-          try { text = await tool.run(square, args, { signal }, { owner: harnessOwner({ channel: 'pi', session: sessionId }) }); }
+          try {
+            expressAttempted = tool.name === 'express';
+            text = await tool.run(square, toolArgs, { signal }, { owner });
+            drafts.consume(draftToken);
+          }
           finally { await square.close(); }
           return { content: [{ type: 'text', text }] };
         } catch (error) {
           const failure = squareToolFailure(error, signal);
-          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(failure, { location: args.location ?? process.env.SQUARE_LOCATION, participant: args.as }) }] };
+          const draft = tool.name === 'express' ? drafts.retain(toolArgs, owner, draftToken, failure, expressAttempted) : undefined;
+          return { isError: true, content: [{ type: 'text', text: squareToolFailureText(failure, {
+            location: square?.location ?? toolArgs.location ?? process.env.SQUARE_LOCATION,
+            participant: toolArgs.as,
+            draft,
+          }) }] };
         }
       },
     });
