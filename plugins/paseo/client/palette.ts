@@ -1,5 +1,5 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import { MARBLE_DARK, MARBLE_LIGHT } from "./marble";
+import { MARBLE_DARK, MARBLE_LIGHT } from "./marble.ts";
 
 /**
  * Square's own courtyard palette: veinless honed stone (muted grey light, charcoal dark) and a
@@ -38,11 +38,30 @@ const STONE = {
   light: { image: `url(${MARBLE_LIGHT})`, edge: "#c9ccd1", boxShadow: "0 1px 0 rgba(24,26,30,0.04), 0 4px 10px -6px rgba(24,26,30,0.18)", inlay: "inset 0 0 0 0.5px rgba(0,0,0,0.26)" },
 } as const;
 
+export interface StoneSkin {
+  /** Data-URI tile for a native `<Image resizeMode="repeat">` skin layer. */
+  tile: { uri: string };
+  /**
+   * Oversized frame for the tile: inset negative by the seed's patch offset and
+   * out by the complement, so the repeat fills the card from that patch at any
+   * size (Fabric tiles via UIImageResizingModeTile; data URIs load via RCTDataRequestHandler).
+   */
+  frame: { left: number; top: number; right: number; bottom: number };
+  /** The darker cut along the bottom edge. */
+  edge: string;
+  /** Contact shadow; Fabric parses the CSS string form. */
+  boxShadow: string;
+  /** Inset shadow setting the ■ into the stone. */
+  inlay: string;
+}
+
 export interface SquarePalette {
   /** Complete theme for the card and its Markdown surfaces. */
   theme: PluginTheme;
-  /** Marble card surface for the web host, cut from the tile at `seed`; native keeps the flat surface1. */
+  /** Marble card surface for the web host, cut from the tile at `seed`. */
   stone(seed: string): { backgroundImage: string; backgroundSize: string; backgroundPosition: string; borderBottomColor: string; boxShadow: string };
+  /** The same slab for native hosts: tiled image skin, bottom cut, contact shadow, ■ inlay. */
+  skin(seed: string): StoneSkin;
   /** Web-only: the ■ set into the stone. */
   inlay: { boxShadow: string };
 }
@@ -53,6 +72,13 @@ function brightness(hex: string): number {
   return 0.299 * parseInt(rgb.slice(0, 2), 16)
     + 0.587 * parseInt(rgb.slice(2, 4), 16)
     + 0.114 * parseInt(rgb.slice(4, 6), 16);
+}
+
+/** Each card shows its own patch of the slab, so neighbours never repeat a vein. */
+function patchOffset(seed: string): { x: number; y: number } {
+  let hash = 2166136261;
+  for (const char of seed) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return { x: (hash >>> 0) % TILE, y: (hash >>> 9) % TILE };
 }
 
 export function squarePalette(theme: PluginTheme): SquarePalette {
@@ -68,16 +94,25 @@ export function squarePalette(theme: PluginTheme): SquarePalette {
       statusDanger: theme.colors.statusDanger,
     } },
     stone: seed => {
-      // Each card shows its own patch of the slab, so neighbours never repeat a vein.
-      let hash = 2166136261;
-      for (const char of seed) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
       const { image, edge, boxShadow } = dark ? STONE.dark : STONE.light;
+      const { x, y } = patchOffset(seed);
       return {
         backgroundImage: image,
         backgroundSize: `${TILE}px ${TILE}px`,
-        backgroundPosition: `${-((hash >>> 0) % TILE)}px ${-((hash >>> 9) % TILE)}px`,
+        backgroundPosition: `${-x}px ${-y}px`,
         borderBottomColor: edge,
         boxShadow,
+      };
+    },
+    skin: seed => {
+      const { edge, boxShadow, inlay } = dark ? STONE.dark : STONE.light;
+      const { x, y } = patchOffset(seed);
+      return {
+        tile: { uri: dark ? MARBLE_DARK : MARBLE_LIGHT },
+        frame: { left: -x, top: -y, right: -(TILE - x), bottom: -(TILE - y) },
+        edge,
+        boxShadow,
+        inlay,
       };
     },
     inlay: { boxShadow: (dark ? STONE.dark : STONE.light).inlay },

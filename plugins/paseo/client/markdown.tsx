@@ -63,8 +63,9 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
       case "space":
       case "checkbox":
       case "def":
-      case "html":
         return null;
+      case "html":
+        return <Text key={key} selectable style={[styles.text, textStyle]}>{token.raw}</Text>;
       case "hr":
         return <View key={key} style={styles.separator} />;
       case "code":

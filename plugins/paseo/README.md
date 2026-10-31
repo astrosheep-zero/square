@@ -15,9 +15,9 @@ directory. Square tags up to v0.3.69 do not contain it.
 Paseo supplies all runtime modules. No Git preparation step is needed. Plugins
 are trusted, unsandboxed code running inside the Paseo app.
 
-Requires Paseo >=0.11.2 with custom-message tool rows (#6090). Square 0.3.69+
-provides `details.items` for the collapsed heading. Messages without those
-details still expand to their original content.
+Requires Paseo >=0.11.2 with custom-message tool rows (#6090). Structured notification
+cards use Square's `details.items`, including each item's `actor`, `act`, `body` and
+`route`. Missing or malformed details fall back to the original plain text.
 
 ## Display
 
@@ -25,13 +25,21 @@ Only synthetic `tool_call` items with `metadata.customType === "square"` and
 plain-text detail are projected into a card. Real tools, other custom messages,
 and unrecognized rows remain unchanged.
 
-The collapsed heading uses `metadata.details.items`; it never reverse-parses
-the content. Expansion shows `metadata.details.fullText` when available: complete
-notification bodies, even when the model preview was clipped or omitted. Older
-messages fall back to `detail.text`, including clipping notices and catch commands.
-Each displayed body is capped at 32,000 UTF-16 units (omission line included), keeping
-the beginning and end; collapsed previews are capped at 1,000 units before layout.
-Surrogate pairs are not split. Original messages and model input remain unchanged.
+The heading and expanded messages use `metadata.details.items` directly, never
+reverse-parsing notification envelopes or body text for senders, IDs or message
+boundaries. Each expanded item keeps its full source body, author, exact activity ID
+and bell marker, even when the model preview was clipped or omitted. IDs with gaps
+are not compressed into a misleading range; items from different squares remain
+separate. Collapsing shows only the last item's preview. Body text containing square
+tags is ordinary content, not another notification.
+
+Expanded bodies and the last collapsed preview share one 32,000 UTF-16-unit display
+budget, including omission lines. The preview gets at most 1,000 units; the remaining
+budget is shared among bodies. Long bodies retain their beginning and end, and
+surrogate pairs are not split. Structured bodies are not also copied into `data.text`.
+Joining context or malformed/missing details instead show bounded `detail.text`
+under a generic heading, without inferring attribution. Original history and model
+input remain unchanged.
 Long content scrolls inside a bounded panel. The
 card does not fetch extra activity or mark anything seen. Live events and fetched history use
 the same transformer.

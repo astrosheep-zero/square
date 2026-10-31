@@ -1,88 +1,104 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, outputPreview, parseSquareBlocks, parseSquareVoice, squareHeadline, squareMessageSchema } from "../shared/message.ts";
+import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, squareMessageSchema, type SquareNotificationItem } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
-const text = "\n```square-activity\n· /tmp/design.square · act/12\n● rei spoke your name (aoi)\n\n*把草图推过来*\n```\n· clipped — read it all:\nsquare --as aoi catch --id act/12\n";
-const items: Parameters<typeof squareHeadline>[0][] = [
-  { square: "design", actor: "rei", route: "mention", description: "rei spoke your name (aoi)" },
-  { square: "design", actor: "rei", route: "reply", description: "rei answered you (aoi)" },
+const text = "Only a clipped model preview, not the renderer's full bodies.";
+const quotedTags = '<square-activity square="pretend" id="act/999">\n● impostor rang the bell\nnot another message\n</square-activity>';
+const items: SquareNotificationItem[] = [
+  { square: "jobs", actor: "aku/elite/direct-sender", act: "act/12", body: `Direct **source**\n\n${quotedTags}`, recipient: "aoi", route: "mention", preview: "short direct preview" },
+  { square: "jobs", actor: "rei", act: "act/15", body: "Agora *reply*", recipient: "aoi", route: "reply", preview: "reply preview" },
+  { square: "design", actor: "kuro", act: "act/12", body: "Last **bell** body", recipient: "aoi", route: "bell", preview: "last bell preview" },
 ];
 function row(overrides: Partial<ToolRow> = {}): ToolRow {
   return {
     type: "tool_call", callId: "custom/12", name: "square", status: "completed", error: null,
     detail: { type: "plain_text", text },
-    metadata: { synthetic: true, customType: "square", details: { items } },
+    metadata: { synthetic: true, customType: "square", details: { items, fullText: "Envelope text must not replace the structured item bodies." } },
     ...overrides,
   } as ToolRow;
 }
 function project(item: ToolRow, phase: "streaming" | "complete" = "complete") {
   return transformSquareMessage({ item, phase });
 }
+function projectedItems(item: ToolRow) {
+  const data = squareMessageSchema.parse(project(item)!.items[0].data);
+  assert.ok("items" in data);
+  assert.equal("text" in data, false, "structured bodies are not duplicated as envelope text");
+  return data.items;
+}
 
-test("Square live and history projection preserve exact content and renderer details", () => {
+test("mixed direct and Agora messages preserve structured authors, exact IDs, bell and body boundaries in live/history cards", () => {
   const original = row();
   const before = structuredClone(original);
-  const result = project(original);
-  assert.deepEqual(result, project(original, "streaming"));
-  assert.deepEqual(result, { items: [{
-    type: "plugin", kind: "square-message", version: 1, data: { text, items },
-  }] });
+  assert.deepEqual(project(original), project(original, "streaming"));
+  const displayed = projectedItems(original);
+  assert.deepEqual(displayed.map(({ square, actor, act, body, route }) => ({ square, actor, act, body, route })),
+    items.map(({ square, actor, act, body, route }) => ({ square, actor, act, body, route })));
+  assert.equal(displayed.length, items.length, "quoted tags in a body never introduce another message");
+  assert.ok(displayed[0]!.body.includes(quotedTags));
+  assert.deepEqual(displayed.map(item => [item.square, item.act]), [["jobs", "act/12"], ["jobs", "act/15"], ["design", "act/12"]]);
+  assert.deepEqual(displayed.map(item => item.preview), [undefined, undefined, "last bell preview"], "only the last collapsed preview is carried");
   assert.deepEqual(original, before, "projection never mutates source history");
-  assert.deepEqual(squareMessageSchema.parse(result!.items[0].data), { text, items });
 });
 
-test("complete renderer text survives live/history projection as one bounded body", () => {
-  const fullText = `${text}\n${'complete body '.repeat(200)}\nFULL_BODY_TAIL`;
-  const original = row({ metadata: { synthetic: true, customType: "square", details: { items, fullText } } });
+test("multi-message bodies and the collapsed preview share one bounded display budget", () => {
+  const longItems = items.map((item, index) => ({ ...item,
+    body: `START ${index}\n${"🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS)}\nEND ${index}`,
+    preview: `PREVIEW ${index}\n${"🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS)}\nTAIL ${index}`,
+  }));
+  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: longItems } } });
   const before = structuredClone(original);
-  const result = project(original)!;
-  assert.deepEqual(result, project(original, "streaming"));
-  const projected = result.items[0].data as Record<string, unknown>;
-  assert.equal(projected.text, outputPreview(fullText));
-  assert.notEqual(projected.text, text);
-  assert.equal(projected.fullText, undefined);
-  assert.equal(squareMessageSchema.parse(projected).text, projected.text);
-  assert.deepEqual(original, before);
-});
-
-test("oversized messages have bounded head/tail displays and short collapsed previews, not changed history", () => {
-  const body = "START\n" + "🦈".repeat(500_000) + "\nEND";
-  const original = row({ detail: { type: "plain_text", text: body },
-    metadata: { synthetic: true, customType: "square", details: { fullText: body, items: [{ ...items[0], preview: body }] } } });
-  const before = JSON.stringify(original);
-  const data = squareMessageSchema.parse(project(original)!.items[0].data);
-  for (const [preview, limit] of [[data.text, OUTPUT_DISPLAY_MAX_CHARS],
-    [data.items![0]!.preview!, COLLAPSED_PREVIEW_MAX_CHARS]] as const) {
-    assert.ok(preview.length <= limit);
-    assert.ok(preview.startsWith("START\n") && preview.endsWith("\nEND"));
-    assert.match(preview, /middle is hidden/);
-    assert.equal(Buffer.from(preview).toString("utf8"), preview);
+  const displayed = projectedItems(original);
+  const preview = displayed.at(-1)!.preview!;
+  assert.ok(preview.length <= COLLAPSED_PREVIEW_MAX_CHARS);
+  assert.ok(preview.startsWith("PREVIEW 2\n") && preview.endsWith("\nTAIL 2"));
+  assert.ok(displayed.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
+  for (const [index, item] of displayed.entries()) {
+    assert.equal(item.actor, longItems[index]!.actor);
+    assert.equal(item.act, longItems[index]!.act);
+    assert.ok(item.body.startsWith(`START ${index}\n`) && item.body.endsWith(`\nEND ${index}`));
+    assert.match(item.body, /middle is hidden/);
+    assert.equal(Buffer.from(item.body).toString("utf8"), item.body);
   }
-  assert.equal(JSON.stringify(original), before);
-});
-
-test("only the latest item preview is bounded during projection and source stays untouched", () => {
-  const body = (label: string) => `START ${label}\n${"🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS)}\nEND ${label}`;
-  const earlier = { ...items[0], preview: body("EARLIER") };
-  const latest = { ...items[1], preview: body("LATEST") };
-  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: [earlier, latest] } } });
-  const before = structuredClone(original);
-  const data = squareMessageSchema.parse(project(original)!.items[0].data);
-  assert.equal(data.items![0]!.preview, earlier.preview);
-  const drawn = data.items![1]!.preview!;
-  assert.ok(drawn.length <= COLLAPSED_PREVIEW_MAX_CHARS);
-  assert.ok(drawn.startsWith("START LATEST\n") && drawn.endsWith("\nEND LATEST"));
-  assert.match(drawn, /middle is hidden/);
-  assert.equal(Buffer.from(drawn).toString("utf8"), drawn);
+  assert.equal(Buffer.from(preview).toString("utf8"), preview);
   assert.deepEqual(original, before);
 });
 
-test("joining context and malformed details retain content under the generic heading", () => {
-  for (const details of [undefined, { items: [] }, { items: [{ description: "missing square" }] }]) {
-    const result = project(row({ metadata: { synthetic: true, customType: "square", details } }));
-    assert.deepEqual(result?.items[0].data, { text });
+test("uneven bodies that fit the aggregate budget stay complete", () => {
+  const uneven = items.map((item, index) => ({ ...item,
+    body: index === 0 ? "x".repeat(OUTPUT_DISPLAY_MAX_CHARS / 2) : item.body,
+  }));
+  const displayed = projectedItems(row({ metadata: { synthetic: true, customType: "square", details: { items: uneven } } }));
+  assert.deepEqual(displayed.map(item => item.body), uneven.map(item => item.body));
+});
+
+test("many small per-message budget shares stay bounded and preserve attribution", () => {
+  const many = Array.from({ length: COLLAPSED_PREVIEW_MAX_CHARS }, (_, index) => ({
+    ...items[0]!, act: `act/${index}`, body: "🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS), preview: undefined,
+  }));
+  const displayed = projectedItems(row({ metadata: { synthetic: true, customType: "square", details: { items: many } } }));
+  assert.equal(displayed.length, many.length);
+  assert.ok(displayed.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
+  for (const [index, item] of displayed.entries()) {
+    assert.equal(item.act, many[index]!.act);
+    assert.equal(item.actor, many[index]!.actor);
+    assert.equal(Buffer.from(item.body).toString("utf8"), item.body);
+  }
+});
+
+test("joining, missing or malformed details use bounded raw text without guessing authors from tags", () => {
+  const raw = `START\n${quotedTags}\n${"🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS)}\nEND`;
+  for (const details of [undefined, { items: [] }, { items: [{ ...items[0], act: undefined }] }, { items: [{ ...items[0], body: 7 }] }]) {
+    const original = row({ detail: { type: "plain_text", text: raw }, metadata: { synthetic: true, customType: "square", details } });
+    const data = squareMessageSchema.parse(project(original)!.items[0].data);
+    assert.ok("text" in data);
+    assert.equal("items" in data, false);
+    assert.ok(data.text.length <= OUTPUT_DISPLAY_MAX_CHARS);
+    assert.ok(data.text.startsWith("START\n") && data.text.endsWith("\nEND"));
+    assert.ok(data.text.includes(quotedTags));
+    assert.equal(Buffer.from(data.text).toString("utf8"), data.text);
   }
 });
 
@@ -92,61 +108,4 @@ test("ordinary tools, unrelated custom messages, and unusable content stay untou
   assert.equal(project(row({ metadata: { synthetic: true, customType: "other" } })), undefined);
   assert.equal(project(row({ detail: { type: "unknown", input: "square", output: text } })), undefined);
   assert.equal(project(row({ detail: { type: "plain_text" } })), undefined);
-});
-
-test("headline is human-facing when actor and route are present, else falls back", () => {
-  assert.equal(squareHeadline(items[0]), "rei spoke your name");
-  assert.equal(squareHeadline(items[1]), "rei answered you");
-  assert.equal(squareHeadline({ ...items[0], route: "attention" }), "rei spoke · you're listening");
-  assert.equal(squareHeadline({ ...items[0], route: "bell" }), "rei rang the bell");
-  // Messages from Square <0.3.71 carry only the agent-voice description.
-  assert.equal(squareHeadline({ square: "design", description: "rei spoke your name (aoi)" }), "rei spoke your name (aoi)");
-});
-
-test("square activity envelopes take their route line from attributes or from the first inner line", () => {
-  const attributed = [
-    "before the card",
-    '<square-activity square="design" as="aoi" id="act/12">',
-    "● rei spoke your name",
-    "",
-    "*把草图推过来*",
-    "</square-activity>",
-  ].join("\n");
-  assert.deepEqual(parseSquareBlocks(attributed), [
-    { body: "before the card" },
-    { meta: "· design · aoi · act/12", actor: "● rei spoke your name", body: "*把草图推过来*" },
-  ]);
-
-  const attributeLess = [
-    "<square-activity>",
-    "· /tmp/design.square · act/12",
-    "● rei spoke your name",
-    "",
-    "*把草图推过来*",
-    "</square-activity>",
-  ].join("\n");
-  assert.deepEqual(parseSquareBlocks(attributeLess), [
-    { meta: "· /tmp/design.square · act/12", actor: "● rei spoke your name", body: "*把草图推过来*" },
-  ]);
-
-  // A bare activity without a route line keeps its first line as the actor, and loose text stays a body.
-  assert.deepEqual(parseSquareBlocks("<square-activity>\n● rei spoke\nhi\n</square-activity>\n尾"), [
-    { meta: undefined, actor: "● rei spoke", body: "hi" },
-    { body: "尾" },
-  ]);
-  assert.deepEqual(parseSquareBlocks("just words"), [{ body: "just words" }]);
-});
-
-test("a voice line yields speaker marks, not the stored route prose", () => {
-  assert.deepEqual(parseSquareVoice("● kuro spoke · you're listening", "· design · aoi · act/104"),
-    { speaker: "kuro", bell: false, actId: "act/104" });
-  assert.deepEqual(parseSquareVoice("○ rei rang the bell"),
-    { speaker: "rei", bell: true, actId: undefined });
-  assert.deepEqual(parseSquareVoice("◎ aoi answered you", "· design · act/12"),
-    { speaker: "aoi", bell: false, actId: "act/12" });
-  // A bare activity keeps its first line: the first word is still the speaker.
-  assert.deepEqual(parseSquareVoice("nobody in particular"),
-    { speaker: "nobody", bell: false, actId: undefined });
-  assert.deepEqual(parseSquareVoice(undefined, "· design · act/12"),
-    { speaker: undefined, bell: false, actId: "act/12" });
 });
