@@ -17,7 +17,7 @@ export function renderPendingAtBoundary(inbox: PendingMembership[]): string {
   return renderBoundary(inbox).context;
 }
 
-interface CompleteBoundaryMembership {
+interface BoundaryEntry {
   membership: PendingMembership;
   actIndex: number;
   markSeen: boolean;
@@ -25,7 +25,7 @@ interface CompleteBoundaryMembership {
 
 interface BoundaryRender {
   context: string;
-  complete: CompleteBoundaryMembership[];
+  entries: BoundaryEntry[];
 }
 
 function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
@@ -36,12 +36,15 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   const agoraBlocks: string[] = [];
   const deliveries: (ActivityDelivery | undefined)[] = [];
   let remainingAgora = queued.filter(({ notification }) => notification.delivery?.mode !== 'direct').length;
-  const complete: CompleteBoundaryMembership[] = [];
+  const entries: BoundaryEntry[] = [];
   let omitted = 0;
   const omission = (count: number) => `${count} more ${count === 1 ? 'activity' : 'activities'} not shown.`;
 
   for (const entry of queued) {
     const { membership, notification } = entry;
+    // The omission line represents the rest of this batch too, but never consumes its bodies.
+    const coverage = { membership, actIndex: notification.actIndex, markSeen: false };
+    entries.push(coverage);
     const block = renderAttentionPreview({
       squarePath: membership.location,
       actIndex: notification.actIndex,
@@ -63,16 +66,12 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
     }
     blocks.push(block);
     deliveries.push(notification.delivery);
-    complete.push({
-      membership,
-      actIndex: notification.actIndex,
-      markSeen: !attentionBodyIsClipped(notification.body, notification.delivery),
-    });
+    coverage.markSeen = !attentionBodyIsClipped(notification.body, notification.delivery);
   }
 
   return {
     context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])], deliveries),
-    complete,
+    entries,
   };
 }
 
@@ -92,7 +91,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
   try {
     try {
       // Enumeration owns discovery/connections only; returned handles belong to the common runner.
-      for (const entry of renderBoundary(pending).complete) {
+      for (const entry of renderBoundary(pending).entries) {
         const { location, seat } = entry.membership;
         let artifact = artifacts.get(location);
         if (artifact === undefined) {
@@ -114,10 +113,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
       const delivered = pending.map(membership => ({ ...membership,
         notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
       })).filter(membership => membership.notifications.length > 0);
-      const fresh = renderBoundary(delivered);
-      const included = new Set(fresh.complete.map(entry => pendingKey(entry.membership, entry.actIndex)));
-      return { payload: { context: fresh.context, delivered },
-        included: claims.filter(({ key }) => included.has(key)).map(({ claim }) => claim) };
+      return { payload: { context: renderBoundary(delivered).context, delivered }, included: eligibleClaims };
     }, payload => present(payload.context, payload.delivered), { signal });
     if (report.observation.kind === 'threw') throw report.observation.error;
     for (const { result } of report.settlements) if (result.persistence.status === 'error') throw result.persistence.error;
@@ -133,7 +129,9 @@ async function presentPendingAtBoundaryUnlocked<T>(
  * `lookup` returns the session's memberships for this boundary. It may reuse an observation it has
  * verified against the current presence binding and artifact revision; the boundary still projects
  * presentation evidence live. Every item is claimed and revalidated before the batch sink;
- * after success, captured-seat commits record only its included items without an eligibility veto.
+ * after success, captured-seat commits record the winning batch, including budget omissions as
+ * clipped (no consumption receipt), without an eligibility veto. Coverage is conservative if a
+ * competing claim's removal lets a previously omitted body fit in the final preview.
  * A source that cannot verify its reuse must read the inbox again.
  */
 export async function presentPendingAtBoundary<T>(

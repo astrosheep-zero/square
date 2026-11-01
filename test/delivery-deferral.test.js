@@ -273,6 +273,52 @@ test('every item in a successful batch retains truthful receipts despite post-si
   assert.equal(sends, 1, 'post-sink deferral release never repeats the batch');
 });
 
+test('budget omissions settle with the winning batch and never drain again after observer restart', async t => {
+  const f = await fixture(t);
+  const activities = [];
+  for (let i = 0; i < 30; i++) activities.push((await f.alice.express({
+    body: `old activity ${i}`, mentions: ['Bob'], force: true,
+  })).activity);
+  const stale = await sessionInbox(f.seat.owner, f.env);
+  let sends = 0;
+  const context = await presentPendingAtBoundary(f.seat.owner, (context, delivered) => {
+    sends++;
+    assert.equal(delivered.flatMap(item => item.notifications).length, activities.length);
+    return context;
+  }, () => stale, f.env);
+  assert.match(context, /more activities not shown/);
+  const state = (await f.artifact.read(facts => activities.map(activity => ({
+    id: activity.id,
+    receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
+    evidence: facts.deliveryEvidence('Bob', f.seat.generation, activity.id).map(row => row.outcome),
+  })))).value;
+  const omitted = state.filter(item => !context.includes(`id="${item.id}"`));
+  assert.ok(omitted.length > 0);
+  for (const item of state) {
+    const shown = context.includes(`id="${item.id}"`);
+    assert.deepEqual(item.evidence, [shown ? 'presented' : 'clipped']);
+    assert.equal(Boolean(item.receipt), shown, 'omission is delivery, never full consumption');
+  }
+  for (let restart = 0; restart < 2; restart++) {
+    const observer = await observeSessionPending(f.seat.owner, f.env);
+    try { assert.deepEqual(await observer.read(), []); } finally { observer.close(); }
+    assert.equal(await presentPendingAtBoundary(f.seat.owner, () => { sends++; }, () => stale, f.env), undefined);
+  }
+  let wakes = 0;
+  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+    attempt: async () => { wakes++; return { outcome: 'accepted' }; },
+  } });
+  assert.equal(wakes, 0, 'omitted items cannot fall back to a wake either');
+  assert.deepEqual((await f.bob.catch({ id: omitted[0].id })).activities.map(item => item.id), [omitted[0].id]);
+  const fresh = await f.say();
+  await presentPendingAtBoundary(f.seat.owner, (context, delivered) => {
+    sends++;
+    assert.match(context, new RegExp(`id="${fresh.id}"`));
+    assert.equal(delivered.flatMap(item => item.notifications).length, 1);
+  }, sessionInbox, f.env);
+  assert.equal(sends, 2, 'only fresh activity starts another batch, not the old omitted backlog');
+});
+
 test('a successful single sink settles despite cancellation of both operation and artifact work', async t => {
   for (const captured of [false, true]) await t.test(captured ? 'artifact captures the signal' : 'operation signal only', async t => {
     const f = await fixture(t);

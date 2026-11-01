@@ -10,7 +10,10 @@ Pi injection and external wake injection acquire mutually exclusive artifact-own
 An accepted or uncertain Paseo wake suppresses native Pi reinjection without asserting presentation
 or consumption. Only proven failed/released attempts can return to the automatic queue. Missing
 landing events, thrown sinks and expired claims do not authorize replay. Renderer details describe
-only the batch that won custody, not the earlier observed inbox. See `delivery-primitives.md`.
+only the batch that won custody, not the earlier observed inbox. Budget-omitted activities belong to
+that same delivered batch: the omission line settles their presentation as `clipped`, without a
+full-consumption receipt. They stay available to explicit catch, but never get paged into later
+model completions or replayed on extension reload. See `delivery-primitives.md`.
 
 For independent existing-session delivery, opt into its local receiver:
 

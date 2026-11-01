@@ -42,6 +42,7 @@ import { withFileLock } from '../dist/file-lock.js';
 import { hasPresentedForOwner } from './presentation-fixtures.js';
 import { formatActivityId } from '../dist/square-core.js';
 import { Square } from '../dist/square-api.js';
+import { sessionInbox } from '../dist/inbox.js';
 import { executeHarnessTarget } from '../dist/harness.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
@@ -853,6 +854,47 @@ test('Pi waits on a contended boundary lock and binds delivery to its ctx sessio
       delete process.env.PI_SESSION_ID;
     }
   });
+});
+
+test('Pi acknowledges a budget-omitted backlog once, across model completions and fresh extension instances', async () => {
+  await withPiFixture('pi-omitted-backlog', async item => {
+    for (let i = 0; i < 30; i++) await expressToPi(item, `old notification ${i} @Bob`);
+    const sent = [];
+    const context = { sessionManager: { getSessionId: () => item.sessionId }, cwd: '/tmp/no-public-square' };
+    const start = async () => {
+      const handlers = new Map();
+      squarePiExtension({
+        on(event, handler) { handlers.set(event, handler); },
+        sendMessage(message) { sent.push(message); },
+      });
+      await handlers.get('session_start')({}, context);
+      return handlers;
+    };
+    let handlers = await start();
+    try {
+      await waitUntil(() => sent.length === 1, 'backlog reminder did not land');
+      assert.match(sent[0].content, /more activities not shown/);
+      assert.equal(sent[0].details.items.length, 30);
+      await piMessageEnd(handlers, sent[0].content);
+      await waitUntil(async () => (await sessionInbox(item.bobBody, item.env)).every(item => item.notifications.length === 0),
+        'omitted notifications were left in the automatic injection queue');
+      for (let completion = 0; completion < 3; completion++) {
+        await piTurnStart(handlers);
+        await piTurnEnd(handlers);
+        await handlers.get('agent_settled')({});
+      }
+      await handlers.get('session_shutdown')({}, context);
+      handlers = await start(); // no old in-memory handledPending set
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(sent.length, 1, 'reload must not page through the old omitted backlog');
+      const fresh = await expressToPi(item, 'fresh after reload @Bob');
+      await waitUntil(() => sent.length === 2, 'new activity was incorrectly suppressed');
+      assert.equal(sent[1].details.items.length, 1);
+      await piMessageEnd(handlers, sent[1].content);
+      await waitUntil(async () => await hasPresentedForOwner(item.sessionId, item.squarePath, 'Bob', fresh),
+        'fresh notification did not settle');
+    } finally { await handlers.get('session_shutdown')({}, context); }
+  }, false);
 });
 
 test('Pi aborts a contended boundary wait on TUI cancellation without touching the ancestor process identity', async () => {
