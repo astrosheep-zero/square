@@ -20,8 +20,10 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const items = "items" in item.data ? item.data.items : undefined;
   const text = "text" in item.data ? item.data.text : undefined;
   const latest = items?.at(-1);
-  const preview = (latest?.preview ?? text)?.replace(/\s+/g, " ").trim();
+  // Keep the source's own line breaks: collapsed and expanded text must wrap alike.
+  const preview = latest?.preview ?? text;
   const speakers = [...new Set(items?.map(entry => entry.actor))];
+  const chorus = speakers.length > 1;
   const squares = [...new Set(items?.map(entry => entry.square))];
   const squareName = squares.join(", ") || "Square";
   const bell = latest?.route === "bell";
@@ -72,7 +74,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
           <View style={{ ...indent, marginTop: 3 }}>
-            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={latest?.actor} />
+            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus ? latest?.actor : undefined} />
           </View>
         )}
       </Pressable>
@@ -84,7 +86,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
                 {entry.route === "bell"
                   ? <SquareCue theme={palette.theme} label={`${entry.actor} 🔔 · ${entry.square} · ${entry.act}`} />
                   : <Text style={{ color: muted, fontSize: 11, fontFamily: MONO }}>{entry.square} · {entry.act}</Text>}
-                <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={entry.actor} actor={entry.actor} />
+                <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.actor : undefined} actor={entry.actor} />
               </View>
             ))}
           </View>

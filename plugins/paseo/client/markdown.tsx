@@ -128,9 +128,9 @@ function renderBlocks(tokens: Token[], styles: Styles, prefix: string, textStyle
   });
 }
 
-/** The speaker run into the start of a line: the seal's blue, then the words. */
+/** A chorus speaker in seal blue, with a fixed half-em breath before the words. */
 function Lead({ name, styles }: { name: string; styles: Styles }) {
-  return <Text style={styles.lead}>{name}{"  "}</Text>;
+  return <Text style={styles.lead}>{name}{"\u2002"}</Text>;
 }
 
 /** One line (or a few) of Markdown, inline only: the collapsed preview on a notification card. */
