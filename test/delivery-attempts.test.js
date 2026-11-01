@@ -98,8 +98,8 @@ test('presentation has its own terminal custody and cannot turn uncertainty into
 test('suppression predicates distinguish presentation custody and uncertain dispatch', () => {
   const presentation = { purpose: 'presentation', outcome: 'dispatching', expiresAt: 15 };
   assert.equal(presentationBlocksDispatch([presentation], 14), true);
-  assert.equal(presentationBlocksDispatch([presentation], 15), false);
-  assert.equal(automaticDispatchEligible([presentation], 15), true);
+  assert.equal(presentationBlocksDispatch([presentation], 15), true);
+  assert.equal(automaticDispatchEligible([presentation], 15), false);
   for (const outcome of ['presented', 'clipped', 'unknown']) {
     assert.equal(presentationBlocksDispatch([{ ...presentation, outcome }], 20), true);
   }

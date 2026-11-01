@@ -250,9 +250,10 @@ for (const channel of ['claude-code', 'opencode']) test(`${channel} native hash 
 test('Paseo wakePreview uses the fixed direct boundary and only presentation consumes it', async t => {
   const f = await fixture(t);
   const item = await f.send();
-  let preview;
+  let preview, token;
   await deliverPending({ artifact: f.artifact, location: f.location, activity: item.index,
     transport: { async attempt(request, _timeout, beforeSend) {
+      token = request.claimToken;
       preview = await f.read(facts => wakePreview(facts, request));
       assertDirect(preview, item);
       assert.match(preview, /This is an external notification, not a direct message from the user\./);
@@ -261,7 +262,7 @@ test('Paseo wakePreview uses the fixed direct boundary and only presentation con
     } } });
   assert.equal(await f.read(facts => facts.receipt('Bob', item.index)), undefined);
   const result = await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', activity: item.index,
-    seat: f.bob, sink: { present(stored) { assert.deepEqual(stored.delivery, delivery); } } });
+    seat: f.bob, observationOf: token, sink: { present(stored) { assert.deepEqual(stored.delivery, delivery); } } });
   assert.equal(result.presented, true);
   assert.ok(await f.read(facts => facts.receipt('Bob', item.index)));
 });

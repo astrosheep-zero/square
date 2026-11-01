@@ -88,7 +88,7 @@ export function presentationBlocksDispatch(attempts: readonly Custody[], now: nu
   finite(now);
   return attempts.some(row => row.purpose === 'presentation'
     && (row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
-      || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)));
+      || row.outcome === 'dispatching'));
 }
 
 /** An expired dispatch is uncertain, not permission for automatic replay. */

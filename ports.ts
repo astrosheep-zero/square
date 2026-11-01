@@ -99,6 +99,8 @@ export interface DeliveryClaimInput {
   readonly seat: SeatRef;
   readonly activity: ActivityId;
   readonly kind: 'wake' | 'presentation';
+  /** Observe an existing wake's exact token; never authorizes another content injection. */
+  readonly observationOf?: string;
   readonly route?: WakeAddress;
   readonly at: number;
   readonly leaseMs: number;
@@ -258,6 +260,8 @@ export interface PresentPendingInput {
   readonly participant: string;
   readonly activity: string | number;
   readonly sink: PresentationSinkPort;
+  /** Existing wake observed by a native receiver; the sink must not inject content. */
+  readonly observationOf?: string;
   /** Captured artifact seat; used to fence both presentation and consumption. */
   readonly seat?: SeatRef;
   readonly generation?: ActivityId;

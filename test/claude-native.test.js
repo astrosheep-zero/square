@@ -17,7 +17,7 @@ import { createArtifactPort } from '../dist/artifact.js';
 import { Square, decodeHarnessOwner } from '../dist/square-api.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { projectSessionCandidates, sessionInbox } from '../dist/inbox.js';
+import { projectSessionCandidates, sessionInbox, nativePendingPreview } from '../dist/inbox.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
 
 const supported = { skip: process.platform !== 'darwin' };
@@ -126,12 +126,11 @@ async function seenIn(location, index = 2, participant = 'Bob') {
 async function seen(f, index = 2, participant = 'Bob') { return seenIn(f.squarePath, index, participant); }
 
 async function pendingPayload(f, request) {
-  const inbox = await sessionInbox(request.seat.owner, f.env);
-  const membership = inbox.find(item => canonicalPathSync(item.location) === canonicalPathSync(request.location)
-    && item.seat.participant === request.participant);
-  const notification = membership?.notifications.find(note => note.actIndex === Number(request.activity.slice(4)));
-  if (membership === undefined || notification === undefined) return undefined;
-  return renderPendingAtBoundary([{ ...membership, notifications: [notification] }]);
+  return (await request.artifact.read(facts => nativePendingPreview(facts, {
+    location: canonicalPathSync(request.location), participant: request.participant, generation: request.seat.generation,
+    routeKind: request.route.kind, address: request.route.address,
+    actIndex: Number(request.activity.slice(4)), now: Date.now(),
+  }))).value?.payload;
 }
 
 function simulatedNativeTransport(f) {
@@ -372,12 +371,12 @@ test('cancelling Claude authentication aborts its key read without sending', asy
 test('manual artifact seats receive a bounded native preview; admission is not presentation', async t => {
   const f = await fixture(t);
   assert.equal(f.start.available, false);
+  const expectedPreview = renderPendingAtBoundary(await sessionInbox(f.bobBody, f.env));
   await dispatch(f);
   assert.equal(f.nativeMessages.length, 1);
   const text = await payload(f);
   assert.match(text, /hello @Bob/);
-  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''),
-    renderPendingAtBoundary(await sessionInbox(f.bobBody, f.env)));
+  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''), expectedPreview);
   assert.doesNotMatch(text, /not for Bob/);
   assert.equal(await seen(f), undefined);
   assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').outcome, 'unknown');
@@ -394,11 +393,11 @@ test('manual artifact seats receive a bounded native preview; admission is not p
 
 test('a clipped Agora preview stays bounded and only stored consumes the activity', async t => {
   const f = await fixture(t, 'x'.repeat(300));
+  const expectedPreview = renderPendingAtBoundary(await sessionInbox(f.bobBody, f.env));
   await dispatch(f);
   const text = await payload(f);
   assert.match(text, /truncated="100 more chars">\nAlice spoke your name\./);
-  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''),
-    renderPendingAtBoundary(await sessionInbox(f.bobBody, f.env)));
+  assert.equal(text.replace(/^\[square-inbox:[^\]]+\]\n/, '').replace(/\n\[\/square-inbox:[^\]]+\]$/, ''), expectedPreview);
   assert.match(text, /as="Bob" id="act\/2"/);
   assert.doesNotMatch(text, /square --|catch --|square_catch/);
   assert.deepEqual(await observeClaudeDelivery(f.coordinate.sessionId, text, 'admitted', f.env), { recognized: true, current: true });

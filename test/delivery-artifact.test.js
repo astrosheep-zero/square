@@ -122,7 +122,7 @@ test('delivery claim, final revalidation, send outcome and presentation share on
   assert.equal(replays, 0, 'accepted evidence must prevent replay');
 
   const presented = await presentPending({ artifact, location: '/tmp/one.square', participant: 'Bob', activity,
-    seat: bob, sink: { async present(item) { assert.equal(item.body, 'one artifact-owned notice'); } }, now: 6 });
+    seat: bob, observationOf: sends[0], sink: { async present(item) { assert.equal(item.body, 'one artifact-owned notice'); } }, now: 6 });
   assert.equal(presented.presented, true);
   const final = (await artifact.read(facts => ({
     seen: facts.receipt('Bob', Number(activity.slice(4))),
@@ -266,7 +266,7 @@ test('delivery evidence retains claim leases, token scoping and terminal transit
   assert.equal((await artifact.claimDelivery({ ...input, at: 18, claimToken: 'no-replay' })).status, 'terminal');
   assert.equal((await artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, activity))).value.length, 1);
 
-  const presentation = { ...input, kind: 'presentation', at: 20, claimToken: 'presentation' };
+  const presentation = { ...input, kind: 'presentation', observationOf: 'first', at: 20, claimToken: 'presentation' };
   assert.equal((await artifact.claimDelivery(presentation)).status, 'acquired');
   assert.equal(await artifact.completeDelivery({ ...presentation, at: 21, outcome: 'failed' }), true);
   const retry = await artifact.claimDelivery({ ...presentation, at: 22, claimToken: 'retry' });

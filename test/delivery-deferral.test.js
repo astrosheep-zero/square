@@ -296,7 +296,7 @@ test('a successful single sink settles despite cancellation of both operation an
   });
 });
 
-test('pre-sink cancellation and rejected sinks release custody without a success receipt', async t => {
+test('pre-sink cancellation releases custody but a throwing sink retains uncertainty without a receipt', async t => {
   for (const phase of ['before', 'rejected']) await t.test(phase, async t => {
     const f = await fixture(t);
     const activity = await f.say();
@@ -322,7 +322,7 @@ test('pre-sink cancellation and rejected sinks release custody without a success
       evidence: facts.deliveryEvidence('Bob', f.seat.generation).map(row => row.outcome),
     }))).value;
     assert.equal(state.receipt, undefined);
-    assert.deepEqual(state.evidence, [phase === 'before' ? 'released' : 'failed']);
+    assert.deepEqual(state.evidence, [phase === 'before' ? 'released' : 'unknown']);
   });
 });
 
@@ -365,7 +365,7 @@ test('a rejected batch sink leaves every rendered item unconsumed, even when can
     evidence: facts.deliveryEvidence('Bob', f.seat.generation).map(row => row.outcome),
   }))).value;
   assert.equal(state.receipts.every(receipt => receipt === undefined), true);
-  assert.deepEqual(state.evidence, ['failed', 'failed']);
+  assert.deepEqual(state.evidence, ['unknown', 'unknown']);
 });
 
 test('a final batch sink excludes a newly deferred peer item and receipts only the rendered items', async t => {
@@ -381,8 +381,9 @@ test('a final batch sink excludes a newly deferred peer item and receipts only t
     acquiring ??= f.bob.deferDelivery({ match, durationMs: 10000 });
     return body;
   } });
-  const rendered = await presentPendingAtBoundary(f.seat.owner, async context => {
+  const rendered = await presentPendingAtBoundary(f.seat.owner, async (context, delivered) => {
     await acquiring;
+    assert.deepEqual(delivered.flatMap(item => item.notifications.map(note => note.actIndex)), [Number(ordinary.id.slice(4))]);
     return context;
   }, () => batch, f.env);
   assert.match(rendered, /ordinary batch item/);

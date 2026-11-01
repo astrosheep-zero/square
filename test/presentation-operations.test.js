@@ -59,11 +59,11 @@ test('Square full/clipped sinks preserve semantic timestamps; clipped success re
   });
 });
 
-test('Square maps a rejected sink explicitly to failed, rethrows its original exception and records no receipt', async t => {
+test('Square retains a throwing sink as unknown, rethrows its original exception and records no receipt', async t => {
   const f = await fixture(t), failure = new Error('Square sink rejected');
   await assert.rejects(presentPending({ ...f.input, sink: { present() { throw failure; } } }), error => error === failure);
   const state = await f.read();
   assert.equal(state.receipt, undefined);
-  assert.equal(state.evidence[0].outcome, 'failed');
+  assert.equal(state.evidence[0].outcome, 'unknown');
   assert.equal(state.evidence[0].message, failure.message);
 });

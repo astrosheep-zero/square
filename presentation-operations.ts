@@ -35,7 +35,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
     port: {
       async claim(signal) {
         const claimed = await input.artifact.claimDelivery({ seat: ref, activity: formatActivityId(index), kind: 'presentation',
-          at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, signal).catch(() => ({ status: 'stale' as const }));
+          observationOf: input.observationOf, at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, signal).catch(() => ({ status: 'stale' as const }));
         return claimed.status === 'acquired' ? { token: claimToken, ordinal: claimed.attemptN } : undefined;
       },
       async current(signal) {
@@ -65,12 +65,12 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
   }, { signal: input.signal });
 }
 
-/** Square sinks explicitly classify rejection as failed; the public effect core defaults to unknown. */
+/** A sink error cannot prove that content was never injected. */
 export async function presentPending(input: PresentPendingInput): Promise<PresentationResult> {
   const prepared = await preparePendingPresentation(input);
   if (prepared === undefined) return { presented: false };
   const report = await presentPrepared(prepared, activity => input.sink.present(activity), {
-    signal: input.signal, classifyError: () => 'failed',
+    signal: input.signal,
   });
   if (report.observation.kind === 'threw') throw report.observation.error;
   const result = report.settlements[0]!.result;

@@ -114,7 +114,7 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
       for (const { evidence, index, hash, clipped } of matches) {
         if (signal.aborted || evidence.claimToken === undefined) return;
         await presentPending({ artifact, location, participant: seat.participant,
-          activity: formatActivityId(index), seat: asSeatRef(seat), sink: { present() {} }, markSeen: !clipped, signal,
+          activity: formatActivityId(index), seat: asSeatRef(seat), observationOf: evidence.claimToken, sink: { present() {} }, markSeen: !clipped, signal,
           current: (facts) => {
             const current = facts.seat(seat.participant);
             const prepared = current === undefined || !sameSeat(current, seat) ? undefined : preview(facts, location, seat, index);

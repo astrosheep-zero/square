@@ -4,7 +4,13 @@ The shipped `plugins/pi/square-pi.js` remains the **only Square Pi extension**.
 Both its activity steer and advisory `nextTurn` send call the SDK-free shared
 `sendPiMessage` leaf compiled from `packages/agent-delivery/src`. Square keeps
 framing, custom type, display, preview/UI, observation/presentation evidence,
-retry/drop and canceled-batch suppression; the leaf neither schedules nor tracks.
+uncertain-landing and canceled-batch suppression; the leaf neither schedules nor tracks.
+
+Pi injection and external wake injection acquire mutually exclusive artifact-owned content custody.
+An accepted or uncertain Paseo wake suppresses native Pi reinjection without asserting presentation
+or consumption. Only proven failed/released attempts can return to the automatic queue. Missing
+landing events, thrown sinks and expired claims do not authorize replay. Renderer details describe
+only the batch that won custody, not the earlier observed inbox. See `delivery-primitives.md`.
 
 For independent existing-session delivery, opt into its local receiver:
 

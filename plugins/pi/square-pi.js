@@ -383,7 +383,7 @@ export default function squarePiExtension(pi) {
         try {
           await presentPendingAtBoundary(
             harnessOwner({ channel: 'pi', session: boundSessionId }),
-            async (content) => {
+            async (content, delivered) => {
               if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
               // One card for the human: a compact heading, expandable to the full body.
               // Model context stays bounded; renderer-only details carry the complete text.
@@ -391,7 +391,7 @@ export default function squarePiExtension(pi) {
               const landing = waitForLanding(messageContent, signal, 'steer');
               try {
                 sendPiMessage(pi,
-                  { customType: 'square', content: messageContent, display: true, details: pendingCardDetails(pending) },
+                  { customType: 'square', content: messageContent, display: true, details: pendingCardDetails(delivered) },
                   { deliverAs: 'steer', triggerTurn: true },
                 );
               } catch (error) {
@@ -411,7 +411,8 @@ export default function squarePiExtension(pi) {
             signal,
           );
           if (signal.aborted || token !== generation) return;
-          for (const key of keys) handledPending.add(key);
+          // Only committed evidence suppresses successful delivery. A competing wake may
+          // have won the claim and can still fail before sending, making this item eligible again.
         } catch (error) {
           if (signal.aborted || token !== generation) return;
           if (error instanceof PiDeliveryDroppedError) {

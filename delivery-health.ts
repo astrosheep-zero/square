@@ -79,7 +79,7 @@ export async function classifyDeliveryHealth(
       const ageMs = Math.max(0, now - note.at);
       const presentation = evidence.some((row) => row.kind === 'presentation' && (
         row.outcome === 'presented' || row.outcome === 'clipped' || row.outcome === 'unknown'
-        || row.outcome === 'dispatching' && (row.expiresAt === undefined || row.expiresAt > now)
+        || row.outcome === 'dispatching'
       ));
       const terminal = evidence.findLast((row) => row.kind === 'wake' && (row.outcome === 'accepted' || row.outcome === 'unknown'));
       const attemptRow = evidence.findLast((row) => row.kind === 'wake' && (

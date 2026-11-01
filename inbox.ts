@@ -42,7 +42,7 @@ function eligibleNotifications(facts: SquareRead, membership: PendingMembership,
   const notifications = membership.notifications.filter(notification => {
     if (cancelledThrough !== undefined && notification.actIndex <= cancelledThrough
       || facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex))
-        .some(row => row.kind === 'presentation' && (row.outcome === 'presented' || row.outcome === 'clipped'))) return false;
+        .some(row => row.outcome !== 'failed' && row.outcome !== 'released')) return false;
     const deferredUntil = deliveryDeferralExpiry(facts, seat, notification.actIndex, now);
     if (deferredUntil === undefined) return true;
     expiry = Math.min(expiry, deferredUntil);

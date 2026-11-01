@@ -52,6 +52,33 @@ currentness policy and the meaning of external proof remain the application's re
 An `accepted` dispatch is not proof of presentation or consumption. Only the responsible presentation
 boundary may assert `presented`; consuming an item is a separate application operation.
 
+## Square content custody
+
+Dispatch and presentation remain separate evidence series, but they are not independent permission
+to inject content. Square's transaction-scoped domain gate checks both series for the same artifact,
+recipient, seat generation and activity before admitting a new injection. A claim in either series
+blocks the other; accepted, presented, clipped and unknown evidence also block it. Only failed or
+released evidence permits another injection. An expired opposing claim is normalized to unknown in
+that transaction rather than stolen. No lock is held over host or network I/O.
+
+A native receiver that has verified the exact existing wake may pass its claim token as
+`observationOf` to the presentation adapter. The gate verifies the wake belongs to the same captured
+recipient/generation/activity and remains dispatching, accepted or unknown. This records observation
+of that message; its sink must not inject another message. Claude and OpenCode retain their exact
+native correlation/content checks. A successful wake alone never creates a consumption receipt.
+Paseo currently has no corresponding native Pi observation correlation: its accepted/unknown attempt
+stays unconsumed, available to explicit catch, without automatic native reinjection.
+
+Session pending projections used for automatic injection suppress claimed, accepted and uncertain
+items as well as presented ones. Failed/released attempts make them eligible again through delivery
+revision observation. Native payload construction and exact-token observation read their captured
+activity directly, not this injection queue. Cancellation and seat replacement retain their existing
+fences. Uncertainty deliberately favors no automatic duplicate over automatic recovery; no
+exactly-once processing or guaranteed eventual delivery is claimed.
+
+These checks use the existing artifact evidence and transactions; no new registry or artifact format
+is introduced. All running injectors must load the updated code before the guarantee applies.
+
 ## Transitions
 
 An `Attempt<D>` has `purpose: 'dispatch' | 'presentation'`, `token`, zero-based `ordinal`, `outcome`,
@@ -83,8 +110,8 @@ The caller supplies valid stored attempts and consistently scoped, ordered rows.
 `purpose`, `outcome`, and optional `expiresAt`; no dummy payload or identity is needed. These predicates
 may see both purposes for the same logical delivery.
 
-Presentation `presented`, `clipped`, `unknown`, or live `dispatching` blocks dispatch. Expired
-presentation dispatching alone does not. Automatic dispatch additionally requires no dispatch
+Presentation `presented`, `clipped`, `unknown`, or `dispatching` blocks dispatch, including an
+expired presentation claim: loss of its lease is uncertainty, not permission to send again. Automatic dispatch additionally requires no dispatch
 `accepted`, `unknown`, or `dispatching`; even expired dispatch custody blocks automatic replay.
 These are preselection predicates, not substitutes for a transactional claim or application gates.
 
@@ -173,8 +200,8 @@ supply isolation for a caller, so this is a mandatory port contract, tested in S
 
 Presentation reports distinguish observed sink behavior from durable persistence. A returned sink
 with `not-recorded` or `error` still returned successfully; that alone proves only the supplied sink's
-documented effect, not model consumption or human display. Square explicitly classifies its existing
-rejected sinks as failed and rethrows the original exception after draining. Its single result stays
+documented effect, not model consumption or human display. Square retains throwing sinks as unknown and rethrows the original exception after draining.
+A missing native landing event or a canceled wait cannot prove the message never entered the host. Its single result stays
 `{ presented: true, activity }` only on recorded success, false on ownership refusal; unexpected
 success-settlement errors propagate. Batch returns its original sink value after all settlements,
 with the same error propagation. No schema, storage format or public Square result changes are needed.

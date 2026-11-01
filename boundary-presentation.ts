@@ -78,7 +78,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
 
 async function presentPendingAtBoundaryUnlocked<T>(
   identity: Owner,
-  present: (context: string) => T | Promise<T>,
+  present: (context: string, delivered: PendingMembership[]) => T | Promise<T>,
   lookup: (identity: Owner, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
@@ -111,12 +111,14 @@ async function presentPendingAtBoundaryUnlocked<T>(
     }
     const report = await presentPreparedBatch(claims.map(({ claim }) => claim), eligibleClaims => {
       const eligible = new Set(claims.filter(({ claim }) => eligibleClaims.includes(claim)).map(({ key }) => key));
-      const fresh = renderBoundary(pending.map(membership => ({ ...membership,
+      const delivered = pending.map(membership => ({ ...membership,
         notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
-      })));
+      })).filter(membership => membership.notifications.length > 0);
+      const fresh = renderBoundary(delivered);
       const included = new Set(fresh.complete.map(entry => pendingKey(entry.membership, entry.actIndex)));
-      return { payload: fresh.context, included: claims.filter(({ key }) => included.has(key)).map(({ claim }) => claim) };
-    }, present, { signal, classifyError: () => 'failed' });
+      return { payload: { context: fresh.context, delivered },
+        included: claims.filter(({ key }) => included.has(key)).map(({ claim }) => claim) };
+    }, payload => present(payload.context, payload.delivered), { signal });
     if (report.observation.kind === 'threw') throw report.observation.error;
     for (const { result } of report.settlements) if (result.persistence.status === 'error') throw result.persistence.error;
     return report.observation.kind === 'returned' ? report.observation.value : undefined;
@@ -136,7 +138,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
  */
 export async function presentPendingAtBoundary<T>(
   identity: Owner,
-  present: (context: string) => T | Promise<T>,
+  present: (context: string, delivered: PendingMembership[]) => T | Promise<T>,
   lookup: (identity: Owner, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<PendingMembership[]> | PendingMembership[] = sessionInbox,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,

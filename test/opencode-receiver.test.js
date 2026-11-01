@@ -62,7 +62,7 @@ async function fixture(t) {
 
 // Native acceptance/uncertainty remains presentation-pending for all shared observers.
 // Only automatic wake preselection applies the additional evidence policy.
-test('automatic wake evidence is separate from presentation pending, including uncertain expired dispatch', async t => {
+test('uncertain wake evidence suppresses another injection, including expired dispatch', async t => {
   const item = await fixture(t);
   await item.bind();
   const index = await item.say('still owes context');
@@ -72,14 +72,14 @@ test('automatic wake evidence is separate from presentation pending, including u
   assert.equal(automaticWakeEligible(await item.evidence(index), Date.now()), false);
   assert.equal((await item.artifact.claimDelivery({ ...claim, at: 3, claimToken: 'later' })).evidence.outcome, 'unknown');
   const observer = await observeSessionPending(item.body, item.env);
-  try { assert.equal((await observer.read())[0].notifications[0].actIndex, index); }
+  try { assert.deepEqual(await observer.read(), []); }
   finally { observer.close(); }
   const wake = { ...(await item.evidence(index))[0], outcome: 'failed' };
   assert.equal(automaticWakeEligible([wake], 10), true);
   assert.equal(automaticWakeEligible([{ ...wake, outcome: 'accepted' }], 10), false);
   const presentation = { ...wake, kind: 'presentation', outcome: 'dispatching', expiresAt: 11 };
   assert.equal(automaticWakeEligible([presentation], 10), false);
-  assert.equal(automaticWakeEligible([presentation], 11), true);
+  assert.equal(automaticWakeEligible([presentation], 11), false);
   assert.equal(automaticWakeEligible([{ ...presentation, outcome: 'unknown' }], 12), false);
 });
 

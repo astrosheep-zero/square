@@ -942,7 +942,7 @@ test('Pi steers pending activity into a running agent and commits only when it l
   }, false);
 });
 
-test('Pi retries a dropped steer after a transient evidence write failure and commits once it lands', async (t) => {
+test('Pi retains an unobserved steer as uncertain despite transient evidence persistence failure', async (t) => {
   await withPiFixture('pi-dropped-session', async (item) => {
     const handlers = new Map();
     const sent = [];
@@ -958,7 +958,7 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
     t.mock.method(DatabaseSync.prototype, 'exec', function (sql, ...args) {
       if (sql === 'BEGIN IMMEDIATE') writing.add(this);
       if (failNextCommit && sql === 'COMMIT' && writing.has(this) && this.location() === artifactLocation
-        && this.prepare("SELECT 1 FROM delivery_evidence WHERE kind='presentation' AND outcome='failed'").get()) {
+        && this.prepare("SELECT 1 FROM delivery_evidence WHERE kind='presentation' AND outcome='unknown'").get()) {
         failNextCommit = false;
         refusedCommit = true;
         throw new Error('database is locked');
@@ -983,13 +983,12 @@ test('Pi retries a dropped steer after a transient evidence write failure and co
       await waitUntil(() => failNextCommit === false, 'the artifact did not retry its transient commit');
       await piTurnStart(handlers);
       await piTurnEnd(handlers);
-      await waitUntil(() => sent.length === 2, 'Pi did not re-present the dropped notification');
-      assert.equal(refusedCommit, true, 'the dropped-presentation evidence commit must encounter the injected busy');
+      await expressToPi(item, 'fresh after uncertain steer @Bob');
+      await waitUntil(() => sent.length === 2, 'fresh activity must still arrive');
+      assert.doesNotMatch(sent[1].message.content, /retry the dropped steer/);
       assert.equal(await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), false);
       await piMessageEnd(handlers, sent[1].message.content);
-      await waitUntil(async () => await hasPresentedForOwner('pi-dropped-session', item.squarePath, 'Bob', actIndex), 'Pi did not commit the retried notification');
-      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
-      assert.equal(sent.length, 2);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }
@@ -1366,7 +1365,7 @@ test('Pi lifecycle hooks do not wait for an unobserved native injection', async 
   });
 });
 
-test('Pi defers a rejected native injection until the next Square change', async () => {
+test('Pi does not replay uncertain injection on later Square changes', async () => {
   await withPiFixture('pi-retry-session', async (item) => {
     const handlers = new Map();
     let calls = 0;
@@ -1399,13 +1398,12 @@ test('Pi defers a rejected native injection until the next Square change', async
       } finally {
         await square.close();
       }
-      await waitUntil(() => calls === 2, 'Pi did not retry after the next Square change');
+      await expressToPi(item, 'new independently deliverable message @Bob');
+      await waitUntil(() => calls === 2, 'Pi did not deliver the fresh activity');
+      assert.doesNotMatch(sent[1].message.content, /retry me/);
       await piMessageEnd(handlers, sent[1].message.content);
-      await waitUntil(
-        async () => await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex),
-        'successful retry did not commit presentation',
-      );
-      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob[formatActivityId(actIndex)].state, 'seen');
+      assert.equal(await hasPresentedForOwner('pi-retry-session', item.squarePath, 'Bob', actIndex), false);
+      assert.equal((await readSquareSnapshot(item.squarePath)).state.runtime.observations.Bob?.[formatActivityId(actIndex)], undefined);
     } finally {
       await handlers.get('session_shutdown')({}, context);
     }

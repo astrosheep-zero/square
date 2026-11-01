@@ -267,6 +267,24 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     },
     claimDelivery(input: import('./ports.js').DeliveryClaimInput): import('./ports.js').DeliveryClaimResult {
       assertSeat(input.seat);
+      const evidence = read.deliveryEvidence(input.seat.participant, input.seat.generation, input.activity);
+      if (input.observationOf !== undefined) {
+        // Receiver adapters validate native identity/content before entering this transaction.
+        // This path records that existing message, rather than acquiring a second send.
+        if (input.kind !== 'presentation' || !evidence.some(row => row.kind === 'wake'
+          && row.claimToken === input.observationOf && ['dispatching', 'accepted', 'unknown'].includes(row.outcome)))
+          return { status: 'stale' };
+      } else {
+        const blocker = evidence.find(row => row.kind !== input.kind
+          && row.outcome !== 'failed' && row.outcome !== 'released');
+        if (blocker !== undefined) {
+          if (blocker.outcome === 'dispatching' && blocker.expiresAt !== undefined && blocker.expiresAt <= input.at) {
+            // Normalize abandoned custody to unknown in the same transaction, never steal it.
+            return mutations.claimDelivery({ ...input, kind: blocker.kind });
+          }
+          return { status: blocker.outcome === 'dispatching' ? 'busy' : 'terminal', evidence: blocker };
+        }
+      }
       return mutations.claimDelivery(input);
     },
     prepareDelivery(input: import('./ports.js').DeliveryPreparation): boolean {
