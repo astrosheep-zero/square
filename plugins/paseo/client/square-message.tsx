@@ -7,8 +7,8 @@ import { MONO, SquareCue, SquareInline, SquareMarkdownBody } from "./markdown";
 import { squarePalette } from "./palette";
 
 /**
- * A square-edged matte slip next to the frosted glass instruments: near-square
- * corners, square seal ■, thin quote guide under the header.
+ * A matte slate slip in the timeline's shared 4px-corner family: square seal ■,
+ * thin quote guide under the header.
  * Header (both states): ■ square · who spoke … act ids · how many.
  * Collapsed: two preview lines. Expanded: the whole scene, at full width.
  * Each structured message keeps its own sender, activity id and body.

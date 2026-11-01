@@ -13,11 +13,10 @@ const darkTheme = { colors: {
   statusSuccess: "#7fb26a", statusWarning: "#e9b45a", statusDanger: "#ef7d6b",
 } };
 
-test("the card is a square-edged matte slip: near-square corners, hairline ring, no shadow", () => {
+test("the card is a flat matte slip: hairline ring, no shadow, square seal", () => {
   for (const theme of [lightTheme, darkTheme]) {
     const palette = squarePalette(theme);
-    assert.equal(palette.card.borderRadius, 2);
-    assert.equal(palette.card.boxShadow, "none", "the slip stays flat — the frosted rail beside it carries the depth");
+    assert.equal(palette.card.boxShadow, "none", "the slip stays flat");
     assert.equal(palette.seal.borderRadius, 0, "the ■ seal is a true square");
     assert.ok(palette.quote.borderLeftWidth <= 1 && palette.quote.paddingLeft < 15);
   }

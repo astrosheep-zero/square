@@ -1,10 +1,10 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 
 /**
- * Square's message card is a square-edged matte paper slip next to the timeline's
- * frosted glass instruments: near-square corners, a square seal ■, a thin quote
+ * Square's message card is a matte slate slip in one family with the timeline's
+ * meantime rail and notesoup paper: the shared 4px corner, a square seal ■, a thin quote
  * guide under the header. No glass sheen, no stone texture, no bottom cut —
- * the card earns its identity from geometry, not decoration.
+ * the card earns its identity from colour and the seal, not decoration.
  */
 const DARK = {
   surface0: "#14161a", // inset / code
@@ -57,7 +57,7 @@ export function squarePalette(theme: PluginTheme): SquarePalette {
       statusWarning: theme.colors.statusWarning,
       statusDanger: theme.colors.statusDanger,
     } },
-    card: { borderRadius: 2, borderWidth: 0.5, boxShadow: "none" },
+    card: { borderRadius: 4, borderWidth: 0.5, boxShadow: "none" },
     seal: { borderRadius: 0 },
     quote: { borderLeftWidth: 1, borderLeftColor: dark ? "#45535e" : "#c2cdd5", paddingLeft: 9 },
   };
