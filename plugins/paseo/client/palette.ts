@@ -1,69 +1,40 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import { MARBLE_DARK, MARBLE_LIGHT } from "./marble.ts";
 
 /**
- * Square's own courtyard palette: veinless honed stone (muted grey light, charcoal dark) and a
- * slate seal ■ — everything half a step down, the quiet card on the timeline, deliberately no relative of notesoup's warm parchment or
- * pi-meantime's neutral carbon. Every token here is opaque and self-contained — the card and
- * Markdown never borrow the host's surface ramp or accent, only its appearance
- * (read from the host ink) and its accentForeground, which paints text on top
- * of an accent fill.
+ * Square's message card is a square-edged matte paper slip next to the timeline's
+ * frosted glass instruments: near-square corners, a square seal ■, a thin quote
+ * guide under the header. No glass sheen, no stone texture, no bottom cut —
+ * the card earns its identity from geometry, not decoration.
  */
 const DARK = {
-  surface0: "#15171a", // inset / code
-  surface1: "#1a1d20", // card (charcoal stone)
-  surface2: "#15171a", // inset / code
-  border: "#2b2f34",
-  foreground: "#dde1e6",
+  surface0: "#14161a", // inset / code
+  surface1: "#252a2e", // card (matte slate paper)
+  surface2: "#14161a", // inset / code
+  border: "#3a4249",
+  foreground: "#d9dce1",
   foregroundMuted: "#858b94",
-  accent: "#8298ad", // plaza ■ / links
+  accent: "#94a6b5", // plaza ■ / links
 } as const;
 
 const LIGHT = {
-  surface0: "#e9ebee",
-  surface1: "#f4f5f6", // card (grey stone)
-  surface2: "#e9ebee",
-  border: "#e0e2e5",
+  surface0: "#f4f5f7",
+  surface1: "#edf0f2", // card (matte slate paper)
+  surface2: "#f4f5f7",
+  border: "#ced5db",
   foreground: "#2b2e33",
-  foregroundMuted: "#90959c",
-  accent: "#56687e",
+  foregroundMuted: "#858b94",
+  accent: "#71869a",
 } as const;
-
-const TILE = 512;
-
-/** Web-only surface: react-native-web passes these through as inline CSS. */
-const STONE = {
-  // A slab resting on the page: one darker cut along the bottom edge, a tight contact shadow, no sheen.
-  dark: { image: `url(${MARBLE_DARK})`, edge: "#34393f", boxShadow: "0 1px 0 rgba(0,0,0,0.3), 0 4px 10px -6px rgba(0,0,0,0.55)", inlay: "inset 0 0 0 0.5px rgba(0,0,0,0.4)" },
-  light: { image: `url(${MARBLE_LIGHT})`, edge: "#c9ccd1", boxShadow: "0 1px 0 rgba(24,26,30,0.04), 0 4px 10px -6px rgba(24,26,30,0.18)", inlay: "inset 0 0 0 0.5px rgba(0,0,0,0.26)" },
-} as const;
-
-export interface StoneSkin {
-  /** Data-URI tile for a native `<Image resizeMode="repeat">` skin layer. */
-  tile: { uri: string };
-  /**
-   * Oversized frame for the tile: inset negative by the seed's patch offset and
-   * out by the complement, so the repeat fills the card from that patch at any
-   * size (Fabric tiles via UIImageResizingModeTile; data URIs load via RCTDataRequestHandler).
-   */
-  frame: { left: number; top: number; right: number; bottom: number };
-  /** The darker cut along the bottom edge. */
-  edge: string;
-  /** Contact shadow; Fabric parses the CSS string form. */
-  boxShadow: string;
-  /** Inset shadow setting the ■ into the stone. */
-  inlay: string;
-}
 
 export interface SquarePalette {
   /** Complete theme for the card and its Markdown surfaces. */
   theme: PluginTheme;
-  /** Marble card surface for the web host, cut from the tile at `seed`. */
-  stone(seed: string): { backgroundImage: string; backgroundSize: string; backgroundPosition: string; borderBottomColor: string; boxShadow: string };
-  /** The same slab for native hosts: tiled image skin, bottom cut, contact shadow, ■ inlay. */
-  skin(seed: string): StoneSkin;
-  /** Web-only: the ■ set into the stone. */
-  inlay: { boxShadow: string };
+  /** Flat slip: a hairline ring and no shadow, so the frosted rail beside it can carry the depth. */
+  card: { borderRadius: number; borderWidth: number; boxShadow: string };
+  /** The square ■ seal, unrounded and flat. */
+  seal: { borderRadius: number };
+  /** The thin quote guide under the header. */
+  quote: { borderLeftWidth: number; borderLeftColor: string; paddingLeft: number };
 }
 
 /** Paseo theme colors are hex (#RGB or #RRGGBB). */
@@ -72,13 +43,6 @@ function brightness(hex: string): number {
   return 0.299 * parseInt(rgb.slice(0, 2), 16)
     + 0.587 * parseInt(rgb.slice(2, 4), 16)
     + 0.114 * parseInt(rgb.slice(4, 6), 16);
-}
-
-/** Each card shows its own patch of the slab, so neighbours never repeat a vein. */
-function patchOffset(seed: string): { x: number; y: number } {
-  let hash = 2166136261;
-  for (const char of seed) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return { x: (hash >>> 0) % TILE, y: (hash >>> 9) % TILE };
 }
 
 export function squarePalette(theme: PluginTheme): SquarePalette {
@@ -93,28 +57,8 @@ export function squarePalette(theme: PluginTheme): SquarePalette {
       statusWarning: theme.colors.statusWarning,
       statusDanger: theme.colors.statusDanger,
     } },
-    stone: seed => {
-      const { image, edge, boxShadow } = dark ? STONE.dark : STONE.light;
-      const { x, y } = patchOffset(seed);
-      return {
-        backgroundImage: image,
-        backgroundSize: `${TILE}px ${TILE}px`,
-        backgroundPosition: `${-x}px ${-y}px`,
-        borderBottomColor: edge,
-        boxShadow,
-      };
-    },
-    skin: seed => {
-      const { edge, boxShadow, inlay } = dark ? STONE.dark : STONE.light;
-      const { x, y } = patchOffset(seed);
-      return {
-        tile: { uri: dark ? MARBLE_DARK : MARBLE_LIGHT },
-        frame: { left: -x, top: -y, right: -(TILE - x), bottom: -(TILE - y) },
-        edge,
-        boxShadow,
-        inlay,
-      };
-    },
-    inlay: { boxShadow: (dark ? STONE.dark : STONE.light).inlay },
+    card: { borderRadius: 2, borderWidth: 0.5, boxShadow: "none" },
+    seal: { borderRadius: 0 },
+    quote: { borderLeftWidth: 1, borderLeftColor: dark ? "#45535e" : "#c2cdd5", paddingLeft: 9 },
   };
 }
