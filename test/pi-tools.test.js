@@ -125,7 +125,13 @@ test('Pi calls use live context, preserve environment, and return human text and
 });
 
 test('Pi retains a blocked express in memory and retries only by draft token', async (t) => {
-  const { cwd, squarePath, call } = await fixture(t);
+  const { cwd, squarePath, context, call } = await fixture(t);
+  const defaultPath = path.join(cwd, 'default.square');
+  const other = await Square.build({ path: defaultPath, markdown: 'default' });
+  await other.close();
+  const previousLocation = process.env.SQUARE_LOCATION;
+  process.env.SQUARE_LOCATION = defaultPath;
+  t.after(() => { if (previousLocation === undefined) delete process.env.SQUARE_LOCATION; else process.env.SQUARE_LOCATION = previousLocation; });
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
@@ -139,6 +145,9 @@ test('Pi retains a blocked express in memory and retries only by draft token', a
   const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
   assert.ok(token, refused.content[0].text);
   assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
+  const foreign = await call('express', { draft: token }, context('another-session'));
+  assert.equal(foreign.isError, true);
+  assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
   await call('catch', { as: 'rei' });
   const retry = await call('express', { draft: token });
   assert.equal(retry.isError, undefined, retry.content[0].text);

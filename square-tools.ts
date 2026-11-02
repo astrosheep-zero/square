@@ -61,6 +61,50 @@ export class SquareExpressDrafts {
     return created;
   }
 }
+interface ToolBinding {
+  identity: ToolIdentity;
+  open(location: string | undefined, control: OperationControl): Promise<Square>;
+}
+
+export function createSquareToolRunner() {
+  const drafts = new SquareExpressDrafts();
+  return async (tool: ToolDefinition, args: JsonObject, control: OperationControl,
+    bind: () => Promise<ToolBinding> | ToolBinding,
+    defaultLocation?: string,
+  ): Promise<{ text: string; isError?: true }> => {
+    let toolArgs = args;
+    let owner: Owner | undefined;
+    let token: string | undefined;
+    let attempted = false;
+    let square: Square | undefined;
+    try {
+      const binding = await bind();
+      owner = binding.identity.owner;
+      if (tool.name === 'express') {
+        const resolved = drafts.resolve(toolArgs, owner);
+        toolArgs = resolved.args;
+        token = resolved.token;
+      }
+      square = await binding.open(toolArgs.location as string | undefined, control);
+      let text: string;
+      try {
+        attempted = tool.name === 'express';
+        text = await tool.run(square, toolArgs, control, binding.identity);
+        drafts.consume(token);
+      } finally { await square.close(); }
+      return { text };
+    } catch (error) {
+      const failure = squareToolFailure(error, control.signal);
+      const draft = tool.name === 'express' ? drafts.retain(toolArgs, owner, token, failure, attempted) : undefined;
+      return { isError: true, text: squareToolFailureText(failure, {
+        location: square?.location ?? (toolArgs.location as string | undefined) ?? defaultLocation,
+        participant: typeof toolArgs.as === 'string' ? toolArgs.as : undefined,
+        draft,
+      }) };
+    }
+  };
+}
+
 type Outcome = Promise<object>;
 type ToolRender = (result: JsonObject, args: JsonObject) => string | undefined;
 interface ToolDefinition {

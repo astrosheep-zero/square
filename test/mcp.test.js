@@ -72,18 +72,21 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
   t.mock.method(Date, 'now', () => now);
   const { cwd, squarePath, env, body: owner } = await fixture();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const defaultPath = path.join(cwd, 'default.square');
+  const other = await Square.build({ path: defaultPath, markdown: 'default' });
+  await other.close();
   const { client, close } = await connectedClient(createSquareMcpServer({
-    cwd, env, path: squarePath, owner,
+    cwd, env, path: defaultPath, owner,
   }));
   try {
-    await client.callTool({ name: 'join', arguments: { as: 'rei' } });
-    await client.callTool({ name: 'join', arguments: { as: 'bob' } });
-    const question = await client.callTool({ name: 'express', arguments: { as: 'bob', body: 'question for rei', mentions: ['rei'] } });
+    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
+    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
+    const question = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'bob', body: 'question for rei', mentions: ['rei'] } });
     assert.equal(question.isError, undefined);
     now += 100_000;
     const body = 'a long answer that the model must not need to repeat\nwith every original option intact';
     const refused = await client.callTool({ name: 'express', arguments: {
-      as: 'rei', body, mentions: ['bob'], reply: 'act/2', noMention: true,
+      location: squarePath, as: 'rei', body, mentions: ['bob'], reply: 'act/2', noMention: true,
     } });
     assert.equal(refused.isError, true);
     assert.match(refused.content[0].text, /your words stay unsent/);
@@ -93,10 +96,13 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
     assert.doesNotMatch(refused.content[0].text, /a long answer/);
     assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
 
-    await client.callTool({ name: 'catch', arguments: { as: 'rei' } });
+    const foreign = await client.callTool({ name: 'express', arguments: { draft: token }, _meta: { threadId: 'foreign' } });
+    assert.equal(foreign.isError, true);
+    assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
+    await client.callTool({ name: 'catch', arguments: { location: squarePath, as: 'rei' } });
     const retry = await client.callTool({ name: 'express', arguments: { draft: token } });
     assert.equal(retry.isError, undefined, retry.content[0].text);
-    const history = await client.callTool({ name: 'history', arguments: { limit: 10 } });
+    const history = await client.callTool({ name: 'history', arguments: { location: squarePath, limit: 10 } });
     assert.match(history.content[0].text, /a long answer that the model must not need to repeat/);
     const square = await Square.at({ path: squarePath, env });
     try {
@@ -118,14 +124,16 @@ test('MCP migration refusals include the required action and recovery command', 
   writeV1Artifact(squarePath, legacyFixtureState(), 7);
   const before = fs.readFileSync(squarePath);
   const env = { ...process.env, CODEX_THREAD_ID: 'migration-refusal' };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath }));
+  const configuredPath = path.join(cwd, 'configured.square');
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: configuredPath }));
   try {
-    const result = await client.callTool({ name: 'status', arguments: {} });
+    const result = await client.callTool({ name: 'status', arguments: { location: squarePath } });
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent, undefined);
     const text = result.content[0].text;
     assert.match(text, /Stop .*migrate and verify/);
     assert.ok(text.includes(squarePath));
+    assert.ok(!text.includes(configuredPath));
     assert.match(text, /square --location .* migrate/);
     assert.deepEqual(fs.readFileSync(squarePath), before);
   } finally { await close(); }

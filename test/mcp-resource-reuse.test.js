@@ -214,8 +214,16 @@ test('reused connections keep per-call participants and harness sessions separat
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
   const call = (name, args, meta) => client.callTool({ name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });
 
-  const first = await call('join', { as: participant }, { threadId: 'session-one' });
+  const [first, concurrent] = await Promise.all([
+    call('join', { as: participant }, { threadId: 'session-one' }),
+    call('join', { as: 'concurrent' }, { threadId: 'session-two' }),
+  ]);
   assert.match(first.content[0].text, /you stepped into the square/);
+  assert.match(concurrent.content[0].text, /you stepped into the square/);
+  const wrongOwner = await call('express', { as: 'concurrent', body: 'not mine' }, { threadId: 'session-one' });
+  assert.equal(wrongOwner.isError, true);
+  const rightOwner = await call('express', { as: 'concurrent', body: 'mine' }, { threadId: 'session-two' });
+  assert.equal(rightOwner.isError, undefined);
   const refused = await call('join', { as: participant }, { threadId: 'session-two' });
   assert.equal(refused.isError, true);
   const reconnected = await call('join', { as: participant }, { threadId: 'session-one' });
