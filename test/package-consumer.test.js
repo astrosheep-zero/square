@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
@@ -42,6 +43,10 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.join(root, 'node_modules', name), target, 'dir');
   }
+  assert.equal(fs.existsSync(path.join(fixture, 'node_modules', '@getpaseo', 'client')), false,
+    'ordinary packaged Square runs without the optional Paseo client');
+  assert.throws(() => createRequire(path.join(packageRoot, 'dist/packages/agent-delivery/src/paseo-native.js'))
+    .resolve('@getpaseo/client/internal/daemon-client'), { code: 'MODULE_NOT_FOUND' });
   fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.writeFileSync(path.join(fixture, 'attention-consumer.ts'), `
     import { resolveAudience, type AudienceInput, type AudienceRecipient, type AudienceRoute } from '@astrosheep/square/attention';

@@ -32,8 +32,8 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(packageJson.name, '@astrosheep/square');
   assert.equal(packageJson.dependencies['@getpaseo/client'], undefined);
   assert.equal(packageJson.dependencies.ws, undefined);
-  assert.equal(packageJson.devDependencies['@getpaseo/client'], '0.11.2');
-  assert.equal(packageJson.peerDependencies['@getpaseo/client'], '0.11.2');
+  assert.equal(packageJson.devDependencies['@getpaseo/client'], '0.14.0');
+  assert.equal(packageJson.peerDependencies['@getpaseo/client'], '0.14.0');
   // Square compiles the shared package source, including its OpenCode leaf, so the
   // SDK must resolve at build time; it is never a runtime dependency of Square.
   assert.equal(packageJson.devDependencies['@opencode/client'], '2.0.20');

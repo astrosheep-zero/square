@@ -13,6 +13,7 @@ import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
 import { sendPaseoWake } from '../dist/wake-sink.js';
+import { waitForPaseoToolBoundary } from '../dist/paseo-timeline.js';
 
 const CONTROLLED = ['PASEO_HOST', 'PASEO_HOME', 'PASEO_PASSWORD'];
 
@@ -43,11 +44,13 @@ const refused = (message, error) => ({
 
 /** A daemon stand-in that records the sends it was asked to perform. */
 async function daemon(t, { onSend, onHello } = {}) {
-  const state = { hellos: [], sends: [] };
+  const state = { hellos: [], sends: [], closes: [], headers: [] };
   const sockets = new Set();
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-  server.on('connection', (socket) => {
+  server.on('connection', (socket, request) => {
     sockets.add(socket);
+    state.headers.push(request.headers);
+    state.closes.push(once(socket, 'close'));
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => {});
     socket.on('message', (raw) => {
@@ -94,7 +97,7 @@ const attempt = { agentId: 'agent-one', prompt: '<system-reminder source="square
 const coordinates = { location: '/squares/PUBLIC.square', participant: 'Faye', activity: 'act/7', attemptN: 1 };
 
 test('the Paseo fixture uses the SDK version pinned by the repository', async () => {
-  const require = createRequire(import.meta.url);
+  const require = createRequire(new URL('../dist/packages/agent-delivery/src/paseo-native.js', import.meta.url));
   const client = require.resolve('@getpaseo/client/internal/daemon-client');
   const installed = JSON.parse(await readFile(path.join(path.dirname(client), '..', 'package.json'), 'utf8'));
   const declared = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
@@ -136,6 +139,37 @@ test('a Square Paseo wake steers with one stable id per attempt', async (t) => {
   await dispatch({ ...coordinates, attemptN: 2 });
   assert.equal(state.sends[2].activeTurnBehavior, 'steer');
   assert.notEqual(state.sends[2].messageId, state.sends[0].messageId);
+  await Promise.all(state.closes);
+});
+
+test('the installed Paseo SDK reads a real timeline and retires its socket', { timeout: 5000 }, async (t) => {
+  await environment(t);
+  const { state, endpoint } = await daemon(t, { onSend: (message) => {
+    assert.equal(message.type, 'fetch_agent_timeline_request');
+    return { type: 'fetch_agent_timeline_response', payload: {
+      requestId: message.requestId, agentId: message.agentId,
+      agent: { id: message.agentId, provider: 'codex', cwd: '/tmp', model: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        lastUserMessageAt: null, status: 'idle', currentModeId: null, availableModes: [],
+        pendingPermissions: [], persistence: null, title: null,
+        capabilities: { supportsStreaming: true, supportsSessionPersistence: true,
+          supportsDynamicModes: false, supportsMcpServers: false, supportsReasoningStream: false,
+          supportsToolInvocations: true } },
+      direction: 'tail', projection: 'projected', epoch: 'epoch', reset: false,
+      staleCursor: false, gap: false, window: { minSeq: 0, maxSeq: 0, nextSeq: 1 },
+      startCursor: null, endCursor: null, hasOlder: false, hasNewer: false, entries: [], error: null,
+    } };
+  } });
+  process.env.PASEO_HOST = endpoint;
+  process.env.PASEO_PASSWORD = 'fixture-password';
+  assert.equal(await waitForPaseoToolBoundary('agent-one'), true);
+  assert.equal(state.sends.length, 1);
+  assert.equal(state.sends[0].agentId, 'agent-one');
+  assert.equal(state.sends[0].projection, 'projected');
+  assert.equal(state.headers.length, 1);
+  assert.equal(state.headers[0].authorization, 'Bearer fixture-password');
+  assert.equal(state.headers[0]['sec-websocket-protocol'], 'paseo.bearer.fixture-password');
+  await Promise.all(state.closes);
 });
 
 test('a refused Paseo wake is a proven pre-accept rejection', async (t) => {

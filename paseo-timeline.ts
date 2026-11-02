@@ -48,6 +48,7 @@ export async function waitForPaseoToolBoundary(agentId: string, opts: WaitForPas
   let client: PaseoClient | undefined;
   try {
     client = await openPaseoClient(target, daemonCredential({ endpointPassword: target.password }), 3_000);
+    await client.connect();
     return await waitSnapshots(
       agentId,
       async (id) => {

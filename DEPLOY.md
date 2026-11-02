@@ -50,6 +50,10 @@ paseo plugin install git:astrosheep-zero/square:plugins/paseo
 It uses Paseo's runtime plugin loading and does not require a daemon restart.
 See [Square for Paseo](plugins/paseo/README.md) for requirements and development.
 
+Square's separate Paseo wake integration uses the optional `@getpaseo/client`
+peer at version `0.14.0`. Install that peer when using Paseo wake; ordinary
+Square operation does not require it.
+
 ## Update
 
 A legacy NDJSON host ledger — or an older SQLite ledger format — needs an explicit
