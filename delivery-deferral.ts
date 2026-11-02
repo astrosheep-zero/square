@@ -89,7 +89,7 @@ export function deliveryDeferralExpiry(facts: SquareRead, captured: SeatRef, ind
   const leases = facts.deliveryDeferrals(seat.participant, seat.generation);
   if (!leases.some(lease => lease.expiresAt > now)) return undefined;
   const activity = facts.activity(index);
-  return activity?.kind === 'say' ? earliestMatchingDeferralExpiry(leases, activity.metadata, now) : undefined;
+  return activity?.kind === 'say' || activity?.kind === 'message' ? earliestMatchingDeferralExpiry(leases, activity.metadata, now) : undefined;
 }
 
 export function earliestMatchingDeferralExpiry(

@@ -56,7 +56,9 @@ test('explicit v2 migration establishes artifact seats and removes legacy routes
   assert.equal(migrated.standing, 3);
   assert.deepEqual(read(location, 'SELECT * FROM activities ORDER BY act_index'), before.activities);
   assert.deepEqual(read(location, 'SELECT * FROM attention ORDER BY listener_key_json,target_key_json'), before.attention);
-  assert.deepEqual(read(location, 'SELECT * FROM landed_audience ORDER BY act_index,recipient_order'), before.audience);
+  const audience = read(location, 'SELECT * FROM landed_audience ORDER BY act_index,recipient_order');
+  assert.deepEqual(audience.map(({ generation_json, ...row }) => row), before.audience.map(row => ({ ...row })), 'audience facts survive migration');
+  assert.deepEqual(audience.map(row => row.generation_json), ['"act/1"', '"act/1"'], 'derived addresses gain generation fences');
   assert.deepEqual(read(location, 'SELECT * FROM receipts ORDER BY owner_json,act_index'), before.receipts);
   assert.equal(read(location, "SELECT COUNT(*) AS n FROM sqlite_schema WHERE name='routes'")[0].n, 0);
   assert.equal(read(location, 'SELECT COUNT(*) AS n FROM seats')[0].n, 3);

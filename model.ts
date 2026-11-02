@@ -9,29 +9,6 @@ export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type ActivityMetadata = Readonly<Record<string, JsonValue>>;
-export interface ActivityDelivery {
-  readonly mode: 'direct';
-  readonly preview?: string;
-}
-
-export function validateActivityDelivery(value: unknown): ActivityDelivery | undefined {
-  if (value === undefined) return undefined;
-  if (value !== null && typeof value === 'object'
-    && [Object.prototype, null].includes(Object.getPrototypeOf(value))
-    && Object.getOwnPropertySymbols(value).length === 0) {
-    const keys = Object.getOwnPropertyNames(value);
-    const mode = Object.getOwnPropertyDescriptor(value, 'mode');
-    const preview = Object.getOwnPropertyDescriptor(value, 'preview');
-    if (mode?.enumerable && 'value' in mode && mode.value === 'direct') {
-      if (keys.length === 1) return { mode: 'direct' };
-      if (keys.length === 2 && preview?.enumerable && 'value' in preview
-        && typeof preview.value === 'string' && preview.value.trim() !== '')
-        return { mode: 'direct', preview: preview.value };
-    }
-  }
-  throw new SquareError('invalid_args', "Activity delivery must be { mode: 'direct', preview?: string }.");
-}
-
 export const ACTIVITY_METADATA_MAX_BYTES = 16 * 1024;
 export const ACTIVITY_METADATA_MAX_DEPTH = 256;
 
@@ -235,7 +212,7 @@ export interface WatchLease {
   filter?: WatchLeaseFilter;
 }
 
-export type DirectedNotificationRoute = import('./attention.js').AudienceRoute;
+export type DirectedNotificationRoute = import('./attention.js').AudienceRoute | 'message';
 
 export interface InboxNotification {
   actIndex: number;
@@ -243,7 +220,14 @@ export interface InboxNotification {
   at: number;
   route: DirectedNotificationRoute;
   body: string;
-  readonly delivery?: ActivityDelivery;
+  readonly preview?: string;
+}
+
+/** The one stored-content-to-notification field mapping used by inbox and native previews. */
+export function notificationFacts(item: StoredAct, route: DirectedNotificationRoute): InboxNotification {
+  if (item.kind !== 'say' && item.kind !== 'message') throw new Error(`Activity ${item.index} is not conversation content.`);
+  return { actIndex: item.index, actor: item.actor, at: item.at, route, body: item.body ?? '(structured activity)',
+    ...(item.kind === 'message' && item.preview !== undefined ? { preview: item.preview } : {}) };
 }
 
 export interface LocatedSeat {

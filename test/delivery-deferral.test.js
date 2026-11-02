@@ -467,16 +467,16 @@ test('native previews for both native addresses revalidate current-generation de
   for (const [routeKind, address] of [['claude-native', { endpoint: '/tmp/unused-deferral-test.sock', sessionId: 'Bob', loaded: 'true' }], ['opencode-server', { sessionId: 'Bob' }]]) {
     await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: routeKind, address }));
     const input = { location: f.location, participant: 'Bob', generation: f.seat.generation,
-      actIndex: Number(activity.id.slice(4)), now: Date.now(), routeKind, address };
+      index: Number(activity.id.slice(4)), now: Date.now(), route: { kind: routeKind, address } };
     assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, input))).value, undefined);
     previews.push(input);
   }
   await f.bob.releaseDeliveryDeferral(lease.id);
   for (const input of previews) {
-    await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: input.routeKind, address: input.address }));
+    await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, input.route));
     assert.ok((await f.artifact.read(facts => nativePendingPreview(facts, input))).value);
     assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, generation: 'act/999' }))).value, undefined);
-    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, address: { ...input.address, stale: 'route' } }))).value, undefined);
+    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, route: { ...input.route, address: { ...input.route.address, stale: 'route' } } }))).value, undefined);
   }
 });
 

@@ -107,7 +107,7 @@ test('observation refers to an exact existing wake, without granting another inj
   assert.equal((await f.claim('presentation', 'bad-observation', { observationOf: 'wrong-token' })).status, 'stale');
   assert.equal((await f.claim('wake', 'invalid-observation', { observationOf: 'wake-token' })).status, 'stale');
   const foreign = await f.producer.transactAs({ kind: 'send', actor: 'Worker' }, facts =>
-    facts.land({ kind: 'say', actor: 'Worker', at: 13, body: 'different report', delivery: { mode: 'direct' }, mentions: ['Bob'] }));
+    facts.land({ kind: 'message', actor: 'Worker', at: 13, body: 'different report', to: ['Bob'] }));
   assert.equal((await f.claim('presentation', 'wrong-activity', {
     activity: `act/${foreign.value.index}`, observationOf: 'wake-token',
   })).status, 'stale');

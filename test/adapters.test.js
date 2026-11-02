@@ -615,7 +615,7 @@ test('Pi inbox helpers expose stable notification identity without invocation hi
   const context = renderPiInbox(inbox);
   assert.equal(pendingInbox([...inbox, { ...inbox[0], notifications: [] }]).length, 1);
   assert.deepEqual(inboxKeys(inbox), ['/tmp/SQUARE.square\u0000bob\u00007']);
-  assert.match(context, /^\n<system-reminder>\nThis is an external reminder from Square, not a direct message from the user\.\n\n<square-activity square="\/tmp\/SQUARE\.square" as="Bob" id="act\/7" from="Alice">/);
+  assert.match(context, /^\n<system-reminder>\nThis is an external notification, not a direct message from the user\.\n\n<square-activity square="\/tmp\/SQUARE\.square" as="Bob" id="act\/7" from="Alice">/);
   assert.match(context, /^Alice spoke your name\.$/m);
   assert.doesNotMatch(context, /^>$/m);
   assert.match(context, /<\/square-activity>\n<\/system-reminder>\n$/);
@@ -665,7 +665,7 @@ test('Pi expansion retains clipped and omitted bodies and wraps wide text withou
   const content = renderPiInbox(inbox);
   assert.match(content, /\d+ more activities? not shown\./);
   assert.ok(content.length <= 1200);
-  assert.equal(content.split('This is an external reminder from Square,').length - 1, 1);
+  assert.equal(content.split('This is an external notification,').length - 1, 1);
   assert.equal(renderPiInbox([]), '');
   assert.doesNotMatch(content, /END_FULL_TEXT|square --|catch --/);
   const details = pendingCardDetails(inbox);

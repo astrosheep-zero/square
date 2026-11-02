@@ -1,4 +1,4 @@
-import { SquareError, formatActivityId, parseActivityId, sameName, validateActivityDelivery, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
+import { SquareError, formatActivityId, parseActivityId, sameName, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
 import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
 
@@ -20,12 +20,12 @@ export interface LandingFacts {
 
 /** The single landing transition, shared by both adapters and explicit rebuild. */
 export function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect {
-  if (activity.kind === 'say' && activity.delivery?.mode === 'direct') {
+  if (activity.kind === 'message') {
     const audience: LandedRecipient[] = [];
-    for (const mention of activity.mentions ?? []) {
+    for (const mention of activity.to) {
       const recipient = facts.standing.find(item => sameName(item.name, mention))?.name;
       if (recipient !== undefined && !audience.some(item => sameName(item.recipient, recipient)))
-        audience.push({ recipient, route: 'mention' });
+        audience.push({ recipient, route: 'message' });
     }
     return { activity, audience };
   }
@@ -33,7 +33,7 @@ export function deriveLanding(activity: StoredAct, facts: LandingFacts): Landing
     actor: activity.actor, recipients: facts.standing.map((item) => item.name),
     mentions: activity.mentions, replyAuthor: facts.replyAuthor, reach: activity.reach,
     incoming: facts.incoming, sameIdentity: sameName,
-  }) : [];
+  }).map(recipient => ({ ...recipient, generation: formatActivityId(facts.standing.find(p => sameName(p.name, recipient.recipient))!.lastJoinIndex!) })) : [];
   const actor = activity.actor;
   const previous = facts.actor ?? { name: actor, firstIndex: activity.index, joined: false, done: false, sayCount: 0 };
   const participant: ParticipantFact = {
@@ -64,7 +64,7 @@ export function deriveLanding(activity: StoredAct, facts: LandingFacts): Landing
 export function landingFacts(read: SquareRead, activity: StoredAct): LandingFacts {
   return {
     actor: read.participant(activity.actor),
-    standing: activity.kind === 'say' ? read.roster().filter((item) => item.joined) : [],
+    standing: activity.kind === 'say' || activity.kind === 'message' ? read.roster().filter((item) => item.joined) : [],
     incoming: activity.kind === 'say' ? read.incomingAttention(activity.actor) : [],
     outgoing: activity.kind === 'listen' || activity.kind === 'ignore' || activity.kind === 'unlisten' ? read.attention(activity.actor) : [],
     replyAuthor: activity.kind === 'say' && activity.reply !== undefined ? read.activity(activity.reply)?.actor : undefined,
@@ -157,10 +157,9 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       if (!sameName(actor, expectedName))
         throw new SquareError('already_joined', 'Activity actor does not match the artifact authority.');
 
-      if (activity.kind === 'say') validateActivityDelivery(activity.delivery);
       if (authority.kind === 'send') {
-        if (activity.kind !== 'say' || activity.delivery?.mode !== 'direct' || activity.reach !== undefined || activity.reply !== undefined)
-          throw new SquareError('invalid_args', 'Send authority may only land direct messages without bell or reply.');
+        if (activity.kind !== 'message')
+          throw new SquareError('invalid_args', 'Send authority may only publish channel messages.');
       } else if (authority.kind === 'participant') {
         assertSeat(authority.seat);
         if (activity.kind === 'join') throw new SquareError('invalid_args', 'A participant seat can only be re-established by join.');

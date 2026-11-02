@@ -28,6 +28,12 @@ async function fixture(t) {
     for (const sql of FORMAT7_SCHEMA_SQL.split(';').filter(sql => /CREATE INDEX activity_/.test(sql))) db.exec(sql + ';');
     const insert = db.prepare('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)');
     for (const row of rows) insert.run(...Object.values(row));
+    const audience = db.prepare('SELECT * FROM landed_audience ORDER BY act_index,recipient_order').all();
+    db.exec('DROP TABLE landed_audience;');
+    db.exec(FORMAT7_SCHEMA_SQL.split(';').find(sql => sql.trim().startsWith('CREATE TABLE landed_audience (')) + ';');
+    db.exec('CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);');
+    const insertAudience = db.prepare('INSERT INTO landed_audience VALUES(?,?,?,?)');
+    for (const row of audience) insertAudience.run(row.act_index, row.recipient_key_json, row.recipient_order, row.route);
     const at = Date.now();
     insert.run(3, at + 3, 'hold', '"Bob"', '"bob"', null, null, '{"body":"old pause"}');
     insert.run(4, at + 4, 'resume', null, null, null, null, '{}');
@@ -54,7 +60,7 @@ async function fixture(t) {
   return input;
 }
 
-test('explicit format 7 -> 8 drops obsolete activity identities while preserving sparse ids and allocator', async t => {
+test('explicit format 7 -> 9 drops obsolete activity identities while preserving sparse ids and allocator', async t => {
   const input = await fixture(t);
   const before = fs.readFileSync(input.path);
   await assert.rejects(Square.at(input), error => error.facts?.reason === 'migration_required');
@@ -62,7 +68,7 @@ test('explicit format 7 -> 8 drops obsolete activity identities while preserving
   const previousMeta = inspect(input.path, db => ({ ...db.prepare('SELECT * FROM square_meta').get() }));
   assert.equal((await migrateSquare({ ...input, env: { ...input.env, SQUARE_HOST_LEDGER_ROOT: '/not/a/legacy/ledger' } })).status, 'migrated');
   inspect(input.path, db => {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
     assert.deepEqual({ ...db.prepare('SELECT * FROM square_meta').get() }, previousMeta);
     assert.deepEqual(db.prepare('SELECT act_index,reply_index FROM activities ORDER BY act_index').all().map(row => ({ ...row })), [
       { act_index: 0, reply_index: null }, { act_index: 1, reply_index: null },
@@ -137,7 +143,7 @@ for (const version of [2, 3]) test(`format ${version} chains through activity de
   });
   assert.equal((await migrateSquare(input)).status, 'migrated');
   inspect(input.path, db => {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
     assert.equal(db.prepare('SELECT next_act_index FROM square_meta').get().next_act_index, 12);
     assert.deepEqual(db.prepare('SELECT act_index FROM activities WHERE act_index>=8').all().map(row => row.act_index), [10]);
     assert.equal(db.prepare('SELECT reply_index FROM activities WHERE act_index=10').get().reply_index, null);
@@ -229,7 +235,7 @@ test('format 7 migration rolls back deletions and schema publication together', 
   const exec = DatabaseSync.prototype.exec;
   t.mock.method(DatabaseSync.prototype, 'exec', function(sql, ...args) {
     const result = exec.call(this, sql, ...args);
-    if (sql === 'PRAGMA user_version = 8;') throw new Error('injected publication failure');
+    if (sql === 'PRAGMA user_version = 9;') throw new Error('injected publication failure');
     return result;
   });
   await assert.rejects(migrateSquare(input), /injected publication failure/);

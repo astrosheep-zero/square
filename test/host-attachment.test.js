@@ -146,7 +146,7 @@ test('detach invalidates cached inboxes, claims and final proactive presentation
   assert.equal(effects, 0);
   assert.equal(await f.read(facts => facts.receipt('Bob', Number(sent.activity.id.slice(4)))), undefined);
   assert.equal(await f.read(facts => nativePendingPreview(facts, { location: f.location, participant: 'Bob', generation: f.ref.generation,
-    actIndex: Number(sent.activity.id.slice(4)), now: Date.now(), routeKind: 'opencode-server', address: { sessionId: 'receiver' } })), undefined);
+    index: Number(sent.activity.id.slice(4)), now: Date.now(), route: { kind: 'opencode-server', address: { sessionId: 'receiver' } } })), undefined);
   await prepared.release();
 });
 

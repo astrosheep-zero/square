@@ -6,9 +6,9 @@ import { createArtifactPort } from './artifact.js';
 import { preparePendingPresentation } from './presentation-operations.js';
 import { presentPreparedBatch } from './delivery-effects.js';
 import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
-import type { ActivityDelivery, Owner, PendingMembership } from './model.js';
+import type { Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
-import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
+import { projectNotification, renderSquareReminder } from './attention-presentation.js';
 export { pendingAtBoundary };
 
 const CONTEXT_MAX = 1200;
@@ -32,10 +32,9 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
-  const directBlocks: string[] = [];
+  const blocks: string[] = [];
   const agoraBlocks: string[] = [];
-  const deliveries: (ActivityDelivery | undefined)[] = [];
-  let remainingAgora = queued.filter(({ notification }) => notification.delivery?.mode !== 'direct').length;
+  let remainingAgora = queued.filter(({ notification }) => notification.route !== 'message').length;
   const entries: BoundaryEntry[] = [];
   let omitted = 0;
   const omission = (count: number) => `${count} more ${count === 1 ? 'activity' : 'activities'} not shown.`;
@@ -45,18 +44,17 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
     // The omission line represents the rest of this batch too, but never consumes its bodies.
     const coverage = { membership, actIndex: notification.actIndex, markSeen: false };
     entries.push(coverage);
-    const block = renderAttentionPreview({
+    const projected = projectNotification({
       squarePath: membership.location,
       actIndex: notification.actIndex,
       recipient: membership.seat.participant,
       actor: notification.actor,
       route: notification.route,
       body: notification.body,
-      delivery: notification.delivery,
+      preview: notification.preview,
     });
-    if (notification.delivery?.mode === 'direct') {
-      directBlocks.push(block);
-    } else {
+    const block = projected.text;
+    if (projected.agora) {
       remainingAgora -= 1;
       const omittedAfter = omitted + remainingAgora;
       const prospective = renderSquareReminder([...agoraBlocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
@@ -66,12 +64,12 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
       }
       agoraBlocks.push(block);
     }
-    deliveries.push(notification.delivery);
-    coverage.markSeen = !attentionBodyIsClipped(notification.body, notification.delivery);
+    blocks.push(block);
+    coverage.markSeen = !projected.clipped;
   }
 
   return {
-    context: renderSquareReminder([...directBlocks, ...agoraBlocks, ...(omitted > 0 ? [omission(omitted)] : [])], deliveries),
+    context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])]),
     entries,
   };
 }

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createArtifactPort } from '../../artifact.js';
 import { deliverPending } from '../../delivery-operations.js';
-import { nativePendingPreview, observeSessionPending, projectSessionSeats } from '../../inbox.js';
-import { automaticWakeEligible, presentationBlocksWake } from '../../delivery.js';
+import { nativePendingPreview, nativePendingSource, observeSessionPending, projectSessionSeats } from '../../inbox.js';
+import { automaticWakeEligible, nativePendingHead, presentationBlocksWake } from '../../delivery.js';
 import { type Seat } from '../../model.js';
 import { harnessOwner, decodeHarnessOwner } from '../../owner.js';
 import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
@@ -23,10 +23,8 @@ function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'part
   if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== captured.generation || seat.owner !== captured.owner) return undefined;
   const wake = seat.wakeAddress;
   if (wake?.kind !== routeKind) return undefined;
-  return nativePendingPreview(facts, {
-    location, routeKind, generation: seat.generation, participant: seat.participant,
-    actIndex: index, address: wake.address, now: Date.now(),
-  });
+  return nativePendingPreview(facts, { location, participant: seat.participant, generation: seat.generation,
+    owner: seat.owner, index, route: wake, now: Date.now() });
 }
 
 export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
@@ -101,14 +99,16 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
         return facts.deliveryEvidence(seat.participant, seat.generation).flatMap((evidence) => {
           const token = evidence.correlation?.harness === 'opencode' ? evidence.correlation.token : undefined;
           const hash = token === undefined ? undefined : observed.get(token);
-          const index = parseActivityId(evidence.activity);
+          const index = parseActivityId(evidence.activity), now = Date.now();
           if (token === undefined || hash === undefined || evidence.claimToken === undefined || index === undefined
-            || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
-            || evidence.correlation?.payloadHash !== hash) return [];
-          const prepared = preview(facts, location, seat, index);
-          if (prepared === undefined || payloadHash(prepared.payload) !== hash
-            || presentationBlocksWake(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), Date.now())) return [];
-          return [{ evidence, index, hash, clipped: prepared.clipped }];
+            || evidence.route === undefined || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
+            || evidence.correlation?.payloadHash !== hash
+            || evidence.route.kind !== routeKind
+            || presentationBlocksWake(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), now)) return [];
+          const source = nativePendingSource(facts, { location, participant: seat.participant, generation: seat.generation,
+            owner: seat.owner, index, route: evidence.route, now });
+          if (source === undefined) return [];
+          return [{ evidence, index, hash, clipped: source.clipped }];
         });
       }, signal);
       for (const { evidence, index, hash, clipped } of matches) {
@@ -116,10 +116,10 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
         await presentPending({ artifact, location, participant: seat.participant,
           activity: formatActivityId(index), seat: asSeatRef(seat), observationOf: evidence.claimToken, sink: { present() {} }, markSeen: !clipped, signal,
           current: (facts) => {
-            const current = facts.seat(seat.participant);
-            const prepared = current === undefined || !sameSeat(current, seat) ? undefined : preview(facts, location, seat, index);
             const correlation = facts.deliveryByToken(evidence.claimToken!);
-            return prepared !== undefined && payloadHash(prepared.payload) === hash
+            return nativePendingHead(facts, { location, participant: seat.participant, generation: seat.generation,
+                owner: seat.owner, index, route: evidence.route!, now: Date.now() }) !== undefined
+              && ['dispatching', 'unknown', 'accepted'].includes(correlation?.outcome ?? '')
               && correlation?.correlation?.harness === 'opencode'
               && correlation.correlation.token !== undefined
               && correlation.correlation.payloadHash === hash;

@@ -2,13 +2,13 @@ import { stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { createArtifactPort } from './artifact.js';
 import { presentPending } from './presentation-operations.js';
-import { nativePendingPreview } from './inbox.js';
+import { nativePendingPreview, nativePendingSource } from './inbox.js';
+import { nativePendingHead, type NativePendingInput } from './delivery.js';
 import { type WakeRoute } from './model.js';
 import { parseActivityId } from './square-core.js';
-import type { DeliveryEvidence, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
+import type { DeliveryEvidence, SeatRef, SquareArtifactPort, SquareRead, WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
 import { decodeHarnessOwner } from './owner.js';
 import { indexedSquareEntries } from './square-index.js';
-import { asSeatRef } from './seats.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
@@ -25,9 +25,8 @@ interface NativePreview {
 function previewFacts(facts: import('./ports.js').SquareRead, request: WakeRequest): NativePreview | undefined {
   const index = parseActivityId(request.activity);
   if (index === undefined || request.route.kind !== 'claude-native' || request.route.address.endpoint === undefined) return undefined;
-  return nativePendingPreview(facts, { location: request.location, routeKind: 'claude-native', generation: request.seat.generation,
-    address: request.route.address,
-    participant: request.participant, actIndex: index, now: Date.now() });
+  return nativePendingPreview(facts, { location: request.location, participant: request.participant,
+    generation: request.seat.generation, owner: request.seat.owner, index, route: request.route, now: Date.now() });
 }
 
 async function preview(artifact: SquareArtifactPort, request: WakeRequest): Promise<NativePreview | undefined> {
@@ -77,19 +76,9 @@ async function dispatchClaude(request: WakeRequest, timeoutMs: number, beforeSen
 interface NativeRow {
   readonly artifact: SquareArtifactPort;
   readonly evidence: DeliveryEvidence;
-  readonly request?: WakeRequest;
-  readonly payload?: string;
-}
-
-function currentPayload(facts: SquareRead, request: WakeRequest): string | undefined {
-  const seat = facts.seat(request.participant), evidence = facts.deliveryByToken(request.claimToken!);
-  if (seat === undefined || seat.attachment !== 'attached' || evidence === undefined || seat.generation !== evidence.generation
-    || seat.generation !== request.seat.generation || seat.owner !== request.seat.owner
-    || evidence.activity !== request.activity || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)) return undefined;
-  const native = previewFacts(facts, request);
-  if (native === undefined) return undefined;
-  const payload = nativePayload(request.claimToken!, native.payload);
-  return evidence.correlation?.payloadHash === hashPayload(payload) ? payload : undefined;
+  readonly location: string;
+  readonly index?: number;
+  readonly seat?: SeatRef;
 }
 
 async function rowsForSession(sessionId: string, env: NodeJS.ProcessEnv, tokens: readonly string[]): Promise<NativeRow[]> {
@@ -106,21 +95,39 @@ async function rowsForSession(sessionId: string, env: NodeJS.ProcessEnv, tokens:
         const evidence = facts.deliveryByToken(token);
         if (evidence?.kind !== 'wake' || evidence.correlation?.harness !== 'claude' || evidence.correlation.token !== token
           || evidence.route?.kind !== 'claude-native' || evidence.route.address.sessionId !== sessionId) return [];
-        const row = { artifact, evidence };
-        const seat = facts.seat(evidence.participant), index = parseActivityId(evidence.activity);
-        const item = index === undefined ? undefined : facts.activity(index);
-        if (seat === undefined || item?.kind !== 'say') return [row];
-        const route: WakeRoute = { location, participant: seat.participant,
-          ...evidence.route, updatedAt: evidence.at };
-        const request: WakeRequest = { location, participant: seat.participant, activity: evidence.activity,
-          actor: item.actor, seat: asSeatRef(seat), claimToken: token, attemptN: evidence.attemptN, route, artifact };
-        return [{ ...row, request, payload: currentPayload(facts, request) }];
+        const seat = facts.seat(evidence.participant);
+        return [{ artifact, evidence, location, index: parseActivityId(evidence.activity),
+          ...(seat === undefined ? {} : { seat: { participant: evidence.participant, owner: seat.owner, generation: evidence.generation } }) }];
       }));
       rows.push(...found.value);
       if (found.value.length === 0) await artifact.close();
     } catch { await artifact.close(); }
   }
   return rows;
+}
+
+/** The token, participant, activity and captured generation must still be the exact wake. */
+function sameCapturedEvidence(facts: SquareRead, row: NativeRow): boolean {
+  const token = row.evidence.claimToken;
+  const evidence = token === undefined ? undefined : facts.deliveryByToken(token);
+  return token !== undefined && evidence !== undefined && row.seat !== undefined && row.seat.participant === row.evidence.participant
+    && row.seat.generation === row.evidence.generation && evidence.kind === 'wake' && evidence.claimToken === token
+    && evidence.participant === row.evidence.participant && evidence.activity === row.evidence.activity
+    && evidence.generation === row.evidence.generation
+    && evidence.correlation?.harness === 'claude' && evidence.correlation.token === token
+    && evidence.correlation.payloadHash === row.evidence.correlation?.payloadHash
+    && ['dispatching', 'unknown', 'accepted'].includes(evidence.outcome);
+}
+
+function capturedInput(row: NativeRow, now: number): NativePendingInput | undefined {
+  if (row.seat === undefined || row.index === undefined || row.evidence.route === undefined) return undefined;
+  return { location: row.location, participant: row.evidence.participant, generation: row.seat.generation,
+    owner: row.seat.owner, index: row.index, route: row.evidence.route, now };
+}
+
+function currentRow(facts: SquareRead, row: NativeRow, now: number): boolean {
+  const input = capturedInput(row, now);
+  return input !== undefined && sameCapturedEvidence(facts, row) && nativePendingHead(facts, input) !== undefined;
 }
 
 /** Recognize the whole frame first; one inactive token vetoes it before any evidence/receipt write. */
@@ -131,22 +138,40 @@ export async function observeClaudeDelivery(sessionId: string, text: string, ope
   const recognized = rows.length > 0;
   const frames = [...text.matchAll(/(?:^|\n)(\[square-inbox:([a-zA-Z0-9-]+)\]\n[\s\S]*?\n\[\/square-inbox:\2\])(?=\n|$)/g)];
   try {
-    if (!recognized || rows.some(row => {
-      const matching = frames.filter(frame => frame[2] === row.evidence.claimToken);
-      return row.payload === undefined || matching.length !== tokens.filter(token => token === row.evidence.claimToken).length
-        || matching.some(frame => frame[1] !== row.payload);
-    })) return { recognized, current: false };
+    // Every recognized token is vetted before any row can write: actual bytes against the
+    // stored correlation hash, then independent current eligibility.
+    const contentCurrent = rows.every(row => {
+      const token = row.evidence.claimToken, hash = row.evidence.correlation?.payloadHash;
+      if (token === undefined || hash === undefined || row.seat === undefined || row.index === undefined
+        || !['dispatching', 'unknown', 'accepted'].includes(row.evidence.outcome)) return false;
+      const matching = frames.filter(frame => frame[2] === token);
+      return matching.length === tokens.filter(candidate => candidate === token).length
+        && matching.every(frame => hashPayload(frame[1]) === hash);
+    });
+    if (!recognized || !contentCurrent) return { recognized, current: false };
+    const now = Date.now();
+    for (const row of rows) {
+      if (!(await row.artifact.read(facts => currentRow(facts, row, now))).value) return { recognized, current: false };
+    }
     for (const row of rows) {
       if (operation === 'guard') continue;
-      const request = row.request!, payload = row.payload!;
-      const admitted = await row.artifact.transactAs({ kind: 'participant', seat: request.seat }, facts =>
-        currentPayload(facts, request) === payload && facts.completeDelivery({ seat: request.seat,
-          activity: row.evidence.activity, claimToken: request.claimToken!, outcome: 'accepted', at: Date.now() })).catch(() => ({ value: false }));
+      const seat = row.seat!, index = row.index!;
+      const current = (facts: SquareRead) => currentRow(facts, row, Date.now());
+      const admitted = await row.artifact.transactAs({ kind: 'participant', seat }, facts =>
+        current(facts) && facts.completeDelivery({ seat, activity: row.evidence.activity,
+          claimToken: row.evidence.claimToken!, outcome: 'accepted', at: Date.now() })).catch(() => ({ value: false }));
       if (!admitted.value) return { recognized, current: false };
-      if (operation === 'stored') await presentPending({ artifact: row.artifact, location: request.location,
-        // Claude's stored event consumes even Agora previews; retain that contract for both modes.
-        participant: request.participant, activity: request.activity, seat: request.seat, observationOf: request.claimToken, markSeen: true, sink: { present() {} },
-        current: facts => currentPayload(facts, request) === payload });
+      if (operation === 'stored') {
+        const input = capturedInput(row, Date.now());
+        if (input === undefined || input.route.kind !== 'claude-native') return { recognized, current: false };
+        const source = (await row.artifact.read(facts => sameCapturedEvidence(facts, row)
+          ? nativePendingSource(facts, input) : undefined)).value;
+        if (source === undefined) return { recognized, current: false };
+        await presentPending({ artifact: row.artifact, location: row.location,
+          // A sender preview is clipped coverage; only a full body consumes the stored message.
+          participant: row.evidence.participant, activity: row.evidence.activity, seat, observationOf: row.evidence.claimToken,
+          markSeen: !source.clipped, sink: { present() {} }, current });
+      }
     }
     return { recognized, current: true };
   } finally { await Promise.all([...new Set(rows.map(row => row.artifact))].map(artifact => artifact.close())); }

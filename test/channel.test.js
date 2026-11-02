@@ -145,7 +145,8 @@ test('send retains detached recipients without waking them and rejects missing o
   assert.deepEqual(attempts, ['Alice'], 'attachment gates proactive wake, not addressed landing');
   const away = (await square.participants()).participants.find(p => p.name === 'Bob');
   assert.equal(away.presence, 'away');
-  assert.equal(away.unreadActivityCount, 1);
+  assert.equal(away.unreadActivityCount, 0, 'Agora counters exclude native messages');
+  assert.equal((await channel.listEndpoints()).find(endpoint => endpoint.name === 'Bob').unreadCount, 1);
   const evidence = (await square.artifact.read(facts => ({
     receipt: facts.receipt('Bob', parseActivityId(sent.id)),
     deliveries: facts.deliveryEvidence('Bob', bob.generation),
@@ -155,17 +156,17 @@ test('send retains detached recipients without waking them and rejects missing o
   const restored = await channel.reattach('Bob', { owner: 'test:bob' });
   assert.equal(restored.generation, bob.generation);
   const pending = await restored.pending({ match });
-  assert.deepEqual(pending.activities.map(a => a.id), [sent.id]);
-  assert.equal(pending.activities[0].body, send.body);
+  assert.deepEqual(pending.messages.map(m => m.id), [sent.id]);
+  assert.equal(pending.messages[0].body, send.body);
   assert.deepEqual(await restored.ack([sent.id]), { consumed: 1 });
-  assert.deepEqual(await restored.pending({ match }), { activities: [], remaining: 0 });
-  const before = await square.history({ limit: null });
+  assert.deepEqual(await restored.pending({ match }), { messages: [], remaining: 0 });
+  const before = await channel.history({ limit: null });
   await assert.rejects(channel.send({ ...send, to: ['Alice', 'Missing'] }), error => error.facts.reason === 'not_standing');
-  assert.deepEqual(await square.history({ limit: null }), before);
+  assert.deepEqual(await channel.history({ limit: null }), before);
   await restored.leave();
-  const departed = await square.history({ limit: null });
+  const departed = await channel.history({ limit: null });
   await assert.rejects(channel.send(send), error => error.facts.reason === 'not_standing');
-  assert.deepEqual(await square.history({ limit: null }), departed);
+  assert.deepEqual(await channel.history({ limit: null }), departed);
   assert.deepEqual(attempts, ['Alice'], 'refused recipient batches land and wake nobody');
 });
 
@@ -179,12 +180,14 @@ test('unjoined send targets only explicit recipients; boundary hooks present the
   const { participants } = await square.participants();
   assert.deepEqual(participants.map(p => p.name).sort(), ['Other', 'Recipient']);
   assert.equal(participants.find(p => p.name === 'Other').pendingMentionCount, 0);
-  assert.equal(participants.find(p => p.name === 'Recipient').pendingMentionCount, 1);
+  assert.equal(participants.find(p => p.name === 'Recipient').pendingMentionCount, 0, 'Channel messages never count as Agora attention');
+  assert.equal((await channel.listEndpoints()).find(endpoint => endpoint.name === 'Recipient').unreadCount, 1);
   assert.equal((await sessionInbox(owner, env))[0].notifications[0].body, body);
   const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
   assertFull(presented, sent);
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), true);
-  assert.deepEqual((await square.history({ at: [sent.id] })).activities[0].metadata, metadata);
+  assert.deepEqual((await channel.history({ at: [sent.id] })).messages[0].metadata, metadata);
+  assert.deepEqual((await square.history({ at: [sent.id] })).activities, [], 'Agora history excludes native messages');
   assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('must not replay'), undefined, env), undefined);
 });
 
@@ -197,7 +200,7 @@ for (const native of ['claude-code', 'opencode']) test(`${native} native hook co
   const transport = { async attempt(request, _timeout, beforeSend) {
     const preview = (await request.artifact.read(facts => nativePendingPreview(facts, {
       location: request.location, participant: request.participant, generation: request.seat.generation,
-      routeKind: wakeAddress.kind, address: wakeAddress.address, actIndex: parseActivityId(request.activity), now: Date.now(),
+      route: { kind: wakeAddress.kind, address: wakeAddress.address }, index: parseActivityId(request.activity), now: Date.now(),
     }))).value;
     assert.equal(preview.clipped, false);
     assertFull(preview.payload, { id: request.activity, from: 'Coordinator', body });
@@ -237,8 +240,9 @@ test('attached senders with unread messages bypass Agora gates, caps, throttle a
   }
   const senderState = (await gated.participants()).participants.find(p => p.name === 'Sender');
   assert.equal(senderState.activityCount, 0);
-  assert.equal(senderState.unreadActivityCount, 1);
-  assert.equal((await gated.history({ from: ['Sender'], limit: null })).activities.filter(a => a.kind === 'say').length, 6);
+  assert.equal(senderState.unreadActivityCount, 0, 'native messages are not Agora unread activity');
+  assert.equal((await channel.listEndpoints()).find(endpoint => endpoint.name === 'Sender').unreadCount, 1);
+  assert.equal((await channel.history({ from: ['Sender'], limit: null })).messages.length, 6);
 });
 
 test('deferral leases match persisted metadata and release restores boundary eligibility without a new message', async t => {
@@ -283,12 +287,13 @@ test('send preserves full body in history, stores truncated preview when clipped
     [{ body: source, truncate: 231 }, normalized, 'a\n' + 'x'.repeat(229) + '… (truncated 1 chars)', true],
   ]) {
     const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', ...input });
-    assert.equal(sent.body, previewExpected);
-    const stored = (await square.history({ at: [sent.id] })).activities[0];
+    assert.equal(sent.body, fullExpected, 'send returns the full stored body');
+    const stored = (await channel.history({ at: [sent.id] })).messages[0];
     assert.equal(stored.body, fullExpected);
-    assert.deepEqual(stored.delivery, clipped ? { mode: 'direct', preview: previewExpected } : { mode: 'direct' });
     const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
-    assertFull(presented, sent);
+    assert.ok(presented.includes(previewExpected), 'presentation shows the explicit preview or the unclipped body');
+    assert.doesNotMatch(presented, /<square-activity/);
+    assert.ok(presented.includes('This is an external notification, not a direct message from the user.'));
     assert.equal(await presentPendingAtBoundary(owner, () => assert.fail('notification ack blocks replay'), undefined, env), undefined);
     assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', Number(sent.id.slice(4))))).value), !clipped);
   }
@@ -298,7 +303,7 @@ test('send validation and unavailable targets reject atomically, and cancellatio
   const { channel, square } = await fixture(t);
   const recipient = await channel.attach('Recipient', { owner: 'test:recipient' });
   const send = { from: 'Coordinator', to: 'Recipient', body: 'valid' };
-  const before = await square.history({ limit: null });
+  const before = await channel.history({ limit: null });
   for (const change of [
     { from: '' }, { from: 'bad name' }, { from: 7 }, { to: [] }, { to: Array(MAX_IDENTITY_SET_SIZE + 1).fill('Recipient') },
     { to: null }, { to: ['Recipient', 7] }, { to: ['bad name'] }, { body: '' }, { body: ' \n ' }, { body: null },
@@ -309,11 +314,11 @@ test('send validation and unavailable targets reject atomically, and cancellatio
       && error.message === 'Channel truncate must be false or a positive integer.');
   await assert.rejects(channel.send({ ...send, to: ['Recipient', 'Missing'] }), error => error.code === 'invalid_args'
     && error.facts.reason === 'not_standing' && error.facts.activityUnsent && assert.deepEqual(error.facts.targets, ['Missing']) === undefined);
-  assert.deepEqual(await square.history({ limit: null }), before);
+  assert.deepEqual(await channel.history({ limit: null }), before);
   const abort = new AbortController();
   abort.abort(new Error('cancel channel send'));
   await assert.rejects(channel.send(send, { signal: abort.signal }), /cancel channel send/);
-  assert.deepEqual(await square.history({ limit: null }), before);
+  assert.deepEqual(await channel.history({ limit: null }), before);
   await recipient.leave();
   await assert.rejects(channel.send(send), error => error.facts.reason === 'not_standing');
 });
@@ -374,7 +379,7 @@ test('endpoint.receive consumes matching messages atomically and reports exact r
     messages: [{ id: second.id, at: second.at, from: 'Worker', to: ['Recipient'], body: 'two', metadata }], consumed: 1, remaining: 0,
   });
   assert.deepEqual(await endpoint.receive({ match }), { messages: [], consumed: 0, remaining: 0 });
-  assert.equal((await endpoint.pending()).activities.length, 1, 'unmatched messages stay unconsumed');
+  assert.equal((await endpoint.pending()).messages.length, 1, 'unmatched messages stay unconsumed');
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', parseActivityId(first.id)))).value), true);
   for (const limit of [0, 101, 1.5, '10'])
     await assert.rejects(endpoint.receive({ limit }), error => error.code === 'invalid_args'
@@ -382,4 +387,49 @@ test('endpoint.receive consumes matching messages atomically and reports exact r
   const abort = new AbortController();
   abort.abort(new Error('cancel receive'));
   await assert.rejects(endpoint.receive({ match }, { signal: abort.signal }), /cancel receive/);
+});
+
+test('Channel reads real Agora landed addresses while native messages stay outside the Agora projection', async t => {
+  const { channel, square } = await fixture(t);
+  const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
+  await channel.attach('Bob', { owner: 'test:bob' });
+  const bobEndpoint = await channel.endpoint('Bob', { owner: 'test:bob' });
+  const bob = await square.participant('Bob', { owner: 'test:bob' });
+  await bob.listen('Alice');
+  const attention = (await alice.express('listening line')).activity;
+  const question = (await bob.express('a question')).activity;
+  const reply = (await alice.express({ body: 'an answer', reply: question.id })).activity;
+  const channelHistory = (await channel.history({ limit: null })).messages;
+  const byId = id => channelHistory.find(message => message.id === id);
+  assert.equal(byId(attention.id).body, 'listening line');
+  assert.deepEqual(byId(attention.id).to, ['Bob'], 'a listener address is a real landed recipient');
+  assert.equal(byId(reply.id).body, 'an answer');
+  assert.deepEqual(byId(reply.id).to, ['Bob'], 'a reply address is a real landed recipient');
+  assert.deepEqual((await square.history({ at: [attention.id, reply.id] })).activities.map(activity => activity.id), [attention.id, reply.id],
+    'Agora history still owns its say records');
+  const received = await bobEndpoint.receive();
+  assert.deepEqual(received.messages.map(message => message.id).sort(), [attention.id, reply.id].sort());
+  assert.deepEqual((await bob.catch()).activities, [], 'Channel consumption records the same receipts Agora catch reads');
+
+  const native = await channel.send({ from: 'Coordinator', to: 'Bob', body: 'native only' });
+  assert.deepEqual((await square.history({ at: [native.id] })).activities, [], 'native messages never enter Agora history');
+  assert.deepEqual((await bob.catch()).activities, [], 'native messages never enter Agora catch');
+  assert.equal((await square.participants()).participants.find(participant => participant.name === 'Bob').unreadActivityCount, 0,
+    'native messages never count as Agora unread activity');
+  assert.ok((await bobEndpoint.pending()).messages.some(message => message.id === native.id), 'the native message remains in Channel pending');
+  assert.ok((await alice.express('still admitted after a native message')).activity.id, 'unread native messages do not block Agora admission');
+});
+
+test('a captured endpoint cannot publish after detach or takeover', async t => {
+  const { channel } = await fixture(t);
+  const owner = 'test:recipient';
+  const recipient = await channel.attach('Recipient', { owner });
+  await channel.attach('Other', { owner: 'test:other' });
+  assert.ok((await recipient.send({ to: 'Other', body: 'current endpoint' })).id);
+  assert.equal(await channel.detach('Recipient', { owner, generation: recipient.generation }), true);
+  await assert.rejects(recipient.send({ to: 'Other', body: 'detached endpoint' }), error => error.code === 'already_joined');
+  await channel.reattach('Recipient', { owner });
+  const replacement = await channel.attach('Recipient', { owner, takeover: true });
+  await assert.rejects(recipient.send({ to: 'Other', body: 'expired generation' }), error => error.code === 'already_joined');
+  assert.ok((await replacement.send({ to: 'Other', body: 'replacement endpoint' })).id);
 });

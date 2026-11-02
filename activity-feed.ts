@@ -7,7 +7,7 @@ const PREVIEW_CHARS = 400;
 
 /** A bounded, nonconsuming glimpse; seen rows beyond a cursor hole must not reappear. */
 export function expressionContext(facts: SquareRead, name: string): ExpressContext {
-  const filter = { afterIndex: facts.participant(name)?.lastJoinIndex ?? -1, unseenOnly: true as const };
+  const filter = { kinds: ['say'] as const, afterIndex: facts.participant(name)?.lastJoinIndex ?? -1, unseenOnly: true as const };
   const page = facts.directed(name, filter, { edge: 'newest', limit: CONTEXT_LIMIT });
   const activities = facts.activities(page.items.map(head => head.index)).filter(act => act.kind === 'say')
     .sort((a, b) => a.index - b.index).map(act => {

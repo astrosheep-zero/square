@@ -1,4 +1,4 @@
-import { type Owner, type LocatedSeat, type PendingMembership, type Seat } from './model.js';
+import { notificationFacts, type Owner, type LocatedSeat, type PendingMembership, type Seat } from './model.js';
 import type { SquareRead } from './ports.js';
 import { createArtifactPort, observeSquareDeliveryRevision, observeSquareRevision } from './artifact.js';
 import { indexedSquareEntries, observeSquareIndex } from './square-index.js';
@@ -6,9 +6,9 @@ import { type VersionObserver } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
 import { formatActivityId, parseActivityId } from './square-core.js';
 import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
-import { pendingHead, pendingHeads, leaseOwnsNotification } from './delivery.js';
+import { nativePendingHead, pendingHeads, leaseOwnsNotification, type NativePendingInput } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
-import { attentionBodyIsClipped, renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
+import { projectNotification, renderSquareReminder } from './attention-presentation.js';
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;
@@ -140,7 +140,7 @@ export async function sessionInboxCounts(input: SessionSeatQuery, signal?: Abort
     const artifact = createArtifactPort(location, undefined, signal);
     try {
       rows.push(...(await artifact.read(facts => locatedSeats(facts, location, owners.flatMap(owner => facts.seatsForOwner(owner).filter(seat => seat.attachment === 'attached'))).map(({ seat }) => ({
-        name: seat.participant, squarePath: location, pending: facts.directedCount(seat.participant, { unseenOnly: true }),
+        name: seat.participant, squarePath: location, pending: facts.directedCount(seat.participant, { unseenOnly: true, currentGeneration: true }),
       })), signal)).value);
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
@@ -172,10 +172,8 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
           cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => {
             const heads = pendingHeads(facts, membership.seat.participant);
             const routes = new Map(heads.map(head => [head.index, head.route]));
-            return { ...membership, notifications: facts.activities(heads.map(head => head.index)).flatMap(item => item.kind === 'say'
-              ? [{ actIndex: item.index, actor: item.actor, at: item.at, body: item.body ?? '(structured activity)',
-                route: routes.get(item.index)!, ...(item.delivery === undefined ? {} : { delivery: item.delivery }) }]
-              : []) };
+            return { ...membership, notifications: facts.activities(heads.map(head => head.index)).flatMap(item =>
+              item.kind === 'say' || item.kind === 'message' ? [notificationFacts(item, routes.get(item.index)!)] : []) };
           }) };
         }
         // Cache conversation content, never leases or delivery eligibility: evidence can change
@@ -201,34 +199,23 @@ export interface NativePendingPreview {
   readonly payload: string;
   readonly clipped: boolean;
 }
-export type NativePendingPreviewInput = {
-  readonly location: string; readonly generation: import('./model.js').ActivityId; readonly participant: string;
-  readonly actIndex: number; readonly cancelledThrough?: number; readonly now: number;
-} & (
-  | { readonly routeKind: 'claude-native'; readonly address: Readonly<Record<string, string>> }
-  | { readonly routeKind: 'opencode-server'; readonly address: Readonly<Record<string, string>> }
-);
+export interface NativePendingSource { readonly text: string; readonly clipped: boolean }
 
-function sameWakeAddress(address: import('./model.js').WakeAddress | undefined, kind: NativePendingPreviewInput['routeKind'], requested: Readonly<Record<string, string>>): boolean {
-  if (address?.kind !== kind || Object.keys(address.address).length !== Object.keys(requested).length) return false;
-  return Object.entries(requested).every(([key, value]) => address.address[key] === value);
+/** One current eligibility + source projection read; senders use text, ACK coverage uses clipped. */
+export function nativePendingSource(facts: SquareRead, input: NativePendingInput): NativePendingSource | undefined {
+  const head = nativePendingHead(facts, input);
+  if (head === undefined) return undefined;
+  const item = facts.activity(input.index);
+  if (item === undefined || (item.kind !== 'say' && item.kind !== 'message')) return undefined;
+  const projected = projectNotification({ squarePath: input.location, recipient: input.participant,
+    ...notificationFacts(item, head.route) });
+  return { text: projected.text, clipped: projected.clipped };
 }
 
-/** Current-generation native attention, owned by its exact wake address and catch state. */
-export function nativePendingPreview(facts: SquareRead, input: NativePendingPreviewInput): NativePendingPreview | undefined {
-  const seat = facts.seat(input.participant);
-  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== input.generation
-    || !sameWakeAddress(seat.wakeAddress, input.routeKind, input.address)) return undefined;
-  const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
-  if (input.actIndex <= Math.max(input.cancelledThrough ?? -1, cancelledThrough ?? -1)) return undefined;
-  const head = pendingHead(facts, seat.participant, input.actIndex);
-  const lease = freshWatchLease(facts, input.participant, input.now);
-  if (!head || (lease !== undefined && leaseOwnsNotification(lease, head))) return undefined;
-  const item = facts.activity(input.actIndex);
-  if (item?.kind !== 'say' || deliveryDeferralExpiry(facts, seat, input.actIndex, input.now) !== undefined) return undefined;
-  return { payload: renderSquareReminder([renderAttentionPreview({ squarePath: input.location, recipient: input.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)', delivery: item.delivery })], [item.delivery]),
-    clipped: attentionBodyIsClipped(item.body ?? '(structured activity)', item.delivery) };
+/** The sender-facing fixed reminder over the shared source projection. */
+export function nativePendingPreview(facts: SquareRead, input: NativePendingInput): NativePendingPreview | undefined {
+  const source = nativePendingSource(facts, input);
+  return source === undefined ? undefined : { payload: renderSquareReminder([source.text]), clipped: source.clipped };
 }
 
 export async function sessionInbox(owner: Owner, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<PendingMembership[]> {

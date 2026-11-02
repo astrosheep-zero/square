@@ -328,6 +328,7 @@ function countingArtifact(artifact) {
       ...artifact,
       read: (select, signal) => artifact.read((facts) => select(Object.assign({}, facts, {
         activities: (indexes) => { counters.hydrated.push([...indexes]); return facts.activities(indexes); },
+        directed: (recipient, filter, page) => { counters.directedRecipients.push(recipient); return facts.directed(recipient, filter, page); },
         directedAt: (recipient, index) => { counters.directedRecipients.push(recipient); return facts.directedAt(recipient, index); },
       })), signal),
     },

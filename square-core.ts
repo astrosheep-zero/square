@@ -18,9 +18,10 @@ export function parseActivityId(value: string): number | undefined {
   return Number.isSafeInteger(index) ? index : undefined;
 }
 export type Act =
+  | { kind: 'message'; actor: Participant; at?: number; body: string; to: readonly Participant[]; preview?: string; metadata?: import('./model.js').ActivityMetadata }
   | { kind: 'join'; actor: Participant; at?: number }
   | { kind: 'done'; actor: Participant; at?: number; body?: string }
-  | { kind: 'say'; actor: Participant; at?: number; body?: string; metadata?: import('./model.js').ActivityMetadata; delivery?: import('./model.js').ActivityDelivery; mentions?: readonly Participant[]; reach?: Reach; reply?: number }
+  | { kind: 'say'; actor: Participant; at?: number; body?: string; metadata?: import('./model.js').ActivityMetadata; mentions?: readonly Participant[]; reach?: Reach; reply?: number }
   | { kind: 'read'; actor: Participant; at?: number; through: number }
   | { kind: 'listen'; actor: Participant; target: Participant; at?: number }
   | { kind: 'ignore'; actor: Participant; target: Participant; at?: number }

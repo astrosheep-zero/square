@@ -224,7 +224,8 @@ Square; there is no `Participant.history`.
   body may carry `{}`; an omitted, empty or whitespace-only body requires non-empty metadata. Metadata-only
   says omit `body` from public activity records. Invalid objects, cycles, unsupported values and oversized
   metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
-  catch, status/latest, unread projections and stream records through the SDK, CLI and stream.
+  catch, status/latest, unread projections and stream records through the SDK, CLI and stream, and
+  by channel send/receive/history/pending messages.
   MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
   `metadata` argument. Tool history/catch return rendered text with a structured-activity placeholder,
   not metadata JSON or activity objects. Metadata does not affect mentions, replies, listening, audience,
@@ -232,14 +233,15 @@ Square; there is no `Participant.history`.
   by exact metadata match through the SDK lease API below. Metadata may nest up to 256 levels; the bound is enforced before
   persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
   metadata JSON. SDK history and pending queries accept exact metadata matches; there is no query
-  language or metadata index. CLI `--metadata <json>` remains an express input flag.
+  language or metadata index. CLI `--metadata <json>` remains an express input flag. Channel
+  `send` accepts the same metadata and returns it on `ChannelMessage` records.
 - Catch returns `{activities, remaining, reason, hint?, observation?}`. Each activity includes
   viewer-relative `perception` and `via`. Reasons are `drained`, `idle`, `capped`, `quorum`,
   `replaced`, or `already-active`. Omitted/zero idle is immediate; positive idle uses the single
   leased quiet wait. Receipt selection, perception, routes, counts and terminal facts settle
   in the receipt transaction. Cancellation/replacement releases only that waiter's lease and never
   consumes future activity.
-- All history callers return a `HistoryResult` object with `activities`. Default page size is ten;
+- Agora history (`Square.history`) returns `{activities}`. Default page size is ten;
   `limit: null` explicitly requests an unbounded archive. Numeric limits must be 1–100. Contextual
   queries still reject an implicit merged window over 100 activities; an explicit numeric limit
   bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts; history
@@ -279,30 +281,42 @@ it instead of owning a second implementation. `Channel` exposes `open`, `create`
 `attach`, `reattach`, `endpoint`, `endpointsOf`, `listEndpoints`, `detach`, `endHeld`, `remove`,
 `cancelDeliveries`, `send`, `history` and `close`. `ChannelEndpoint` exposes `pending`, `ack`,
 `receive`, `leave`, `send`, `deferDelivery`, `renewDeliveryDeferral` and `releaseDeliveryDeferral`.
-`Square.send`, `Square.history`, `Square.seatsOf`, `Square.detach`, `Square.endHeld`,
-`Square.cancelDeliveries`, `Square.close` and the matching `Participant` methods delegate to those
-same implementations.
+`Square.send`, `Square.seatsOf`, `Square.detach`, `Square.endHeld`, `Square.cancelDeliveries`,
+`Square.close` and the matching `Participant` methods delegate to those same implementations.
+`Square.history` and `Participant.pending` remain Agora projections, not channel reads: Agora
+history selects joins, says, departures and listener changes but never native messages, and Agora
+pending selects addressed, unconsumed says as perceived activities.
 
 - `Channel.create` and `Channel.inMemory` build an endpoint artifact with empty `warmup`: the Agora
   chatroom guide belongs to `Square.build` / `Square.inMemory`, not to a point-to-point channel.
 - `Channel.send({from, to, body, truncate?, metadata?})` addresses standing members explicitly.
   `truncate` defaults to `false`, so the full body is delivered and presentation records a receipt.
-  An explicit positive integer longer than the body is likewise unclipped; when the body is longer,
-  the delivery carries `{mode: 'direct', preview}` so presentation shows the preview and records
-  `'clipped'` without consuming the full stored body. `pending`, `receive` and `ack` still read and
-  consume that full body. Any other `truncate` value is refused before landing.
+  An explicit positive integer at least as long as the body is likewise unclipped; when the body is
+  longer, the landed message stores `preview`, so presentation shows that preview and records clipped
+  coverage without consuming the full stored body. `pending`, `receive` and `ack` still read and
+  consume that full body. Any other `truncate` value is refused before landing. `to` in the send
+  result and in every `ChannelMessage` is the actual landed audience after address resolution. A
+  stored message may have an empty body only when imported from a legacy metadata-only direct say;
+  `Channel.send` itself always requires a non-empty body.
 - `endpoint.receive(options?, control?)` selects the oldest unconsumed addressed messages matching the
   shared filters and records their receipts in one transaction, returning
   `{messages, consumed, remaining}`. Each `ChannelMessage` is `{id, at, from, to, body, metadata?}`,
   symmetric with the send result. `remaining` counts matching unconsumed messages left after that
   transaction. Nothing is consumed by `pending` or `history`.
+- `Channel.history(query?, control?)` returns `{messages}` for native messages and says, selecting
+  the newest page oldest-first by default; `order: 'desc'` reverses the page. It shares the
+  `ActivityQuery` filters (`at`, `from`, `match`, `search`, `cursor`) but has no Agora
+  `contextBefore`/`contextAfter`, `since`, `mention` or `observe` options. Its default page size is
+  100; `limit` accepts 1–100 or `null` for all matches.
 - `listEndpoints(control?)` reports every standing endpoint without an owner argument as
   `{name, generation, attachment, deliveryAvailable, unreadCount, lastActiveAt?}`. `endpointsOf(owner)`
   remains the owner-scoped custody list, and neither operation joins, restores or reveals an address.
-- Direct notifications render inside the fixed `<channel-message channel="..." from="..." to="..."
-  id="act/N">` envelope, so a recipient sees the channel, sender and message ID. Body text that would
-  read as `<channel-`, `<square-` or `<system-reminder` is escaped. In a mixed boundary the Agora
-  omission line follows the `<square-activity>` blocks and never trails after direct messages.
+- Direct notifications have no separate envelope: the model-facing text is the stored preview, or
+  the body when untruncated, escaped inside the shared `<system-reminder>` frame; sender, recipients
+  and ID are not printed. Body text that would read as `<channel-`, `<square-` or
+  `<system-reminder` is escaped. A mixed boundary keeps notification order; its fixed budget and
+  `N more activities not shown.` line apply only to Agora activity blocks, and the line trails the
+  rendered batch.
 - An unconsumed direct message stays eligible for the proactive inbox and wake horizon across a seat
   takeover or rejoin. Earlier Agora activity still ends at the recipient's new read horizon.
 
@@ -329,13 +343,15 @@ interface ActivityQuery {
 - `match` uses the same nested own-property, exact type-sensitive scalar equalities as deferrals.
   `search` tests each activity's ID, sender and body independently, case-insensitively. Literal mode
   treats regex characters as plain text; regex mode uses JavaScript's built-in regular expressions,
-  without a ReDoS timeout. Search text must be nonempty and regex syntax must be valid. History
-  searches says and departures, not joins; pending always selects addressed, unconsumed says.
+  without a ReDoS timeout. Search text must be nonempty and regex syntax must be valid. Agora
+  history searches says and departures, not joins. Participant `pending` selects addressed,
+  unconsumed says; `ChannelEndpoint` `pending`/`receive` select addressed, unconsumed messages and
+  says.
 - A cursor is an exclusive activity-ID boundary, independent of `limit`: before excludes the anchor
   and everything newer; after excludes the anchor and everything older. No consumption is involved.
   Storage applies the shared filters before limiting and uses the same predicates for counts.
-- History keeps its archive-specific `order`, `mention`, `since` and context options. By default it
-  selects the newest page and returns it oldest first; an after cursor selects the oldest following
+- Agora history keeps its archive-specific `order`, `mention`, `since` and context options. By
+  default it selects the newest page and returns it oldest first; an after cursor selects the oldest following
   page. `order: 'desc'` reverses the selected page, not which activities belong to it. Numeric limits
   stay 1–100, default ten; `limit: null` reads all matches. Exact/context history keeps its existing
   implicit full-window selection with a 100-activity bound unless a numeric limit is supplied.
@@ -351,9 +367,10 @@ boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--a
 ## Pending query and exact acknowledgement
 
 `Participant.pending(options?, control?)` and `Participant.ack(ids, control?)` separate a read-only
-query from explicit consumption. `ChannelEndpoint` from `@astrosheep/square/channel` exposes the
-identical methods from the channel implementation the Participant handle delegates to; neither keeps
-a second inbox, read horizon or storage.
+query from explicit consumption. Agora `pending` returns addressed, unconsumed `say` records as
+perceived activities, so native messages never appear there. `ChannelEndpoint` from
+`@astrosheep/square/channel` returns `{messages}` for both native messages and says; `ack` records
+the same receipts in either case. Neither layer keeps a second inbox, read horizon or storage.
 
 `Channel.send` / `Square.send` address joined members, including detached members. Attachment gates
 proactive wake, not landing: a detached recipient retains its unread addressed activity without a
@@ -367,19 +384,21 @@ import type { ChannelEndpoint, MetadataMatch } from '@astrosheep/square/channel'
 async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
   for (;;) {
     const page = await endpoint.pending({ match });
-    if (page.activities.length === 0) break;
+    if (page.messages.length === 0) break;
     // Process the entire page successfully before acknowledging its exact IDs.
-    for (const activity of page.activities) await processNotice(activity);
-    const { consumed } = await endpoint.ack(page.activities.map(activity => activity.id));
+    for (const message of page.messages) await processNotice(message);
+    const { consumed } = await endpoint.ack(page.messages.map(message => message.id));
     // consumed may be smaller if another consumer acknowledged some IDs first.
   }
 }
 ```
 
-- `pending(query: PendingOptions = {}, control?)` returns
-  `{activities: readonly PerceivedActivity[], remaining: number}`. It selects only landed,
-  addressed, unconsumed says, oldest first. Body, metadata, delivery information, perception and
-  route use the same public records as catch; bodies are full stored bodies, not clipped previews.
+- `Participant.pending(query: PendingOptions = {}, control?)` returns
+  `{activities: readonly PerceivedActivity[], remaining: number}` and selects landed, addressed,
+  unconsumed says oldest first, with viewer-relative `perception` and `via` as in catch.
+  `ChannelEndpoint.pending` returns `{messages: readonly ChannelMessage[], remaining: number}` for
+  addressed, unconsumed messages and says; each message is `{id, at, from, to, body, metadata?}`.
+  Both read full stored bodies, never clipped previews or delivery remnants.
 - Limit defaults to 100 and must be an integer from 1 through 100. The shared filters above are
   available alongside that limit. Storage applies addressedness, consumption and all supplied
   filters **before** limiting. `remaining` counts matching unconsumed activities outside the returned
@@ -402,7 +421,8 @@ async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
   Cancellation before the receipt transaction prevents consumption; a committed ack is not undone.
 - To drain all matching notices, keep querying and acknowledging pages until an **empty** page.
   Acknowledging one page exposes the next without a cursor. For read-only pagination instead, pass
-  `cursor: {id: page.activities.at(-1)!.id, direction: 'after'}` with the same filters; earlier pages
+  `cursor: {id: page.messages.at(-1)!.id, direction: 'after'}` on a channel endpoint (or
+  `page.activities` on a Participant) with the same filters; earlier pages
   stay unconsumed. Do not silently stop after the default page or treat a snapshot `remaining: 0`
   as proof that concurrent producers have stopped. Query and
   ack are separate operations, not an exclusive claim or an exactly-once external-effect guarantee.
@@ -526,16 +546,20 @@ opening a valid current-format Square first.
 
 ## Artifact format and explicit migration
 
-The current artifact format is 7. It stores opaque owners rather than harness coordinates and
-preserves format 6's attached/detached distinction. Seats, delivery evidence, cancellation and
+The current artifact format is 9. It stores opaque owners rather than harness coordinates,
+preserves the attached/detached seat distinction, and stores point-to-point messages as their own
+`message` records alongside Agora `say` records. Seats, delivery evidence, cancellation and
 independent delivery deferrals remain separate from conversation activities and catch ownership.
 Ordinary opens refuse older formats with migration guidance and never convert them implicitly.
 
 Stop all sessions and services using the artifact, make an offline backup, then run
 `square --location <path.square> migrate` and `doctor` before reopening with upgraded runtimes.
-Supported formats 2–6 convert to 7 in one transaction. Format 6's Body coordinates become encoded
-owners while attachment, generations, wakes, evidence and revisions survive. Formats 4/5 first gain
-attached seats; format 4 also gains empty deferral support. Formats 4–6 never consult HostLedger.
+Supported formats 2–8 convert to 9 in one transaction. Format 6's Body coordinates become encoded
+owners while attachment, generations, wakes, evidence and revisions survive. Formats 4/5 gain
+attached seats; format 4 also gains empty deferral support. Formats 4–8 never consult HostLedger;
+format 8 already removed hold/resume activities. Legacy direct-delivery says become native
+`message` records, preserving an empty or nonempty body, metadata, addressed recipients and any
+stored preview.
 Historic host-cleanup departures cannot be distinguished from voluntary `done` and stay done.
 For formats 2/3, also freeze and back up the legacy HostLedger used for verified owner/evidence
 import; no authority is manufactured for done participants. Replay-critical native ambiguity
@@ -546,8 +570,9 @@ does not migrate files or install a new runtime.
 
 ## SDK breaking migration: opaque owners
 
-Artifact format 7 introduced opaque owners; format-6 artifacts required explicit migration before
-opening with that format. Current artifacts use format 8 and require explicit migration from format 7.
+Artifact format 7 introduced opaque owners, format 8 removed hold/resume activities, and format 9
+stores native messages. Current artifacts use format 9 and require explicit migration from formats
+2–8.
 `Body`, `sameBody` and `validateBody` are removed from the core and public API. Replace identity
 objects with an explicit owner at each identity-bearing operation; do not put identity on a resource:
 

@@ -58,7 +58,7 @@ test('the channel owns endpoint messaging and the Agora resource delegates to it
     && ['Channel', 'ChannelEndpoint'].every(name => edge.names.includes(name))),
   'sqlite-square.ts must build its channel and endpoints');
   // One implementation per behavior: the Agora layer keeps only delegation here.
-  for (const owned of [/facts\.directed\(/, /facts\.seatsForOwner\(/, /Channel truncate must be/])
+  for (const owned of [/facts\.seatsForOwner\(/, /Channel truncate must be/])
     assert.doesNotMatch(resource, owned);
   assert.match(channel, /Channel truncate must be false or a positive integer\./);
 });

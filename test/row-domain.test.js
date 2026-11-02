@@ -119,18 +119,18 @@ test('audience priority is bell > mention > reply > attention, with self and ign
   const port = createArtifactPort(':memory:', fixtureState(acts));
   try {
     const audience = async (index) => (await port.read((facts) => facts.audience(index))).value;
-    assert.deepEqual(await audience(3), [{ recipient: 'Bob', route: 'mention' }, { recipient: 'Carol', route: 'mention' }], 'case-variant mentions resolve to roster spelling');
+    assert.deepEqual(await audience(3), [{ recipient: 'Bob', route: 'mention', generation: 'act/1' }, { recipient: 'Carol', route: 'mention', generation: 'act/2' }], 'case-variant mentions resolve to roster spelling');
     assert.deepEqual(await audience(4), [], 'unknown and self mentions reach nobody');
-    assert.deepEqual(await audience(5), [{ recipient: 'Alice', route: 'reply' }]);
-    assert.deepEqual(await audience(7), [{ recipient: 'Carol', route: 'attention' }], 'listener-only edge');
-    assert.deepEqual(await audience(9), [{ recipient: 'Carol', route: 'mention' }], 'mention beats listening, ignoring sender is skipped');
-    assert.deepEqual(await audience(10), [{ recipient: 'Bob', route: 'bell' }, { recipient: 'Carol', route: 'bell' }], 'bell bypasses ignore');
-    assert.deepEqual(await audience(12), [{ recipient: 'Carol', route: 'bell' }], 'departed peers are not reached');
-    assert.deepEqual(await audience(14), [{ recipient: 'Alice', route: 'reply' }]);
+    assert.deepEqual(await audience(5), [{ recipient: 'Alice', route: 'reply', generation: 'act/0' }]);
+    assert.deepEqual(await audience(7), [{ recipient: 'Carol', route: 'attention', generation: 'act/2' }], 'listener-only edge');
+    assert.deepEqual(await audience(9), [{ recipient: 'Carol', route: 'mention', generation: 'act/2' }], 'mention beats listening, ignoring sender is skipped');
+    assert.deepEqual(await audience(10), [{ recipient: 'Bob', route: 'bell', generation: 'act/1' }, { recipient: 'Carol', route: 'bell', generation: 'act/2' }], 'bell bypasses ignore');
+    assert.deepEqual(await audience(12), [{ recipient: 'Carol', route: 'bell', generation: 'act/2' }], 'departed peers are not reached');
+    assert.deepEqual(await audience(14), [{ recipient: 'Alice', route: 'reply', generation: 'act/0' }]);
     assert.deepEqual(await audience(16), [], 'done mention target drops; ignoring target stays skipped after rejoin');
     assert.deepEqual(await audience(17), [], 'reply author who is no longer standing reaches nobody');
     assert.deepEqual(await audience(23), [], 'ignore blocks a reply as well as a mention');
-    assert.deepEqual(await audience(33), [{ recipient: 'Dave', route: 'reply' }], 'a read activity can be a reply author');
+    assert.deepEqual(await audience(33), [{ recipient: 'Dave', route: 'reply', generation: 'act/25' }], 'a read activity can be a reply author');
   } finally {
     await port.close();
   }

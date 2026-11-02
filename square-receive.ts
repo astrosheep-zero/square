@@ -1,10 +1,9 @@
-import type { AudienceRoute } from './attention.js';
-import type { StoredAct } from './model.js';
+import type { DirectedNotificationRoute, StoredAct } from './model.js';
 import type { DirectedFilter, SquareRead } from './ports.js';
 import type { ReceiveRead } from './receive.js';
 
 /** Transaction-local projections only; the artifact still owns indexed selection and bodies. */
-export function squareReceiveRead(facts: SquareRead): ReceiveRead<number, StoredAct, AudienceRoute, DirectedFilter> {
+export function squareReceiveRead(facts: SquareRead): ReceiveRead<number, StoredAct, DirectedNotificationRoute, DirectedFilter> {
   const filter = (query: DirectedFilter, unconsumed: boolean): DirectedFilter => {
     const { unseenOnly: _, ...rest } = query;
     return unconsumed ? { ...rest, unseenOnly: true } : rest;

@@ -19,6 +19,7 @@ import { deliverPending } from '../dist/delivery-operations.js';
 import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { projectSessionCandidates, sessionInbox, nativePendingPreview } from '../dist/inbox.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
+import { Channel } from '../dist/channel.js';
 
 const supported = { skip: process.platform !== 'darwin' };
 const claudeBody = "claude-code" + ":" + ('claude-test');
@@ -128,8 +129,8 @@ async function seen(f, index = 2, participant = 'Bob') { return seenIn(f.squareP
 async function pendingPayload(f, request) {
   return (await request.artifact.read(facts => nativePendingPreview(facts, {
     location: canonicalPathSync(request.location), participant: request.participant, generation: request.seat.generation,
-    routeKind: request.route.kind, address: request.route.address,
-    actIndex: Number(request.activity.slice(4)), now: Date.now(),
+    owner: request.seat.owner, route: request.route,
+    index: Number(request.activity.slice(4)), now: Date.now(),
   }))).value?.payload;
 }
 
@@ -406,7 +407,8 @@ test('a clipped Agora preview stays bounded and only stored consumes the activit
   await dispatch(f);
   assert.equal(f.nativeMessages.length, 1, 'admitted activity is not replayed');
   await stored(f, text);
-  assert.equal(await seen(f), 'seen', 'Claude stored retains full consumption even for clipped Agora previews');
+  assert.equal(await seen(f), undefined, 'a bounded Agora preview does not consume the full stored body');
+  assert.equal((await currentEvidence(f)).find(row => row.kind === 'presentation').outcome, 'clipped');
 });
 
 test('unmatched or rewritten native text cannot authorize admission or presentation', async t => {
@@ -658,4 +660,30 @@ test('a retired child-agent candidate is discovered by session and recognized wi
   assert.deepEqual(await evidenceIn(childPath, 'Bob', childSeat.generation), before);
   assert.equal(await seenIn(childPath), undefined);
   assert.deepEqual(await observeClaudeDelivery(f.coordinate.sessionId, '[square-inbox:invented-token]\n/tmp/nowhere.square', 'stored', f.env), { recognized: false, current: false });
+});
+
+
+test('an old native message frame is recognized but never current across a same-session takeover', supported, async t => {
+  const f = await fixture(t);
+  const channel = await Channel.open({ path: f.squarePath, env: f.env, wakeTransport: false });
+  try {
+    const sent = await channel.send({ from: 'Coordinator', to: 'Bob', body: 'native before takeover' });
+    const index = Number(sent.id.slice(4));
+    await dispatch(f, index);
+    const text = await payload(f, sent.id);
+    const before = await seatFor(f);
+    assert.notEqual(before, undefined);
+    const oldEvidence = await evidence(f, before.generation);
+    assert.equal(oldEvidence.find(row => row.kind === 'wake').outcome, 'unknown');
+    const replacement = await channel.attach('Bob', { owner: f.bobBody, takeover: true,
+      wakeAddress: { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint, loaded: 'true' } } });
+    assert.notEqual(replacement.generation, before.generation);
+    assert.deepEqual(await observeClaudeDelivery(f.coordinate.sessionId, text, 'guard', f.env), { recognized: true, current: false });
+    assert.deepEqual(await stored(f, text), { recognized: true, current: false });
+    assert.equal(await seen(f, index), undefined);
+    const after = await evidence(f, before.generation);
+    assert.equal(after.find(row => row.kind === 'wake').outcome, 'unknown', 'a stale frame never completes the old wake');
+    assert.equal(after.some(row => row.kind === 'presentation'), false, 'a stale frame writes no presentation evidence');
+    assert.deepEqual(await currentEvidence(f), [], 'the replacement generation has no inherited native attempt');
+  } finally { await channel.close(); }
 });

@@ -9,7 +9,8 @@ import { sessionInbox } from '../dist/inbox.js';
 import { parseActivityId } from '../dist/square-core.js';
 
 const match = { fields: [{ path: ['job', 'id'], equals: 7 }] };
-const ids = page => page.activities.map(activity => activity.id);
+const ids = page => page.messages.map(message => message.id);
+const activityIds = page => page.activities.map(activity => activity.id);
 
 async function fixture(t, clock) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pending-ack-'));
@@ -37,11 +38,9 @@ test('pending filters addressed unconsumed metadata before paging and drains eve
   const page = await endpoint.pending({ match });
   assert.deepEqual(ids(page), expected.slice(0, 100));
   assert.equal(page.remaining, 3);
-  assert.equal(page.activities[0].body, fullBody, 'explicit pending reads full bodies, not delivery previews');
-  assert.deepEqual(page.activities[0].metadata, { job: { id: 7 }, n: 0 });
-  assert.equal(page.activities[0].perception, 'full');
-  assert.equal(page.activities[0].via, 'mention');
-  assert.deepEqual(await participant.pending({ match }), page, 'real Participant and Channel share the query');
+  assert.equal(page.messages[0].body, fullBody, 'explicit pending reads full bodies, not sender previews');
+  assert.deepEqual(page.messages[0].metadata, { job: { id: 7 }, n: 0 });
+  assert.deepEqual(await participant.pending({ match }), { activities: [], remaining: 0 }, 'Agora pending excludes native messages');
   assert.deepEqual(ids(await endpoint.pending({ match, limit: 1 })), expected.slice(0, 1));
   assert.equal((await endpoint.pending({ match, limit: 1 })).remaining, 102);
   // Opening again sees the same page: neither querying nor a deferral consumes anything.
@@ -49,19 +48,21 @@ test('pending filters addressed unconsumed metadata before paging and drains eve
   try {
     assert.deepEqual(await (await reopened.endpoint('Recipient', { owner: 'test:recipient' })).pending({ match }), page);
   } finally { await reopened.close(); }
-  assert.equal((await square.participants()).participants.find(p => p.name === 'Recipient').unreadActivityCount, 104);
+  assert.equal((await square.participants()).participants.find(p => p.name === 'Recipient').unreadActivityCount, 0, 'Agora counters exclude native messages');
+  assert.equal((await channel.listEndpoints()).find(endpoint => endpoint.name === 'Recipient').unreadCount, 104);
   const drained = [];
   for (;;) {
     const next = await endpoint.pending({ match });
-    if (!next.activities.length) break;
+    if (!next.messages.length) break;
     drained.push(...ids(next));
-    assert.deepEqual(await endpoint.ack(ids(next)), { consumed: next.activities.length });
+    assert.deepEqual(await endpoint.ack(ids(next)), { consumed: next.messages.length });
   }
   assert.deepEqual(drained, expected);
-  assert.deepEqual(ids(await participant.pending()), [unrelated.id]);
+  assert.deepEqual(activityIds(await participant.pending()), [], 'Agora pending never sees native messages');
   assert.equal(await endpoint.releaseDeliveryDeferral(lease.id), true);
-  assert.deepEqual(await endpoint.pending({ match }), { activities: [], remaining: 0 });
-  assert.equal((await square.history({ limit: null })).activities.filter(a => a.kind === 'say').length, 105);
+  assert.deepEqual(await endpoint.pending({ match }), { messages: [], remaining: 0 });
+  assert.equal((await channel.history({ limit: null })).messages.length, 105);
+  assert.deepEqual((await square.history({ limit: null })).activities.filter(a => a.kind === 'say'), []);
 });
 
 test('storage matching uses exact nested own-property scalar equalities and AND semantics', async t => {
@@ -76,7 +77,7 @@ test('storage matching uses exact nested own-property scalar equalities and AND 
     field(['literal.key', 'quoted"key', 'nul\0key'], 'ok'), field(['__proto__', 'value'], 'own')])), [sent.id]);
   for (const wrong of [field(value.path, '1'), field(['literal.key', 'quoted"key', 'flag'], 1),
     field(['missing'], null), field(['list', '0'], 1), field(['toString'], null)]) {
-    assert.deepEqual(await query([nil, wrong]), { activities: [], remaining: 0 });
+    assert.deepEqual(await query([nil, wrong]), { messages: [], remaining: 0 });
   }
   await assert.rejects(endpoint.pending({ match: { fields: [] } }), error => error.code === 'invalid_args');
   await assert.rejects(endpoint.pending({ limit: 101 }), error => error.code === 'invalid_args');
@@ -102,15 +103,15 @@ test('history and pending share exact IDs, unjoined senders, metadata, search an
   assert.deepEqual(ids(next), [second.id]);
   assert.equal(next.remaining, 0);
   assert.deepEqual(ids(await endpoint.pending({ ...query, cursor: { id: second.id, direction: 'before' } })), [first.id]);
-  assert.deepEqual(ids(await square.history({ ...query, mention: 'Recipient', limit: 1 })), [second.id], 'history keeps newest-page selection');
-  assert.deepEqual(ids(await square.history({ ...query, mention: 'Recipient', cursor: { id: first.id, direction: 'after' }, limit: 1 })), [second.id]);
-  assert.deepEqual(ids(await square.history({ ...query, limit: null })), [first.id, second.id, foreign.id], 'archive has no implicit recipient filter');
+  assert.deepEqual((await channel.history({ ...query, limit: 1 })).messages.map(message => message.id), [foreign.id], 'Channel history has no implicit recipient filter and keeps newest-page selection');
+  assert.deepEqual((await channel.history({ ...query, cursor: { id: first.id, direction: 'after' }, limit: 1 })).messages.map(message => message.id), [second.id]);
+  assert.deepEqual((await channel.history({ ...query, limit: null })).messages.map(message => message.id), [first.id, second.id, foreign.id], 'history has no implicit recipient filter');
   for (const filter of [{ at: [] }, { from: [] }, { from: ['NeverJoined'] }]) {
-    assert.deepEqual(ids(await square.history(filter)), []);
-    assert.deepEqual(await endpoint.pending(filter), { activities: [], remaining: 0 });
+    assert.deepEqual((await channel.history(filter)).messages, []);
+    assert.deepEqual(await endpoint.pending(filter), { messages: [], remaining: 0 });
   }
   const exact = { ...query, at: [foreign.id, second.id, first.id], search: { text: `^${first.id}$|^${second.id}$`, mode: 'regex' } };
-  assert.deepEqual(ids(await square.history(exact)), [first.id, second.id]);
+  assert.deepEqual((await channel.history(exact)).messages.map(message => message.id), [first.id, second.id]);
   assert.deepEqual(ids(await endpoint.pending(exact)), [first.id, second.id]);
   assert.deepEqual(ids(await endpoint.pending({ ...query, search: { text: '^keiyaku-notice$', mode: 'regex' } })),
     [older.id, first.id, second.id, literalDistractor.id]);
@@ -122,7 +123,7 @@ test('shared query validation rejects malformed filters on both reads and search
   const { square, endpoint, participant } = await fixture(t);
   const sent = await participant.express('hello');
   const selected = await square.history({ search: { text: 'Recipient', mode: 'literal' }, limit: 1, observe: true });
-  assert.deepEqual(ids(selected), [sent.activity.id]);
+  assert.deepEqual(activityIds(selected), [sent.activity.id]);
   assert.equal(selected.observation.totalMatches, 1);
   assert.equal(selected.observation.continuation, undefined, 'matching join is excluded by the search relation');
   for (const query of [
@@ -162,9 +163,10 @@ test('ack consumes exact addressed IDs atomically and idempotently without prese
     first: facts.receipt('Recipient', parseActivityId(first.id)),
   }))).value;
   assert.deepEqual(evidence, { receipt: { at: 1000 }, deliveries: [], first: undefined });
-  assert.equal((await participant.catch({ id: second.id })).activities[0].id, second.id, 'exact catch remains repeatable after ack');
-  assert.deepEqual(ids(await participant.catch()), [first.id], 'ordinary catch and ack share receipts');
-  assert.deepEqual(await endpoint.pending(), { activities: [], remaining: 0 });
+  await assert.rejects(participant.catch({ id: second.id }), error => error.code === 'invalid_args' && error.facts?.reason === 'not_addressed');
+  assert.deepEqual(activityIds(await participant.catch()), [], 'Agora catch excludes native messages and does not share their receipts');
+  assert.deepEqual(await endpoint.ack([first.id]), { consumed: 1 });
+  assert.deepEqual(await endpoint.pending(), { messages: [], remaining: 0 });
 });
 
 test('pending and even empty ack require the captured attached owner and generation', async t => {
@@ -207,10 +209,10 @@ test('unconsumed direct messages stay in the proactive inbox across a takeover, 
   assert.notEqual(taken.generation, endpoint.generation);
   const inbox = (await sessionInbox(owner, options.env)).flatMap(row => row.notifications);
   assert.deepEqual(inbox.map(note => note.actIndex), [parseActivityId(sent.id)], 'the unconsumed direct message survives the new generation while earlier chat does not');
-  assert.deepEqual(inbox.map(note => note.delivery), [{ mode: 'direct' }]);
+  assert.deepEqual(inbox.map(note => note.route), ['message']);
   const received = await taken.receive({ match });
   assert.deepEqual(received.messages.map(message => message.id), [sent.id]);
   assert.equal(received.consumed, 1);
   assert.deepEqual((await sessionInbox(owner, options.env)).flatMap(row => row.notifications), [], 'receipts remove it from the proactive horizon');
-  assert.deepEqual((await taken.pending()).activities.map(activity => activity.id), [`act/${mention}`], 'explicit pending still reads the historical mention hole');
+  assert.deepEqual((await taken.pending()).messages, [], 'the earlier mention is fenced to its captured generation and is not current pending');
 });

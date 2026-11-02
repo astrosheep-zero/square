@@ -1,5 +1,5 @@
 import { DatabaseSync as MemoryDatabase, type DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { SquareError, nameKey, isWakeRouteKind, validateOwner, validateActivityMetadata, validateActivityDelivery, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Owner, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
+import { SquareError, nameKey, isWakeRouteKind, validateOwner, validateActivityMetadata, activityMetadataHasContent, type ActivityMetadata, type ActivityId, type ActivityObservation, type Owner, type HardCap, type Seat, type StoredAct, type WakeAddress, type WatchLease } from './model.js';
 import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, IndexPage, FactPage, DirectedFilter, DirectedHead, SeatRef, DeliveryClaimInput, DeliveryClaimResult, DeliveryCompletion, DeliveryPreparation, DeliveryEvidence } from './ports.js';
 import type { DeliveryDeferralFact } from './delivery-deferral.js';
 import { validateMetadataMatch, matchingDeferrals, validateDeferralId } from './delivery-deferral.js';
@@ -35,7 +35,8 @@ export const V4_USER_VERSION = 4;
 export const V5_USER_VERSION = 5;
 export const V6_USER_VERSION = 6;
 export const V7_USER_VERSION = 7;
-export const CURRENT_USER_VERSION = 8;
+export const V8_USER_VERSION = 8;
+export const CURRENT_USER_VERSION = 9;
 export const V1_SNAPSHOT_TABLE = 'square_snapshot';
 const V1_SNAPSHOT_DDL = `CREATE TABLE ${V1_SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL CHECK(revision>=0), state TEXT NOT NULL)`;
 const V1_SNAPSHOT_COLUMNS = [
@@ -79,7 +80,7 @@ export function validateLegacyFraming(database: DatabaseSync, applicationId: num
 function normalizedLegacySql(sql: string): string {
     return sql.trim().replace(/\s+/g, ' ').replace(/\s*(>=|[(),=])\s*/g, '$1');
 }
-const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','read','listen','ignore','unlisten')";
+const CURRENT_ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','message','read','listen','ignore','unlisten')";
 
 export const ACTIVITIES_TABLE_SQL = `CREATE TABLE activities (
   act_index INTEGER PRIMARY KEY CHECK (act_index BETWEEN 0 AND 9007199254740991),
@@ -197,15 +198,18 @@ CREATE TABLE landed_audience (
   act_index INTEGER NOT NULL,
   recipient_key_json TEXT COLLATE BINARY NOT NULL,
   recipient_order INTEGER NOT NULL CHECK (recipient_order >= 0),
-  route TEXT NOT NULL CHECK (route IN ('mention','reply','attention','bell')),
+  route TEXT NOT NULL CHECK (route IN ('mention','reply','attention','bell','message')),
+  generation_json TEXT,
   PRIMARY KEY (act_index, recipient_key_json),
   UNIQUE (act_index, recipient_order)
 ) WITHOUT ROWID;
 CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);`;
-export const FORMAT7_SCHEMA_SQL = legacyActivitySchema(SCHEMA_SQL);
+export const FORMAT8_SCHEMA_SQL = SCHEMA_SQL.replace("'say','message'", "'say'").replace("'bell','message'", "'bell'").replace('  generation_json TEXT,\n', '');
+export const FORMAT7_SCHEMA_SQL = legacyActivitySchema(FORMAT8_SCHEMA_SQL);
 export const FORMAT6_SCHEMA_SQL = FORMAT7_SCHEMA_SQL.replace(`  owner_json TEXT NOT NULL,\n  generation_json TEXT NOT NULL,`, `  channel_json TEXT NOT NULL,\n  session_json TEXT NOT NULL,\n  agent_json TEXT,\n  generation_json TEXT NOT NULL,`).replace('CREATE INDEX seat_owner ON seats(owner_json);', 'CREATE INDEX seat_body ON seats(channel_json, session_json, agent_json);');
 export const FORMAT5_SCHEMA_SQL = FORMAT6_SCHEMA_SQL.replace(`,\n  ${ATTACHMENT_COLUMN_SQL}`, '');
 export const FORMAT4_SCHEMA_SQL = FORMAT5_SCHEMA_SQL.replace(DELIVERY_DEFERRALS_SQL, '');
+const FORMAT8_SCHEMA = FORMAT8_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const FORMAT7_SCHEMA = FORMAT7_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const FORMAT6_SCHEMA = FORMAT6_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
 const FORMAT5_SCHEMA = FORMAT5_SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean).map(normalizedSql).sort();
@@ -268,7 +272,7 @@ function immutable<T>(value: T): T {
     }
     return value;
 }
-const kinds = ['join', 'done', 'say', 'read', 'listen', 'ignore', 'unlisten'];
+const kinds = ['join', 'done', 'say', 'message', 'read', 'listen', 'ignore', 'unlisten'];
 function head(row: Row): ActivityHead {
     const index = integer(row.act_index), at = finite(row.at);
     requireFact(kinds.includes(string(row.kind)));
@@ -289,13 +293,15 @@ export function validateStoredActivity(value: unknown): StoredAct {
     const common = ['kind', 'at', 'index', 'actor'];
     string(a.actor, true);
     switch (a.kind) {
+        case 'message':
+            shape(a, [...common, 'body', 'to'], ['preview', 'metadata']);
+            string(a.body);
+            requireFact(strings(a.to).length > 0, 'message needs recipients.');
+            if (Object.hasOwn(a, 'preview')) string(a.preview, true);
+            if (Object.hasOwn(a, 'metadata')) validateActivityMetadata(a.metadata);
+            break;
         case 'say':
-            shape(a, [...common], ['body', 'mentions', 'reach', 'reply', 'metadata', 'delivery']);
-            if (Object.hasOwn(a, 'delivery')) {
-                requireFact(a.delivery !== undefined, 'say delivery is malformed.');
-                try { validateActivityDelivery(a.delivery); }
-                catch { throw invalidArtifact('say delivery is malformed.'); }
-            }
+            shape(a, [...common], ['body', 'mentions', 'reach', 'reply', 'metadata']);
             if (Object.hasOwn(a, 'body')) string(a.body);
             if (Object.hasOwn(a, 'metadata')) {
                 requireFact(a.metadata !== undefined, 'say metadata is malformed.');
@@ -332,7 +338,7 @@ export function validateStoredActivity(value: unknown): StoredAct {
 function activity(row: Row): StoredAct {
     const h = head(row), payload = object(json(row.payload_json));
     // Payload cannot shadow indexed structural columns.
-    const allowed = h.kind === 'say' ? ['body', 'mentions', 'metadata', 'delivery'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
+    const allowed = h.kind === 'message' ? ['body', 'to', 'preview', 'metadata'] : h.kind === 'say' ? ['body', 'mentions', 'metadata'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
     requireFact(Object.keys(payload).every(k => allowed.includes(k)));
     return immutable(validateStoredActivity({ ...h, ...payload }));
 }
@@ -351,7 +357,7 @@ function attention(row: Row): AttentionFact {
     });
 }
 function routeKind(value: unknown): DirectedHead['route'] {
-    requireFact(['mention', 'reply', 'attention', 'bell'].includes(string(value)));
+    requireFact(['mention', 'reply', 'attention', 'bell', 'message'].includes(string(value)));
     return value as DirectedHead['route'];
 }
 export function validateWatchLease(value: unknown): WatchLease {
@@ -466,7 +472,7 @@ function validateOwnedSchema(db: DatabaseSync, expected: readonly string[], loca
     requireFact(actual.length === expected.length && actual.every((sql, i) => sql === expected[i]), 'unsupported row schema.');
     requireFact((db.prepare('PRAGMA journal_mode').get() as Row).journal_mode === (location === ':memory:' ? 'memory' : 'delete'), 'unsupported journal mode.');
 }
-export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 | 7 | 8, location = ''): void {
+export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9, location = ''): void {
     if (version === V2_USER_VERSION || version === V3_USER_VERSION) {
         const issue = legacyRowFramingIssue(db, APPLICATION_ID, version, location, FORMAT4_SCHEMA_SQL);
         if (issue !== undefined) throw invalidArtifact(issue);
@@ -475,7 +481,7 @@ export function validateRowFraming(db: DatabaseSync, version: 2 | 3 | 4 | 5 | 6 
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     requireFact(identity.user_version === version, 'unsupported SQLite format version.');
-    validateOwnedSchema(db, version === V4_USER_VERSION ? FORMAT4_SCHEMA : version === V5_USER_VERSION ? FORMAT5_SCHEMA : version === V6_USER_VERSION ? FORMAT6_SCHEMA : version === V7_USER_VERSION ? FORMAT7_SCHEMA : EXPECTED_SCHEMA_SQL, location);
+    validateOwnedSchema(db, version === V4_USER_VERSION ? FORMAT4_SCHEMA : version === V5_USER_VERSION ? FORMAT5_SCHEMA : version === V6_USER_VERSION ? FORMAT6_SCHEMA : version === V7_USER_VERSION ? FORMAT7_SCHEMA : version === V8_USER_VERSION ? FORMAT8_SCHEMA : EXPECTED_SCHEMA_SQL, location);
 }
 export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHeader {
     const identity = db.prepare('SELECT application_id,user_version FROM pragma_application_id,pragma_user_version').get() as Row;
@@ -484,7 +490,7 @@ export function validateSqliteHeader(db: DatabaseSync, location = ''): SquareHea
         validateLegacyFraming(db, APPLICATION_ID, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
-    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION || identity.user_version === V4_USER_VERSION || identity.user_version === V5_USER_VERSION || identity.user_version === V6_USER_VERSION || identity.user_version === V7_USER_VERSION) {
+    if (identity.user_version === V2_USER_VERSION || identity.user_version === V3_USER_VERSION || identity.user_version === V4_USER_VERSION || identity.user_version === V5_USER_VERSION || identity.user_version === V6_USER_VERSION || identity.user_version === V7_USER_VERSION || identity.user_version === V8_USER_VERSION) {
         validateRowFraming(db, identity.user_version, location);
         throw new SquareError('invalid_args', `Square artifact at ${location} needs migration.\nStop sessions using it, back it up, then migrate and verify before restarting.`, { reason: 'migration_required' });
     }
@@ -593,6 +599,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         const p = read.participant(recipient), base = selectActivity({ ...filter, actors: filter.senders });
         base.sql += ' AND d.recipient_key_json=?';
         base.args.push(p ? key(p.name) : '');
+        if (filter.currentGeneration) {
+            base.sql += ' AND (d.generation_json IS NULL OR d.generation_json=?)';
+            base.args.push(p?.joined && p.lastJoinIndex !== undefined ? encode(formatActivityId(p.lastJoinIndex)) : '');
+        }
         if (filter.unseenOnly) {
             base.sql += ' AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.owner_json=? AND r.act_index=a.act_index)';
             base.args.push(encode(p?.name ?? recipient));
@@ -603,14 +613,12 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     }
     function directedHead(row: Row, recipient: string): DirectedHead {
         const h = head(row);
-        requireFact(h.kind === 'say');
-        return immutable({
-            index: h.index, at: h.at, actor: h.actor, recipient, route: routeKind(row.route)
-        });
+        requireFact(h.kind === 'say' || h.kind === 'message');
+        return immutable({ index: h.index, at: h.at, actor: h.actor, recipient, route: routeKind(row.route) });
     }
     const directedFrom = 'landed_audience d JOIN activities a ON a.act_index=d.act_index';
     const pendingFrom = `landed_audience d JOIN activities a ON a.act_index=d.act_index JOIN participants p ON p.name_key_json=d.recipient_key_json`;
-    const pendingWhere = `p.joined=1 AND d.act_index>COALESCE(p.last_join_index,-1) AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.owner_json=p.name_json AND r.act_index=d.act_index)`;
+    const pendingWhere = `p.joined=1 AND (d.generation_json IS NULL OR d.generation_json='"act/'||p.last_join_index||'"') AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.owner_json=p.name_json AND r.act_index=d.act_index)`;
     const latestSeats = `seats s JOIN participants p ON p.name_key_json=s.participant_key_json
         JOIN activities a ON a.act_index=p.last_join_index AND a.kind='join' AND a.actor_key_json=p.name_key_json
         AND s.generation_json='"act/'||a.act_index||'"'`;
@@ -717,7 +725,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             args.push(integer(take));
             return immutable(all(`SELECT at FROM activities WHERE ${where} ORDER BY at DESC,act_index DESC LIMIT ?`, args).map(r => finite(r.at)).reverse());
         },
-        audience(index) { return immutable(all('SELECT p.name_json,d.route FROM landed_audience d JOIN participants p ON p.name_key_json=d.recipient_key_json WHERE d.act_index=? ORDER BY d.recipient_order', [integer(index)]).map(r => ({ recipient: decoded(r.name_json, true), route: routeKind(r.route) }))); },
+        audience(index) { return immutable(all('SELECT p.name_json,d.route,d.generation_json FROM landed_audience d JOIN participants p ON p.name_key_json=d.recipient_key_json WHERE d.act_index=? ORDER BY d.recipient_order', [integer(index)]).map(r => ({ recipient: decoded(r.name_json, true), route: routeKind(r.route), ...(r.generation_json === null ? {} : { generation: activityId(decoded(r.generation_json, true)) }) }))); },
         directed(recipient, filter, page) {
             const s = directedSelection(recipient, filter), limit = pageLimit(page), canonical = owner(recipient);
             return pageRows(all(`SELECT a.act_index,a.at,a.kind,a.actor_json,a.actor_key_json,a.reach,a.reply_index,d.route FROM ${directedFrom} WHERE ${s.sql} ORDER BY a.act_index ${page.edge === 'newest' ? 'DESC' : 'ASC'} LIMIT ?`, [...s.args, limit]), page, r => directedHead(r, canonical));
@@ -736,7 +744,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const groups = indices.map(r => {
                 const rows = all(`SELECT a.act_index,a.at,a.kind,a.actor_json,a.actor_key_json,a.reach,a.reply_index,p.name_json,d.route FROM ${pendingFrom} WHERE ${pendingWhere} AND d.act_index=? ORDER BY d.recipient_order`, [integer(r.act_index)]);
                 const h = head(rows[0]);
-                requireFact(h.kind === 'say');
+                requireFact(h.kind === 'say' || h.kind === 'message');
                 return {
                     index: h.index, at: h.at, actor: h.actor, recipients: rows.map(v => ({ recipient: decoded(v.name_json, true), route: routeKind(v.route) }))
                 };
@@ -748,7 +756,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return r ? immutable({ at: finite(r.at) }) : undefined;
         },
         receiptFacts(name, afterIndex) {
-            const k = encode(owner(name)), r = one('SELECT MAX(at) AS latest FROM receipts WHERE owner_json=?', [k])!, e = one('SELECT MAX(r.act_index) AS latest FROM receipts r JOIN activities a ON a.act_index=r.act_index WHERE r.owner_json=? AND r.act_index>? AND a.actor_json IS NOT NULL', [k, integer(afterIndex, -1)])!;
+            const k = encode(owner(name)), r = one('SELECT MAX(at) AS latest FROM receipts WHERE owner_json=?', [k])!, e = one("SELECT MAX(r.act_index) AS latest FROM receipts r JOIN activities a ON a.act_index=r.act_index WHERE r.owner_json=? AND r.act_index>? AND a.actor_json IS NOT NULL AND a.kind!='message'", [k, integer(afterIndex, -1)])!;
             return immutable({ ...(r.latest === null ? {} : { latestAt: finite(r.latest) }), ...(e.latest === null ? {} : { latestActorActivityIndex: integer(e.latest) }) });
         },
         deliveryDeferrals(name, generation) {
@@ -835,8 +843,8 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             };
             receive({
                 insertItem: () => { run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reach ?? null, reply ?? null, encode(payload)]); },
-                insertAddress: (item, address, order) => { run('INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route) VALUES(?,?,?,?)', [item, key(address.recipient), order, address.via]); },
-            }, { item: { key: index, data: a }, audience: effect.audience.map(r => ({ recipient: r.recipient, via: r.route })) });
+                insertAddress: (item, address, order) => { run('INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,route,generation_json) VALUES(?,?,?,?,?)', [item, key(address.recipient), order, address.via.route, address.via.generation === undefined ? null : encode(address.via.generation)]); },
+            }, { item: { key: index, data: a }, audience: effect.audience.map(r => ({ recipient: r.recipient, via: r })) });
             if (effect.participant) {
                 const p = effect.participant;
                 string(p.name, true);
@@ -970,7 +978,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             const currentSeat = read.seat(input.seat.participant);
             const item = read.activity(index);
             if (currentSeat === undefined || currentSeat.attachment !== 'attached' || currentSeat.generation !== input.seat.generation || currentSeat.owner !== input.seat.owner
-                || item?.kind !== 'say' || read.directedAt(input.seat.participant, index) === undefined) return { status: 'stale' };
+                || (item?.kind !== 'say' && item?.kind !== 'message') || read.directed(input.seat.participant, { afterIndex: index - 1, throughIndex: index, currentGeneration: true }, { edge: 'oldest', limit: 1 }).items.length === 0) return { status: 'stale' };
             if (matchingDeferrals(read.deliveryDeferrals(currentSeat.participant, currentSeat.generation), item.metadata, input.at).length > 0) return { status: 'deferred' };
             const cancelledThrough = read.cancelledThrough(input.seat.participant, input.seat.generation);
             if (cancelledThrough !== undefined && index <= cancelledThrough) return { status: 'stale' };

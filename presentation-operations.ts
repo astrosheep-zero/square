@@ -19,7 +19,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
       || input.current?.(facts) === false || !pendingHead(facts, participant.name, index)
       || deliveryDeferralExpiry(facts, seat, index, input.now ?? Date.now()) !== undefined) return undefined;
     const item = facts.activity(index);
-    return item?.kind === 'say' ? { participant, seat, item } : undefined;
+    return item?.kind === 'say' || item?.kind === 'message' ? { participant, seat, item } : undefined;
   }, input.signal).catch(() => undefined);
   if (initial?.value === undefined) return undefined;
   const { participant, seat, item } = initial.value;

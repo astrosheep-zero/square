@@ -1,11 +1,13 @@
-import type { DirectedNotificationRoute, WatchLease } from './model.js';
+import { notificationFacts, type DirectedNotificationRoute, type Owner, type WakeAddress, type WatchLease } from './model.js';
 import type { DeliveryEvidence, DirectedHead, ParticipantFact, SquareArtifactPort, SquareRead, WakeRequest } from './ports.js';
 import { renderAttentionPreview, renderSquareReminder } from './attention-presentation.js';
-import { parseActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId } from './square-core.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { automaticDispatchEligible, presentationBlocksDispatch } from './delivery-attempts.js';
 import type { Attempt } from './delivery-attempts.js';
 import { matchesCatchSelection } from './catch-selection.js';
+import { freshWatchLease } from './runtime.js';
+import { asSeatRef } from './seats.js';
 
 export type { DirectedNotificationRoute } from './model.js';
 /** Exact stored activity projection for transports that send an awareness reminder. */
@@ -14,12 +16,10 @@ export function wakePreview(facts: SquareRead, request: WakeRequest): string | u
   const head = index === undefined ? undefined : pendingHead(facts, request.participant, index);
   const item = index === undefined ? undefined : facts.activity(index);
   const seat = facts.seat(request.participant);
-  if (head === undefined || item?.kind !== 'say' || seat === undefined || seat.attachment !== 'attached'
+  if (head === undefined || (item?.kind !== 'say' && item?.kind !== 'message') || seat === undefined || seat.attachment !== 'attached'
     || deliveryDeferralExpiry(facts, request.seat, item.index, Date.now()) !== undefined) return undefined;
-  return renderSquareReminder([renderAttentionPreview({
-    squarePath: request.location, recipient: request.participant, actIndex: item.index,
-    actor: item.actor, route: head.route, body: item.body ?? '(structured activity)', delivery: item.delivery,
-  })], [item.delivery]);
+  return renderSquareReminder([renderAttentionPreview({ squarePath: request.location, recipient: request.participant,
+    ...notificationFacts(item, head.route) })]);
 }
 export interface RoutedNotification {
   actor: string;
@@ -41,24 +41,48 @@ export function automaticWakeEligible(evidence: readonly DeliveryEvidence[], now
   return automaticDispatchEligible(custody(evidence), now);
 }
 
-/** A direct message is point-to-point, so it stays eligible across a seat takeover. */
-function directDelivery(facts: SquareRead, index: number): boolean {
-  const activity = facts.activity(index);
-  return activity?.kind === 'say' && activity.delivery?.mode === 'direct';
-}
-
 /** Notification pending is not cursor suffix or historical catch membership. */
 export function pendingHead(facts: SquareRead, name: string, index: number): DirectedHead | undefined {
   const participant = facts.participant(name);
   if (!participant?.joined || facts.receipt(participant.name, index)) return undefined;
-  // Unconsumed direct messages survive a takeover; Agora chat before a voluntary rejoin does not.
-  if (index <= (participant.lastJoinIndex ?? -1) && !directDelivery(facts, index)) return undefined;
-  return facts.directedAt(participant.name, index);
+  return facts.directed(participant.name, { afterIndex: index - 1, throughIndex: index, currentGeneration: true }, { edge: 'oldest', limit: 1 }).items[0];
+}
+
+function sameWakeAddress(left: WakeAddress | undefined, right: WakeAddress | undefined): boolean {
+  if (left === undefined || right === undefined || left.kind !== right.kind) return false;
+  const keys = Object.keys(left.address);
+  return keys.length === Object.keys(right.address).length && keys.every(key => left.address[key] === right.address[key]);
+}
+
+/** Current native eligibility shared by wake selection, preview and ACK. */
+export interface NativePendingInput {
+  readonly location: string;
+  readonly participant: string; readonly generation: import('./model.js').ActivityId;
+  readonly owner?: Owner; readonly index: number; readonly route: WakeAddress;
+  readonly now: number; readonly cancelledThrough?: number;
+}
+
+export function nativePendingHead(facts: SquareRead, input: NativePendingInput): DirectedHead | undefined {
+  const seat = facts.seat(input.participant);
+  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== input.generation
+    || input.owner !== undefined && seat.owner !== input.owner
+    || !sameWakeAddress(seat.wakeAddress, input.route)) return undefined;
+  const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
+  if (input.index <= Math.max(input.cancelledThrough ?? -1, cancelledThrough ?? -1)) return undefined;
+  if (deliveryDeferralExpiry(facts, asSeatRef(seat), input.index, input.now) !== undefined) return undefined;
+  const head = pendingHead(facts, seat.participant, input.index);
+  if (head === undefined) return undefined;
+  const lease = freshWatchLease(facts, seat.participant, input.now);
+  return lease !== undefined && leaseOwnsNotification(lease, { actor: head.actor, route: head.route, recipient: seat.participant })
+    ? undefined : head;
 }
 
 /** One activity's landed recipients that still owe a wake; the rest of the roster is untouched. */
 export function pendingRecipients(facts: SquareRead, index: number): DirectedHead[] {
-  return facts.audience(index).flatMap(({ recipient }) => {
+  return facts.audience(index).flatMap(({ recipient, generation }) => {
+    // A fenced address to an earlier generation cannot be pending; skip its exact lookup.
+    const participant = facts.participant(recipient);
+    if (!participant?.joined || generation !== undefined && generation !== formatActivityId(participant.lastJoinIndex!)) return [];
     const head = pendingHead(facts, recipient, index);
     return head === undefined ? [] : [head];
   });
@@ -69,12 +93,10 @@ export function pendingHeads(facts: SquareRead, name: string): DirectedHead[] {
   const participant = facts.participant(name);
   if (!participant?.joined) return [];
   const heads: DirectedHead[] = [];
-  const eligible = (head: DirectedHead) => head.index > (participant.lastJoinIndex ?? -1)
-    || directDelivery(facts, head.index);
   let afterIndex = -1;
   for (;;) {
-    const page = facts.directed(participant.name, { afterIndex, unseenOnly: true }, { edge: 'oldest', limit: 100 });
-    heads.push(...page.items.filter(eligible));
+    const page = facts.directed(participant.name, { afterIndex, unseenOnly: true, currentGeneration: true }, { edge: 'oldest', limit: 100 });
+    heads.push(...page.items);
     if (!page.hasMore) break;
     afterIndex = page.items.at(-1)!.index;
   }
@@ -130,6 +152,8 @@ export async function collectPending(artifact: SquareArtifactPort) {
 
 /** A live catch owns every matching notification, independent of its page size. */
 export function leaseOwnsNotification(lease: WatchLease, notification: RoutedNotification): boolean {
+  // Agora catch selects say only; it must never hold a native message it cannot consume.
+  if (notification.route === 'message') return false;
   return matchesCatchSelection(notification.actor, notification.route === 'bell' ? { kind: 'bell' }
     : { kind: 'mentions', names: notification.route === 'mention' ? [notification.recipient] : [] }, lease.filter ?? {},
   notification.route === 'reply' ? notification.recipient : undefined);

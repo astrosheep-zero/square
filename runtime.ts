@@ -31,7 +31,7 @@ export function watchTerminalStatus(facts: SquareRead, name: string): 'capped' |
 /** A continuous prefix stops at the first unseen historical audience edge after join. */
 export function readCursor(facts: SquareRead, name: string): number {
   const boundary = facts.participant(name)?.lastJoinIndex ?? -1;
-  const block = facts.directed(name, { afterIndex: boundary, unseenOnly: true }, { edge: 'oldest', limit: 1 }).items[0]?.index;
+  const block = facts.directed(name, { kinds: ['say'], afterIndex: boundary, unseenOnly: true }, { edge: 'oldest', limit: 1 }).items[0]?.index;
   const last = facts.activityHeads({
     afterIndex: boundary, ...(block === undefined ? {} : { beforeIndex: block }),
     kinds: ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'],
@@ -43,7 +43,7 @@ export function readCursor(facts: SquareRead, name: string): number {
 export function presenceAnchor(facts: SquareRead, name: string): number {
   const boundary = facts.participant(name)?.lastJoinIndex ?? -1;
   if (boundary < 0) return -1;
-  const own = facts.activityHeads({ afterIndex: boundary, actors: [name] }, { edge: 'newest', limit: 1 }).items[0]?.index;
+  const own = facts.activityHeads({ afterIndex: boundary, actors: [name], kinds: ['join', 'done', 'say', 'read', 'listen', 'ignore', 'unlisten'] }, { edge: 'newest', limit: 1 }).items[0]?.index;
   const evidence = Math.max(boundary, own ?? boundary, facts.receiptFacts(name, boundary).latestActorActivityIndex ?? boundary);
   return facts.activityHeads({ afterIndex: boundary, throughIndex: evidence, kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0]?.index ?? -1;
 }

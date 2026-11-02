@@ -49,7 +49,7 @@ function catchPageSelection(facts: SquareRead, requestedName: string, options: C
   const participant = resolveKnownName(facts, requestedName);
   const limit = catchLimit(options.limit);
   const senders = options.from?.map(name => resolveKnownName(facts, name));
-  const filter: DirectedFilter = { unseenOnly: true, ...(senders === undefined ? {} : { senders }), ...(options.mention === true ? { attentionOnly: true } : {}) };
+  const filter: DirectedFilter = { kinds: ['say'], unseenOnly: true, ...(senders === undefined ? {} : { senders }), ...(options.mention === true ? { attentionOnly: true } : {}) };
   return { participant, filter, selection: { kind: 'page' as const, query: filter, limit } };
 }
 
@@ -66,7 +66,7 @@ export function selectCatchPage(facts: SquareRead, requestedName: string, option
 /** Selection, receipts and resulting cursor belong to one artifact write transaction. */
 export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchSelection {
   let viewer: string;
-  let filter: DirectedFilter = { unseenOnly: true };
+  let filter: DirectedFilter = { kinds: ['say'], unseenOnly: true };
   let selection: Selection<number, DirectedFilter>;
   if (options.id !== undefined) {
     viewer = resolveKnownName(facts, requestedName);
@@ -85,6 +85,10 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
   try {
     consumed = consumeReceived({
       ...squareReceiveRead(facts),
+      addressed(recipient, index) {
+        const head = facts.directed(recipient, { indexes: [index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items[0];
+        return head === undefined ? undefined : { key: head.index, via: head.route };
+      },
       insertReceipt: (ref, time) => facts.markSeen(ref.recipient, [ref.item], time) > 0,
     }, viewer, selection, at);
   } catch (error) {
@@ -101,7 +105,7 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
   const delivered = consumed.items.map(item => item.data);
   const observed = observeCatchSelection(facts, viewer, delivered, filter, at, consumed.remaining);
   // Receipts are the durable catch count: everything directed here minus what is still unseen.
-  const caught = facts.directedCount(viewer, {}) - facts.directedCount(viewer, { unseenOnly: true });
+  const caught = facts.directedCount(viewer, { kinds: ['say'] }) - facts.directedCount(viewer, { kinds: ['say'], unseenOnly: true });
   // An exact id catch is a targeted fetch and stays repeatable, so it carries no nudge.
   const hint = options.id === undefined ? catchHint(caught - consumed.newlyConsumed, caught) : undefined;
   return hint === undefined ? observed : { ...observed, hint };

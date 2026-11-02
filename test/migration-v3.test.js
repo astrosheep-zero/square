@@ -254,7 +254,12 @@ test('format-3 migration preserves shared seats and leaves missing or conflictin
     activities: 14, receipts: 1, leases: 1, routes: 6, recoveredSeats: 3, unownedStanding: 3, sharedBodySeats: 2, skippedEvidence: 5,
   } });
   for (const [table, original] of Object.entries(before)) {
-    assert.deepEqual(rows(location, `SELECT * FROM ${table} ORDER BY 1,2`), original, `${table} is unchanged`);
+    const current = rows(location, `SELECT * FROM ${table} ORDER BY 1,2`);
+    if (table === 'landed_audience') {
+      assert.deepEqual(current.map(({ generation_json, ...row }) => row), original.map(row => ({ ...row })), 'landed audience facts are unchanged');
+      assert.deepEqual(current.map(row => row.generation_json), ['"act/1"', '"act/1"', '"act/1"', '"act/10"'],
+        'derived addresses gain the standing generation fence');
+    } else assert.deepEqual(current, original, `${table} is unchanged`);
   }
   assert.deepEqual(rows(location, 'SELECT owner_json,lease_id_json,heartbeat_at,expires_at,filter_json FROM catch_leases'), leaseBefore);
   assert.equal(rows(location, 'SELECT next_act_index FROM square_meta')[0].next_act_index, 14);

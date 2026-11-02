@@ -59,6 +59,8 @@ export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit:
 export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
 export interface DirectedFilter extends Omit<ActivityFilter, 'actors' | 'actorMatch'> {
   readonly unseenOnly?: true;
+  /** Restrict to addresses belonging to the current standing generation or unfenced addresses. */
+  readonly currentGeneration?: true;
   readonly senders?: readonly string[];
   readonly attentionOnly?: true;
 }
@@ -67,9 +69,13 @@ export interface DirectedHead {
   readonly at: number;
   readonly actor: string;
   readonly recipient: string;
-  readonly route: import('./attention.js').AudienceRoute;
+  readonly route: import('./model.js').DirectedNotificationRoute;
 }
-export type LandedRecipient = import('./attention.js').AudienceRecipient;
+export interface LandedRecipient {
+  readonly recipient: string;
+  readonly route: import('./model.js').DirectedNotificationRoute;
+  readonly generation?: ActivityId;
+}
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;
 export type ArtifactWriteAuthority =

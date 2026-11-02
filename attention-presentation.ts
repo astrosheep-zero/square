@@ -1,10 +1,8 @@
 import { homedir } from 'node:os';
-
-import type { ActivityDelivery, DirectedNotificationRoute } from './model.js';
+import type { DirectedNotificationRoute } from './model.js';
 import { formatActivityId } from './square-core.js';
 
 export const ATTENTION_BODY_MAX = 200;
-
 export interface AttentionPreview {
   squarePath: string;
   actIndex: number;
@@ -12,103 +10,46 @@ export interface AttentionPreview {
   actor: string;
   route: DirectedNotificationRoute;
   body: string;
-  delivery?: ActivityDelivery;
+  preview?: string;
 }
 
-export function previewAttentionBody(body: string, delivery?: ActivityDelivery): string {
-  const compact = (delivery?.mode === 'direct' ? delivery.preview ?? body : body).replace(/\r\n/g, '\n');
-  if (delivery?.mode === 'direct' || compact.length <= ATTENTION_BODY_MAX) return compact;
-  return `${compact.slice(0, ATTENTION_BODY_MAX).trimEnd()}…`;
+export function previewAttentionBody(body: string): string {
+  const compact = body.replace(/\r\n/g, '\n');
+  return compact.length <= ATTENTION_BODY_MAX ? compact : `${compact.slice(0, ATTENTION_BODY_MAX).trimEnd()}…`;
 }
-
-export function attentionBodyIsClipped(body: string, delivery?: ActivityDelivery): boolean {
-  return delivery?.mode === 'direct'
-    ? delivery.preview !== undefined
-    : body.replace(/\r\n/g, '\n').length > ATTENTION_BODY_MAX;
+export function attentionBodyIsClipped(body: string): boolean {
+  return body.replace(/\r\n/g, '\n').length > ATTENTION_BODY_MAX;
 }
-
 export function displayAttentionPath(squarePath: string): string {
-  return squarePath.startsWith(homedir())
-    ? `~${squarePath.slice(homedir().length)}`
-    : squarePath;
+  return squarePath.startsWith(homedir()) ? `~${squarePath.slice(homedir().length)}` : squarePath;
 }
-
 export function renderAttentionDescription({ actor, route }: Pick<AttentionPreview, 'actor' | 'route'>): string {
   switch (route) {
+    case 'message': return `${actor} sent you a message`;
     case 'mention': return `${actor} spoke your name`;
     case 'reply': return `${actor} answered you`;
     case 'attention': return `${actor} spoke · you’re listening`;
     case 'bell': return `${actor} rang the bell`;
   }
 }
-
-/** Full notification text for human-facing expansion, never the bounded model preview. */
-export function renderAttentionFull(attention: AttentionPreview): string {
-  return attention.delivery?.mode === 'direct'
-    ? renderDirectBlock(attention, attention.body.replace(/\r\n/g, '\n'))
-    : renderAttentionBlock(attention, attention.body);
-}
-
-/** Attribute values keep their quotes; the stored body and the human card stay unescaped. */
 function escapeAttribute(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-
-/** A body may quote the envelope's own tags; in the preview they must never read as one. */
 function escapeSquareTags(text: string): string {
   return text.replace(/<(\/?)(square-|channel-|system-reminder)/gi, '<\\$1$2');
 }
 
-function renderAttentionBlock(attention: AttentionPreview, body: string): string {
-  return [
-    '<square-activity>',
-    `· ${displayAttentionPath(attention.squarePath)} · ${attention.recipient} · ${formatActivityId(attention.actIndex)}`,
-    `● ${renderAttentionDescription(attention)}`,
-    '',
-    body,
-    '</square-activity>',
-  ].join('\n');
-}
-
-/** The fixed point-to-point envelope: a recipient must see who, which channel and which message. */
-function renderDirectBlock(attention: AttentionPreview, bodyText = previewAttentionBody(attention.body, attention.delivery)): string {
-  const attributes = [
-    `channel="${escapeAttribute(displayAttentionPath(attention.squarePath))}"`,
-    `from="${escapeAttribute(attention.actor)}"`,
-    `to="${escapeAttribute(attention.recipient)}"`,
-    `id="${escapeAttribute(formatActivityId(attention.actIndex))}"`,
-  ];
-  return [
-    `<channel-message ${attributes.join(' ')}>`,
-    escapeSquareTags(bodyText),
-    '</channel-message>',
-  ].join('\n');
-}
-
-/** Shared model-facing envelope; transport correlation and human cards stay outside it. */
-export function renderSquareReminder(previews: readonly string[], deliveries: readonly (ActivityDelivery | undefined)[] = []): string {
-  if (previews.length === 0) return '';
-  const header = deliveries.some(item => item?.mode === 'direct')
-    ? 'This is an external notification, not a direct message from the user.'
-    : 'This is an external reminder from Square, not a direct message from the user.';
-  return [
-    '',
-    '<system-reminder>',
-    header,
-    '',
-    previews.join('\n\n'),
-    '</system-reminder>',
-    '',
-  ].join('\n');
-}
-
-export function renderAttentionPreview(attention: AttentionPreview): string {
-  if (attention.delivery?.mode === 'direct') return renderDirectBlock(attention);
-  const remaining = attention.body.replace(/\r\n/g, '\n').length - ATTENTION_BODY_MAX;
+/** The sole source adapter: transports and cards consume this projection, not delivery modes. */
+export function projectNotification(attention: AttentionPreview) {
+  const body = attention.body.replace(/\r\n/g, '\n');
+  const description = renderAttentionDescription(attention);
+  if (attention.route === 'message') {
+    const preview = attention.preview ?? body;
+    return { text: escapeSquareTags(preview), full: body, preview, description,
+      clipped: attention.preview !== undefined, agora: false };
+  }
+  const remaining = body.length - ATTENTION_BODY_MAX;
+  const preview = previewAttentionBody(body);
   const attributes = [
     `square="${escapeAttribute(displayAttentionPath(attention.squarePath))}"`,
     `as="${escapeAttribute(attention.recipient)}"`,
@@ -116,11 +57,20 @@ export function renderAttentionPreview(attention: AttentionPreview): string {
     `from="${escapeAttribute(attention.actor)}"`,
     ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
   ];
-  return [
-    `<square-activity ${attributes.join(' ')}>`,
-    `${renderAttentionDescription(attention)}.`,
-    '',
-    escapeSquareTags(previewAttentionBody(attention.body)),
-    '</square-activity>',
-  ].join('\n');
+  return {
+    text: [`<square-activity ${attributes.join(' ')}>`, `${description}.`, '', escapeSquareTags(preview), '</square-activity>'].join('\n'),
+    full: ['<square-activity>', `· ${displayAttentionPath(attention.squarePath)} · ${attention.recipient} · ${formatActivityId(attention.actIndex)}`,
+      `● ${description}`, '', body, '</square-activity>'].join('\n'),
+    preview, description, clipped: remaining > 0, agora: true,
+  };
+}
+/** Full human expansion never substitutes a sender-owned preview for the stored body. */
+export function renderAttentionFull(attention: AttentionPreview): string { return projectNotification(attention).full; }
+export function renderAttentionPreview(attention: AttentionPreview): string { return projectNotification(attention).text; }
+
+/** The fixed model-facing outer frame, independent of transport and source. */
+export function renderSquareReminder(previews: readonly string[]): string {
+  if (previews.length === 0) return '';
+  return ['', '<system-reminder>', 'This is an external notification, not a direct message from the user.', '',
+    previews.join('\n\n'), '</system-reminder>', ''].join('\n');
 }

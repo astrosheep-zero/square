@@ -253,6 +253,7 @@ function renderEventCliFacts(
         bodyClipped: body.clipped,
       };
     }
+    case 'message':
     case 'read':
       return { text: '', bodyClipped: false };
   }

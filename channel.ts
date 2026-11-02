@@ -8,28 +8,29 @@ import { coreDone, decideJoin, resolveKnownName } from './decisions.js';
 import { validateDeferralDuration, validateDeferralId, validateMetadataMatch } from './delivery-deferral.js';
 import { deliverPending } from './delivery-operations.js';
 import { InternalSquareError, activityMetadataHasContent, sameName, SquareError,
-  validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress } from './model.js';
+  validateActivityMetadata, validateName, type Owner, type Seat, type WakeAddress, type StoredAct } from './model.js';
 import { createDefaultWakeTransport } from './notifications.js';
 import { harnessOwner } from './owner.js';
 import { harnessSessionSources, participantIdentity, type HarnessSessionChannel } from './participant-identity.js';
 import { assertCurrentSeat } from './square-domain.js';
-import type { SquareArtifactPort, WakeTransportPort, SquareResourceOwner } from './ports.js';
+import type { SquareArtifactPort, WakeTransportPort, SquareResourceOwner, SquareRead, SquareWrite, ArtifactWriteAuthority, DirectedFilter } from './ports.js';
 import { joinRecoveryCommand } from './presentation.js';
-import { inSquareCount, presenceAnchor } from './runtime.js';
+import { consumeReceived, selectReceivedHeads } from './receive.js';
+import { inSquareCount } from './runtime.js';
 import { asSeatRef, participantAuthority, requireJoinName, requireOwner } from './seats.js';
+import { squareReceiveRead } from './square-receive.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 import { squareLocation } from './square-location.js';
 import { rememberSquarePath, squareIndexPath } from './square-index.js';
-import { NON_READ, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT, parseRequiredActivityId, publicActivities,
-  selectHistory, toPerceivedActivity, toPublicActivity } from './views.js';
-import type { AckResult, Activity, ActivityId, ChannelEndpointSummary, ChannelMessage, ChannelReceiveResult,
-  ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, HistoryQuery, HistoryResult,
+import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT, parseRequiredActivityId, toPublicActivity } from './views.js';
+import type { AckResult, Activity, ActivityId, ChannelEndpointSummary, ChannelMessage, ChannelReceiveResult, ChannelPendingResult, ChannelHistoryResult,
+  ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, ChannelHistoryQuery,
   JoinOptions, JoinObservation, JoinResult, LifecycleResult, MetadataMatch, OperationControl, OperationFailureDetail,
-  PendingOptions, PendingResult, SquareObservation } from './square-facade.js';
+  PendingOptions, SquareObservation } from './square-facade.js';
 
 export { harnessOwner, decodeHarnessOwner, localUserOwner } from './owner.js';
-export type { ActivityDelivery, ActivityMetadata, ActivityQuery, ActivitySearch, ActivityCursor,
-  ChannelTruncate, PerceivedActivity, PendingOptions, PendingResult, AckResult,
+export type { ActivityMetadata, ActivityQuery, ActivitySearch, ActivityCursor,
+  ChannelTruncate, PendingOptions, ChannelPendingResult, ChannelHistoryResult, ChannelHistoryQuery, AckResult,
   ChannelEndpointSummary, ChannelMessage, ChannelReceiveResult } from './square-facade.js';
 export type { ActivityId, ChannelSendInput, ChannelSendResult, DeliveryDeferral, HeldSeat, MetadataMatch,
   OperationControl, Owner, WakeAddress, SquareResourceOwner, WakeTransportPort, HarnessSessionChannel };
@@ -213,7 +214,7 @@ export class Channel {
           generation: seat.generation,
           attachment: seat.attachment,
           deliveryAvailable: seat.wakeAddress !== undefined,
-          unreadCount: facts.directedCount(participant.name, { unseenOnly: true }),
+          unreadCount: facts.directedCount(participant.name, { unseenOnly: true, currentGeneration: true }),
           ...(participant.lastActiveAt === undefined ? {} : { lastActiveAt: participant.lastActiveAt }),
         }];
       }), control?.signal)).value;
@@ -323,12 +324,29 @@ export class Channel {
     return await this.endHeld(name, identity) !== null;
   }
 
-  /** Direct messages use explicit recipients, not participant expression admission or body attention. */
+  /** Shared transaction/publication effect boundary; upper layers supply admission and addressing facts. */
+  async publish<T extends { readonly stored: StoredAct }>(authority: ArtifactWriteAuthority,
+    admit: (facts: SquareWrite) => T, control?: OperationControl): Promise<T> {
+    const committed = (await this.artifact.transactAs(authority, admit, control?.signal)).value;
+    if (this.wakeTransport !== undefined)
+      await deliverPending({ artifact: this.artifact, transport: this.wakeTransport, location: this.deliveryLocation,
+        activity: committed.stored.index, now: committed.stored.at }).catch(() => undefined);
+    return committed;
+  }
+
+  /** Messages resolve only explicit addresses, without social admission or body attention. */
   async send(input: ChannelSendInput, control?: OperationControl): Promise<ChannelSendResult> {
     checkControl(control);
-    const { from, to, body, truncate = false } = input;
+    const { from } = input;
     if (typeof from !== 'string') throw new SquareError('invalid_args', 'Channel sender must be a name.');
     validateName(from);
+    return this.sendAs({ kind: 'send', actor: from }, input, control);
+  }
+
+  /** Internal composition point: a captured endpoint publishes under its own seat authority. */
+  async sendAs(authority: ArtifactWriteAuthority, input: ChannelSendInput, control?: OperationControl): Promise<ChannelSendResult> {
+    checkControl(control);
+    const { from, to, body, truncate = false } = input;
     const targets = typeof to === 'string' ? [to] : to;
     if (!Array.isArray(targets) || targets.length < 1 || targets.length > MAX_IDENTITY_SET_SIZE)
       throw new SquareError('invalid_args', `Channel needs between 1 and ${MAX_IDENTITY_SET_SIZE} recipients.`);
@@ -345,58 +363,68 @@ export class Channel {
     const preview = truncate !== false && fullBody.length > truncate
       ? `${fullBody.slice(0, truncate).trimEnd()}… (truncated ${fullBody.length - truncate} chars)`
       : undefined;
-    const delivery = preview === undefined ? { mode: 'direct' as const } : { mode: 'direct' as const, preview };
     const metadata = validateActivityMetadata(input.metadata);
-    const { stored, resolvedTo } = (await this.artifact.transactAs({ kind: 'send', actor: from }, facts => {
-      const standing = facts.roster().filter(p => p.joined), resolvedTo: string[] = [], missing: string[] = [];
-      for (const target of unique) {
-        const recipient = standing.find(p => sameName(p.name, target));
-        if (recipient === undefined) missing.push(target);
-        else resolvedTo.push(recipient.name);
-      }
+    const { stored, resolvedTo } = await this.publish(authority, facts => {
+      // Landing owns the one explicit-address resolution; its actual audience is the result.
+      const landed = facts.land({ kind: 'message', actor: from, at: this.clock(), body: fullBody,
+        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), ...(preview === undefined ? {} : { preview }), to: unique });
+      const audience = facts.audience(landed.index), missing = unique.filter(target => !audience.some(address => sameName(address.recipient, target)));
       if (missing.length > 0) throw new SquareError('invalid_args', `Channel recipients are not standing: ${missing.join(', ')}`, {
         reason: 'not_standing', targets: missing, activityUnsent: true,
       });
-      return { stored: facts.land({ kind: 'say', actor: from, at: this.clock(), body: fullBody,
-        ...(activityMetadataHasContent(metadata) ? { metadata } : {}), delivery, mentions: resolvedTo }), resolvedTo };
-    }, control?.signal)).value;
-    if (this.wakeTransport !== undefined)
-      await deliverPending({ artifact: this.artifact, transport: this.wakeTransport, location: this.deliveryLocation,
-        activity: stored.index, now: stored.at }).catch(() => undefined);
-    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo, body: preview ?? fullBody,
-      ...(stored.kind !== 'say' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
+      return { stored: landed, resolvedTo: audience.map(address => address.recipient) };
+    }, control);
+    return { id: formatActivityId(stored.index), at: stored.at, from: stored.actor, to: resolvedTo, body: fullBody,
+      ...(stored.kind !== 'message' || stored.metadata === undefined ? {} : { metadata: stored.metadata }) };
   }
 
-  async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
-    if (query.limit !== undefined && query.limit !== null && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT))
-      throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
+  async history(query: ChannelHistoryQuery = {}, control?: OperationControl): Promise<ChannelHistoryResult> {
+    checkControl(control);
+    const limit = query.limit === undefined ? 100 : query.limit;
+    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100))
+      throw new SquareError('invalid_args', 'History limit must be a positive integer no greater than 100.');
     if (query.order !== undefined && query.order !== 'asc' && query.order !== 'desc')
       throw new SquareError('invalid_args', 'History order must be asc or desc.');
-    if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
-    for (const count of [query.contextBefore, query.contextAfter])
-      if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');
-    const limit = query.limit === undefined ? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT) : query.limit;
-    const contextual = !!query.at?.length || query.contextBefore !== undefined || query.contextAfter !== undefined;
-    const kinds = contextual || query.since !== undefined ? undefined : NON_READ;
+    const filter = { ...activityQueryFilter(query, ['order']), kinds: ['message', 'say'] as const };
     return (await this.artifact.read(facts => {
-      const selected = selectHistory(facts, query, limit, kinds, query.observe === true);
-      if (contextual && limit === null && selected.totalMatches > HISTORY_MAX_LIMIT)
-        throw failure(new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`), { operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: selected.totalMatches } });
-      const activities = publicActivities(selected.activities);
-      if (!query.observe) return { activities };
-      const indexes = selected.activities.map(activity => activity.index), presenceAnchors: Record<number, string[]> = {};
-      for (const participant of facts.roster()) {
-        const anchor = presenceAnchor(facts, participant.name);
-        if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
-      }
-      return { activities, observation: { ...this.observation(inSquareCount(facts)), ...selected,
-        sayNumbers: facts.sayOrdinals(indexes), presenceAnchors } };
+      const heads = facts.activityHeads(filter, { edge: query.cursor?.direction === 'after' ? 'oldest' : 'newest',
+        limit: limit ?? Math.max(1, facts.activityCount(filter)) }).items;
+      const messages = facts.activities(heads.map(head => head.index)).map(activity => channelMessage(facts, activity));
+      if (query.order === 'desc') messages.reverse();
+      return { messages };
     }, control?.signal)).value;
   }
 
   async close(): Promise<void> {
     if (this.closesArtifact) await this.artifact.close();
   }
+}
+
+/** One validated page selection shared by pending and receive. */
+function channelPendingSelection(options: PendingOptions, kinds: NonNullable<DirectedFilter['kinds']>) {
+  const limit = options.limit === undefined ? 100 : options.limit;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+    throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
+  const { actors, ...query } = activityQueryFilter(options);
+  return { limit, filter: { ...query, kinds, senders: actors, unseenOnly: true as const, currentGeneration: true as const } };
+}
+
+/** Shared current-address page selection and hydration for Channel and the Agora projection. */
+export function pendingPage<M>(facts: SquareRead, participant: string, options: PendingOptions,
+  kinds: NonNullable<DirectedFilter['kinds']>, hydrate: (facts: SquareRead, activity: StoredAct) => M,
+): { readonly items: readonly M[]; readonly remaining: number } {
+  const { limit, filter } = channelPendingSelection(options, kinds);
+  const heads = selectReceivedHeads(squareReceiveRead(facts), participant, { kind: 'page', query: filter, limit });
+  const items = facts.activities(heads.map(head => head.key)).map(activity => hydrate(facts, activity));
+  return { items, remaining: facts.directedCount(participant, filter) - items.length };
+}
+
+/** Hydration is shared by all Channel reads; recipients are the actual landed addresses. */
+function channelMessage(facts: SquareRead, activity: StoredAct): ChannelMessage {
+  if (activity.kind !== 'message' && activity.kind !== 'say') throw new Error('Not a channel content record');
+  return { id: formatActivityId(activity.index), at: activity.at, from: activity.actor,
+    to: facts.audience(activity.index).map(address => address.recipient), body: activity.body ?? '',
+    ...(activity.metadata === undefined ? {} : { metadata: activity.metadata }) };
 }
 
 /** Captures one recipient seat through the channel's own storage, never a wrapped square. */
@@ -408,19 +436,12 @@ export class ChannelEndpoint {
   private get storage(): SquareArtifactPort { return this.channel.artifact; }
   private get participant(): string { return this.seat.participant; }
 
-  async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
+  async pending(options: PendingOptions = {}, control?: OperationControl): Promise<ChannelPendingResult> {
     checkControl(control);
-    const limit = options.limit === undefined ? 100 : options.limit;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
-    const { actors, ...query } = activityQueryFilter(options);
     return (await this.storage.read(facts => {
       assertCurrentSeat(facts, asSeatRef(this.seat));
-      const filter = { ...query, senders: actors, unseenOnly: true as const };
-      const heads = facts.directed(this.participant, filter, { edge: 'oldest', limit });
-      const activities = facts.activities(heads.items.map(head => head.index))
-        .map(activity => toPerceivedActivity(facts, activity, this.participant));
-      return { activities, remaining: facts.directedCount(this.participant, filter) - activities.length };
+      const page = pendingPage(facts, this.participant, options, ['message', 'say'], channelMessage);
+      return { messages: page.items, remaining: page.remaining };
     }, control?.signal)).value;
   }
   async ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult> {
@@ -429,7 +450,7 @@ export class ChannelEndpoint {
     const indexes = [...new Set(Array.from(ids, parseRequiredActivityId))];
     return (await this.storage.transactAs(participantAuthority(this.seat), facts => {
       for (const index of indexes) {
-        if (facts.directedAt(this.participant, index) === undefined)
+        if (facts.directed(this.participant, { afterIndex: index - 1, throughIndex: index, currentGeneration: true }, { edge: 'oldest', limit: 1 }).items.length === 0)
           throw new SquareError('invalid_args', `${formatActivityId(index)} is not addressed to you.`, {
             reason: 'not_addressed', activityId: formatActivityId(index),
           });
@@ -440,23 +461,13 @@ export class ChannelEndpoint {
   /** Select and consume matching unconsumed messages in one transaction. */
   async receive(options: PendingOptions = {}, control?: OperationControl): Promise<ChannelReceiveResult> {
     checkControl(control);
-    const limit = options.limit === undefined ? 100 : options.limit;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
-    const { actors, ...query } = activityQueryFilter(options);
+    const { limit, filter } = channelPendingSelection(options, ['message', 'say']);
     return (await this.storage.transactAs(participantAuthority(this.seat), facts => {
-      const filter = { ...query, senders: actors, unseenOnly: true as const };
-      const heads = facts.directed(this.participant, filter, { edge: 'oldest', limit });
-      const indexes = heads.items.map(head => head.index);
-      const messages: ChannelMessage[] = facts.activities(indexes).flatMap(activity => activity.kind !== 'say' ? []
-        : [{
-          id: formatActivityId(activity.index), at: activity.at, from: activity.actor,
-          to: [...(activity.mentions ?? [])], body: activity.body ?? '',
-          ...(activity.metadata === undefined ? {} : { metadata: activity.metadata }),
-        }]);
-      const consumed = indexes.length === 0 ? 0 : facts.markSeen(this.participant, indexes, this.channel.clock());
-      const remaining = facts.directedCount(this.participant, filter);
-      return { messages, consumed, remaining };
+      const consumed = consumeReceived({ ...squareReceiveRead(facts),
+        insertReceipt: (ref, at) => facts.markSeen(ref.recipient, [ref.item], at) > 0,
+      }, this.participant, { kind: 'page', query: filter, limit }, this.channel.clock());
+      return { messages: consumed.items.map(item => channelMessage(facts, item.data)),
+        consumed: consumed.newlyConsumed, remaining: consumed.remaining };
     }, control?.signal)).value;
   }
   async leave(control?: OperationControl): Promise<void> {
@@ -494,6 +505,6 @@ export class ChannelEndpoint {
       facts.releaseDeliveryDeferral(asSeatRef(seat), id, this.channel.clock()), control?.signal)).value;
   }
   send(input: Omit<ChannelSendInput, 'from'>, control?: OperationControl): Promise<ChannelSendResult> {
-    return this.channel.send({ ...input, from: this.participant }, control);
+    return this.channel.sendAs(participantAuthority(this.seat), { ...input, from: this.participant }, control);
   }
 }

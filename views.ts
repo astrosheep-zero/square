@@ -21,12 +21,11 @@ const ARCHIVE = new Set(['join', 'done', 'say']);
 
 /** The one StoredAct-to-public-Activity field mapping. Rejects read bookkeeping. */
 export function toPublicActivity(stored: StoredAct): Activity {
-  if (stored.kind === 'read') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
+  if (stored.kind === 'read' || stored.kind === 'message') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
-    ...(stored.kind === 'say' && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
-    ...(stored.kind === 'say' && stored.delivery !== undefined ? { delivery: stored.delivery } : {}),
+    ...('metadata' in stored && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
     mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }
@@ -100,7 +99,7 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
   return { activities, visibleActivities, totalMatches, ...(continuation === undefined ? {} : { continuation }) };
 }
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
-  return activities.flatMap((activity) => activity.kind === 'read' ? [] : [toPublicActivity(activity)]);
+  return activities.flatMap((activity) => activity.kind === 'read' || activity.kind === 'message' ? [] : [toPublicActivity(activity)]);
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
   const known = resolveKnownName(facts, name);
@@ -186,7 +185,7 @@ export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_L
   if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
   const heads = last === 0 ? [] : recipient === undefined
     ? facts.activityHeads({ kinds: NON_READ }, { edge: 'newest', limit: last }).items
-    : facts.directed(recipient, {}, { edge: 'newest', limit: last }).items;
+    : facts.directed(recipient, { kinds: ['say'] }, { edge: 'newest', limit: last }).items;
   const activities = facts.activities(heads.map((head) => head.index)).map((activity) => recipient === undefined
     ? toPublicActivity(activity) : toPerceivedActivity(facts, activity, recipient));
   return { activities, cursor: facts.header().lastActIndex, hasMore: false };

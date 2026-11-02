@@ -225,7 +225,7 @@ test('delivery route distinguishes mentioned recipients from listeners on the sa
   await trace([
     { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 }, { kind: 'join', actor: 'Cara', at: 3 },
     { kind: 'listen', actor: 'Cara', target: 'Alice', at: 4 }, { kind: 'say', actor: 'Alice', body: 'question @Bob', mentions: ['Bob'], at: 5 },
-  ], (facts) => assert.deepEqual(facts.audience(4), [{ recipient: 'Bob', route: 'mention' }, { recipient: 'Cara', route: 'attention' }]));
+  ], (facts) => assert.deepEqual(facts.audience(4), [{ recipient: 'Bob', route: 'mention', generation: 'act/1' }, { recipient: 'Cara', route: 'attention', generation: 'act/2' }]));
 });
 
 test('pending projection remains complete across a long history', async () => {

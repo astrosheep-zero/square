@@ -6,18 +6,17 @@ import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
-import { Channel, ChannelEndpoint, checkControl, failure, squareClock } from './channel.js';
+import { Channel, ChannelEndpoint, checkControl, failure, pendingPage, squareClock } from './channel.js';
 import { attentionChange, coreDone, coreListening, decideAct, resolveKnownName, validateDoneBody } from './decisions.js';
-import { WATCH_HEARTBEAT_MS, inSquareCount } from './runtime.js';
+import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
 import { catchLimit, decideCatch, observeCatchSelection, selectCatchPage, type CatchSelection } from './catch-decisions.js';
 import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
 import { asSeatRef, participantAuthority, requireJoinName, requireOwner } from './seats.js';
 import { recoveryObservation, entryPresentation, queryStatus, queryParticipants, catchPresence,
-  parseRequiredActivityId, toPublicActivity, HISTORY_DEFAULT_LIMIT } from './views.js';
+  parseRequiredActivityId, toPublicActivity, toPerceivedActivity, publicActivities, selectHistory, NON_READ, HISTORY_MAX_LIMIT, HISTORY_DEFAULT_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
 import { squareIndexPath } from './square-index.js';
-import { deliverPending } from './delivery-operations.js';
 import { participantIdentity } from './participant-identity.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from './artifact.js';
@@ -138,7 +137,7 @@ export class SqliteSquare {
                 throw error;
               }
             });
-            const committed = (await square.artifact.transactAs(participantAuthority(seat), facts => {
+            const committed = await square.channel.publish(participantAuthority(seat), facts => {
               // Decoding selected rows is storage work, not proof of safe admission refusal.
               const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
                 ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
@@ -153,11 +152,9 @@ export class SqliteSquare {
                 ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
                 ...(decision.unmatchedMentions === undefined ? {} : { unmatchedMentions: decision.unmatchedMentions }),
                 ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }) };
-            }, control?.signal)).value;
+            }, control);
             landedId = formatActivityId(committed.stored.index);
             effect = 'landed';
-            if (square.wakeTransport !== undefined)
-              await deliverPending({ artifact: square.artifact, transport: square.wakeTransport, location: square.deliveryLocation, activity: committed.stored.index, now }).catch(() => undefined);
             const { stored, standingCount, ownActivityCount, hardCap, ...metadata } = committed;
             const hint = expressHint(ownActivityCount);
             return { activity: toPublicActivity(stored), ...metadata,
@@ -297,8 +294,13 @@ export class SqliteSquare {
         if (leaseId !== undefined) await releaseWatchLease(square.artifact, seat!, leaseId).catch(() => undefined);
       }
     }
-    pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult> {
-      return this.endpoint.pending(options, control);
+    async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
+      checkControl(control);
+      return (await this.owner.artifact.read(facts => {
+        assertCurrentSeat(facts, asSeatRef(this.seat));
+        const page = pendingPage(facts, this.name, options, ['say'], (read, activity) => toPerceivedActivity(read, activity, this.name));
+        return { activities: page.items, remaining: page.remaining };
+      }, control?.signal)).value;
     }
     ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult> {
       return this.endpoint.ack(ids, control);
@@ -356,8 +358,31 @@ export class SqliteSquare {
     const seat = await this.channel.reattachSeat(name, { owner, wakeAddress }, control);
     return seat === null ? null : this.handle(seat);
   }
-  history(query?: HistoryQuery, control?: OperationControl): Promise<HistoryResult> {
-    return this.channel.history(query, control);
+  async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
+    if (query.limit !== undefined && query.limit !== null && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT))
+      throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
+    if (query.order !== undefined && query.order !== 'asc' && query.order !== 'desc')
+      throw new SquareError('invalid_args', 'History order must be asc or desc.');
+    if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
+    for (const count of [query.contextBefore, query.contextAfter])
+      if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');
+    const limit = query.limit === undefined ? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT) : query.limit;
+    const contextual = !!query.at?.length || query.contextBefore !== undefined || query.contextAfter !== undefined;
+    const kinds = contextual || query.since !== undefined ? [...NON_READ, 'read' as const] : NON_READ;
+    return (await this.artifact.read(facts => {
+      const selected = selectHistory(facts, query, limit, kinds, query.observe === true);
+      if (contextual && limit === null && selected.totalMatches > HISTORY_MAX_LIMIT)
+        throw failure(new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`), { operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: selected.totalMatches } });
+      const activities = publicActivities(selected.activities);
+      if (!query.observe) return { activities };
+      const indexes = selected.activities.map(activity => activity.index), presenceAnchors: Record<number, string[]> = {};
+      for (const participant of facts.roster()) {
+        const anchor = presenceAnchor(facts, participant.name);
+        if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
+      }
+      return { activities, observation: { ...this.observation(inSquareCount(facts)), ...selected,
+        sayNumbers: facts.sayOrdinals(indexes), presenceAnchors } };
+    }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
     return (await this.artifact.read(facts =>

@@ -83,9 +83,9 @@ test('landed audience settles mentions, bell, attention, ignore and self in prio
       bobDirect: read.directedCount('Bob', {}),
       caraDirect: read.directedCount('Cara', {}),
     }))).value;
-    assert.deepEqual(facts.mention, [{ recipient: 'Cara', route: 'mention' }]);
-    assert.deepEqual(facts.bell, [{ recipient: 'Bob', route: 'bell' }, { recipient: 'Cara', route: 'bell' }]);
-    assert.deepEqual(facts.attention, [{ recipient: 'Cara', route: 'attention' }]);
+    assert.deepEqual(facts.mention, [{ recipient: 'Cara', route: 'mention', generation: 'act/2' }]);
+    assert.deepEqual(facts.bell, [{ recipient: 'Bob', route: 'bell', generation: 'act/1' }, { recipient: 'Cara', route: 'bell', generation: 'act/2' }]);
+    assert.deepEqual(facts.attention, [{ recipient: 'Cara', route: 'attention', generation: 'act/2' }]);
     assert.equal(facts.selfEdge, undefined);
     assert.equal(facts.selfIncluded, false);
     assert.equal(facts.bobDirect, 1);

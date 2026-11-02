@@ -9,7 +9,7 @@ import { formatActivityId, isWakeRouteKind, nameKey, type Seat, type StoredAct, 
 import { parseActivityId } from './square-core.js';
 import { readLegacyHostData, type LegacyDeliveryEvidence, type LegacyHostData } from './square-migration-host-ledger.js';
 import { legacyRowFramingIssue, FORMAT4_ADDED_OBJECTS } from './square-legacy-framing.js';
-import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, V6_USER_VERSION, V7_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
+import { APPLICATION_ID, ACTIVITIES_TABLE_SQL, ACTIVITY_INDEXES_SQL, CURRENT_USER_VERSION, V2_USER_VERSION, V3_USER_VERSION, V4_USER_VERSION, V5_USER_VERSION, V6_USER_VERSION, V7_USER_VERSION, V8_USER_VERSION, SCHEMA_SQL, FORMAT4_SCHEMA_SQL, DELIVERY_DEFERRALS_SQL, validateRowFraming, inspectSqlite, createSqliteDriver, invalidArtifact,
   validateStoredActivity, exportSqliteState, initializeSqlite,
   type SquareRuntimeState, type SquareState } from './square-sqlite.js';
 
@@ -165,6 +165,23 @@ function migrateActivities(database: DatabaseSync): void {
     'DROP TABLE activities_legacy;',
     ...ACTIVITY_INDEXES_SQL.map((sql) => `${sql};`),
   ].join('\n'));
+
+  // Format 8's direct delivery encoding exists only at this explicit migration boundary.
+  const update = database.prepare('UPDATE activities SET kind=?,reach=NULL,reply_index=NULL,payload_json=? WHERE act_index=?');
+  for (const row of database.prepare("SELECT act_index,payload_json FROM activities WHERE kind='say'").all()) {
+    const payload = parseJson(row.payload_json, 'legacy activity payload is malformed.');
+    assertSource(isObject(payload), 'legacy activity payload is malformed.');
+    if (!Object.hasOwn(payload, 'delivery')) continue;
+    const delivery = payload.delivery;
+    assertSource(isObject(delivery) && hasExactKeys(delivery, ['mode'], ['preview']) && delivery.mode === 'direct'
+      && (delivery.preview === undefined || typeof delivery.preview === 'string' && delivery.preview.length > 0), 'legacy delivery is malformed.');
+    assertSource(hasExactKeys(payload, ['mentions', 'delivery'], ['body', 'metadata']), 'legacy direct payload is malformed.');
+    const { delivery: _, mentions: to, body, ...content } = payload;
+    update.run('message', JSON.stringify({ body: body ?? '', ...content, to, ...(delivery.preview === undefined ? {} : { preview: delivery.preview }) }), row.act_index);
+  }
+  database.exec('DROP TABLE landed_audience;');
+  database.exec(tableDefinition('landed_audience'));
+  database.exec('CREATE INDEX audience_recipient ON landed_audience(recipient_key_json, act_index);');
 
   // Actor-bearing deleted activities and cleared replies can change maintained indices.
   // Replay surviving facts only, without lowering the authoritative next allocator.
@@ -387,7 +404,7 @@ function inspectLegacyRowArtifact(database: DatabaseSync, location: string, host
   }
   const seats = planSeats(location, roster, routes, host.owners, driver);
   const standingCount = roster.filter(participant => participant.joined).length;
-  const deliveries = planLegacyDeliveries(host.evidence, seats, driver);
+  const deliveries = planLegacyDeliveries(host.evidence, seats, driver, database);
   const counts: MigrationCounts = {
     activities: activityCount,
     receipts: Number((database.prepare('SELECT COUNT(*) AS n FROM receipts').get() as { n: number }).n),
@@ -425,7 +442,7 @@ function legacyDeliveryPayload(source: LegacyDeliveryEvidence, current?: WakeAdd
       ? current : { kind: 'opencode-server', address: { sessionId: source.session } } };
 }
 
-function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats: readonly Seat[], driver: ReturnType<typeof createSqliteDriver>): LegacyDelivery[] {
+function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats: readonly Seat[], driver: ReturnType<typeof createSqliteDriver>, database: DatabaseSync): LegacyDelivery[] {
   const byGroup = new Map<string, Array<Omit<LegacyDelivery, 'attemptN'> & { readonly attemptN?: number }>>();
   const completedBodies = new Map<string, string | null>();
   for (const source of records) {
@@ -455,7 +472,7 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
     if (native && seat !== undefined && harness !== undefined && seat.owner !== harnessOwner({ channel: harness === 'claude' ? 'claude-code' : 'opencode', session: source.session, ...(source.agent === undefined ? {} : { agent: source.agent }) })) continue;
     const joined = establishingJoin(driver, participant);
     const generation = formatActivityId(joined);
-    if (index <= joined || driver.activityHeads({ indexes: [index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items.length === 0 || driver.directedAt(participant.name, index) === undefined) continue;
+    if (index <= joined || driver.activityHeads({ indexes: [index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items.length === 0 || database.prepare('SELECT 1 FROM landed_audience WHERE recipient_key_json=? AND act_index=?').get(JSON.stringify(nameKey(participant.name)), index) === undefined) continue;
     if (participant.done) {
       const done = driver.activityHeads({ actors: [participant.name], kinds: ['done'] }, { edge: 'newest', limit: 1 }).items[0];
       if (done === undefined || index >= done.index) continue;
@@ -496,7 +513,7 @@ function planLegacyDeliveries(records: readonly LegacyDeliveryEvidence[], seats:
   return deliveries.filter(row => row.claimToken === undefined || tokens.get(row.claimToken) === 1);
 }
 
-function tableDefinition(name: 'square_meta' | 'catch_leases' | 'seats'): string {
+function tableDefinition(name: 'square_meta' | 'catch_leases' | 'seats' | 'landed_audience'): string {
   const definition = SCHEMA_SQL.split(';').map((statement) => statement.trim()).find((statement) => statement.startsWith(`CREATE TABLE ${name} (`));
   if (definition === undefined) throw new Error(`Missing current table definition for ${name}.`);
   return `${definition};`;
@@ -555,7 +572,7 @@ function upgradeRowArtifact(database: DatabaseSync, location: string, plan: RowM
   validateCurrentFraming(database, location);
 }
 
-function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | 6 | 7 | undefined {
+function validateMigrationSource(database: DatabaseSync, location: string): 2 | 3 | 4 | 5 | 6 | 7 | 8 | undefined {
   const before = identity(database);
   if (before.applicationId !== APPLICATION_ID) throw invalidArtifact('unrelated SQLite database.');
   if (before.userVersion === V2_USER_VERSION || before.userVersion === V3_USER_VERSION) {
@@ -563,7 +580,7 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
     if (issue !== undefined) throw invalidArtifact(issue);
     return before.userVersion;
   }
-  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION || before.userVersion === V6_USER_VERSION || before.userVersion === V7_USER_VERSION) {
+  if (before.userVersion === V4_USER_VERSION || before.userVersion === V5_USER_VERSION || before.userVersion === V6_USER_VERSION || before.userVersion === V7_USER_VERSION || before.userVersion === V8_USER_VERSION) {
     validateRowFraming(database, before.userVersion, location);
     return before.userVersion;
   }
@@ -577,7 +594,7 @@ function validateMigrationSource(database: DatabaseSync, location: string): 2 | 
 /**
  * Explicit conversion of the supported legacy formats. Row-backed versions 2 and 3 are
  * preflighted read-only, then receive ownership/evidence and deferral storage in one
- * format-8 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
+ * format-9 transaction. Formats 4/5 gain attachment; format 4 also gains empty deferrals.
  * All legacy seats are encoded as opaque owners, preserving format-6 attachment.
  * Every source drops obsolete activities and their identity references, clears dangling
  * replies and rebuilds derived indices; surviving ids and allocation watermarks remain stable.
@@ -590,12 +607,12 @@ export async function migrateSquareFile(location: string, signal?: AbortSignal, 
   try {
     const source = await inSqliteTransaction(database, false, () => validateMigrationSource(database, squarePath), value => value, signal);
     if (source === undefined) return { status: 'already-current', standing: standing(database) };
-    if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION || source === V7_USER_VERSION) {
+    if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION || source === V7_USER_VERSION || source === V8_USER_VERSION) {
       return await inSqliteTransaction(database, true, () => {
         assertSource(validateMigrationSource(database, squarePath) === source, 'source format changed during migration preflight.');
       }, () => {
         if (source === V4_USER_VERSION) database.exec(DELIVERY_DEFERRALS_SQL);
-        if (source !== V7_USER_VERSION) migrateSeatOwnership(database, source);
+        if (source === V4_USER_VERSION || source === V5_USER_VERSION || source === V6_USER_VERSION) migrateSeatOwnership(database, source);
         migrateActivities(database);
         database.exec(`PRAGMA user_version = ${CURRENT_USER_VERSION};`);
         validateCurrentFraming(database, squarePath);
