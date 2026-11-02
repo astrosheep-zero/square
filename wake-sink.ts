@@ -8,7 +8,7 @@ export interface PaseoWakeRequest {
   prompt: string;
   location: string;
   participant: string;
-  activity: string;
+  message: string;
   attemptN?: number;
 }
 
@@ -16,9 +16,9 @@ export interface PaseoWakeRequest {
  * The daemon's own dedup key for one attempt. Every retry of the same attempt
  * derives the same id; a later attempt of the same attention derives a new one.
  */
-export function paseoWakeMessageId(request: Pick<PaseoWakeRequest, 'location' | 'participant' | 'activity' | 'attemptN'>): string {
+export function paseoWakeMessageId(request: Pick<PaseoWakeRequest, 'location' | 'participant' | 'message' | 'attemptN'>): string {
   const digest = createHash('sha256')
-    .update([request.location, request.participant, request.activity, request.attemptN ?? 0].join('|'))
+    .update([request.location, request.participant, request.message, request.attemptN ?? 0].join('|'))
     .digest('hex');
   return `square-${digest.slice(0, 32)}`;
 }

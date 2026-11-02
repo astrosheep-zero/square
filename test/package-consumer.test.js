@@ -162,16 +162,27 @@ test('packed ESM root typechecks, imports, and rejects deep imports', () => {
     assert.throws(() => transaction(tx => consumeReceived(tx, 'other', selection, 11)), ReceiveError);
   `);
   fs.writeFileSync(path.join(fixture, 'consumer.ts'), `
-    import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult, type PendingResult } from '@astrosheep/square';
-    import { Channel, type ChannelEndpoint, type ActivityQuery, type PendingOptions, type ChannelPendingResult, type AckResult } from '@astrosheep/square/channel';
+    import { Square, SquareError, type Activity, type PerceivedActivity, type ActivityId, type Participant, type JoinResult, type HistoryResult, type PendingResult, type ActivityQuery } from '@astrosheep/square';
+    import { Channel, type ChannelEndpoint, type ChannelEndpointHold, type MessageMetadata, type MessageSearch, type WakeTransportPort, type MessageQuery, type ChannelPendingOptions, type ChannelPendingResult, type AckResult } from '@astrosheep/square/channel';
+    const metadata: MessageMetadata = { job: { id: 7 } };
+    const search: MessageSearch = { text: 'outcome', mode: 'literal' };
+    const transport: WakeTransportPort = { async attempt(request, _timeout, beforeSend) {
+      await request.channel.prepare({ correlation: { harness: 'pi' }, coverage: 'full' });
+      return { outcome: await beforeSend() ? 'accepted' : 'not-capable' };
+    } };
+    const holds: Promise<readonly ChannelEndpointHold[]> = Channel.inMemory({ wakeTransport: transport }).endpointsOf('test:owner');
+    void metadata; void search; void holds;
     async function readAndAck(endpoint: ChannelEndpoint, participant: Participant) {
       const filter: ActivityQuery = { at: ['act/1'], from: ['keiyaku-notice'],
         match: { fields: [{ path: ['job', 'id'], equals: 7 }] },
         search: { text: 'outcome', mode: 'literal' }, cursor: { id: 'act/0', direction: 'after' } };
-      const options: PendingOptions = { ...filter, limit: 100 };
+      const messageFilter: MessageQuery = { at: ['msg/1'], from: ['keiyaku-notice'],
+        match: { fields: [{ path: ['job', 'id'], equals: 7 }] },
+        search: { text: 'outcome', mode: 'literal' }, cursor: { id: 'msg/0', direction: 'after' } };
+      const options: ChannelPendingOptions = { ...messageFilter, limit: 100 };
       const page: ChannelPendingResult = await endpoint.pending(options);
       const ack: AckResult = await endpoint.ack(page.messages.map(message => message.id));
-      const same: PendingResult = await participant.pending(options);
+      const same: PendingResult = await participant.pending({ ...filter, limit: 100 });
       const archive: Promise<HistoryResult> = square.history(filter);
       void archive;
       await participant.ack(same.activities.map(activity => activity.id));

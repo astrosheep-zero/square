@@ -31,7 +31,8 @@ register their native wake addresses only through their loaded integrations. An
 ordinary reconnect or reattachment cannot replace a current native address with a
 generic Paseo proposal. Addresses belong to the artifact seat generation, not an
 expiring routes table: explicit receiver withdrawal permits fallback, and a new
-seat generation cannot inherit the previous generation's native registration.
+seat generation cannot inherit the previous generation's native registration. Endpoint generations
+are opaque strings, compared for equality rather than interpreted.
 Participant expressions do not publish replacement addresses.
 
 This is route preference, not permission to bypass receiver policy. Claude can
@@ -117,9 +118,10 @@ See [participant-ownership.md](participant-ownership.md).
 ## Body, admission, and presentation
 
 The coordinator uses Square's canonical audience projection and bounded body
-preview. Each notification identifies the square, receiving participant and
-activity before its event and body. A clipped preview describes catching that
-activity to read it in full; it never embeds shell commands or tool-call syntax.
+preview. Agora notifications identify the square, receiving participant and activity before its
+event and body. A clipped preview describes catching that activity to read it in full; it never
+embeds shell commands or tool-call syntax. Direct Channel notifications carry their stored preview
+or body instead. Channel custody and consumption use `msg/N`; Agora relations use `act/N`.
 Opaque text correlation resolves through bound memberships and the existing
 attempt ledger, never a path or asserted source from incoming text.
 
@@ -140,11 +142,12 @@ pass through. Recognized stale/cancelled deliveries can be consumed before queue
 No ambiguous send is blindly retried.
 
 The sole presentation writer observes **returned stored main user-role text**
-after `session.append.next`. It matches the entire expected payload within
-Claude's idle/busy peer framing. A complete preview records seen + presented;
-a clipped one records clipped only. This means stored in model context, not
-processed or understood. Catch/presentation races are idempotent and revalidated
-immediately before send and inside the observation transaction.
+after `session.append.next`. The native attempt persists the payload hash and full/clipped coverage
+before sending. Stored ACK matches the entire framed payload against that persisted hash and checks
+the captured custody and current eligibility; it does not depend on rendering the payload again with
+the current renderer. Persisted full coverage records seen + presented; clipped coverage records
+clipped only. This means stored in model context, not processed or understood. Catch/presentation
+races are idempotent and revalidated immediately before send and inside the observation transaction.
 
 ## Cancellation and custody
 
@@ -152,7 +155,7 @@ Explicit plugin `turn.abort` and terminal `turn.complete(reason:'aborted')`
 suppress the outstanding local batch without recording seen. Ordinary answer,
 refusal, and error completion are not user cancellation. Separate engine-owned
 family state survives hot reload, containing the abort timestamp and frozen
-membership generations. The artifact stores a generation-scoped monotonic activity
+membership generations. The artifact stores a generation-scoped monotonic message-index
 cutoff; replacement generations cannot inherit the old abort.
 
 Engine state reads are snapshots of one dispatch. Confirmation therefore uses

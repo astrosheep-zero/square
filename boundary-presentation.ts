@@ -5,11 +5,10 @@ import { withFileLock } from './file-lock.js';
 import { createArtifactPort } from './artifact.js';
 import { preparePendingPresentation } from './presentation-operations.js';
 import { presentPreparedBatch } from './delivery-effects.js';
-import { sessionInbox, projectBoundaryEligibility, pendingAtBoundary, pendingKey } from './inbox.js';
+import { sessionInbox, projectBoundaryEligibility, pendingKey } from './inbox.js';
 import type { Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
-import { projectNotification, renderSquareReminder } from './attention-presentation.js';
-export { pendingAtBoundary };
+import { projectChannelNotification, projectNotification, renderSquareReminder } from './attention-presentation.js';
 
 const CONTEXT_MAX = 1200;
 
@@ -19,7 +18,7 @@ export function renderPendingAtBoundary(inbox: PendingMembership[]): string {
 
 interface BoundaryEntry {
   membership: PendingMembership;
-  actIndex: number;
+  messageIndex: number;
   markSeen: boolean;
 }
 
@@ -34,7 +33,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   );
   const blocks: string[] = [];
   const agoraBlocks: string[] = [];
-  let remainingAgora = queued.filter(({ notification }) => notification.route !== 'message').length;
+  let remainingAgora = queued.filter(({ notification }) => notification.route !== undefined).length;
   const entries: BoundaryEntry[] = [];
   let omitted = 0;
   const omission = (count: number) => `${count} more ${count === 1 ? 'activity' : 'activities'} not shown.`;
@@ -42,19 +41,16 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   for (const entry of queued) {
     const { membership, notification } = entry;
     // The omission line represents the rest of this batch too, but never consumes its bodies.
-    const coverage = { membership, actIndex: notification.actIndex, markSeen: false };
+    const coverage = { membership, messageIndex: notification.messageIndex, markSeen: false };
     entries.push(coverage);
-    const projected = projectNotification({
-      squarePath: membership.location,
-      actIndex: notification.actIndex,
-      recipient: membership.seat.participant,
-      actor: notification.actor,
-      route: notification.route,
-      body: notification.body,
-      preview: notification.preview,
-    });
+    const projected = notification.route === undefined
+      ? projectChannelNotification({ squarePath: membership.location, recipient: membership.seat.participant,
+          actor: notification.actor, body: notification.body, ...(notification.preview === undefined ? {} : { preview: notification.preview }) })
+      : projectNotification({ squarePath: membership.location, actIndex: notification.actIndex ?? notification.messageIndex,
+          recipient: membership.seat.participant, actor: notification.actor, route: notification.route,
+          body: notification.body, ...(notification.preview === undefined ? {} : { preview: notification.preview }) });
     const block = projected.text;
-    if (projected.agora) {
+    if ('agora' in projected && projected.agora) {
       remainingAgora -= 1;
       const omittedAfter = omitted + remainingAgora;
       const prospective = renderSquareReminder([...agoraBlocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
@@ -99,8 +95,8 @@ async function presentPendingAtBoundaryUnlocked<T>(
           artifacts.set(location, artifact);
         }
         const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
-          activity: entry.actIndex, seat, markSeen: entry.markSeen, signal });
-        if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, entry.actIndex), claim });
+          message: entry.messageIndex, seat, markSeen: entry.markSeen, signal });
+        if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, entry.messageIndex), claim });
       }
     } catch (error) {
       // Transfer has not happened: enumeration must abandon any custody already acquired.
@@ -110,7 +106,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
     const report = await presentPreparedBatch(claims.map(({ claim }) => claim), eligibleClaims => {
       const eligible = new Set(claims.filter(({ claim }) => eligibleClaims.includes(claim)).map(({ key }) => key));
       const delivered = pending.map(membership => ({ ...membership,
-        notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.actIndex))),
+        notifications: membership.notifications.filter(note => eligible.has(pendingKey(membership, note.messageIndex))),
       })).filter(membership => membership.notifications.length > 0);
       return { payload: { context: renderBoundary(delivered).context, delivered }, included: eligibleClaims };
     }, payload => present(payload.context, payload.delivered), { signal });

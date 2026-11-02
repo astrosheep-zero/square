@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
-import { pendingHeads, leaseOwnsNotification } from '../dist/delivery.js';
+import { pendingHeads } from '../dist/delivery.js';
+import { leaseOwnsNotification } from '../dist/catch-selection.js';
 import { perceiveActivity } from '../dist/perception-projection.js';
 import { previewAttentionBody, renderAttentionPreview, renderSquareReminder } from '../dist/attention-presentation.js';
 
 async function trace(acts, select, observations = {}) {
+  let messageIndex = 0;
   const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: ['test'],
-    acts: acts.map((act, index) => ({ ...act, index })),
+    acts: acts.map((act, index) => ({ ...act, index,
+      ...(act.kind === 'say' ? { messageIndex: messageIndex++ } : {}) })),
     runtime: { ...emptyRuntimeState(acts.length), nextActIndex: acts.length, observations },
   });
   try { return (await artifact.read(select)).value; }
@@ -43,7 +46,7 @@ test('a reply reaches its author with route reply and the full body', async () =
     { kind: 'say', actor: 'Alice', at: 5, body: 'answer', reply: 3 },
   ], (facts) => {
     assert.deepEqual(plannedRecipients(facts, 4), ['Bob:reply']);
-    assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index, route }) => `${index}:${route}`), ['4:reply']);
+    assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index, route }) => `${index}:${route}`), ['1:reply']);
     assert.equal(perceiveActivity(facts, facts.activity(4), 'Bob'), 'full');
     assert.equal(perceiveActivity(facts, facts.activity(4), 'Cara'), 'presence');
   });
@@ -82,7 +85,7 @@ test('pending attention is post-join and independent of the read cursor', async 
     { kind: 'join', actor: 'Bob', at: 3 },
     { kind: 'say', actor: 'Alice', at: 4, body: 'pending @Bob', mentions: ['Bob'] },
     { kind: 'say', actor: 'Bob', at: 5, body: 'self cursor advance' },
-  ], facts => assert.deepEqual(pendingHeads(facts, 'bob').map(({ index }) => index), [3]),
+  ], facts => assert.deepEqual(pendingHeads(facts, 'bob').map(({ index }) => index), [1]),
   { Bob: { 'act/4': { state: 'seen', at: 5 } } });
 });
 
@@ -233,5 +236,5 @@ test('pending projection remains complete across a long history', async () => {
     { kind: 'join', actor: 'Alice', at: 1 }, { kind: 'join', actor: 'Bob', at: 2 },
     ...Array.from({ length: 4_000 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index + 3,
       body: index % 1_000 === 0 ? `direct ${index} @Bob` : `undirected ${index}`, mentions: index % 1_000 === 0 ? ['Bob'] : [] })),
-  ], (facts) => assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index }) => index), [2, 1_002, 2_002, 3_002]));
+  ], (facts) => assert.deepEqual(pendingHeads(facts, 'Bob').map(({ index }) => index), [0, 1_000, 2_000, 3_000]));
 });

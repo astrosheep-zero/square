@@ -1,7 +1,7 @@
 import os from 'node:os';
-import { type Owner, validateOwner } from './model.js';
+import { type Owner, validateOwner } from './neutral.js';
 
-export type { Owner } from './model.js';
+export type { Owner } from './neutral.js';
 
 export interface HarnessCoordinate {
   readonly channel: string;

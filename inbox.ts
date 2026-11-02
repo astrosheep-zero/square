@@ -1,14 +1,14 @@
-import { notificationFacts, type Owner, type LocatedSeat, type PendingMembership, type Seat } from './model.js';
+import { type Owner, type LocatedSeat, type PendingMembership, type Seat } from './model.js';
 import type { SquareRead } from './ports.js';
 import { createArtifactPort, observeSquareDeliveryRevision, observeSquareRevision } from './artifact.js';
 import { indexedSquareEntries, observeSquareIndex } from './square-index.js';
 import { type VersionObserver } from './file-changes.js';
 import { canonicalPath } from './canonical-path.js';
-import { formatActivityId, parseActivityId } from './square-core.js';
+import { formatMessageId } from './message.js';
 import { freshWatchLease, WATCH_STALE_MS } from './runtime.js';
-import { nativePendingHead, pendingHeads, leaseOwnsNotification, type NativePendingInput } from './delivery.js';
+import { nativePendingHead, pendingHeads, type NativePendingInput } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
-import { projectNotification, renderSquareReminder } from './attention-presentation.js';
+import { projectMessageNotification, renderSquareReminder } from './attention-presentation.js';
 
 export interface PendingWaitOptions {
   signal?: AbortSignal;
@@ -19,31 +19,21 @@ export interface PendingWaitOptions {
   onChangeArmed?: (armed: boolean) => void;
 }
 
-export function pendingKey(membership: LocatedSeat, actIndex: number): string {
-  return membership.location + '\0' + membership.seat.participant.toLocaleLowerCase() + '\0' + actIndex;
-}
-
-export function pendingAtBoundary(inbox: readonly PendingMembership[]): PendingMembership[] {
-  return inbox.map((membership) => {
-    const lease = membership.catchLease;
-    if (lease === undefined) return membership;
-    return { ...membership, notifications: membership.notifications.filter(
-      (notification) => !leaseOwnsNotification(lease, { ...notification, recipient: membership.seat.participant }),
-    ) };
-  }).filter((membership) => membership.notifications.length > 0);
+export function pendingKey(membership: LocatedSeat, messageIndex: number): string {
+  return membership.location + '\0' + membership.seat.participant.toLocaleLowerCase() + '\0' + messageIndex;
 }
 
 function eligibleNotifications(facts: SquareRead, membership: PendingMembership, now = Date.now()): Pick<PendingMembership, 'notifications' | 'deliveryDeferralExpiry'> {
   const seat = facts.seat(membership.seat.participant);
   if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== membership.seat.generation
     || seat.owner !== membership.seat.owner) return { notifications: [] };
-  const cancelledThrough = facts.cancelledThrough(seat.participant, seat.generation);
+  const cancelledThrough = facts.channel.cancelledThrough(seat.participant, seat.generation);
   let expiry = Infinity;
   const notifications = membership.notifications.filter(notification => {
-    if (cancelledThrough !== undefined && notification.actIndex <= cancelledThrough
-      || facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(notification.actIndex))
+    if (cancelledThrough !== undefined && notification.messageIndex <= cancelledThrough
+      || facts.deliveryEvidence(seat.participant, seat.generation, formatMessageId(notification.messageIndex))
         .some(row => row.outcome !== 'failed' && row.outcome !== 'released')) return false;
-    const deferredUntil = deliveryDeferralExpiry(facts, seat, notification.actIndex, now);
+    const deferredUntil = deliveryDeferralExpiry(facts.channel, seat, notification.messageIndex, now);
     if (deferredUntil === undefined) return true;
     expiry = Math.min(expiry, deferredUntil);
     return false;
@@ -54,7 +44,7 @@ function eligibleNotifications(facts: SquareRead, membership: PendingMembership,
 /** Revalidate a supplied batch immediately before the boundary's independent claim/send checks. */
 export async function projectBoundaryEligibility(inbox: readonly PendingMembership[]): Promise<PendingMembership[]> {
   const grouped = new Map<string, PendingMembership[]>();
-  for (const membership of pendingAtBoundary(inbox)) {
+  for (const membership of inbox.filter(candidate => candidate.notifications.length > 0)) {
     const entries = grouped.get(membership.location) ?? [];
     entries.push(membership);
     grouped.set(membership.location, entries);
@@ -111,9 +101,10 @@ function groupCandidates(candidates: readonly SessionBindingCandidate[]): Map<st
 
 function locatedSeats(facts: SquareRead, location: string, seats: readonly Seat[]): LocatedSeat[] {
   return seats.flatMap(seat => {
-    const index = parseActivityId(seat.generation);
+    const participant = facts.participant(seat.participant);
+    const index = participant?.lastJoinIndex;
     const joined = index === undefined ? undefined : facts.activity(index);
-    return joined?.kind !== 'join' ? [] : [{ location, seat, joinedAt: joined.at }];
+    return joined?.kind === 'join' ? [{ location, seat, joinedAt: joined.at }] : [{ location, seat, joinedAt: 0 }];
   });
 }
 
@@ -170,17 +161,24 @@ async function projectPending(candidates: readonly SessionBindingCandidate[],
         let cached = cache?.get(location);
         if (cached?.coordinate !== coordinate || cached.version !== header.revision) {
           cached = { coordinate, version: header.revision, value: locatedSeats(facts, location, seats).map(membership => {
-            const heads = pendingHeads(facts, membership.seat.participant);
-            const routes = new Map(heads.map(head => [head.index, head.route]));
-            return { ...membership, notifications: facts.activities(heads.map(head => head.index)).flatMap(item =>
-              item.kind === 'say' || item.kind === 'message' ? [notificationFacts(item, routes.get(item.index)!)] : []) };
+            const heads = pendingHeads(facts, membership.seat.participant, Date.now(), false);
+            const messages = new Map(facts.channel.messages(heads.map(head => head.index)).map(item => [item.index, item]));
+            return { ...membership, notifications: heads.flatMap(head => {
+              const item = messages.get(head.index);
+              if (item === undefined) return [];
+              return [{ messageIndex: item.index, ...(head.activityIndex === undefined ? {} : { actIndex: head.activityIndex }),
+                actor: item.from, at: item.at, body: item.body, ...(item.preview === undefined ? {} : { preview: item.preview }), ...(head.route === undefined ? {} : { route: head.route }) }];
+            }) };
           }) };
         }
         // Cache conversation content, never leases or delivery eligibility: evidence can change
         // without a conversation revision and must not force body hydration or self-wake retries.
         return { cached, pending: cached.value.map(membership => {
           const catchLease = freshWatchLease(facts, membership.seat.participant);
-          return { ...membership, ...eligibleNotifications(facts, membership),
+          // Cached conversation content, but claim coverage and deferrals are re-read on every projection.
+          const observed = { ...membership, notifications: membership.notifications.filter(note =>
+            !facts.channel.suppressed(membership.seat.participant, membership.seat.generation, note.messageIndex, Date.now())) };
+          return { ...observed, ...eligibleNotifications(facts, observed),
             ...(catchLease === undefined ? {} : { catchLease }) };
         }) };
       }, signal);
@@ -205,10 +203,11 @@ export interface NativePendingSource { readonly text: string; readonly clipped: 
 export function nativePendingSource(facts: SquareRead, input: NativePendingInput): NativePendingSource | undefined {
   const head = nativePendingHead(facts, input);
   if (head === undefined) return undefined;
-  const item = facts.activity(input.index);
-  if (item === undefined || (item.kind !== 'say' && item.kind !== 'message')) return undefined;
-  const projected = projectNotification({ squarePath: input.location, recipient: input.participant,
-    ...notificationFacts(item, head.route) });
+  const item = facts.channel.message(input.index);
+  if (item === undefined) return undefined;
+  const projected = projectMessageNotification({ squarePath: input.location, recipient: input.participant,
+    actor: item.from, body: item.body, ...(item.preview === undefined ? {} : { preview: item.preview }),
+    ...(head.activityIndex === undefined || head.route === undefined ? {} : { agora: { actIndex: head.activityIndex, route: head.route } }) });
   return { text: projected.text, clipped: projected.clipped };
 }
 
@@ -276,9 +275,9 @@ export async function observeSessionPending(owner: Owner, suppliedEnv: NodeJS.Pr
     });
   }
   function eligibleInbox(inbox: PendingMembership[], excludeKeys?: ReadonlySet<string>) {
-    const eligible = pendingAtBoundary(inbox);
+    const eligible = inbox.filter(membership => membership.notifications.length > 0);
     return excludeKeys === undefined ? eligible : eligible.flatMap((membership) => {
-      const notifications = membership.notifications.filter((notification) => !excludeKeys.has(pendingKey(membership, notification.actIndex)));
+      const notifications = membership.notifications.filter((notification) => !excludeKeys.has(pendingKey(membership, notification.messageIndex)));
       return notifications.length === 0 ? [] : [{ ...membership, notifications }];
     });
   }
@@ -334,7 +333,7 @@ export async function observeSessionPending(owner: Owner, suppliedEnv: NodeJS.Pr
           }
           const inbox = await currentInbox(candidates, signal);
           const pending = eligibleInbox(inbox, options.excludeKeys);
-          const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => pendingKey(membership, note.actIndex))).sort());
+          const eligibleKeys = JSON.stringify(pending.flatMap((membership) => membership.notifications.map((note) => pendingKey(membership, note.messageIndex))).sort());
           if (previousEligible !== undefined && previousEligible !== eligibleKeys) canReturn = true;
           previousEligible = eligibleKeys;
           if (signal.aborted) return [];

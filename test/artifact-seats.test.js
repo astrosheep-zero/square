@@ -19,17 +19,17 @@ test('every SeatRef mutation checks the complete input against captured authorit
   const bob = await join(artifact, 'Bob', "test" + ":" + ('bob') + ":agent:worker", 2);
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 3, body: 'notice', mentions: ['Bob'] }));
-  const claim = { seat: bob, activity: 'act/2', kind: 'wake', at: 4, leaseMs: 100, claimToken: 'body-claim' };
+  const claim = { seat: bob, message: 'msg/0', kind: 'wake', at: 4, leaseMs: 100, claimToken: 'body-claim' };
   assert.equal((await artifact.claimDelivery(claim)).status, 'acquired');
   const correlation = { harness: 'pi', token: 'native' };
   const observation = { eventId: 'event', messageId: 'message', state: 'held', observedAt: 5 };
   const mutations = [
-    ['claim', (facts, seat) => facts.claimDelivery({ ...claim, seat, claimToken: 'forged' })],
-    ['prepare', (facts, seat) => facts.prepareDelivery({ seat, claimToken: claim.claimToken, correlation })],
-    ['complete', (facts, seat) => facts.completeDelivery({ ...claim, seat, outcome: 'accepted' })],
-    ['observe', (facts, seat) => facts.observeNativeDelivery({ seat, claimToken: claim.claimToken, observation })],
+    ['claim', (facts, seat) => facts.channel.claimDelivery({ ...claim, seat, claimToken: 'forged' })],
+    ['prepare', (facts, seat) => facts.channel.prepareDelivery({ seat, claimToken: claim.claimToken, correlation, coverage: 'full' })],
+    ['complete', (facts, seat) => facts.channel.completeDelivery({ ...claim, seat, outcome: 'accepted' })],
+    ['observe', (facts, seat) => facts.channel.observeNativeDelivery({ seat, claimToken: claim.claimToken, observation })],
     ['wake address', (facts, seat) => facts.updateWakeAddress(seat, { kind: 'paseo', address: { agentId: 'wrong' } })],
-    ['cancel', (facts, seat) => facts.cancelThrough(seat, 2)],
+    ['cancel', (facts, seat) => facts.channel.cancelThrough(seat, 0)],
   ];
   const before = (await artifact.read(facts => facts.header())).value;
   for (const [name, mutate] of mutations) {
@@ -39,7 +39,7 @@ test('every SeatRef mutation checks the complete input against captured authorit
   }
   for (const forged of [{ ...bob, participant: 'Alice' }, { ...bob, generation: alice.generation }])
     await assert.rejects(artifact.transactAs({ kind: 'participant', seat: bob }, facts =>
-      facts.claimDelivery({ ...claim, seat: forged })), error => error.code === 'already_joined');
+      facts.channel.claimDelivery({ ...claim, seat: forged })), error => error.code === 'already_joined');
   await assert.rejects(artifact.transactAs({ kind: 'join', participant: 'Bob', owner: bob.owner }, facts =>
     facts.updateWakeAddress({ ...bob, owner: 'another-owner' })),error => error.code === 'already_joined');
   assert.deepEqual((await artifact.read(facts => facts.header())).value, before);
@@ -48,25 +48,55 @@ test('every SeatRef mutation checks the complete input against captured authorit
   assert.equal(unchanged.outcome, 'dispatching');
   assert.equal(unchanged.correlation, undefined);
   assert.equal(unchanged.nativeObservations, undefined);
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, undefined);
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', bob.generation))).value, undefined);
   assert.equal((await artifact.read(facts => facts.seat('Bob'))).value.wakeAddress, undefined);
-  assert.equal(await artifact.prepareDelivery({ seat: bob, claimToken: claim.claimToken, correlation }), true);
+  assert.equal(await artifact.prepareDelivery({ seat: bob, claimToken: claim.claimToken, correlation, coverage: 'full' }), true);
   assert.equal(await artifact.completeDelivery({ ...claim, outcome: 'accepted' }), true);
+});
+
+test('landing extends recipient catch coverage atomically without granting the sender claim authority', async t => {
+  const artifact = createArtifactPort(':memory:', empty());
+  t.after(() => artifact.close());
+  const alice = await join(artifact, 'Alice', 'test:alice', 1);
+  const bob = await join(artifact, 'Bob', 'test:bob', 2);
+  await artifact.transactAs({ kind: 'participant', seat: bob }, facts =>
+    facts.putLease('Bob', { leaseId: 'catch', heartbeatAt: 3, expiresAt: 100, filter: { mention: 'Bob' } }, bob.generation));
+  const say = at => ({ kind: 'say', actor: 'Alice', at, body: 'owned by Bob catch', mentions: ['Bob'] });
+  const landed = (await artifact.transactAs({ kind: 'participant', seat: alice }, facts => {
+    const activity = facts.land(say(4));
+    assert.deepEqual(facts.channel.claimLease('Bob', 'agora').suppressed, [activity.messageIndex]);
+    return activity;
+  })).value;
+  const claim = (await artifact.read(facts => facts.channel.claimLease('Bob', 'agora'))).value;
+  assert.deepEqual(claim.suppressed, [landed.messageIndex]);
+  for (const authority of [{ kind: 'participant', seat: alice }, { kind: 'send', actor: 'Alice' }]) {
+    await assert.rejects(artifact.transactAs(authority, facts =>
+      facts.channel.putReceiveClaim({ ...claim, suppressed: [] })),
+    error => ['already_joined', 'invalid_args'].includes(error.code));
+  }
+  const before = (await artifact.read(facts => facts.header())).value;
+  await assert.rejects(artifact.transactAs({ kind: 'participant', seat: alice }, facts => {
+    facts.land(say(5));
+    throw new Error('abort landing');
+  }), /abort landing/);
+  assert.deepEqual((await artifact.read(facts => facts.header())).value, before);
+  assert.deepEqual((await artifact.read(facts => facts.channel.claimLease('Bob', 'agora'))).value, claim);
+  assert.equal((await artifact.read(facts => facts.channel.messageCount({}))).value, 1);
 });
 
 test('mutations revalidate after done in the same transaction and rejected writes roll back retirement', async t => {
   const artifact = createArtifactPort(':memory:', empty());
   t.after(() => artifact.close());
   const bob = await join(artifact, 'Bob', "test" + ":" + ('bob') + ":agent:worker", 1);
-  const claim = { seat: bob, activity: 'act/0', kind: 'wake', at: 3, leaseMs: 100, claimToken: 'after-done' };
+  const claim = { seat: bob, message: 'msg/0', kind: 'wake', at: 3, leaseMs: 100, claimToken: 'after-done' };
   const mutations = [
-    facts => facts.claimDelivery(claim),
-    facts => facts.prepareDelivery({ seat: bob, claimToken: claim.claimToken, correlation: { harness: 'pi', token: 'native' } }),
-    facts => facts.completeDelivery({ ...claim, outcome: 'accepted' }),
-    facts => facts.observeNativeDelivery({ seat: bob, claimToken: claim.claimToken, observation: { eventId: 'event', messageId: 'message', state: 'held', observedAt: 3 } }),
+    facts => facts.channel.claimDelivery(claim),
+    facts => facts.channel.prepareDelivery({ seat: bob, claimToken: claim.claimToken, correlation: { harness: 'pi', token: 'native' }, coverage: 'full' }),
+    facts => facts.channel.completeDelivery({ ...claim, outcome: 'accepted' }),
+    facts => facts.channel.observeNativeDelivery({ seat: bob, claimToken: claim.claimToken, observation: { eventId: 'event', messageId: 'message', state: 'held', observedAt: 3 } }),
     facts => facts.updateWakeAddress(bob, { kind: 'paseo', address: { agentId: 'bob' } }),
-    facts => facts.cancelThrough(bob, 0),
-    facts => facts.markSeen('Bob', [0], 3),
+    facts => facts.channel.cancelThrough(bob, 0),
+    facts => facts.channel.markSeen('Bob', [0], 3),
     facts => facts.putLease('Bob', { leaseId: 'lease', heartbeatAt: 3, expiresAt: 100 }, bob.generation),
     facts => facts.removeLease('Bob', 'lease', bob.generation),
     facts => facts.land({ kind: 'say', actor: 'Bob', at: 3, body: 'after done' }),
@@ -99,7 +129,7 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 3, body: 'hello @Bob', mentions: ['Bob'] }));
   const beforeDelivery = await artifact.read(facts => ({ conversation: facts.header().revision, delivery: facts.header().deliveryRevision }));
-  const claim = await artifact.claimDelivery({ seat: bob, activity: 'act/2', kind: 'wake',
+  const claim = await artifact.claimDelivery({ seat: bob, message: 'msg/0', kind: 'wake',
     route: { kind: 'claude-native', address: { sessionId: 'bob' } }, at: 4, leaseMs: 100, claimToken: 'claim-1' });
   assert.deepEqual(claim, { status: 'acquired', claimToken: 'claim-1', attemptN: 0 });
   assert.equal((await artifact.read(facts => facts.deliveryByToken('claim-1'))).value?.participant, 'Bob');
@@ -107,8 +137,8 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
 
   const observation = { eventId: 'event-1', messageId: 'message-1', state: 'held', observedAt: 5 };
   assert.equal((await artifact.transactAs({ kind: 'participant', seat: bob }, facts =>
-    facts.observeNativeDelivery({ seat: bob, claimToken: 'claim-1', observation }))).value, true);
-  assert.equal(await artifact.completeDelivery({ seat: bob, activity: 'act/2', claimToken: 'claim-1', outcome: 'accepted', at: 6,
+    facts.channel.observeNativeDelivery({ seat: bob, claimToken: 'claim-1', observation }))).value, true);
+  assert.equal(await artifact.completeDelivery({ seat: bob, message: 'msg/0', claimToken: 'claim-1', outcome: 'accepted', at: 6,
     correlation: { harness: 'claude', messageId: 'message-1' } }), true);
   const evidence = (await artifact.read(facts => facts.deliveryByToken('claim-1'))).value;
   assert.equal(evidence?.outcome, 'accepted');
@@ -121,17 +151,17 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
   assert.deepEqual((await artifact.read(facts => facts.seat('Bob'))).value?.wakeAddress,
     { kind: 'paseo', address: { agentId: 'bob' } });
   assert.equal(await artifact.cancelDeliveries(bob), true);
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, 2);
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', bob.generation))).value, 0);
   const revisionAtCancellation = await artifact.revision();
   await assert.rejects(artifact.cancelDeliveries(bob, 999), /assigned activity index|allocator/i);
   assert.equal(await artifact.revision(), revisionAtCancellation, 'a future cancellation boundary rolls back');
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, 2);
-  assert.deepEqual(await artifact.claimDelivery({ seat: bob, activity: 'act/2', kind: 'wake', at: 7, leaseMs: 100, claimToken: 'claim-2' }),
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', bob.generation))).value, 0);
+  assert.deepEqual(await artifact.claimDelivery({ seat: bob, message: 'msg/0', kind: 'wake', at: 7, leaseMs: 100, claimToken: 'claim-2' }),
     { status: 'stale' });
 
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 8, body: 'after cancellation', mentions: ['Bob'] }));
-  assert.equal((await artifact.claimDelivery({ seat: bob, activity: 'act/3', kind: 'wake', at: 9, leaseMs: 100, claimToken: 'claim-3' })).status, 'acquired');
+  assert.equal((await artifact.claimDelivery({ seat: bob, message: 'msg/1', kind: 'wake', at: 9, leaseMs: 100, claimToken: 'claim-3' })).status, 'acquired');
 
   const replacementBody = "test" + ":" + ('replacement');
   const replacement = (await artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: replacementBody, expectedGeneration: bob.generation }, facts => {
@@ -142,8 +172,8 @@ test('artifact gate owns lifecycle seats, fences writes, and keeps delivery evid
   assert.equal(replacement.owner, replacementBody);
   assert.notEqual(replacement.generation, bob.generation);
   assert.equal((await artifact.read(facts => facts.seat('Bob'))).value.generation, replacement.generation);
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', replacement.generation))).value, undefined);
-  await assert.rejects(artifact.transactAs({ kind: 'participant', seat: bob }, facts => facts.markSeen('Bob', [2], 12)), /replaced/);
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', replacement.generation))).value, undefined);
+  await assert.rejects(artifact.transactAs({ kind: 'participant', seat: bob }, facts => facts.channel.markSeen('Bob', [2], 12)), /replaced/);
   assert.equal((await artifact.read(facts => facts.seatsForOwner(aliceBody))).value.length, 1);
   assert.equal((await artifact.read(facts => facts.seatsForOwner(replacementBody))).value[0].participant, 'Bob');
 
@@ -195,7 +225,7 @@ test('done removes seat authority, and rejoin/takeover replace it atomically', a
   const { createSquareFile } = await import('../dist/artifact.js');
   await createSquareFile(location, empty());
   const body = "test" + ":" + ('owner');
-  const square = await SqliteSquare.at({ path: location, env: {} });
+  const square = await SqliteSquare.at({ path: location, env: { SQUARE_INDEX: path.join(dir, 'index.ndjsonl') } });
   t.after(async () => { await square.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   assert.equal(await square.reattach('Ivy', { owner: body }), null);
   const ivy = (await square.join('Ivy', { owner: body })).participant;
@@ -218,10 +248,10 @@ test('done removes seat authority, and rejoin/takeover replace it atomically', a
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 3, body: 'first @Bob', mentions: ['Bob'] }));
   assert.equal(await artifact.cancelDeliveries(bob), true);
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', bob.generation))).value, 2);
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', bob.generation))).value, 0);
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 4, body: 'later @Bob', mentions: ['Bob'] }));
-  assert.equal((await artifact.claimDelivery({ seat: bob, activity: 'act/3', kind: 'wake', at: 5, leaseMs: 50, claimToken: 'later' })).status, 'acquired');
+  assert.equal((await artifact.claimDelivery({ seat: bob, message: 'msg/1', kind: 'wake', at: 5, leaseMs: 50, claimToken: 'later' })).status, 'acquired');
   const replacement = (await artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: ':', expectedGeneration: bob.generation }, facts => {
     facts.land({ kind: 'done', actor: 'Bob', at: 6 });
     facts.land({ kind: 'join', actor: 'Bob', at: 7 });
@@ -229,6 +259,6 @@ test('done removes seat authority, and rejoin/takeover replace it atomically', a
   })).value;
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 8, body: 'new generation @Bob', mentions: ['Bob'] }));
-  assert.equal((await artifact.claimDelivery({ seat: replacement, activity: 'act/6', kind: 'wake', at: 9, leaseMs: 50, claimToken: 'replacement' })).status, 'acquired');
-  assert.equal((await artifact.read(facts => facts.cancelledThrough('Bob', replacement.generation))).value, undefined);
+  assert.equal((await artifact.claimDelivery({ seat: replacement, message: 'msg/2', kind: 'wake', at: 9, leaseMs: 50, claimToken: 'replacement' })).status, 'acquired');
+  assert.equal((await artifact.read(facts => facts.channel.cancelledThrough('Bob', replacement.generation))).value, undefined);
 });

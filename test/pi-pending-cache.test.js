@@ -58,7 +58,7 @@ test('a Pi batch hydrates the recipient projection once and reuses it at the bou
   const hydrations = [];
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (typeof sql === 'string' && sql.includes('act_index IN (SELECT value FROM json_each')
+    if (typeof sql === 'string' && sql.includes('FROM messages WHERE msg_index IN (SELECT value FROM json_each')
       && fs.realpathSync.native(this.location()) === canonicalArtifact) hydrations.push(sql);
     return prepare.call(this, sql, ...args);
   });
@@ -92,7 +92,7 @@ test('a Pi batch hydrates the recipient projection once and reuses it at the bou
     );
     const artifact = createArtifactPort(fixture.squarePath);
     try {
-      assert.deepEqual((await artifact.read(facts => facts.deliveryEvidence('Bob', 'act/1', formatActivityId(2)))).value
+      assert.deepEqual((await artifact.read(facts => facts.channel.deliveryEvidence('Bob', facts.seat('Bob').generation, 'msg/0'))).value
         .filter(row => row.kind === 'presentation').map(row => row.outcome), ['presented']);
     } finally { await artifact.close(); }
   } finally {

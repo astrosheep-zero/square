@@ -100,11 +100,6 @@ const COMMANDS: readonly CommandHelp[] = [
     names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',
     summary: 'Validate artifact integrity.',
   },
-  {
-    names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
-    summary: 'Convert a supported older square to the current format in place.',
-    details: ['For the selected .square artifact only. Stop sessions using this artifact before conversion. Back up the stopped artifact, migrate it, then run square --location <path> doctor before starting updated clients.', 'Versions 2–7 migrate explicitly to format 8. Format 7 migration deletes hold/resume activities and their keyed rows, clears replies to those activities, and preserves surviving activity ids with gaps. Format 6 attachment and opaque-owner conversion are preserved; versions 4/5 first gain attached seats, and 4 also gains empty deferrals. Version 1, unrelated or unsupported artifacts refuse without a write. Names whose legacy owner and routes agree may share an owner; ambiguous names stay standing without custody. Rejoin with the same owner after migration to republish discovery. There is no --check, --backup or --force.'],
-  },
 ];
 
 function definitionFor(command: string): CommandHelp | undefined {
@@ -119,7 +114,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
-    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

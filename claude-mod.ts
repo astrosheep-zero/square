@@ -1,5 +1,5 @@
 import { operationEnv } from './participant-identity.js';
-import { createArtifactPort } from './artifact.js';
+import { channelArtifact, createArtifactPort } from './artifact.js';
 import { recordClaudeDeliveryStatus, type ClaudeDeliveryStatus } from './claude-delivery-status.js';
 import { Square } from './square-api.js';
 import { observeClaudeDelivery, type ClaudeBinding } from './claude-delivery.js';
@@ -107,8 +107,8 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
             let beforeIndex: number | undefined;
             for (;;) {
               const page = facts.activityHeads({ beforeIndex }, { edge: 'newest', limit: 100 });
-              const last = [...page.items].reverse().find((activity) => activity.at <= cutoff);
-              if (last !== undefined) return last.index;
+              const last = page.items.find((activity) => activity.at <= cutoff && activity.messageIndex !== undefined);
+              if (last !== undefined) return last.messageIndex!;
               if (!page.hasMore) return -1;
               beforeIndex = page.items[0].index;
             }
@@ -138,7 +138,7 @@ export async function runClaudeMod(inputText: string, env: NodeJS.ProcessEnv = p
       if (input.operation !== 'start' && !recovery.has(location)) continue;
       const artifact = createArtifactPort(location, undefined, signal);
       let indices: number[];
-      try { indices = await sweepPending({ artifact, location, now: Date.now(), graceMs: 0, limit: 8 }); }
+      try { indices = await sweepPending({ artifact: channelArtifact(artifact), location, now: Date.now(), graceMs: 0, limit: 8 }); }
       catch (error) {
         if (error instanceof InternalSquareError && error.code === 'not_found')
           throw new SquareError('unavailable', `Square is unavailable at ${location}`);

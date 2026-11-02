@@ -37,10 +37,11 @@ async function fixture(t) {
   const alice = await join('Alice', "test" + ":" + ('author'));
   const bob = await join('Bob', body, { kind: 'opencode-server', address: { sessionId: 'native-session' } });
   const say = text => artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
-    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: text, mentions: ['Bob'] })).then(result => result.value.index);
+    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: text, mentions: ['Bob'] })).then(result => result.value.messageIndex);
   const bind = () => rememberSquarePath(location, body, env.SQUARE_INDEX);
-  const evidence = index => artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, `act/${index}`)).then(result => result.value);
-  const receipt = index => artifact.read(facts => facts.receipt('Bob', index)).then(result => result.value);
+  const evidence = index => artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, `msg/${index}`)).then(result => result.value);
+  const receipt = index => artifact.read(facts => facts.channel.receipt('Bob', index)).then(result => result.value);
+  const messageOf = index => artifact.read(facts => facts.channel.message(index)).then(result => result.value);
   const receivers = [];
   const start = prompt => {
     const abort = new AbortController();
@@ -57,7 +58,7 @@ async function fixture(t) {
     await artifact.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { location, env, artifact, body, alice, bob, say, bind, evidence, receipt, start };
+  return { location, env, artifact, body, alice, bob, say, bind, evidence, receipt, messageOf, start };
 }
 
 // Native acceptance/uncertainty remains presentation-pending for all shared observers.
@@ -66,8 +67,8 @@ test('uncertain wake evidence suppresses another injection, including expired di
   const item = await fixture(t);
   await item.bind();
   const index = await item.say('still owes context');
-  const activity = `act/${index}`;
-  const claim = { seat: item.bob, activity, kind: 'wake', at: 1, leaseMs: 1, claimToken: 'interrupted' };
+  const activity = `msg/${index}`;
+  const claim = { seat: item.bob, message: activity, kind: 'wake', at: 1, leaseMs: 1, claimToken: 'interrupted' };
   assert.equal((await item.artifact.claimDelivery(claim)).status, 'acquired');
   assert.equal(automaticWakeEligible(await item.evidence(index), Date.now()), false);
   assert.equal((await item.artifact.claimDelivery({ ...claim, at: 3, claimToken: 'later' })).evidence.outcome, 'unknown');
@@ -123,7 +124,7 @@ test('failed wake is retried on startup; unknown evidence settles without spin o
   const item = await fixture(t);
   await item.bind();
   const index = await item.say('failed before native receiver starts');
-  const claim = { seat: item.bob, activity: `act/${index}`, kind: 'wake', at: Date.now(), leaseMs: 1000, claimToken: 'failed' };
+  const claim = { seat: item.bob, message: `msg/${index}`, kind: 'wake', at: Date.now(), leaseMs: 1000, claimToken: 'failed' };
   assert.equal((await item.artifact.claimDelivery(claim)).status, 'acquired');
   assert.equal(await item.artifact.completeDelivery({ ...claim, outcome: 'failed' }), true);
   const calls = [];
@@ -205,7 +206,8 @@ test('receipt and takeover during native I/O exclude stale batch/context while n
     return accepted(input);
   });
   await until(() => calls.length === 1, 'first native I/O was not entered');
-  await item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts => facts.markSeen('Bob', [caught], Date.now()));
+  const caughtMessage = await item.messageOf(caught);
+  await item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts => facts.channel.markSeen('Bob', [caughtMessage.index], Date.now()));
   await item.artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: 'opencode:native-session:agent:other-agent',
     expectedGeneration: item.bob.generation, wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts => {
     facts.land({ kind: 'done', actor: 'Bob', at: Date.now() });
@@ -216,10 +218,10 @@ test('receipt and takeover during native I/O exclude stale batch/context while n
     wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts =>
     facts.land({ kind: 'join', actor: 'Cara', at: Date.now() }));
   const fresh = (await item.artifact.transactAs({ kind: 'participant', seat: item.alice }, facts =>
-    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new exact-body member', mentions: ['Cara', 'Bob'] }))).value.index;
+    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new exact-body member', mentions: ['Cara', 'Bob'] }))).value.messageIndex;
   release();
   await until(async () => (await item.artifact.read(facts =>
-    facts.deliveryEvidence('Cara', facts.seat('Cara').generation, `act/${fresh}`))).value.some(row => row.outcome === 'accepted'),
+    facts.deliveryEvidence('Cara', facts.seat('Cara').generation, `msg/${fresh}`))).value.some(row => row.outcome === 'accepted'),
   'new exact-body membership did not receive pending activity');
   const newMessageCalls = calls.filter(call => call.text.includes('new exact-body member'));
   assert.equal(newMessageCalls.length, 2, 'both current seats with the exact native address receive the new activity');

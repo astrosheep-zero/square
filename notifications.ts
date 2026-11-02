@@ -1,13 +1,16 @@
+import { createDefaultWakeTransport, type WakeTransports } from './wake-transports.js';
+export { createDefaultWakeTransport, createWakeTransport, type WakeTransports } from './wake-transports.js';
+import { squareWakeProjection } from './wake-preview.js';
 import path from 'node:path';
 import { canonicalPath } from './canonical-path.js';
 import fs from 'node:fs';
 
 import { indexedSquareEntries } from './square-index.js';
 
-import { InternalSquareError, SquareError, type WakeRouteKind } from './model.js';
-import { createArtifactPort } from './artifact.js';
+import { InternalSquareError, SquareError } from './model.js';
+import { channelArtifact, createArtifactPort } from './artifact.js';
 import { deliverPending, sweepPending } from './delivery-operations.js';
-import type { WakeTransportPort } from './ports.js';
+import { formatMessageId } from './message.js';
 
 export const PRIVILEGED_HOOK_BUDGET_MS = 3000;
 
@@ -19,51 +22,10 @@ export function wakeGraceMs(env: NodeJS.ProcessEnv = process.env): number {
   return value;
 }
 
-export type WakeTransports = Readonly<Partial<Record<WakeRouteKind, WakeTransportPort>>>;
-
 interface ProcessNotificationOptions {
   transports?: WakeTransports;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-}
-
-/** Concrete transports use wall time; semantic state time belongs to Square operations. */
-export async function createDefaultWakeTransport(
-  env: NodeJS.ProcessEnv = process.env,
-  suppliedTransports?: WakeTransports,
-): Promise<WakeTransportPort> {
-  if (suppliedTransports !== undefined) return createWakeTransport(suppliedTransports);
-  const transports: Partial<Record<WakeRouteKind, WakeTransportPort>> = {};
-  try {
-    const { CodexQueueTransport } = await import('./codex-queue.js');
-    transports['codex-queue'] = new CodexQueueTransport({ env });
-  } catch { /* core-only builds may omit Codex */ }
-  if (env.SQUARE_DISABLE_PASEO_WAKE !== '1') {
-    try {
-      const { PaseoWakeTransport } = await import('./paseo-delivery.js');
-      transports.paseo = new PaseoWakeTransport();
-    } catch { /* Paseo is optional */ }
-  }
-  const { createClaudeWakeTransport } = await import('./claude-delivery.js');
-  transports['claude-native'] = createClaudeWakeTransport(env);
-  const { HttpWakeTransport } = await import('./http-delivery.js');
-  transports.http = new HttpWakeTransport({ env });
-  return createWakeTransport(transports);
-}
-
-/** Route selection only: all implementations receive the same request and final gate. */
-export function createWakeTransport(transports: WakeTransports): WakeTransportPort {
-  const missing = (kind: WakeRouteKind) => ({ outcome: 'not-capable' as const, diagnostic: `no transport for ${kind}` });
-  return {
-    async probe(route) {
-      const transport = transports[route.kind];
-      if (transport === undefined) return missing(route.kind);
-      try { return await transport.probe?.(route) ?? true; }
-      catch (error) { return { outcome: 'not-capable', diagnostic: error instanceof Error ? error.message : String(error) }; }
-    },
-    attempt: (request, timeoutMs, beforeSend) => transports[request.route.kind]?.attempt(request, timeoutMs, beforeSend)
-      ?? Promise.resolve(missing(request.route.kind)),
-  };
 }
 
 export async function processActNotificationsOnce(squarePath: string, actIndex: number, opts: ProcessNotificationOptions = {}): Promise<void> {
@@ -75,7 +37,9 @@ export async function processActNotificationsOnce(squarePath: string, actIndex: 
     await artifact.read(facts => facts.header());
     const transport = await createDefaultWakeTransport(env, opts.transports);
     try {
-      await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
+      const message = (await artifact.read(facts => { const activity = facts.activity(actIndex); return activity?.kind === 'say' ? activity.messageIndex : undefined; })).value;
+      if (message === undefined) return;
+      await deliverPending({ artifact: channelArtifact(artifact), preparePresentation: squareWakeProjection(artifact), transport, location: squarePath, message: formatMessageId(message), timeoutMs: Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000), now: now() });
     } catch { /* Delivery failure does not undo the activity. */ }
   } catch (error) {
     if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -115,13 +79,13 @@ export async function sweepPrivilegedPending(
         if (remainingMs() === 0 || signal?.aborted) break;
         const limit = Number.parseInt(env.SQUARE_NOTIFY_SWEEP_LIMIT ?? '8', 10);
         const graceMs = 0;
-        const selected = await sweepPending({ artifact, location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
-        for (const actIndex of selected) {
+        const selected = await sweepPending({ artifact: channelArtifact(artifact), location: squarePath, now: Date.now(), graceMs, limit: Number.isFinite(limit) && limit > 0 ? limit : 8 }).catch(() => []);
+        for (const messageIndex of selected) {
           const remaining = remainingMs();
           if (remaining === 0 || signal?.aborted) break;
           const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
           const timeoutMs = Math.max(1, Math.min(Number.isFinite(configured) && configured > 0 ? configured : 5000, remaining));
-          await deliverPending({ artifact, transport, location: squarePath, activity: actIndex, timeoutMs, now: Date.now() }).catch(() => undefined);
+          await deliverPending({ artifact: channelArtifact(artifact), preparePresentation: squareWakeProjection(artifact), transport, location: squarePath, message: formatMessageId(messageIndex), timeoutMs, now: Date.now() }).catch(() => undefined);
         }
       } finally { await artifact.close(); }
     } catch { /* stale index entries are ignored by the hook */ }
@@ -147,7 +111,7 @@ export async function sweepPendingNotifications(
   let selected: number[];
   try {
     await artifact.read(facts => facts.header());
-    selected = await sweepPending({ artifact, location: squarePath, now, graceMs: wakeGraceMs(env), limit });
+    selected = await sweepPending({ artifact: channelArtifact(artifact), location: squarePath, now, graceMs: wakeGraceMs(env), limit });
   } catch (error) {
     if (error instanceof InternalSquareError && error.code === 'not_found')
       throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
@@ -156,7 +120,7 @@ export async function sweepPendingNotifications(
     await artifact.close();
   }
   if (opts.dispatchCandidate !== undefined) {
-    for (const actIndex of selected) await opts.dispatchCandidate(actIndex);
+    for (const messageIndex of selected) await opts.dispatchCandidate(messageIndex);
   }
   return selected;
 }

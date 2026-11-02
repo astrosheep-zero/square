@@ -55,7 +55,7 @@ test('CLI read-only opens need no identity; participant writes do', async () => 
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   const square = await Square.at(squareInput({
-    command: 'status', cwd: ROOT, env: {}, squarePath: file, name: 'Alice', homeDir: os.homedir(),
+    command: 'status', cwd: ROOT, env: { SQUARE_INDEX: path.join(path.dirname(file), 'index.ndjsonl') }, squarePath: file, name: 'Alice', homeDir: os.homedir(),
   }));
   try {
     assert.equal((await square.participants()).participants.length, 0);
@@ -258,6 +258,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
   assert.match(index.stdout, /^Prepare and manage:$/m);
   assert.match(index.stdout, /^Setup:$/m);
   assert.match(index.stdout, /^  list$/m);
+  assert.doesNotMatch(index.stdout, /^  migrate(?:\s|$)/m);
   assert.doesNotMatch(index.stdout, /^  ls,/m);
 
   const missingSquare = path.join(cwd, 'missing.square');
@@ -277,7 +278,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
     runAsync(['help', 'history'], { cwd }),
     runAsync(['help', 'list'], { cwd }),
     runAsync(['help', 'missing-command'], { cwd }),
-    ...['act', 'echo', 'compact'].flatMap((removed) => [
+    ...['act', 'echo', 'compact', 'migrate'].flatMap((removed) => [
       runAsync(['help', removed], { cwd }),
       runAsync([removed], { cwd }),
     ]),
@@ -291,7 +292,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
   assert.match(unknown.stderr, /unknown command: missing-command/);
   assert.match(unknown.stderr, /square --help/);
   for (const [index, result] of removedResults.entries()) {
-    const removed = ['act', 'echo', 'compact'][Math.floor(index / 2)];
+    const removed = ['act', 'echo', 'compact', 'migrate'][Math.floor(index / 2)];
     assert.equal(result.status, 2, removed);
     assert.match(result.stderr, new RegExp(`unknown command: ${removed}`));
     assert.doesNotMatch(result.stderr, /did you mean/i);

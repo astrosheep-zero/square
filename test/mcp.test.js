@@ -13,7 +13,6 @@ import { Square, selectOwnSeat } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from '../dist/claude-mcp-context.js';
-import { legacyFixtureState, writeV1Artifact } from './fixtures/v1-artifact.js';
 
 const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -114,28 +113,6 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
     const consumed = await client.callTool({ name: 'express', arguments: { draft: token } });
     assert.equal(consumed.isError, true);
     assert.match(consumed.content[0].text, /Unknown, expired, or inaccessible/);
-  } finally { await close(); }
-});
-
-test('MCP migration refusals include the required action and recovery command', async (t) => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-migration-'));
-  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const squarePath = path.join(cwd, 'legacy.square');
-  writeV1Artifact(squarePath, legacyFixtureState(), 7);
-  const before = fs.readFileSync(squarePath);
-  const env = { ...process.env, CODEX_THREAD_ID: 'migration-refusal' };
-  const configuredPath = path.join(cwd, 'configured.square');
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: configuredPath }));
-  try {
-    const result = await client.callTool({ name: 'status', arguments: { location: squarePath } });
-    assert.equal(result.isError, true);
-    assert.equal(result.structuredContent, undefined);
-    const text = result.content[0].text;
-    assert.match(text, /Stop .*migrate and verify/);
-    assert.ok(text.includes(squarePath));
-    assert.ok(!text.includes(configuredPath));
-    assert.match(text, /square --location .* migrate/);
-    assert.deepEqual(fs.readFileSync(squarePath), before);
   } finally { await close(); }
 });
 

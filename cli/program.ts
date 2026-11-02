@@ -10,7 +10,7 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
   if (!isSquareError(error)) throw error;
   const detail = (error as OperationError).operation;
   const squarePath = context?.squarePath;
-  const recovery = error.facts?.reason === 'migration_required' || context === undefined || squarePath === undefined ? undefined
+  const recovery = context === undefined || squarePath === undefined ? undefined
     : await withSquare({ ...context, name: detail?.participant ?? context.name }, (square) => square.recovery(detail?.participant ?? context.name)).catch(() => undefined);
   const name = detail?.participant ?? recovery?.participant ?? context?.name;
   const lines = renderFailureLines(error, { squarePath, name, owner: context?.owner ?? context?.env.SQUARE_OWNER });

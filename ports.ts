@@ -1,7 +1,13 @@
-import type { Act, ActivityId, Owner, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
-import type { AttemptOutcome } from './delivery-attempts.js';
-import type { MetadataMatch, DeliveryDeferralFact } from './delivery-deferral.js';
+import type { ActDraft, HydratedAct, SayRelation, Owner, HardCap, Seat, StoredAct, WakeAddress, WakeRoute, WatchLease } from './model.js';
 import type { ActivitySearch } from './square-facade.js';
+import type { IndexPage, FactPage } from './neutral.js';
+export type { WakeTransportPort, WakePresentation, WakeProjectionContext, WakeProjection, WakeRequest, WakeOutcome } from './channel-transport.js';
+export type { IndexPage, FactPage } from './neutral.js';
+import type { ChannelArtifact, ChannelRead, ChannelWrite, ChannelWriteAuthority, ChannelDeliveryEvidence, ChannelDeliveryClaimInput, ChannelDeliveryClaimResult,
+  ChannelDeliveryPreparation, ChannelDeliveryCompletion, MessageId, EndpointGeneration } from './channel-ports.js';
+export type { ChannelArtifact, ChannelRead, ChannelWrite, ChannelWriteAuthority, ChannelHeader, MessageFact, MessageAddressFact, MessageHead, MessageFilter,
+  MessageDraft, EndpointFact, EndpointRef, ReceiveClaimFact, ChannelDeliveryEvidence, ChannelDeliveryClaimInput,
+  ChannelDeliveryClaimResult, ChannelDeliveryPreparation, ChannelDeliveryCompletion } from './channel-ports.js';
 
 export type ActivityIndex = number;
 export interface SquareHeader {
@@ -41,6 +47,7 @@ export interface ActivityHead {
   readonly actor: string;
   readonly reach?: 'bell';
   readonly reply?: ActivityIndex;
+  readonly messageIndex?: number;
 }
 export interface ActivityFilter {
   readonly afterIndex?: number;
@@ -52,14 +59,12 @@ export interface ActivityFilter {
   readonly actorMatch?: 'identity' | 'exact';
   readonly afterAt?: number;
   /** Shared query predicates, applied before paging or counting. */
-  readonly metadataMatch?: MetadataMatch;
+  readonly metadataMatch?: import('./delivery-deferral.js').MetadataMatch;
   readonly search?: ActivitySearch;
 }
-export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
-export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
+/** Upper attention filter over its own landed reasons and lower message addresses. */
 export interface DirectedFilter extends Omit<ActivityFilter, 'actors' | 'actorMatch'> {
   readonly unseenOnly?: true;
-  /** Restrict to addresses belonging to the current standing generation or unfenced addresses. */
   readonly currentGeneration?: true;
   readonly senders?: readonly string[];
   readonly attentionOnly?: true;
@@ -70,74 +75,35 @@ export interface DirectedHead {
   readonly actor: string;
   readonly recipient: string;
   readonly route: import('./model.js').DirectedNotificationRoute;
+  readonly messageIndex: number;
+  readonly generation?: EndpointGeneration;
 }
 export interface LandedRecipient {
   readonly recipient: string;
   readonly route: import('./model.js').DirectedNotificationRoute;
-  readonly generation?: ActivityId;
+  readonly generation?: EndpointGeneration;
 }
 export interface ReceiptFacts { readonly latestAt?: number; readonly latestActorActivityIndex?: number }
 export type SeatRef = Pick<Seat, 'participant' | 'owner' | 'generation'>;
-export type ArtifactWriteAuthority =
-  | { readonly kind: 'send'; readonly actor: string }
-  | { readonly kind: 'participant'; readonly seat: SeatRef }
+export type ArtifactWriteAuthority = ChannelWriteAuthority
   | { readonly kind: 'host-cleanup'; readonly seat: SeatRef }
   | { readonly kind: 'join'; readonly participant: string; readonly owner: Owner; readonly wakeAddress?: WakeAddress }
-  | { readonly kind: 'takeover'; readonly participant: string; readonly owner: Owner; readonly expectedGeneration: ActivityId; readonly wakeAddress?: WakeAddress };
-export interface DeliveryEvidence {
-  readonly participant: string;
-  readonly generation: ActivityId;
-  readonly activity: ActivityId;
-  readonly kind: 'wake' | 'presentation';
-  readonly outcome: AttemptOutcome;
-  readonly attemptN: number;
-  readonly at: number;
-  readonly expiresAt?: number;
-  readonly claimToken?: string;
-  readonly route?: WakeAddress;
-  readonly signature?: string;
-  readonly message?: string;
-  readonly diagnostic?: import('./model.js').JsonValue;
-  readonly correlation?: { readonly harness: 'claude' | 'opencode' | 'pi'; readonly token?: string; readonly messageId?: string; readonly payloadHash?: string };
-  readonly nativeObservations?: readonly { readonly eventId: string; readonly messageId: string; readonly state: 'held' | 'released' | 'dropped'; readonly reason?: string; readonly observedAt: number }[];
-}
-export interface DeliveryClaimInput {
-  readonly seat: SeatRef;
-  readonly activity: ActivityId;
-  readonly kind: 'wake' | 'presentation';
-  /** Observe an existing wake's exact token; never authorizes another content injection. */
-  readonly observationOf?: string;
-  readonly route?: WakeAddress;
-  readonly at: number;
-  readonly leaseMs: number;
-  readonly claimToken: string;
-}
-export type DeliveryClaimResult =
-  | { readonly status: 'acquired'; readonly claimToken: string; readonly attemptN: number }
-  | { readonly status: 'busy' | 'terminal' | 'stale' | 'deferred'; readonly evidence?: DeliveryEvidence };
-export interface DeliveryPreparation {
-  readonly seat: SeatRef;
-  readonly claimToken: string;
-  readonly correlation: NonNullable<DeliveryEvidence['correlation']>;
-}
-export interface DeliveryCompletion {
-  readonly seat: SeatRef;
-  readonly activity: ActivityId;
-  readonly claimToken: string;
-  readonly outcome: Exclude<DeliveryEvidence['outcome'], 'dispatching'>;
-  readonly at: number;
-  readonly signature?: string;
-  readonly message?: string;
-  readonly diagnostic?: import('./model.js').JsonValue;
-  readonly correlation?: DeliveryEvidence['correlation'];
-}
+  | { readonly kind: 'takeover'; readonly participant: string; readonly owner: Owner; readonly expectedGeneration: EndpointGeneration; readonly wakeAddress?: WakeAddress };
+export type DeliveryEvidence = ChannelDeliveryEvidence;
+export type DeliveryClaimInput = ChannelDeliveryClaimInput;
+export type DeliveryClaimResult = ChannelDeliveryClaimResult;
+export type DeliveryPreparation = ChannelDeliveryPreparation;
+export type DeliveryCompletion = ChannelDeliveryCompletion;
+export type { MessageId, EndpointGeneration };
 /** Domain facts exist only during a synchronous artifact callback. Values are detached. */
 export interface SquareRead {
+  /** Lower Channel facts. Upper layers may use them; Channel never sees this composite. */
+  readonly channel: ChannelRead;
   seat(requestedName: string): Seat | undefined;
   seatsForOwner(owner: Owner): readonly Seat[];
-  deliveryEvidence(participant: string, generation: ActivityId, activity?: ActivityId): readonly DeliveryEvidence[];
+  deliveryEvidence(participant: string, generation: EndpointGeneration, message?: MessageId): readonly DeliveryEvidence[];
   deliveryByToken(claimToken: string): DeliveryEvidence | undefined;
-  cancelledThrough(participant: string, generation: ActivityId): number | undefined;
+  cancelledThrough(participant: string, generation: EndpointGeneration): number | undefined;
   header(): SquareHeader;
   participant(requestedName: string): ParticipantFact | undefined;
   participantCounts(): ParticipantCounts;
@@ -145,8 +111,10 @@ export interface SquareRead {
   attention(listener: string): readonly AttentionFact[];
   incomingAttention(sender: string): readonly AttentionFact[];
   activity(index: ActivityIndex): StoredAct | undefined;
+  activityByMessage(messageIndex: number): SayRelation | undefined;
   activityHeads(filter: ActivityFilter, page: IndexPage): FactPage<ActivityHead>;
-  activities(indexes: readonly ActivityIndex[]): readonly StoredAct[];
+  /** The explicit content projection: each say resolved against its Channel message in one read. */
+  activities(indexes: readonly ActivityIndex[]): readonly HydratedAct[];
   activityCount(filter: ActivityFilter): number;
   contextIndexes(centers: readonly ActivityIndex[], before: number, after: number): readonly ActivityIndex[];
   sayOrdinals(indexes: readonly ActivityIndex[]): Readonly<Record<number, number>>;
@@ -155,33 +123,22 @@ export interface SquareRead {
   directed(recipient: string, filter: DirectedFilter, page: IndexPage): FactPage<DirectedHead>;
   directedAt(recipient: string, index: ActivityIndex): DirectedHead | undefined;
   directedCount(recipient: string, filter: DirectedFilter): number;
-  pendingAudience(afterExclusive: number, throughInclusive: number, activityLimit: number): {
-    readonly groups: readonly { readonly index: ActivityIndex; readonly at: number; readonly actor: string; readonly recipients: readonly LandedRecipient[] }[];
-    readonly hasMore: boolean;
-  };
   receipt(requestedName: string, index: ActivityIndex): { readonly at: number } | undefined;
   receiptFacts(requestedName: string, afterIndex: number): ReceiptFacts;
   lease(requestedName: string): WatchLease | undefined;
-  deliveryDeferrals(participant: string, generation: ActivityId): readonly DeliveryDeferralFact[];
+  deliveryDeferrals(participant: string, generation: EndpointGeneration): readonly import('./delivery-deferral.js').DeliveryDeferralFact[];
 }
 export interface SquareWrite extends SquareRead {
-  land(activity: Act & { readonly at: number }): StoredAct;
+  readonly channel: ChannelWrite;
+  land(draft: ActDraft): StoredAct;
   updateWakeAddress(seat: SeatRef, wakeAddress?: WakeAddress): boolean;
   /** Join authority only; preserves membership and its establishing generation. */
   reattachSeat(seat: SeatRef, wakeAddress?: WakeAddress): boolean;
   /** Host-cleanup authority only; stale/already-detached coordinates are a no-op. */
   detachSeat(seat: SeatRef): boolean;
-  cancelThrough(seat: SeatRef, through: ActivityIndex): boolean;
-  claimDelivery(input: DeliveryClaimInput): DeliveryClaimResult;
-  prepareDelivery(input: DeliveryPreparation): boolean;
-  completeDelivery(input: DeliveryCompletion): boolean;
-  observeNativeDelivery(input: { readonly seat: SeatRef; readonly claimToken: string; readonly observation: NonNullable<DeliveryEvidence['nativeObservations']>[number] }): boolean;
-  markSeen(requestedName: string, indexes: readonly ActivityIndex[], at: number): number;
-  putLease(requestedName: string, lease: WatchLease, generation?: ActivityId): boolean;
-  removeLease(requestedName: string, expectedLeaseId: string, generation?: ActivityId): boolean;
-  putDeliveryDeferral(seat: SeatRef, id: string, match: MetadataMatch, expiresAt: number, now: number): boolean;
-  renewDeliveryDeferral(seat: SeatRef, id: string, expiresAt: number, now: number): boolean;
-  releaseDeliveryDeferral(seat: SeatRef, id: string, now: number): boolean;
+  /** Upper catch claim: the lease plus the message coverage it currently owns. */
+  putLease(requestedName: string, lease: WatchLease, generation?: EndpointGeneration, suppressed?: readonly number[]): boolean;
+  removeLease(requestedName: string, expectedLeaseId: string, generation?: EndpointGeneration): boolean;
 }
 export interface SquareReadResult<R> { readonly value: R; readonly version: number }
 export interface SquareCommitResult<R> extends SquareReadResult<R> { readonly changed: boolean }
@@ -198,8 +155,8 @@ export interface SquareArtifactPort {
   claimDelivery(input: DeliveryClaimInput, signal?: AbortSignal): Promise<DeliveryClaimResult>;
   prepareDelivery(input: DeliveryPreparation, signal?: AbortSignal): Promise<boolean>;
   completeDelivery(input: DeliveryCompletion, signal?: AbortSignal): Promise<boolean>;
-  /** Persist suppression through a fixed index, or atomically capture the current artifact head. */
-  cancelDeliveries(seat: SeatRef, through?: ActivityIndex, signal?: AbortSignal): Promise<boolean>;
+  /** Persist suppression through a fixed message, or atomically capture the current artifact head. */
+  cancelDeliveries(seat: SeatRef, through?: number, signal?: AbortSignal): Promise<boolean>;
   changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -215,62 +172,27 @@ export interface SquareResourceOwner {
   close(): Promise<void>;
 }
 
-/** Sole wake executor protocol; implementations own only transport readiness and sending. */
-export interface WakeTransportPort {
-  /** Capability check that performs no external wake and writes no evidence. */
-  probe?(route: WakeRoute): Promise<boolean | { readonly outcome: 'not-capable'; readonly diagnostic?: string }>;
-  attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome>;
-}
-
-export interface WakeRequest {
-  readonly location: string;
-  readonly participant: string;
-  readonly activity: string;
-  readonly actor: string;
-  readonly seat: SeatRef;
-  readonly claimToken?: string;
-  readonly attemptN?: number;
-  readonly route: WakeRoute;
-  /** Artifact context for native adapters that must persist correlation before I/O. */
-  readonly artifact?: SquareArtifactPort;
-}
-
 /** Executor-neutral presentation capability; intentionally separate from wake transport. */
 export interface PresentationSinkPort {
-  present(activity: StoredAct): void | Promise<void>;
-}
-
-export type WakeOutcome =
-  | { readonly outcome: 'accepted'; readonly signature?: string }
-  | { readonly outcome: 'failed'; readonly message?: string; readonly signature?: string; readonly diagnostic?: unknown }
-  | { readonly outcome: 'not-capable'; readonly diagnostic?: string }
-  | { readonly outcome: 'unknown'; readonly signature?: string; readonly message?: string; readonly diagnostic?: unknown };
-
-export interface DeliverPendingInput {
-  readonly artifact: SquareArtifactPort;
-  readonly transport: WakeTransportPort;
-  readonly location: string;
-  readonly timeoutMs?: number;
-  readonly now?: number;
-  readonly activity?: string | number;
+  present(message: MessageFact): void | Promise<void>;
 }
 
 export interface PresentationResult {
   readonly presented: boolean;
-  readonly activity?: StoredAct;
+  readonly message?: MessageFact;
 }
 
 export interface PresentPendingInput {
   readonly artifact: SquareArtifactPort;
   readonly location: string;
   readonly participant: string;
-  readonly activity: string | number;
+  readonly message: string | number;
   readonly sink: PresentationSinkPort;
   /** Existing wake observed by a native receiver; the sink must not inject content. */
   readonly observationOf?: string;
   /** Captured artifact seat; used to fence both presentation and consumption. */
   readonly seat?: SeatRef;
-  readonly generation?: ActivityId;
+  readonly generation?: EndpointGeneration;
   readonly now?: number;
   readonly timeoutMs?: number;
   /** Pre-effect work control only; successful sink evidence settles independently, with a bounded lifetime. */
@@ -280,3 +202,5 @@ export interface PresentPendingInput {
   /** Receiver-specific pre-effect eligibility, never a veto of an already successful sink. */
   readonly current?: (facts: SquareRead) => boolean;
 }
+
+import type { MessageFact } from './channel-ports.js';

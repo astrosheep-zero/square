@@ -8,13 +8,38 @@ import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { deliverPending } from '../dist/delivery-operations.js';
-import { wakePreview } from '../dist/delivery.js';
+import { squareWakeProjection } from '../dist/wake-preview.js';
+import { nativePendingPreview } from '../dist/inbox.js';
 import { HttpWakeTransport } from '../dist/http-delivery.js';
+import { Channel } from '../dist/channel-internal.js';
 
 // Local receivers must not travel through a developer's environment proxy.
 process.env.NO_PROXY = '127.0.0.1,localhost';
+
+const messageOf = async (square, activity) =>
+  `msg/${(await square.artifact.read(facts => facts.activity(Number(activity.id.slice(4))))).value.messageIndex}`;
+
+test('standalone Channel sends an HTTP notification without an Agora preview', async t => {
+  const bodies = [];
+  const transport = new HttpWakeTransport({ env: {}, fetch: async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(null, { status: 202 });
+  } });
+  const channel = Channel.inMemory({ wakeTransport: transport });
+  t.after(() => channel.close());
+  const bob = await channel.attach('Bob', { owner: 'test:bob', wakeAddress: {
+    kind: 'http', address: { url: 'https://example.com/wake' },
+  } });
+  const sent = await channel.send({ from: 'Alice', to: 'Bob', body: 'standalone HTTP' });
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].message, sent.id);
+  assert.match(bodies[0].preview, /standalone HTTP/);
+  assert.doesNotMatch(bodies[0].preview, /<square-activity/);
+  const evidence = (await channel.artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, sent.id))).value;
+  assert.equal(evidence[0].outcome, 'accepted');
+});
 
 async function server(t, handler) {
   const server = http.createServer(handler);
@@ -37,10 +62,12 @@ async function fixture(t, url = 'https://example.com/wake', options = {}) {
   const artifact = createArtifactPort(location);
   t.after(async () => { await artifact.close(); await square.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
-  const request = { location, participant: 'Bob', activity: activity.id, actor: 'Alice', seat, artifact,
-    claimToken: 'private-claim', attemptN: 0, route: { ...wakeAddress, location, participant: 'Bob', updatedAt: Date.now() } };
+  const context = { location, participant: 'Bob', message: await messageOf(square, activity), actor: 'Alice', seat,
+    route: { ...wakeAddress, location, participant: 'Bob', updatedAt: Date.now() } };
+  const request = { ...context, channel: { prepare: async () => true }, presentation: await squareWakeProjection(artifact)(context),
+    claimToken: 'private-claim', attemptN: 0 };
   const transport = new HttpWakeTransport({ env: input.env, ...options });
-  return { input, square, alice, bob, seat, artifact, request, transport, wakeAddress };
+  return { input, square, alice, bob, seat, artifact, request, transport, wakeAddress, activityId: activity.id };
 }
 
 test('HTTP probe validates locally; invalid configuration, missing preview and refused final gate never send', async t => {
@@ -66,10 +93,8 @@ test('HTTP probe validates locally; invalid configuration, missing preview and r
   }
   assert.equal(await f.transport.probe(f.request.route), true, 'HTTPS uses the same local validation');
   assert.equal((await attempt({ ...f.request, route: { ...f.request.route, kind: 'paseo' } })).outcome, 'not-capable');
-  assert.equal((await attempt({ ...f.request, artifact: undefined })).outcome, 'not-capable');
+  assert.equal((await attempt({ ...f.request, presentation: undefined })).outcome, 'not-capable');
   assert.equal((await f.transport.attempt(f.request, 1000, async () => false)).outcome, 'not-capable');
-  await f.bob.catch({ id: f.request.activity });
-  assert.equal((await attempt(f.request)).outcome, 'not-capable');
   assert.equal(sends, 0);
   assert.equal(checks, 0);
 });
@@ -84,7 +109,7 @@ test('HTTPS uses a POST allowlist payload and cancels acknowledgement bodies wit
     assert.equal(init.redirect, 'manual');
     assert.equal(init.headers.get('authorization'), 'Bearer sender-token');
     assert.equal(init.headers.get('content-type'), 'application/json');
-    assert.deepEqual(Object.keys(JSON.parse(init.body)).sort(), ['activity', 'actor', 'location', 'participant', 'preview']);
+    assert.deepEqual(Object.keys(JSON.parse(init.body)).sort(), ['actor', 'location', 'message', 'participant', 'preview']);
     signal = init.signal;
     return new Response(new ReadableStream({ cancel() { cancelled = true; return new Promise(() => {}); } }), { status: 200 });
   } });
@@ -115,16 +140,20 @@ test('public default open roundtrips the HTTP seat and records wake acceptance, 
   assert.equal(request.url, '/wake?secret=query-secret');
   assert.equal(request.headers['content-type'], 'application/json');
   assert.equal(request.headers.authorization, 'Bearer sender-token');
-  const expected = { ...f.request, activity: activity.id };
-  const preview = (await f.artifact.read(facts => wakePreview(facts, expected))).value;
-  assert.deepEqual(request.body, { location: f.input.path, participant: 'Bob', activity: activity.id, actor: 'Alice', attemptN: 0, preview });
+  const message = await messageOf(opened, activity);
+  const preview = (await f.artifact.read(facts => nativePendingPreview(facts, {
+    location: f.input.path, participant: 'Bob', generation: f.seat.generation, owner: f.seat.owner,
+    index: Number(message.slice(4)), route: f.request.route, now: Date.now(),
+  }))).value;
+  assert.ok(preview);
+  assert.deepEqual(request.body, { location: f.input.path, participant: 'Bob', message, actor: 'Alice', attemptN: 0, preview: preview.payload });
   const state = (await f.artifact.read(facts => ({
-    evidence: facts.deliveryEvidence('Bob', f.seat.generation, activity.id),
-    receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
+    evidence: facts.deliveryEvidence('Bob', f.seat.generation, message),
+    receipt: facts.channel.receipt('Bob', Number(message.slice(4))),
   }))).value;
   assert.deepEqual(state.evidence.map(row => [row.kind, row.outcome]), [['wake', 'accepted']]);
   assert.equal(state.receipt, undefined);
-  await deliverPending({ artifact: f.artifact, location: f.input.path, activity: activity.id, transport: f.transport });
+  await deliverPending({ artifact: channelArtifact(f.artifact), preparePresentation: squareWakeProjection(f.artifact), location: f.input.path, message, transport: f.transport });
   assert.equal(requests.length, 1, 'accepted wakes are not replayed');
 });
 
@@ -185,21 +214,20 @@ test('a lost acknowledgement records unknown and the dispatcher never automatica
     res.destroy();
   });
   const f = await fixture(t, url);
-  const input = { artifact: f.artifact, location: f.input.path, transport: f.transport, activity: f.request.activity };
+  const input = { artifact: channelArtifact(f.artifact), preparePresentation: squareWakeProjection(f.artifact), location: f.input.path, transport: f.transport, message: f.request.message };
   await deliverPending(input);
   await deliverPending(input);
   assert.equal(calls, 1);
   const evidence = (await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value;
   assert.deepEqual(evidence.map(row => [row.outcome, row.signature]), [['unknown', 'http_send_unknown']]);
-  assert.equal(evidence[0].message, 'HTTP wake acceptance is unknown after a network error.');
+  assert.equal(evidence[0].messageText, 'HTTP wake acceptance is unknown after a network error.');
 });
 
 test('preview and final check consume one budget; an expired local budget never starts fetch', async t => {
   let calls = 0, now = Date.now();
   const f = await fixture(t, undefined, { fetch: async () => { calls++; assert.fail('expired budget sent'); } });
   t.mock.method(Date, 'now', () => now);
-  const artifact = { read: async (...args) => { const result = await f.artifact.read(...args); now += 40; return result; } };
-  const result = await f.transport.attempt({ ...f.request, artifact }, 100, async () => { now += 60; return true; });
+  const result = await f.transport.attempt(f.request, 100, async () => { now += 100; return true; });
   assert.equal(result.outcome, 'failed');
   assert.equal(result.signature, 'http_pre_send_timeout');
   assert.equal(calls, 0);
@@ -233,7 +261,7 @@ test('dispatcher timeout stays unknown without HTTP I/O, late gate send or autom
       return beforeSend();
     })());
   } };
-  const input = { artifact: f.artifact, location: f.input.path, activity: f.request.activity, transport, timeoutMs: 1000 };
+  const input = { artifact: channelArtifact(f.artifact), preparePresentation: squareWakeProjection(f.artifact), location: f.input.path, message: f.request.message, transport, timeoutMs: 1000 };
   const evidence = async () => (await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value;
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const pending = deliverPending(input);
@@ -279,7 +307,7 @@ test('HTTP final gates share deferral, cancellation and attachment fences withou
   let calls = 0;
   const url = await server(t, (_req, res) => { calls++; res.end(); });
   const f = await fixture(t, url);
-  const input = { artifact: f.artifact, location: f.input.path };
+  const input = { artifact: channelArtifact(f.artifact), preparePresentation: squareWakeProjection(f.artifact), location: f.input.path };
   let lease, attempts = 0;
   for (const change of [
     async () => { lease = await f.bob.deferDelivery({ match: { fields: [{ path: ['job'], equals: 7 }] }, durationMs: 10000 }); },
@@ -287,7 +315,7 @@ test('HTTP final gates share deferral, cancellation and attachment fences withou
     async () => { await f.square.detach('Bob', { owner: f.seat.owner, generation: f.seat.generation }); },
   ]) {
     const { activity } = await f.alice.express({ body: 'ready', metadata: { job: 7 }, mentions: ['Bob'], force: true });
-    await deliverPending({ ...input, activity: activity.id, transport: {
+    await deliverPending({ ...input, message: await messageOf(f.square, activity), transport: {
       probe: route => f.transport.probe(route),
       attempt: (request, budget, beforeSend) => {
         attempts++;

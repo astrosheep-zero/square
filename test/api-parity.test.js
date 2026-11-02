@@ -189,7 +189,7 @@ function measureArtifact(t, squarePath) {
   });
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
     const statement = prepare.call(this, sql, ...args);
-    if (this.location() === file && sql.startsWith('SELECT * FROM activities WHERE act_index IN ')) {
+    if (this.location() === file && sql.includes('WHERE a.act_index IN (SELECT value FROM json_each')) {
       const all = statement.all;
       statement.all = function (...values) { const rows = all.apply(this, values); hydrated += rows.length; return rows; };
     }

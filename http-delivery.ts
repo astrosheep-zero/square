@@ -1,6 +1,5 @@
-import type { WakeRoute } from './model.js';
-import type { WakeOutcome, WakeRequest, WakeTransportPort } from './ports.js';
-import { wakePreview } from './delivery.js';
+import type { WakeRoute } from './channel-values.js';
+import type { WakeOutcome, WakeRequest, WakeTransportPort } from './channel-transport.js';
 
 export interface HttpWakeTransportOptions {
   fetch?: typeof fetch;
@@ -52,11 +51,10 @@ export class HttpWakeTransport implements WakeTransportPort {
     });
     const send = async (): Promise<WakeOutcome> => {
       try {
-        const preview = request.artifact === undefined ? undefined
-          : (await request.artifact.read(facts => wakePreview(facts, request), controller.signal)).value;
+        const preview = request.presentation?.payload;
         if (preview === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
         const body = JSON.stringify({
-          location: request.location, participant: request.participant, activity: request.activity, actor: request.actor,
+          location: request.location, participant: request.participant, message: request.message, actor: request.actor,
           ...(request.attemptN === undefined ? {} : { attemptN: request.attemptN }), preview,
         });
         if (controller.signal.aborted || Date.now() >= deadline) return budgetUnavailable();

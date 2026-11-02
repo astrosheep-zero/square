@@ -1,5 +1,4 @@
-import type { WakeRequest, WakeOutcome, WakeTransportPort } from './ports.js';
-import { wakePreview } from './delivery.js';
+import type { WakeRequest, WakeOutcome, WakeTransportPort } from './channel-transport.js';
 import { DeliveryError } from './packages/agent-delivery/src/index.js';
 import { resolvePaseoDaemon } from './packages/agent-delivery/src/paseo-native.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
@@ -60,8 +59,7 @@ export class PaseoWakeTransport implements WakeTransportPort {
       };
     }
 
-    const payload = request.artifact === undefined ? undefined
-      : (await request.artifact.read((facts) => wakePreview(facts, request))).value;
+    const payload = request.presentation?.payload;
     if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
     let remaining = remainingMs();
     if (remaining === 0) return budgetUnavailable();
@@ -107,7 +105,7 @@ export class PaseoWakeTransport implements WakeTransportPort {
         prompt: payload,
         location: request.location,
         participant: request.participant,
-        activity: request.activity,
+        message: request.message,
         ...(request.attemptN === undefined ? {} : { attemptN: request.attemptN }),
       }, { timeoutMs: remaining });
       return { outcome: 'accepted' };

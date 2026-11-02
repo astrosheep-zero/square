@@ -1,5 +1,7 @@
 # Row runtime delivery evidence
 
+> Historical record: migration and legacy formats described below have since been removed.
+
 Candidate implementation: `833d6f15c9071767eb49a9562a4c42a93c6f4000` plus post-review removal of three dead runtime exports and benchmark phase baselines. Baseline: `99679eb2905dde5f282025bc7f5494f7da065e54`. This report is Deliverer evidence, **not independent review or acceptance**. Explicit migration is a separate delivery; no publication, live migration, host service change, or remote native presentation was performed.
 
 ## Deletion and replacement

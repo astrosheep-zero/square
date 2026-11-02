@@ -359,9 +359,8 @@ export interface FailureReport {
   readonly code: string;
   readonly message: string;
   readonly facts?: {
-    readonly reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'migration_required' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
+    readonly reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
     readonly activityId?: string;
-    readonly ledgerRoot?: string;
     readonly activityExists?: boolean;
   };
   readonly operation?: OperationFailureDetail;
@@ -374,10 +373,7 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
   const reason = facts?.reason;
   const marked = reason === 'never_joined' || reason === 'not_standing';
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
-  if (reason === 'migration_required') {
-    if (facts?.ledgerRoot !== undefined) lines.push('square ledger migrate', 'square ledger verify');
-    else if (squarePath !== undefined) lines.push(`${commandPrefix(squarePath)} migrate`);
-  } else if (squarePath !== undefined && name !== undefined && reason === 'needs_seat') {
+  if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
     lines.push(joinRecoveryCommand(squarePath, name, owner));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {

@@ -1,5 +1,5 @@
 import { resolveCodexHome } from './packages/agent-delivery/src/codex-endpoint.js';
-import type { WakeAddress } from './model.js';
+import type { WakeAddress } from './channel-values.js';
 
 /** Capture the receiver's CLI configuration when its seat is established, not at send time. */
 export function codexWakeAddress(threadId: string, env: NodeJS.ProcessEnv): WakeAddress {

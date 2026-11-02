@@ -41,7 +41,7 @@ test('a blocked COMMIT retries the same callback/result and releases the event l
   const { file, port } = await fixture(t);
   const reader = new DatabaseSync(file, { readOnly: true });
   t.after(() => reader.close());
-  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
+  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM storage_meta').get();
   let calls = 0, finished = false;
   const body = "test" + ":" + ('alice');
   const pending = port.transactAs({ kind: 'join', participant: 'Alice', owner: body }, w => { calls++; return w.land({ kind: 'join', actor: 'Alice', at: 0 }); }).then(r => { finished = true; return r; });
@@ -59,7 +59,7 @@ test('a blocked COMMIT retries the same callback/result and releases the event l
 test('abort while COMMIT is busy rolls back all landing effects and preserves the caller reason', async t => {
   const { file, port } = await fixture(t), reader = new DatabaseSync(file, { readOnly: true });
   t.after(() => reader.close());
-  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM square_meta').get();
+  reader.exec('BEGIN'); reader.prepare('SELECT revision FROM storage_meta').get();
   const abort = new AbortController(), reason = new Error('stop commit');
   let calls = 0;
   const body = "test" + ":" + ('alice');
@@ -126,12 +126,12 @@ test('two processes serialize unseen selection plus sparse receipt insertion wit
   const script = `import {createArtifactPort} from './dist/artifact.js';
     const p=createArtifactPort(process.argv[1]);
     const seat=(await p.read(facts=>facts.seat('Bob'))).value;
-    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
+    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.messageIndex);w.channel.markSeen('Bob',ids,3);return ids;});
     console.log(JSON.stringify(result));await p.close();`;
   const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
   for (const o of outcomes) assert.equal(o.code, 0, o.err);
   const results = outcomes.map(o => JSON.parse(o.out));
-  assert.deepEqual(results.flatMap(r => r.value), [2]);
+  assert.deepEqual(results.flatMap(r => r.value), [0]);
   assert.deepEqual(results.map(r => r.changed).sort(), [false, true]);
   assert.equal(await port.revision(), seededRevision + 1);
 });
@@ -163,7 +163,7 @@ test('idle revision discovery has a positive control and never selects historica
   const queries = [], prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) { queries.push(sql); return prepare.call(this, sql, ...args); });
   assert.equal(await port.changed(baseline, 80), false);
-  assert.ok(queries.some(sql => /FROM square_meta/i.test(sql)), 'must actually observe authoritative revision');
+  assert.ok(queries.some(sql => /FROM storage_meta/i.test(sql)), 'must actually observe authoritative revision');
   assert.equal(queries.some(sql => /payload_json|SELECT \* FROM activities/i.test(sql)), false);
   const writer = createArtifactPort(file);
   t.after(() => writer.close());

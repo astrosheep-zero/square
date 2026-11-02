@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { withFileLock } from './file-lock.js';
 import { canonicalPath } from './canonical-path.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
-import { validateOwner, type Owner } from './model.js';
+import { validateOwner, type Owner } from './neutral.js';
 
 /** A rebuildable discovery hint: the owner that may have used an artifact and its path. */
 export interface SquareIndexEntry {

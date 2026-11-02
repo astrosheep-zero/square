@@ -8,11 +8,12 @@ import { SQUARE_IDENTITY } from './identity.js';
 import { Square, createSquareResourceOwner } from './square-api.js';
 import { harnessOwner, type Owner } from './square-api.js';
 import type { SquareAtInput } from './square-facade.js';
+import type { WakeAddress } from './model.js';
 
 /** The server owns its artifact connection lifetime, so callers cannot lend one. */
 export interface SquareMcpOptions extends Omit<SquareAtInput, 'resources'> {
   readonly owner?: Owner;
-  readonly wakeAddress?: import('./model.js').WakeAddress;
+  readonly wakeAddress?: WakeAddress;
 }
 export type SquareMcpServer = McpServer;
 

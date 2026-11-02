@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createWakeTransport, createDefaultWakeTransport } from '../dist/notifications.js';
 
 const request = (kind) => ({
-  location: '/tmp/transport.square', participant: 'Faye', activity: 'act/2', actor: 'Bev',
+  location: '/tmp/transport.square', participant: 'Faye', message: 'msg/0', actor: 'Bev',
   seat: { participant: 'Faye', generation: 'act/1', owner: ':' },
   route: { kind, address: {}, location: '/tmp/transport.square', participant: 'Faye', updatedAt: 1 },
 });

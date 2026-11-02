@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { squareWakeProjection } from '../dist/wake-preview.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,18 +14,50 @@ import { runClaudeMod } from '../dist/claude-mod.js';
 import { observeClaudeDelivery, nativePayload, createClaudeWakeTransport } from '../dist/claude-delivery.js';
 import { recordClaudeDeliveryStatus } from '../dist/claude-delivery-status.js';
 import { doctorDeliveryHealth } from '../dist/delivery-health.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { Square, decodeHarnessOwner } from '../dist/square-api.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
+import { Square, decodeHarnessOwner, createSquareResourceOwner } from '../dist/square-api.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { renderPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { projectSessionCandidates, sessionInbox, nativePendingPreview } from '../dist/inbox.js';
+import { projectSessionCandidates, sessionInbox } from '../dist/inbox.js';
 import { canonicalPathSync } from '../dist/canonical-path.js';
-import { Channel } from '../dist/channel.js';
+import { Channel } from '../dist/channel-internal.js';
+import { composedChannel } from './channel-composition.js';
 
 const supported = { skip: process.platform !== 'darwin' };
 const claudeBody = "claude-code" + ":" + ('claude-test');
 const authorBody = "claude-code" + ":" + ('claude-author');
 const bodyHash = text => createHash('sha256').update(text).digest('hex');
+
+test('standalone Channel sends native bytes with lower custody and no Agora preview', supported, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-native-'));
+  const endpoint = path.join(root, 'in.sock');
+  let receive;
+  const frame = new Promise(resolve => { receive = resolve; });
+  const server = net.createServer(socket => {
+    let data = '';
+    socket.on('data', part => {
+      data += part;
+      if (data.endsWith('\n')) receive(JSON.parse(data.trim().split('\n').at(-1)));
+    });
+  });
+  server.listen(endpoint);
+  await once(server, 'listening');
+  const channel = Channel.inMemory({ wakeTransport: createClaudeWakeTransport() });
+  t.after(async () => { await channel.close(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
+  const bob = await channel.attach('Bob', { owner: claudeBody, wakeAddress: {
+    kind: 'claude-native', address: { endpoint, sessionId: 'claude-test', loaded: 'true' },
+  } });
+  const sent = await channel.send({ from: 'Alice', to: 'Bob', body: 'standalone message' });
+  const wire = await frame;
+  const rows = (await channel.artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, sent.id))).value;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].outcome, 'unknown');
+  assert.equal(rows[0].coverage, 'full');
+  assert.equal(rows[0].correlation.messageId, wire.uuid);
+  assert.equal(rows[0].correlation.payloadHash, bodyHash(wire.message.content));
+  assert.match(wire.message.content, /standalone message/);
+  assert.doesNotMatch(wire.message.content, /<square-activity/);
+});
 
 async function fixture(t, text = 'hello @Bob', envOverrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-native-'));
@@ -101,7 +134,8 @@ async function landSay(f, text, mentions = ['Bob'], location = f.squarePath) {
   const square = await Square.at({ path: location, env: f.env });
   try {
     const result = await (await square.participant('Alice', { owner: f.authorBody })).express(text, { force: true, mentions });
-    return Number(result.activity.id.slice('act/'.length));
+    const stored = await square.artifact.read(facts => facts.activity(Number(result.activity.id.slice('act/'.length))));
+    return stored.value.messageIndex;
   } finally { await square.close(); }
 }
 
@@ -121,31 +155,24 @@ async function evidenceIn(location, participant = 'Bob', generation) {
 }
 async function evidence(f, generation) { return evidenceIn(f.squarePath, 'Bob', generation); }
 async function currentEvidence(f) { return evidence(f); }
-async function seenIn(location, index = 2, participant = 'Bob') {
-  return artifactReadAt(location, facts => facts.receipt(participant, index) === undefined ? undefined : 'seen');
+async function seenIn(location, index = 0, participant = 'Bob') {
+  return artifactReadAt(location, facts => facts.channel.receipt(participant, index) === undefined ? undefined : 'seen');
 }
-async function seen(f, index = 2, participant = 'Bob') { return seenIn(f.squarePath, index, participant); }
-
-async function pendingPayload(f, request) {
-  return (await request.artifact.read(facts => nativePendingPreview(facts, {
-    location: canonicalPathSync(request.location), participant: request.participant, generation: request.seat.generation,
-    owner: request.seat.owner, route: request.route,
-    index: Number(request.activity.slice(4)), now: Date.now(),
-  }))).value?.payload;
-}
+async function seen(f, index = 0, participant = 'Bob') { return seenIn(f.squarePath, index, participant); }
 
 function simulatedNativeTransport(f) {
   return {
     async attempt(request, _timeoutMs, beforeSend) {
       const token = request.claimToken;
-      const preview = await pendingPayload(f, request);
+      const preview = request.presentation;
       if (token === undefined || preview === undefined) return { outcome: 'not-capable' };
-      const text = nativePayload(token, preview);
+      const text = nativePayload(token, preview.payload);
       const messageId = randomUUID();
       const correlation = { harness: 'claude', token, messageId, payloadHash: bodyHash(text) };
-      if (!await request.artifact.prepareDelivery({ seat: request.seat, claimToken: token, correlation }))
+      if (!await request.channel.prepare({ correlation,
+        coverage: preview.coverage }))
         return { outcome: 'not-capable' };
-      f.payloads.set(`${canonicalPathSync(request.location)}\0${request.activity}`, text);
+      f.payloads.set(`${canonicalPathSync(request.location)}\0${request.message}`, text);
       await f.onPrepared?.({ request, correlation, text });
       if (!await beforeSend()) return { outcome: 'not-capable' };
       f.nativeMessages.push({ sessionId: request.route.address.sessionId, messageId, text });
@@ -154,14 +181,14 @@ function simulatedNativeTransport(f) {
   };
 }
 
-async function dispatch(f, activity = 2, location = f.squarePath) {
+async function dispatch(f, message = 0, location = f.squarePath, preparePresentation) {
   const artifact = createArtifactPort(location);
   try {
-    return await deliverPending({ artifact, transport: simulatedNativeTransport(f), location, activity, now: Date.now() });
+    return await deliverPending({ artifact: channelArtifact(artifact), preparePresentation: preparePresentation ?? squareWakeProjection(artifact), transport: simulatedNativeTransport(f), location, message, now: Date.now() });
   } finally { await artifact.close(); }
 }
-async function payload(f, activity = 'act/2', location = f.squarePath) {
-  const text = f.payloads.get(`${canonicalPathSync(location)}\0${activity}`);
+async function payload(f, message = 'msg/0', location = f.squarePath) {
+  const text = f.payloads.get(`${canonicalPathSync(location)}\0${message}`);
   assert.ok(text, 'expected a prepared artifact-owned native attempt');
   return text;
 }
@@ -190,7 +217,7 @@ test('native wake persists the same message id used by both wire identifiers bef
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint, loaded: 'true' } });
   const artifact = createArtifactPort(f.squarePath);
   try {
-    await deliverPending({ artifact, transport: createClaudeWakeTransport(f.env), location: f.squarePath, activity: 2 });
+    await deliverPending({ artifact: channelArtifact(artifact), preparePresentation: squareWakeProjection(artifact), transport: createClaudeWakeTransport(f.env), location: f.squarePath, message: 0 });
     await f.firstFrame;
     const original = (await currentEvidence(f)).find(row => row.kind === 'wake');
     assert.equal(original.outcome, 'unknown');
@@ -411,6 +438,23 @@ test('a clipped Agora preview stays bounded and only stored consumes the activit
   assert.equal((await currentEvidence(f)).find(row => row.kind === 'presentation').outcome, 'clipped');
 });
 
+test('stored native frames settle their persisted coverage, not the current projection', async t => {
+  for (const [body, coverage] of [['x'.repeat(300), 'full'], ['short @Bob', 'clipped']]) {
+    await t.test(coverage, async t => {
+      const f = await fixture(t, body);
+      // Historical bytes and coverage deliberately disagree with today's Agora preview.
+      await dispatch(f, 0, f.squarePath, async () => ({ payload: 'historical notification', coverage }));
+      const text = await payload(f);
+      assert.match(text, /historical notification/);
+      assert.equal((await currentEvidence(f)).find(row => row.kind === 'wake').coverage, coverage);
+      assert.deepEqual(await stored(f, text), { recognized: true, current: true });
+      assert.equal(await seen(f), coverage === 'full' ? 'seen' : undefined);
+      assert.equal((await currentEvidence(f)).find(row => row.kind === 'presentation').outcome,
+        coverage === 'full' ? 'presented' : 'clipped');
+    });
+  }
+});
+
 test('unmatched or rewritten native text cannot authorize admission or presentation', async t => {
   const f = await fixture(t);
   await dispatch(f);
@@ -430,7 +474,7 @@ test('a catch receipt committed before a late native append prevents presentatio
   try {
     const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
     const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
-    await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.markSeen('Bob', [2], Date.now()));
+    await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.channel.markSeen('Bob', [0], Date.now()));
   } finally { await artifact.close(); }
   await stored(f, text);
   assert.equal((await currentEvidence(f)).filter(row => row.kind === 'presentation').length, 0);
@@ -454,12 +498,12 @@ test('cancellation fences an old native payload while later artifact activity ca
   assert.equal(f.nativeMessages.length, 1, 'cancelled activity is not replayed');
   await setWakeAddress(f, undefined);
   const nextIndex = await landSay(f, 'new @Bob');
-  assert.equal(nextIndex, 4);
+  assert.equal(nextIndex, 2);
   await setWakeAddress(f, { kind: 'claude-native', address: { endpoint: f.coordinate.endpoint } });
   await dispatch(f, nextIndex);
   assert.equal(f.nativeMessages.length, 2);
-  assert.equal((await currentEvidence(f)).find(row => row.activity === 'act/4' && row.kind === 'wake').outcome, 'unknown');
-  const newText = await payload(f, 'act/4');
+  assert.equal((await currentEvidence(f)).find(row => row.message === 'msg/2' && row.kind === 'wake').outcome, 'unknown');
+  const newText = await payload(f, 'msg/2');
   await stored(f, newText);
   assert.equal(await seen(f, nextIndex), 'seen');
 });
@@ -502,11 +546,11 @@ test('a mixed current and inactive native frame vetoes every token before any si
   const old = await payload(f);
   const prior = await seatFor(f);
   const artifact = createArtifactPort(f.squarePath);
-  try { await artifact.cancelDeliveries(prior, 2); }
+  try { await artifact.cancelDeliveries(prior, 0); }
   finally { await artifact.close(); }
   const next = await landSay(f, 'fresh @Bob');
   await dispatch(f, next);
-  const fresh = await payload(f, `act/${next}`);
+  const fresh = await payload(f, `msg/${next}`);
   const before = await currentEvidence(f);
   for (const operation of ['guard', 'admitted', 'stored']) {
     for (const text of [`${fresh}\n${old}`, `${old}\n${fresh}`, `${fresh}\n${fresh.replace('fresh', 'altered')}`])
@@ -516,7 +560,7 @@ test('a mixed current and inactive native frame vetoes every token before any si
   }
   assert.deepEqual(await stored(f, fresh), { recognized: true, current: true });
   assert.equal(await seen(f, next), 'seen');
-  assert.equal(await seen(f, 2), undefined);
+  assert.equal(await seen(f, 0), undefined);
 });
 
 test('pinned session end cannot retire a replacement artifact seat', supported, async t => {
@@ -578,7 +622,9 @@ test('a prior cancellation cutoff cannot suppress a replacement generation on re
 test('the final native send gate releases a prepared attempt after a catch receipt lands', async t => {
   const f = await fixture(t);
   f.onPrepared = async ({ request }) => {
-    await request.artifact.transactAs({ kind: 'participant', seat: request.seat }, facts => facts.markSeen('Bob', [2], Date.now()));
+    const artifact = createArtifactPort(f.squarePath);
+    try { await artifact.transactAs({ kind: 'participant', seat: request.seat }, facts => facts.channel.markSeen('Bob', [0], Date.now())); }
+    finally { await artifact.close(); }
   };
   await dispatch(f);
   assert.equal(f.nativeMessages.length, 0);
@@ -606,7 +652,7 @@ test('mixed native tokens across two candidate artifacts veto every ordering bef
   const otherPath = path.join(f.root, 'other.square');
   const otherIndex = await seedSquare(f, otherPath, claudeBody, 'second @Bob');
   await dispatch(f, otherIndex, otherPath);
-  const retired = await payload(f, `act/${otherIndex}`, otherPath);
+  const retired = await payload(f, `msg/${otherIndex}`, otherPath);
   assert.notEqual(retired, current);
 
   const otherSeat = await seatIn(otherPath);
@@ -642,8 +688,8 @@ test('a retired child-agent candidate is discovered by session and recognized wi
   const childPath = path.join(f.root, 'child.square');
   await seedSquare(f, childPath, childBody, 'child @Bob');
   const childSeat = await seatIn(childPath);
-  await dispatch(f, 2, childPath);
-  const text = await payload(f, 'act/2', childPath);
+  await dispatch(f, 0, childPath);
+  const text = await payload(f, 'msg/0', childPath);
   const before = await evidenceIn(childPath, 'Bob', childSeat.generation);
 
   const child = await Square.at({ path: childPath, env: f.env });
@@ -665,7 +711,8 @@ test('a retired child-agent candidate is discovered by session and recognized wi
 
 test('an old native message frame is recognized but never current across a same-session takeover', supported, async t => {
   const f = await fixture(t);
-  const channel = await Channel.open({ path: f.squarePath, env: f.env, wakeTransport: false });
+  const resources = createSquareResourceOwner();
+  const channel = composedChannel(f.squarePath, resources, { env: f.env });
   try {
     const sent = await channel.send({ from: 'Coordinator', to: 'Bob', body: 'native before takeover' });
     const index = Number(sent.id.slice(4));
@@ -685,5 +732,5 @@ test('an old native message frame is recognized but never current across a same-
     assert.equal(after.find(row => row.kind === 'wake').outcome, 'unknown', 'a stale frame never completes the old wake');
     assert.equal(after.some(row => row.kind === 'presentation'), false, 'a stale frame writes no presentation evidence');
     assert.deepEqual(await currentEvidence(f), [], 'the replacement generation has no inherited native attempt');
-  } finally { await channel.close(); }
+  } finally { await channel.close(); await resources.close(); }
 });

@@ -56,17 +56,6 @@ Square operation does not require it.
 
 ## Update
 
-A legacy NDJSON host ledger — or an older SQLite ledger format — needs an explicit
-offline migration. Stop every agent session and MCP service using Square with that
-ledger. Do not mix old and new processes. After updating the package, with them
-still stopped, run `square ledger verify`, `square ledger migrate`, then
-`square ledger verify`. Only then start the updated sessions and services together.
-`migrate` imports the NDJSON sources or upgrades an older SQLite ledger in place,
-preserving records, order and observer revisions; a current SQLite ledger is an
-untouched no-op. These commands never stop or restart anything for you. See
-[host ledger](guides/host-ledger.md) for source preservation, refusal behavior
-and backup guidance. Ordinary empty-root reads create nothing.
-
 ```bash
 npm install -g @astrosheep/square@latest
 square install --all -f
@@ -89,21 +78,14 @@ their existing installation and delivery paths.
 
 The user-level host ledger is a separate `host-ledger.sqlite`, also using
 DELETE/FULL. `square ledger verify` is read-only and needs no square location
-or participant. `square ledger migrate` explicitly imports NDJSON without
-overwriting a destination, or transactionally upgrades a prior SQLite format in
-place. Legacy source bytes remain untouched. `square ledger gc` reclaims only
-artifact-proven closed delivery evidence; freed storage can be reused but the file
-need not immediately shrink. Small permanent Claude recognition tokens remain,
-and their total count is unbounded. Do not
-roll back to retained NDJSON files after SQLite writes have begun.
+or participant. `square ledger gc` reclaims only artifact-proven closed delivery
+evidence; freed storage can be reused but the file need not immediately shrink.
+Small permanent Claude recognition tokens remain, and their total count is unbounded.
+Do not roll back to retained NDJSON files after SQLite writes have begun.
 
 Each `.square` artifact is a transactional SQLite database using DELETE journal
-mode and FULL synchronous writes. A version 1 or 2 artifact must be explicitly converted to current format 3 with
-`square --location <path> migrate` while nothing uses it. Back it up first, run
-`doctor` afterward, and reopen it only with upgraded runtimes: older versions
-refuse format 3. Unlisten does not change the host-ledger format; package updates
-never migrate artifacts automatically. Unrelated or unsupported artifacts are
-refused without a write.
+mode and FULL synchronous writes. Ordinary opens refuse older or unsupported
+artifact formats; they do not convert them.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

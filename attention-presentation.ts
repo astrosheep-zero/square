@@ -1,3 +1,5 @@
+import { escapeSquareTags, projectChannelNotification } from './channel-presentation.js';
+export { projectChannelNotification, renderSquareReminder } from './channel-presentation.js';
 import { homedir } from 'node:os';
 import type { DirectedNotificationRoute } from './model.js';
 import { formatActivityId } from './square-core.js';
@@ -25,7 +27,6 @@ export function displayAttentionPath(squarePath: string): string {
 }
 export function renderAttentionDescription({ actor, route }: Pick<AttentionPreview, 'actor' | 'route'>): string {
   switch (route) {
-    case 'message': return `${actor} sent you a message`;
     case 'mention': return `${actor} spoke your name`;
     case 'reply': return `${actor} answered you`;
     case 'attention': return `${actor} spoke · you’re listening`;
@@ -35,19 +36,10 @@ export function renderAttentionDescription({ actor, route }: Pick<AttentionPrevi
 function escapeAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-function escapeSquareTags(text: string): string {
-  return text.replace(/<(\/?)(square-|channel-|system-reminder)/gi, '<\\$1$2');
-}
-
 /** The sole source adapter: transports and cards consume this projection, not delivery modes. */
 export function projectNotification(attention: AttentionPreview) {
   const body = attention.body.replace(/\r\n/g, '\n');
   const description = renderAttentionDescription(attention);
-  if (attention.route === 'message') {
-    const preview = attention.preview ?? body;
-    return { text: escapeSquareTags(preview), full: body, preview, description,
-      clipped: attention.preview !== undefined, agora: false };
-  }
   const remaining = body.length - ATTENTION_BODY_MAX;
   const preview = previewAttentionBody(body);
   const attributes = [
@@ -64,13 +56,20 @@ export function projectNotification(attention: AttentionPreview) {
     preview, description, clipped: remaining > 0, agora: true,
   };
 }
+/** One stored message: Agora framing when an upper say owns it, Channel's raw frame otherwise. */
+export function projectMessageNotification(input: {
+  squarePath: string;
+  recipient: string;
+  actor: string;
+  body: string;
+  preview?: string;
+  agora?: { readonly actIndex: number; readonly route: DirectedNotificationRoute };
+}) {
+  if (input.agora === undefined) return projectChannelNotification(input);
+  return projectNotification({ squarePath: input.squarePath, recipient: input.recipient, actor: input.actor,
+    route: input.agora.route, actIndex: input.agora.actIndex, body: input.body });
+}
+
 /** Full human expansion never substitutes a sender-owned preview for the stored body. */
 export function renderAttentionFull(attention: AttentionPreview): string { return projectNotification(attention).full; }
 export function renderAttentionPreview(attention: AttentionPreview): string { return projectNotification(attention).text; }
-
-/** The fixed model-facing outer frame, independent of transport and source. */
-export function renderSquareReminder(previews: readonly string[]): string {
-  if (previews.length === 0) return '';
-  return ['', '<system-reminder>', 'This is an external notification, not a direct message from the user.', '',
-    previews.join('\n\n'), '</system-reminder>', ''].join('\n');
-}

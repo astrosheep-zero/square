@@ -8,9 +8,10 @@ import { clearCodexBoundary, codexQueueEligible, readCodexBoundary, recordCodexB
 import { CodexQueueTransport, CodexQueueSendError, sendCodexQueue } from '../dist/codex-queue.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { connect, DeliveryError } from '../dist/packages/agent-delivery/src/index.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { deliverPending } from '../dist/delivery-operations.js';
+import { squareWakeProjection } from '../dist/wake-preview.js';
 import { createDefaultWakeTransport } from '../dist/notifications.js';
 import { squareClock } from '../dist/square-api.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
@@ -27,8 +28,8 @@ async function pending(t, env, address = { threadId: 'thread-a' }) {
   const bob = await join('Bob', { kind: 'codex-queue', address });
   await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'stored awareness', mentions: ['Bob'] }));
-  return { artifact, bob, location: '/tmp/codex-test.square', activity: 'act/2',
-    participant: 'Bob', seat: bob, route: { kind: 'codex-queue', address }, transport: new CodexQueueTransport({ env }) };
+  return { artifact, channel: channelArtifact(artifact), bob, location: '/tmp/codex-test.square', message: 'msg/0',
+    participant: 'Bob', seat: bob, presentation: { payload: 'stored awareness', coverage: 'full' }, route: { kind: 'codex-queue', address }, transport: new CodexQueueTransport({ env }) };
 }
 
 function fixture(t) {
@@ -81,7 +82,8 @@ test('artifact-owned dispatch sends its stored preview through public connect an
     } });
     return { ...agent, queue: (text, control) => { timeout = control.timeoutMs; return agent.queue(text, control); } };
   } });
-  await deliverPending({ ...input, transport, timeoutMs: 2000 });
+  const { channel, ...rest } = input;
+  await deliverPending({ ...rest, artifact: channel, preparePresentation: squareWakeProjection(input.artifact), transport, timeoutMs: 2000 });
   assert.equal(boundaryReads, 1, 'the bound client alone checks lifecycle at queue time');
   const sent = JSON.parse(fs.readFileSync(item.capture, 'utf8'));
   assert.equal(sent.home, '/recipient/codex');
@@ -169,7 +171,8 @@ test('default Codex transport retains supplied executable and child environment 
   process.env.SQUARE_CODEX_BIN = '/missing/ambient-codex';
   t.after(() => { if (previous === undefined) delete process.env.SQUARE_CODEX_BIN; else process.env.SQUARE_CODEX_BIN = previous; });
   // Child startup allowance only; the frozen-clock test separately proves the dispatch deadline.
-  await deliverPending({ ...input, transport, timeoutMs: 5000 });
+  const { channel, ...rest } = input;
+  await deliverPending({ ...rest, artifact: channel, preparePresentation: squareWakeProjection(input.artifact), transport, timeoutMs: 5000 });
   assert.match(fs.readFileSync(args, 'utf8'), /^queue\n--thread\nthread-a\n--message\n[\s\S]*stored awareness/);
   assert.equal((await input.artifact.read(facts => facts.deliveryEvidence('Bob', input.bob.generation))).value[0].outcome, 'accepted');
 });

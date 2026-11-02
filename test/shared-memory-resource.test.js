@@ -47,11 +47,11 @@ test('injected memory transport preserves resource identity, deferrals and final
   assert.equal(observed.location, square.location);
   assert.equal(observed.route.location, square.location);
   assert.equal(observed.seat.owner, body('bob'));
-  const evidence = (await observed.artifact.read(facts => facts.deliveryEvidence('Bob', observed.seat.generation, sent.activity.id))).value;
+  const evidence = (await square.artifact.read(facts => facts.channel.deliveryEvidence('Bob', observed.seat.generation, sent.activity.messageId))).value;
   assert.equal(evidence.some(row => row.kind === 'wake' && row.outcome === 'accepted'), true);
   steal = true;
   const suppressed = await alice.express('racing takeover', { mentions: ['Bob'], force: true });
   assert.equal(attempts, 2);
-  const suppressedEvidence = (await observed.artifact.read(facts => facts.deliveryEvidence('Bob', observed.seat.generation, suppressed.activity.id))).value;
+  const suppressedEvidence = (await square.artifact.read(facts => facts.channel.deliveryEvidence('Bob', observed.seat.generation, suppressed.activity.messageId))).value;
   assert.equal(suppressedEvidence.some(row => row.outcome === 'accepted'), false);
 });

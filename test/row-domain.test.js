@@ -3,16 +3,49 @@ import test from 'node:test';
 
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
 import { createArtifactPort } from '../dist/artifact.js';
+import { pendingHeads } from '../dist/delivery.js';
+import { catchCoverage } from '../dist/square-domain.js';
 
 const T0 = 1_700_000_000_000;
 
+test('pending reasons and catch coverage need only say relations, not content', () => {
+  const heads = [
+    { index: 3, at: T0, from: 'Alice', recipient: 'Bob' },
+    { index: 4, at: T0, from: 'Carol', recipient: 'Bob' },
+    { index: 5, at: T0, from: 'Alice', recipient: 'Bob' },
+  ];
+  const facts = {
+    channel: {
+      endpoint: () => ({ participant: 'Bob', attachment: 'attached', generation: 'join' }),
+      directed: () => ({ items: heads, hasMore: false }),
+      suppressed: () => false,
+    },
+    activityByMessage: index => index === 5 ? undefined : {
+      kind: 'say', index: index + 10, at: T0, actor: index === 3 ? 'Alice' : 'Carol', messageIndex: index,
+      get body() { throw new Error('content must not be hydrated'); },
+      get metadata() { throw new Error('metadata must not be hydrated'); },
+    },
+    directedAt: (name, index) => name === 'Bob' ? { route: index === 13 ? 'mention' : 'reply' } : undefined,
+  };
+  assert.deepEqual(pendingHeads(facts, 'Bob', T0), [
+    { index: 3, at: T0, actor: 'Alice', recipient: 'Bob', activityIndex: 13, route: 'mention' },
+    { index: 4, at: T0, actor: 'Carol', recipient: 'Bob', activityIndex: 14, route: 'reply' },
+    { index: 5, at: T0, actor: 'Alice', recipient: 'Bob' },
+  ]);
+  const lease = { leaseId: 'catch', heartbeatAt: T0, expiresAt: T0 + 1000, filter: { participants: ['Alice'], mention: 'Bob' } };
+  assert.deepEqual(catchCoverage(facts, 'Bob', lease), [3]);
+  assert.deepEqual(catchCoverage(facts, 'Bob', { ...lease, filter: { mention: 'Bob' } }), [3, 4]);
+});
+
 function fixtureState(acts, options = {}) {
   const lastIndex = acts.reduce((max, act) => Math.max(max, act.index), -1);
+  let messageIndex = 0;
+  const imported = acts.map(act => act.kind === 'say' ? { ...act, messageIndex: messageIndex++ } : act);
   return {
     hardCap: options.hardCap === undefined ? null : options.hardCap,
     preamble: ['preamble line'],
     warmup: ['warmup line'],
-    acts,
+    acts: imported,
     runtime: {
       nextActIndex: options.nextActIndex === undefined ? lastIndex + 1 : options.nextActIndex,
       observations: options.observations ?? {},
@@ -138,18 +171,18 @@ test('audience priority is bell > mention > reply > attention, with self and ign
 
 test('sparse orphan receipts retain coordinates and owner spelling', async () => {
   const observations = {
-    Alice: Object.fromEntries([1, 2, 17, 19].map(index => [`act/${index}`, { state: 'seen', at: T0 + 100 }])),
-    ghost: { 'act/4': { state: 'seen', at: T0 + 150 } },
+    Alice: Object.fromEntries([5, 11].map(index => [`act/${index}`, { state: 'seen', at: T0 + 100 }])),
+    ghost: { 'act/14': { state: 'seen', at: T0 + 150 } },
   };
   const port = createArtifactPort(':memory:', fixtureState(GAPPED_ACTS, { observations }));
   try {
     const view = (await port.read(facts => ({
-      orphan: facts.receipt('ALICE', 2), missing: facts.receipt('Alice', 3),
-      facts: facts.receiptFacts('Alice', -1), exact: facts.receipt('ghost', 4),
-      casefolded: facts.receipt('Ghost', 4),
+      orphan: facts.receipt('ALICE', 5), missing: facts.receipt('Alice', 8),
+      facts: facts.receiptFacts('Alice', -1), exact: facts.receipt('ghost', 14),
+      casefolded: facts.receipt('Ghost', 14),
     }))).value;
     assert.deepEqual(view, { orphan: { at: T0 + 100 }, missing: undefined,
-      facts: { latestAt: T0 + 100 }, exact: { at: T0 + 150 }, casefolded: undefined });
+      facts: { latestAt: T0 + 100, latestActorActivityIndex: 11 }, exact: { at: T0 + 150 }, casefolded: undefined });
   } finally { await port.close(); }
 });
 
@@ -174,7 +207,7 @@ test('cursor and presence distinguish holes, reads and orphan receipts', async (
     'act/10': { state: 'seen', at: T0 + 950 } } });
   assert.equal(beyond.cursor, 8, 'a seen row beyond a hole does not advance the cursor');
   assert.equal(beyond.presence, 13, 'an orphan receipt does not move the anchor');
-  assert.equal(beyond.receiptFacts.latestAt, T0 + 950);
+  assert.equal(beyond.receiptFacts.latestAt, T0 + 900, 'a receipt on a non-content activity has no message to survive import');
   assert.equal(beyond.receiptFacts.latestActorActivityIndex, 13);
   const complete = await probe({ Alice: { 'act/12': { state: 'seen', at: T0 + 1000 },
     'act/13': { state: 'seen', at: T0 + 900 } } });
@@ -186,19 +219,10 @@ test('historical audience retains earlier holes while pending discovery stops at
   try {
     const beforeCatch = (await port.read((facts) => ({
       historical: facts.directed('Alice', { unseenOnly: true }, { edge: 'oldest', limit: 10 }).items.map((head) => head.index),
-      pending: facts.pendingAudience(-1, 8, 10).groups.map((group) => ({ index: group.index, recipients: group.recipients.map((row) => row.recipient) })),
       cursor: readCursor(facts, 'Alice'),
     }))).value;
     assert.deepEqual(beforeCatch.historical, [2, 3, 7, 8], 'ordinary catch is not cut by the latest join');
-    assert.deepEqual(beforeCatch.pending, [{ index: 7, recipients: ['Alice'] }, { index: 8, recipients: ['Alice'] }], 'notification pending starts after the latest join');
     assert.equal(beforeCatch.cursor, 6, 'cursor sits at the rejoin coordinate before any addressed row');
-
-    const page = (await port.read((facts) => facts.pendingAudience(-1, 8, 1))).value;
-    assert.deepEqual(page.groups.map((group) => group.index), [7], 'a page limit bounds activity groups');
-    assert.equal(page.hasMore, true);
-    const whole = (await port.read((facts) => facts.pendingAudience(-1, 8, 2))).value;
-    assert.equal(whole.hasMore, false);
-    assert.deepEqual(Object.keys(whole.groups[0]).sort(), ['actor', 'at', 'index', 'recipients'], 'pending discovery carries no body');
 
   } finally {
     await port.close();

@@ -118,7 +118,7 @@ test('stored say validation rejects blank bodies with empty metadata', async () 
       await alice.express({ body: 'valid', metadata: {}, force: true });
     } finally { await square.close(); }
     const database = new DatabaseSync(location);
-    try { database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":"   ","metadata":{}}'); }
+    try { database.prepare('UPDATE messages SET body_json=?, metadata_json=? WHERE msg_index=0').run('"   "', '{}'); }
     finally { database.close(); }
     const reopened = await Square.at({ path: location });
     try { await assert.rejects(reopened.history({ limit: null }), /non-empty body or non-empty metadata/); }

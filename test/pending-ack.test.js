@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { Channel } from '../dist/channel.js';
-import { Square, harnessOwner } from '../dist/square-api.js';
+import { composedChannel } from './channel-composition.js';
+import { Square, harnessOwner, createSquareResourceOwner } from '../dist/square-api.js';
 import { sessionInbox } from '../dist/inbox.js';
 import { parseActivityId } from '../dist/square-core.js';
 
@@ -17,12 +17,13 @@ async function fixture(t, clock) {
   const location = path.join(root, 'notices.square');
   const options = { path: location, wakeTransport: false, clock,
     env: { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') } };
-  const channel = await Channel.create(options);
-  const square = await Square.at(options);
-  const endpoint = await channel.attach('Recipient', { owner: 'test:recipient' });
-  const participant = await square.participant('Recipient', { owner: 'test:recipient' });
-  t.after(async () => { await square.close(); await channel.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { channel, square, endpoint, participant, options };
+  const resources = createSquareResourceOwner();
+  const square = await Square.build({ ...options, resources, markdown: '# Test' });
+  const channel = composedChannel(location, resources, options);
+  const participant = (await square.join('Recipient', { owner: 'test:recipient' })).participant;
+  const endpoint = await channel.endpoint('Recipient', { owner: 'test:recipient' });
+  t.after(async () => { await square.close(); await channel.close(); await resources.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  return { channel, square, endpoint, participant, options: { ...options, resources } };
 }
 
 test('pending filters addressed unconsumed metadata before paging and drains every page through ack', async t => {
@@ -44,7 +45,7 @@ test('pending filters addressed unconsumed metadata before paging and drains eve
   assert.deepEqual(ids(await endpoint.pending({ match, limit: 1 })), expected.slice(0, 1));
   assert.equal((await endpoint.pending({ match, limit: 1 })).remaining, 102);
   // Opening again sees the same page: neither querying nor a deferral consumes anything.
-  const reopened = await Channel.open(options);
+  const reopened = composedChannel(options.path, options.resources, options);
   try {
     assert.deepEqual(await (await reopened.endpoint('Recipient', { owner: 'test:recipient' })).pending({ match }), page);
   } finally { await reopened.close(); }
@@ -129,7 +130,7 @@ test('shared query validation rejects malformed filters on both reads and search
   for (const query of [
     { search: { text: '[', mode: 'regex' } },
     { search: { text: '', mode: 'literal' } },
-    { cursor: { id: 'act/01', direction: 'after' } },
+    { cursor: { id: 'msg/01', direction: 'after' } },
   ]) {
     for (const read of [input => square.history(input), input => endpoint.pending(input)])
       await assert.rejects(read(query), error => error.code === 'invalid_args');
@@ -142,28 +143,29 @@ test('ack consumes exact addressed IDs atomically and idempotently without prese
   const other = await channel.attach('Other', { owner: 'test:other' });
   const send = to => channel.send({ from: 'Coordinator', to, body: 'notice', metadata: { job: { id: 7 } } });
   const first = await send('Recipient'), second = await send(['Recipient', 'Other']), foreign = await send('Other');
-  for (const unaddressed of [foreign.id, 'act/9999', endpoint.generation]) {
+  for (const unaddressed of [foreign.id, 'msg/9999']) {
     await assert.rejects(endpoint.ack([first.id, unaddressed]), error => error.code === 'invalid_args' && error.facts.reason === 'not_addressed');
     assert.deepEqual(ids(await endpoint.pending()), [first.id, second.id]);
   }
+  await assert.rejects(endpoint.ack([endpoint.generation]), error => error.code === 'invalid_args');
   const abort = new AbortController();
   abort.abort(new Error('cancel explicit receipt'));
   await assert.rejects(endpoint.ack([first.id], { signal: abort.signal }), /cancel explicit receipt/);
   await assert.rejects(endpoint.pending({ match }, { signal: abort.signal }), /cancel explicit receipt/);
   await assert.rejects(endpoint.ack([first.id, 'not-an-id']), error => error.code === 'invalid_args');
-  assert.deepEqual(await participant.ack([second.id, second.id]), { consumed: 1 });
+  assert.deepEqual(await endpoint.ack([second.id, second.id]), { consumed: 1 });
   now = 2000;
   assert.deepEqual(await endpoint.ack([second.id]), { consumed: 0 });
   assert.deepEqual(await endpoint.ack([]), { consumed: 0 });
   assert.deepEqual(ids(await endpoint.pending()), [first.id], 'later acknowledgement never advances over an earlier hole');
   assert.deepEqual(ids(await other.pending()), [second.id, foreign.id], 'receipt belongs only to the addressed recipient');
   const evidence = (await square.artifact.read(facts => ({
-    receipt: facts.receipt('Recipient', parseActivityId(second.id)),
-    deliveries: facts.deliveryEvidence('Recipient', endpoint.generation),
-    first: facts.receipt('Recipient', parseActivityId(first.id)),
+    receipt: facts.channel.receipt('Recipient', Number(second.id.slice(4))),
+    deliveries: facts.channel.deliveryEvidence('Recipient', endpoint.generation),
+    first: facts.channel.receipt('Recipient', Number(first.id.slice(4))),
   }))).value;
   assert.deepEqual(evidence, { receipt: { at: 1000 }, deliveries: [], first: undefined });
-  await assert.rejects(participant.catch({ id: second.id }), error => error.code === 'invalid_args' && error.facts?.reason === 'not_addressed');
+  await assert.rejects(participant.catch({ id: second.id }), error => error.code === 'invalid_args');
   assert.deepEqual(activityIds(await participant.catch()), [], 'Agora catch excludes native messages and does not share their receipts');
   assert.deepEqual(await endpoint.ack([first.id]), { consumed: 1 });
   assert.deepEqual(await endpoint.pending(), { messages: [], remaining: 0 });
@@ -197,19 +199,20 @@ test('unconsumed direct messages stay in the proactive inbox across a takeover, 
   let now = 1000;
   const { channel, square, endpoint, options } = await fixture(t, () => now);
   const owner = harnessOwner({ channel: 'pi', session: 'takeover-direct' });
-  await channel.attach('Other', { owner: 'test:other' });
-  const other = await square.participant('Other', { owner: 'test:other' });
+  const other = (await square.join('Other', { owner: 'test:other' })).participant;
   await other.express('chat hello @Recipient');
   const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'direct before takeover', metadata: { job: { id: 7 } } });
   const before = (await sessionInbox('test:recipient', options.env)).flatMap(row => row.notifications);
-  const mention = before.map(note => note.actIndex).find(index => index !== parseActivityId(sent.id));
-  assert.deepEqual(before.map(note => note.actIndex), [mention, parseActivityId(sent.id)], 'fixture owner sees the mention and the direct message');
+  const direct = Number(sent.id.slice(4));
+  assert.equal(before.length, 2, 'fixture owner sees the mention and the direct message');
+  assert.ok(before.some(note => note.actIndex !== undefined), 'the Agora mention keeps its activity coordinate');
+  assert.ok(before.some(note => note.actIndex === undefined && note.messageIndex === direct), 'the native message keeps its message coordinate');
   now = 2000;
   const taken = await channel.attach('Recipient', { owner, takeover: true });
   assert.notEqual(taken.generation, endpoint.generation);
   const inbox = (await sessionInbox(owner, options.env)).flatMap(row => row.notifications);
-  assert.deepEqual(inbox.map(note => note.actIndex), [parseActivityId(sent.id)], 'the unconsumed direct message survives the new generation while earlier chat does not');
-  assert.deepEqual(inbox.map(note => note.route), ['message']);
+  assert.deepEqual(inbox.map(note => note.messageIndex), [direct], 'the unconsumed direct message survives the new generation while earlier chat does not');
+  assert.deepEqual(inbox.map(note => note.route), [undefined]);
   const received = await taken.receive({ match });
   assert.deepEqual(received.messages.map(message => message.id), [sent.id]);
   assert.equal(received.consumed, 1);

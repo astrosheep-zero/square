@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
 import { preparePendingPresentation, presentPending } from '../dist/presentation-operations.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
@@ -29,17 +29,19 @@ async function fixture(t, extra = {}) {
   const ref = await read(facts => facts.seat('Bob'));
   const detach = () => square.detach('Bob', { owner: body, generation: ref.generation });
   t.after(async () => { await artifact.close(); await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, location, env, body, wakeAddress, square, bob, alice, artifact, read, ref, detach };
+  return { root, location, env, body, wakeAddress, square, bob, alice, artifact, channel: channelArtifact(artifact), read, ref, detach };
 }
 const match = { fields: [{ path: ['kind'], equals: 'notice' }] };
 const needsSeat = error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat';
+const messageOf = async (read, activity) =>
+  `msg/${(await read(facts => facts.activity(Number(activity.id.slice(4))))).messageIndex}`;
 
 test('host detach preserves membership, listens, horizon and evidence, but revokes every participant mutation', async t => {
   const f = await fixture(t);
   await f.bob.listen('Alice');
   const lease = await f.bob.deferDelivery({ match, durationMs: 60_000 });
   const sent = await f.alice.express('pending before shutdown @Bob', { force: true });
-  const claim = await f.artifact.claimDelivery({ seat: f.ref, activity: sent.activity.id, kind: 'wake', at: Date.now(), leaseMs: 5000, claimToken: 'before-detach' });
+  const claim = await f.artifact.claimDelivery({ seat: f.ref, message: await messageOf(f.read, sent.activity), kind: 'wake', at: Date.now(), leaseMs: 5000, claimToken: 'before-detach' });
   assert.equal(claim.status, 'acquired');
   await f.artifact.transactAs({ kind: 'participant', seat: f.ref }, facts =>
     facts.putLease('Bob', { leaseId: 'catching', heartbeatAt: Date.now(), expiresAt: Date.now() + 60_000 }, f.ref.generation));
@@ -72,15 +74,15 @@ test('even an empty catch probe and raw artifact writes require an attached capt
   await f.detach();
   await assert.rejects(f.bob.catch(), needsSeat);
   for (const mutate of [
-    facts => facts.markSeen('Bob', [], 1), facts => facts.putLease('Bob', { leaseId: 'no', heartbeatAt: 1, expiresAt: 2 }),
-    facts => facts.removeLease('Bob', 'no'), facts => facts.updateWakeAddress(f.ref, f.wakeAddress), facts => facts.cancelThrough(f.ref, 0),
-    facts => facts.claimDelivery({ seat: f.ref, activity: 'act/0', kind: 'wake', at: 1, leaseMs: 10, claimToken: 'no' }),
-    facts => facts.prepareDelivery({ seat: f.ref, claimToken: 'no', correlation: { harness: 'pi' } }),
-    facts => facts.completeDelivery({ seat: f.ref, activity: 'act/0', claimToken: 'no', outcome: 'accepted', at: 1 }),
-    facts => facts.observeNativeDelivery({ seat: f.ref, claimToken: 'no', observation: { eventId: 'no', messageId: 'no', state: 'held', observedAt: 1 } }),
+    facts => facts.channel.markSeen('Bob', [], 1), facts => facts.putLease('Bob', { leaseId: 'no', heartbeatAt: 1, expiresAt: 2 }),
+    facts => facts.removeLease('Bob', 'no'), facts => facts.updateWakeAddress(f.ref, f.wakeAddress), facts => facts.channel.cancelThrough(f.ref, 0),
+    facts => facts.channel.claimDelivery({ seat: f.ref, message: 'msg/0', kind: 'wake', at: 1, leaseMs: 10, claimToken: 'no' }),
+    facts => facts.channel.prepareDelivery({ seat: f.ref, claimToken: 'no', correlation: { harness: 'pi' } }),
+    facts => facts.channel.completeDelivery({ seat: f.ref, message: 'msg/0', claimToken: 'no', outcome: 'accepted', at: 1 }),
+    facts => facts.channel.observeNativeDelivery({ seat: f.ref, claimToken: 'no', observation: { eventId: 'no', messageId: 'no', state: 'held', observedAt: 1 } }),
   ]) await assert.rejects(f.artifact.transactAs({ kind: 'participant', seat: f.ref }, mutate), needsSeat);
   await assert.rejects(f.artifact.transactAs({ kind: 'host-cleanup', seat: f.ref }, facts => facts.land({ kind: 'say', actor: 'Bob', at: 1, body: 'not host authority' })), /only end membership/);
-  await assert.rejects(f.artifact.transactAs({ kind: 'host-cleanup', seat: f.ref }, facts => facts.markSeen('Bob', [], 1)), /current participant seat/);
+  await assert.rejects(f.artifact.transactAs({ kind: 'host-cleanup', seat: f.ref }, facts => facts.channel.markSeen('Bob', [], 1)), /does not permit that mutation/);
 });
 
 test('away is projected without history; audience accumulates and survives exact-Body join or reattach', async t => {
@@ -132,7 +134,8 @@ test('detach invalidates cached inboxes, claims and final proactive presentation
   const observer = await observeSessionPending(f.body, f.env);
   t.after(() => observer.close());
   assert.equal((await observer.read()).length, 1);
-  const prepared = await preparePendingPresentation({ artifact: f.artifact, location: f.location, participant: 'Bob', seat: f.ref, activity: sent.activity.id });
+  const message = await messageOf(f.read, sent.activity);
+  const prepared = await preparePendingPresentation({ artifact: f.artifact, location: f.location, participant: 'Bob', seat: f.ref, message });
   assert.ok(prepared);
   await f.detach();
   assert.equal(await prepared.eligible(), false);
@@ -140,13 +143,13 @@ test('detach invalidates cached inboxes, claims and final proactive presentation
   assert.deepEqual(await sessionInboxCounts({ owner: f.body, env: f.env }), []);
   let effects = 0;
   assert.equal(await presentPendingAtBoundary(f.body, () => { effects++; }, () => inbox, f.env), undefined);
-  assert.deepEqual(await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', seat: f.ref, activity: sent.activity.id, sink: { present() { effects++; } } }), { presented: false });
-  await deliverPending({ artifact: f.artifact, location: f.location, activity: sent.activity.id, transport: { async attempt() { effects++; return { outcome: 'accepted' }; } } });
-  assert.deepEqual(await sweepPending({ artifact: f.artifact, location: f.location, now: Date.now(), graceMs: 0, limit: 20 }), []);
+  assert.deepEqual(await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', seat: f.ref, message, sink: { present() { effects++; } } }), { presented: false });
+  await deliverPending({ artifact: f.channel, location: f.location, message, transport: { async attempt() { effects++; return { outcome: 'accepted' }; } } });
+  assert.deepEqual(await sweepPending({ artifact: f.channel, location: f.location, now: Date.now(), graceMs: 0, limit: 20 }), []);
   assert.equal(effects, 0);
   assert.equal(await f.read(facts => facts.receipt('Bob', Number(sent.activity.id.slice(4)))), undefined);
   assert.equal(await f.read(facts => nativePendingPreview(facts, { location: f.location, participant: 'Bob', generation: f.ref.generation,
-    index: Number(sent.activity.id.slice(4)), now: Date.now(), route: { kind: 'opencode-server', address: { sessionId: 'receiver' } } })), undefined);
+    index: Number(message.slice(4)), now: Date.now(), route: { kind: 'opencode-server', address: { sessionId: 'receiver' } } })), undefined);
   await prepared.release();
 });
 
@@ -154,7 +157,7 @@ test('a detach during transport readiness fails the final send gate', async t =>
   const f = await fixture(t);
   const sent = await f.alice.express('race @Bob', { force: true });
   let attempts = 0, sends = 0;
-  await deliverPending({ artifact: f.artifact, location: f.location, activity: sent.activity.id, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, message: await messageOf(f.read, sent.activity), transport: {
     async probe() { return true; },
     async attempt(_request, _timeout, beforeSend) {
       attempts++;

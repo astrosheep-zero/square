@@ -9,8 +9,9 @@ import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/bo
 import { operationEnv } from '../../dist/participant-identity.js';
 import { detachSessionSeats, restoreSessionSeats } from '../../dist/session-lifecycle.js';
 import { projectSessionSeats, observeSessionPending, pendingKey } from '../../dist/inbox.js';
-import { projectNotification, renderAttentionFull } from '../../dist/attention-presentation.js';
+import { projectMessageNotification } from '../../dist/attention-presentation.js';
 import { formatActivityId } from '../../dist/square-core.js';
+import { formatMessageId } from '../../dist/message.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 class PiDeliveryDroppedError extends Error {
@@ -26,7 +27,7 @@ export function pendingInbox(inbox) {
 
 export function inboxKeys(inbox) {
   return pendingInbox(inbox).flatMap((item) => item.notifications.map((note) =>
-    pendingKey(item, note.actIndex)
+    pendingKey(item, note.messageIndex)
   ));
 }
 
@@ -41,24 +42,25 @@ function framePiMessage(content) {
 /** Renderer-only card facts for Pi and Paseo; Pi never sends `details` to the model. */
 export function pendingCardDetails(pending) {
   const items = pending.flatMap((membership) => membership.notifications.map((note) => {
-    const projected = projectNotification({ ...note, squarePath: membership.location, recipient: membership.seat.participant });
+    const projected = projectMessageNotification({ squarePath: membership.location, recipient: membership.seat.participant,
+      actor: note.actor, body: note.body, ...(note.preview === undefined ? {} : { preview: note.preview }),
+      ...(note.actIndex === undefined || note.route === undefined ? {} : { agora: { actIndex: note.actIndex, route: note.route } }) });
     return ({
     square: path.basename(membership.location, '.square'),
     actor: note.actor,
     recipient: membership.seat.participant,
     route: note.route,
-    act: formatActivityId(note.actIndex),
+    act: note.actIndex === undefined ? formatMessageId(note.messageIndex) : formatActivityId(note.actIndex),
     preview: projected.preview,
     description: projected.description,
     body: note.body,
   }); }));
   if (items.length === 0) return undefined;
-  const fullText = pending.flatMap((membership) => membership.notifications.map((note) => renderAttentionFull({
-    squarePath: membership.location,
-    actIndex: note.actIndex,
-    recipient: membership.seat.participant,
-    ...note,
-  }))).join('\n\n');
+  const fullText = pending.flatMap((membership) => membership.notifications.map((note) => projectMessageNotification({
+    squarePath: membership.location, recipient: membership.seat.participant, actor: note.actor, body: note.body,
+    ...(note.preview === undefined ? {} : { preview: note.preview }),
+    ...(note.actIndex === undefined || note.route === undefined ? {} : { agora: { actIndex: note.actIndex, route: note.route } }),
+  }).full)).join('\n\n');
   return { items, fullText };
 }
 

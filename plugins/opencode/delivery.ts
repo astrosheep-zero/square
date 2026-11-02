@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { createArtifactPort } from '../../artifact.js';
+import { squareWakeProjection } from '../../wake-preview.js';
+import { channelArtifact, createArtifactPort } from '../../artifact.js';
 import { deliverPending } from '../../delivery-operations.js';
-import { nativePendingPreview, nativePendingSource, observeSessionPending, projectSessionSeats } from '../../inbox.js';
+import { nativePendingSource, observeSessionPending, projectSessionSeats } from '../../inbox.js';
 import { automaticWakeEligible, nativePendingHead, presentationBlocksWake } from '../../delivery.js';
 import { type Seat } from '../../model.js';
 import { harnessOwner, decodeHarnessOwner } from '../../owner.js';
-import type { SquareRead, WakeRequest, WakeTransportPort } from '../../ports.js';
-import { formatActivityId, parseActivityId } from '../../square-core.js';
+import type { WakeRequest, WakeTransportPort } from '../../ports.js';
+import { formatMessageId, parseMessageId } from '../../message.js';
 import { indexedSquareEntries } from '../../square-index.js';
 import { asSeatRef } from '../../seats.js';
 import { restoreSessionSeats } from '../../session-lifecycle.js';
@@ -17,15 +18,6 @@ const routeKind = 'opencode-server' as const;
 const ownerFor = (sessionId: string) => harnessOwner({ channel: 'opencode', session: sessionId });
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
-
-function preview(facts: SquareRead, location: string, captured: Pick<Seat, 'participant' | 'owner' | 'generation'>, index: number) {
-  const seat = facts.seat(captured.participant);
-  if (seat === undefined || seat.attachment !== 'attached' || seat.generation !== captured.generation || seat.owner !== captured.owner) return undefined;
-  const wake = seat.wakeAddress;
-  if (wake?.kind !== routeKind) return undefined;
-  return nativePendingPreview(facts, { location, participant: seat.participant, generation: seat.generation,
-    owner: seat.owner, index, route: wake, now: Date.now() });
-}
 
 export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   return [...new Set((await indexedSquareEntries({ }, env)).flatMap((entry) => {
@@ -47,9 +39,8 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
     probe: async (route) => !lifetime.aborted && route.kind === routeKind
       && route.address.sessionId === target.sessionId,
     async attempt(request: WakeRequest, timeoutMs: number, beforeSend) {
-      const index = parseActivityId(request.activity);
-      const artifact = request.artifact;
-      if (artifact === undefined || request.claimToken === undefined || index === undefined
+      const presentation = request.presentation;
+      if (request.claimToken === undefined || parseMessageId(request.message) === undefined || presentation === undefined
         || request.route.kind !== routeKind || request.route.address.sessionId !== target.sessionId) {
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention has no matching artifact claim or session.' };
       }
@@ -57,18 +48,14 @@ function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: Ab
       const started = Date.now();
       if (signal.aborted || !await beforeSend())
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before send.' };
-      const { value: prepared } = await artifact.read((facts) => preview(facts, request.location, request.seat, index), signal);
-      if (prepared === undefined) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
       const inputId = createNativeInputId();
-      const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(prepared.payload) };
-      if (!await artifact.prepareDelivery({ seat: request.seat, claimToken: request.claimToken, correlation }, signal))
+      const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(presentation.payload) };
+      if (!await request.channel.prepare({ correlation,
+        coverage: presentation.coverage, ...(presentation.description === undefined ? {} : { description: presentation.description }) }, signal))
         return { outcome: 'not-capable', diagnostic: 'OpenCode delivery claim is no longer current.' };
-      const fresh = await artifact.read((facts) => preview(facts, request.location, request.seat, index), signal);
-      if (fresh.value === undefined || payloadHash(fresh.value.payload) !== correlation.payloadHash)
-        return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before native send.' };
       if (signal.aborted || !await beforeSend())
         return { outcome: 'not-capable', diagnostic: 'OpenCode attention was consumed before send.' };
-      const result = await sendNativeText(target, prepared.payload, {
+      const result = await sendNativeText(target, presentation.payload, {
         inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
       });
       if (result.state === 'accepted') return { outcome: 'accepted' };
@@ -99,22 +86,22 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
         return facts.deliveryEvidence(seat.participant, seat.generation).flatMap((evidence) => {
           const token = evidence.correlation?.harness === 'opencode' ? evidence.correlation.token : undefined;
           const hash = token === undefined ? undefined : observed.get(token);
-          const index = parseActivityId(evidence.activity), now = Date.now();
+          const index = parseMessageId(evidence.message), now = Date.now();
           if (token === undefined || hash === undefined || evidence.claimToken === undefined || index === undefined
             || evidence.route === undefined || !['dispatching', 'unknown', 'accepted'].includes(evidence.outcome)
             || evidence.correlation?.payloadHash !== hash
             || evidence.route.kind !== routeKind
-            || presentationBlocksWake(facts.deliveryEvidence(seat.participant, seat.generation, evidence.activity), now)) return [];
+            || presentationBlocksWake(facts.deliveryEvidence(seat.participant, seat.generation, evidence.message), now)) return [];
           const source = nativePendingSource(facts, { location, participant: seat.participant, generation: seat.generation,
             owner: seat.owner, index, route: evidence.route, now });
           if (source === undefined) return [];
-          return [{ evidence, index, hash, clipped: source.clipped }];
+          return [{ evidence, index, hash, clipped: evidence.coverage === 'clipped' }];
         });
       }, signal);
       for (const { evidence, index, hash, clipped } of matches) {
         if (signal.aborted || evidence.claimToken === undefined) return;
         await presentPending({ artifact, location, participant: seat.participant,
-          activity: formatActivityId(index), seat: asSeatRef(seat), observationOf: evidence.claimToken, sink: { present() {} }, markSeen: !clipped, signal,
+          message: formatMessageId(index), seat: asSeatRef(seat), observationOf: evidence.claimToken, sink: { present() {} }, markSeen: !clipped, signal,
           current: (facts) => {
             const correlation = facts.deliveryByToken(evidence.claimToken!);
             return nativePendingHead(facts, { location, participant: seat.participant, generation: seat.generation,
@@ -150,11 +137,11 @@ export async function receiveOpenCodePending(target: OpenCodeNativeSession, env:
           const { value: notifications } = await artifact.read((facts) => {
             if (!sameSeat(facts.seat(seat.participant), seat)) return [];
             return membership.notifications.filter((note) => automaticWakeEligible(
-              facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(note.actIndex)), Date.now()));
+              facts.deliveryEvidence(seat.participant, seat.generation, formatMessageId(note.messageIndex)), Date.now()));
           }, signal);
           for (const note of notifications) {
             if (signal.aborted) return;
-            await deliverPending({ artifact, transport, location, activity: formatActivityId(note.actIndex), now: Date.now() });
+            await deliverPending({ artifact: channelArtifact(artifact), preparePresentation: squareWakeProjection(artifact), transport, location, message: formatMessageId(note.messageIndex), now: Date.now() });
           }
         } catch (error) {
           if (signal.aborted) throw signal.reason ?? error;
@@ -194,7 +181,7 @@ export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.Pr
     if (seat.attachment !== 'attached') continue;
     const artifact = createArtifactPort(location, undefined, signal);
     try {
-      const { value: through } = await artifact.read((facts) => facts.header().lastActIndex, signal);
+      const { value: through } = await artifact.read((facts) => facts.channel.header().lastMessageIndex, signal);
       if (through >= 0) await artifact.cancelDeliveries(asSeatRef(seat), through, signal);
     } finally { await artifact.close(); }
   }

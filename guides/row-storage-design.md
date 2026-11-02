@@ -1,12 +1,8 @@
 # Row-oriented artifact design
 
-> Historical design: the public SDK `Square.snapshot()` and its closure were retired. Snapshot-specific proposals below record the design at the time, not the current API.
+> Historical, superseded design: this document records the original format-2 row-storage proposal and its former acceptance terms, not current instructions or the current API. Square artifacts now use a breaking fresh format; there is no migration command or migration support. The public SDK `Square.snapshot()` and its closure were also retired.
 
-**Historical accepted design for artifact format 2.** The current runtime uses format 3 for the
-`unlisten` event; see [Square API](square-api.md#artifact-format-and-explicit-migration) for current
-format/migration behavior. The schema and delivery-stage terms below record the original row-storage
-replacement, not a pending implementation or a second current-format definition.
-Source baseline: `99679eb` (0.3.70). This document specifies the design; [runtime delivery evidence](row-runtime-delivery-evidence.md) records implementation verification and actual capacity measurements. Explicit migration remains a separately accepted delivery.
+Source baseline: `99679eb` (0.3.70). The schema and delivery-stage terms below record the original row-storage replacement; [runtime delivery evidence](row-runtime-delivery-evidence.md) records implementation verification and capacity measurements from that work.
 
 ## Decision in brief
 
@@ -14,14 +10,13 @@ Source baseline: `99679eb` (0.3.70). This document specifies the design; [runtim
 - Domain code owns behavior; the artifact adapter owns SQLite. Keep the public operation facade; any future daemon runs those operations and their transactions server-side, rather than transmitting callback-based storage ports.
 - Persist authority once: activities, sparse receipts, leases, ordered routes and configuration. Maintain participant/attention/audience indices atomically; do not add an inbox, cursor, eligible/notified flags, or a sidecar.
 - Keep receiver-owned discovery without guaranteed push. Background traversal must progress despite unrelated writes and revisit earlier withheld candidates on change/expiry.
-- Explicit `square --location <path.square> migrate` converts v1 in place in one transaction. No runtime dual format, automatic migration, daemon or socket is added.
-- Two acceptance boundaries: row-backed runtime, then explicit migration. Release both together. No claim of 300-process capacity until the implementation is measured.
+- No claim of 300-process capacity until the implementation is measured.
 
-This document supersedes the exploratory inbox/snapshot sketches and temporary design reports. The domain specification below fixes interfaces/schema/algorithms; the migration and delivery terms fix failure handling and verification. The AGENTS.md amendment is proposed here and lands with runtime implementation, not as a claim about today's authority.
+This historical proposal superseded exploratory inbox/snapshot sketches and temporary design reports. Its domain specification and delivery terms record the interfaces, algorithms and verification proposed at the time, not today's authority.
 
 # Domain specification
 
-The interfaces below are the settled private interfaces; public behavior remains unchanged. Migration and acceptance are specified later in this document.
+The interfaces below describe the private interfaces proposed at the time; historical runtime acceptance is described later in this document.
 
 ## 1. Boundary and authority
 
@@ -36,7 +31,7 @@ Three layers:
 - A domain transaction wrapper implements `SquareRead`/`SquareWrite`. `land()` allocates an index and runs the single shared landing transition. This wrapper owns interpretation of domain facts, not SQL.
 - The private SQLite driver decodes typed rows, translates the finite selectors below, and applies typed landing effects. Only this driver performs artifact I/O. No SQL, row objects, statement handles, SQLite names, or transaction capabilities reach renderers/harnesses. The memory adapter implements the same capabilities and uses the same landing transition.
 
-There is no whole-state runtime fallback. Full integrity inspection, legacy migration, and an explicit test/export projection are exceptional bounded-by-request operations; hot callers must not invoke them.
+There is no whole-state runtime fallback. Full integrity inspection and an explicit test/export projection are exceptional bounded-by-request operations; hot callers must not invoke them.
 
 ## 2. Exact private domain port
 
@@ -230,7 +225,7 @@ interface LandingFacts {
 function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect;
 ```
 
-`deriveLanding` is pure and shared by runtime and rebuild. `land()` reads the necessary narrow facts, validates structural invariants (not action admission again), allocates **header.nextActIndex**, calls this transition, and applies the effect plus nextActIndex increment atomically. Migration supplies the preserved assigned indices; it never calls the allocator or admission validation. Earlier reply author lookup uses the existing activity row; missing earlier coordinate means no author. Valid replay never requires a future author because reply < own index.
+`deriveLanding` is pure and shared by runtime and rebuild. `land()` reads the necessary narrow facts, validates structural invariants (not action admission again), allocates **header.nextActIndex**, calls this transition, and applies the effect plus nextActIndex increment atomically. Earlier reply author lookup uses the existing activity row; missing earlier coordinate means no author. Valid replay never requires a future author because reply < own index.
 
 `markSeen` accepts any nonnegative index below nextActIndex, even if no activity/participant exists. It refuses unassigned coordinates and non-finite timestamps; it inserts only missing exact-owner receipts. Actions—not a receipt FK—ensure catch/native writes concern the intended activities. Lease writers similarly retain unknown/raw owner fallback. Only receipt insertion marks seen; presentation outcome, cancellation, and wake evidence do not.
 
@@ -338,7 +333,7 @@ Actor's original spelling lives in actor_json; actor_key_json is its indexed ide
 
 Route payload contains location, original participant spelling, channel, address, optional epoch, and all extra properties accepted by the v1 validator; sessionId/kind/updatedAt are reconstructed from columns. `participant_key_json` is only a derivative, not a replacement for original participant spelling. Routes have **no unique identity constraint**. Import positions are array positions; `replaceRoutes` can rewrite this small array to positions 0..n-1. Holes in positions from internal deletion are harmless provided order is retained, but the chosen runtime replacement implementation rewrites contiguous positions. No canonical-location column: legacy routes retain raw locations; current route policy canonicalizes when it currently does, and wake/native equality does not silently gain canonicalization.
 
-Preserve finite route epoch/extra JSON values and empty strings; do not otherwise tighten their legacy shapes. Use ordinary JSON encoding, not a bespoke numeric codec. Migration explicitly refuses non-finite numbers anywhere in a route (updatedAt, epoch, or nested extras) before DDL/inserts and leaves the artifact unchanged; never silently coerce them to null. These exponent-overflow values can pass the old permissive validator on manually authored JSON, but are not non-finite values normally persisted by the v1 JSON.stringify writer. Runtime codecs likewise require finite route numeric values. Raw schema equality is not receipt or participant equality.
+Preserve finite route epoch/extra JSON values and empty strings; do not otherwise tighten their legacy shapes. Use ordinary JSON encoding, not a bespoke numeric codec. These exponent-overflow values can pass the old permissive validator on manually authored JSON, but are not non-finite values normally persisted by the v1 JSON.stringify writer. Runtime codecs likewise require finite route numeric values. Raw schema equality is not receipt or participant equality.
 
 No receipt `state` column: all receipts are seen. No additional name registry: a participant is first touched by ANY actor-bearing activity, not necessarily join.
 
@@ -350,7 +345,7 @@ Landing uses pre-activity participant/attention facts:
 3. join sets joined=true/done=false and lastJoinIndex=index. done sets joined=false/done=true and clears OUTGOING listen only. Ignore survives departure/rejoin; incoming attention is not cleared. Say increments lifetime count, even for unusual imported prejoin/postdone sequences.
 4. listen inserts listen only when not already listening; removes matching ignore. ignore removes matching listen and inserts ignore only when absent. Preserve target's first retained spelling and relation order, including unknown/self targets. A no-op legacy activity still touches actor time; replay never applies the current ten-name admission cap. Read does not acknowledge receipts or advance a persisted cursor.
 
-There is one production transition, no SQL triggers and no separate migration fold. Test-only frozen old fold/replay supplies differential evidence. Index integrity checking can rebuild through the production transition but cannot replace differential tests with self-comparison.
+There is one production transition and no SQL triggers. Test-only frozen old fold/replay supplies differential evidence. Index integrity checking can rebuild through the production transition but cannot replace differential tests with self-comparison.
 
 Existing route policy remains domain code over `routes()` plus `replaceRoutes()`:
 - Identity is canonical location + nameKey(participant) + EXACT sessionId where routes.ts currently uses routeIdentityKey. Applying a route removes **every** matching identity and appends one new row at the tail. Nonmatching order is preserved.
@@ -428,7 +423,7 @@ No production structure below carries `.state`, all `.activities`, or a deferred
 | Claude cancellation/resume/route discovery | cancellation=max existing activity index with at<=cutoff (not assumed chronological time); use newest activity-head pages in one read txn, testing timestamps from greatest index downward and stopping at the first match. If none matches, cutoff is -1. Resume last join/done by EXACT actor spelling; no full snapshot. Routes keep first-match order. |
 | nativePendingPreview (Claude/OpenCode), WakeCurrentness | exact directedAt + joined/latestJoin/unseen receipt, routes first-match/exact epoch/address, fresh lease, captured cancellation cutoff. Generic currentness still joins selected owned routes with host evidence; does not newly consult lease. Pre-effect projection does not persist eligibility. |
 | public Square.snapshot().delivered(name,id) | explicit receiptAssignments + detached roster resolution + small header/status in ONE read txn, as below. Other production callers must not use this for count/standing. |
-| doctor / explicit import/export tests | full selected-row validation and replay comparison of indices; detached result includes standing count, not state for CLI header. Legacy validator lives only in explicit migration/test oracle. No automatic repair. |
+| doctor / explicit import/export tests | full selected-row validation and replay comparison of indices; detached result includes standing count, not state for CLI header. No automatic repair. |
 
 ### Public SDK snapshot closure (retired)
 
@@ -446,7 +441,7 @@ Keep synchronous arbitrary `delivered(name,id)`. `snapshot()` intentionally copi
 
 ## 8. Error/transaction lifecycle (fixed)
 
-- Open existing artifact create-disabled; validate owned header/schema before persistent pragmas, and validate again in the transaction. New runtime refuses v1 with existing invalid_args plus migration_required recovery per lead terms; no dual read or automatic migration. Missing/unsupported/corrupt refusal semantics stay; selected row corruption is reported on access. Full doctor checks unrelated rows explicitly, rather than every hot read scanning authority.
+- Open existing artifact create-disabled; validate owned header/schema before persistent pragmas, and validate again in the transaction. Missing, unsupported and corrupt artifacts are refused; selected row corruption is reported on access. Full doctor checks unrelated rows explicitly, rather than every hot read scanning authority.
 - `read` starts one SQLite read transaction and pins revision before callback. Results are detached. A busy acquisition before callback may retry after the existing 25ms cancellable yield. No callback replay once invoked. `transact` starts BEGIN IMMEDIATE, invokes once, performs domain writes/read-your-writes, and increments revision ONCE if any authoritative value changed. No-op transaction returns unchanged version/changed=false; no whole-state clone/deep-equality cycle.
 - BUSY COMMIT retries the SAME transaction/callback result. SQL/codec/callback error, thenable result, expired capability use, close, or abort before successful commit rolls back; capability is invalidated on every exit. Callback throw retains the original error. Exhausting safe nextActIndex/revision refuses before irreversible commit. If callback catches an internal driver failure, transaction is marked failed and cannot commit partial changes. A harmless domain validation exception can be caught before a write (needed by endOwnedSession's already_done/not_joined handling).
 - Per-port queued writes and reads-after-prior-writes retain current ordering; memory port has equivalent serialization/no-op/revision behavior. Close aborts busy waits, waits for queued operations, releases observers/handles, and is idempotent; changed() returns false on close. Explicit caller abort propagates its reason. No returned callback/result exposes DB lifetime.
@@ -457,23 +452,9 @@ Keep synchronous arbitrary `delivered(name,id)`. `snapshot()` intentionally copi
 
 No unresolved product decision remains for this storage design. Chosen cost tradeoffs are intentional: O(recipients) audience rows at landing (bells included), indexed exact counts/ordinals may scan keys, regex history still examines matching bodies, explicit SDK snapshot copies receipts, and complete sessionInbox remains complete. These are not promises of measured capacity. Host-ledger format/global NDJSON parsing/GC and harness scheduling improvements are excluded.
 
-Migration implements the schema here using the single explicit in-place transaction below; it does not invent the schema/keys/domain transition. Verification, two independently acceptable deliveries, and capacity evidence are fixed in the migration and delivery terms below. Receipt lookup uses exact canonical roster spelling; route ordering/duplicates are retained; no mandatory backup or --check/--backup/max-workers configuration is introduced.
+The historical delivery terms below accompanied the domain specification above.
 
-# Migration and delivery terms
-
-These terms apply together with the domain specification above.
-
-## Migration protocol
-
-- Only `square --location <path.square> migrate`. No --check, --backup, --force, auto-migrate, bulk mode, separate lock database, sidecar, daemon, or runtime dual reader. An operator can make an offline backup with ordinary tooling; the command does not invent a backup lifecycle.
-- application_id remains 0x53515245; user_version 2 identifies rows. Normal new-format reads/writes refuse version 1 with invalid_args / reason migration_required and descriptive offline-migration guidance. The CLI adds the shell-quoted recovery command; native tool errors do not embed invocation syntax. build --force does not bypass it. Unknown/unrelated/invalid formats are refused, not repaired.
-- `doctor` remains read-only: recognizes legacy v1 and prints the migration recovery command (exit 2); validates v2 fully, including a replay comparison of derived indices. It must not imply that legacy v1 is damaged. Directory/list probing retains omission semantics for unsupported files; no new implicit migration/discovery subsystem.
-- Open existing canonical path create-disabled. A read-only preflight establishes owned known schema/version before any persistent pragma or DDL. Require existing DELETE journal mode, refuse another mode without changing it; the shipped v1 creator/writer already establishes DELETE. Set connection busy_timeout=0 and synchronous=FULL. Acquire BEGIN IMMEDIATE, re-check format/schema under the lock, and validate the full v1 snapshot inside it. If v2 is already present and has valid framing/header, return already-format-2 without changing revision. A second migrator follows this same in-lock check.
-- Use v1 validation retained ONLY in migration (test oracle may also retain it), plus one explicit restriction: non-finite numbers anywhere in a route (including nested extras) are unsupported input, refused before DDL/inserts with the artifact untouched. They are not normally persisted as non-finite values by the v1 JSON.stringify writer; do not add a bespoke overflow-number codec or silently coerce to null. Copy normally persisted authoritative facts losslessly, preserving revision and nextActIndex, activity indices/gaps and optional field distinctions, raw receipt/lease owner keys, route order/duplicates, strings and finite fractional timestamps. Absent routes and [] both become zero rows; empty receipt-owner maps are behaviorless and may become zero receipt rows. Do not canonicalize receipts or add foreign keys that reject accepted v1 facts.
-- Actual receipt lookup is exact canonical roster spelling, not lowercase nameKey: preserve the raw owner-key relation and resolve lookup via the domain. Free-form JS strings must survive SQLite binding; JSON string encoding (including for key strings where necessary) preserves lone surrogates. All normalized lookup keys come from domain nameKey, never SQLite LOWER.
-- Create v2 tables and insert authority. Build derived participant/attention/audience facts with the SAME single-step domain transition used by runtime landing (admission checks are NOT replayed). Check insert/constraint failures normally; do not add a second full replay or a second in-memory copy just to validate the function against itself. Lossless authority equality and old-replay equivalence are migration tests; doctor can explicitly recompute indices for integrity checking. Drop square_snapshot. Set user_version=2 inside the same transaction. Commit once; nothing is published piecemeal.
-- Busy acquisition/read retries yield using existing 25ms retry and operation cancellation. Busy COMMIT retries the same transaction; never rerun copy or domain callback. Error/abort before successful COMMIT rolls back. Process death before commit recovers v1 through SQLite journal; after commit leaves complete v2. Preserve path/inode/registry identity. No host-ledger mutation and no synthetic activity.
-- Storage exclusion is guaranteed for the shipped SQLite v1 runtime because it validates again after BEGIN IMMEDIATE: its write commits before migration, or it sees v2 and refuses afterward. A pre-migration read can finish with its old snapshot. Migration does not revoke in-flight remote delivery or stop processes; recommend stopping/upgrading attached runtimes for an operationally quiet migration. Arbitrary external path replacement and pre-SQLite binaries are outside the artifact update protocol. Do not claim a distributed transaction or exactly-once remote delivery.
+# Historical delivery terms
 
 ## Independent discovery and concurrency
 
@@ -485,26 +466,22 @@ These terms apply together with the domain specification above.
 
 ## Acceptance boundary and verification
 
-Two independently acceptable implementations, not one aggregate:
-1. Row-backed runtime: new format creation, domain port and single transition, all production callers moved, old whole-state runtime path removed, v1 refusal/doctor recovery, public behavior preserved and cost evidence.
-2. Explicit v1 migration: depends on the settled v2 schema/transition; migration CLI and transactional preservation/recovery evidence. Core v2 behavior can be accepted on newly created artifacts without migration; migration is independently accepted on v1 fixtures. Release should ship both together so existing users have the recovery command.
-Host-ledger format/GC, daemon/socket service, new notification delivery semantics, version pinning, and publication are excluded.
+The historical row-backed runtime delivery covered new format creation, a domain port and single transition, moving production callers, removal of the old whole-state runtime path, refusal of old formats, public behavior and cost evidence. Host-ledger format/GC, daemon/socket service, new notification delivery semantics, version pinning, and publication were excluded.
 
 ### Mandatory deletion and simplification acceptance
 
 This is a replacement, not an additive adapter layer. Acceptance MUST reject an implementation that leaves the unnecessary old machinery in place even if behavior tests pass.
 
 - Remove the production whole-state read/transact/snapshot-replacement path, full-state clones/deep-equality write detection, replay-per-operation delivery/perception closures, obsolete `FromState`/delta bridges, and `.state`/whole-history renderer inputs replaced by the caller map. Delete dead callers, exports and tests of removed implementation details; retain behavioral coverage.
-- One production landing transition and one definition of each domain predicate. No parallel old/new runtime paths, compatibility wrappers, generic query framework, duplicate conversion layers, or unsupported defensive branches. The v1 decoder exists ONLY for explicit migration; frozen legacy semantic oracles are test-only. Full doctor/export and explicit SDK snapshot exceptions are narrow capabilities, not runtime fallbacks.
-- Hand-written production source must be net smaller than pre-change baseline `99679eb2905dde5f282025bc7f5494f7da065e54`, both for the runtime candidate and the final combined runtime+migration candidate. Migration adds only its necessary one-time conversion code and must fit that combined reduction; it need not be net-negative relative to the already reduced runtime candidate. Count tracked production `.ts`, `.js`, `.mjs` files; exclude tests/fixtures, scripts, documentation, generated output, vendored references and dependencies. No unrelated deletions, moving production code into excluded paths, code minification, formatting-only reductions or removing behavioral tests to game the result.
-- Delivery evidence includes the deletion/replacement map (old mechanism → replacement or removal), remaining legacy-reference search with justified migration/test-only exceptions, and production additions/deletions/net delta against the fixed baseline. Independent review judges unnecessary abstraction and duplication in addition to correctness. A passing test suite or negative line count alone cannot waive this criterion; unexplained retained obsolete code or net growth is a rejection, not deferred cleanup.
+- One production landing transition and one definition of each domain predicate. No parallel old/new runtime paths, compatibility wrappers, generic query framework, or unsupported defensive branches. Full doctor/export and explicit SDK snapshot exceptions are narrow capabilities, not runtime fallbacks.
+- Hand-written runtime production source was to be net smaller than pre-change baseline `99679eb2905dde5f282025bc7f5494f7da065e54`. Count tracked production `.ts`, `.js`, `.mjs` files; exclude tests/fixtures, scripts, documentation, generated output, vendored references and dependencies. No unrelated deletions, moving production code into excluded paths, code minification, formatting-only reductions or removing behavioral tests to game the result.
+- Delivery evidence includes the deletion/replacement map (old mechanism → replacement or removal) and production additions/deletions/net delta against the fixed baseline. Independent review judges unnecessary abstraction and duplication in addition to correctness. A passing test suite or negative line count alone cannot waive this criterion; unexplained retained obsolete code or net growth is a rejection, not deferred cleanup.
 
 Minimum meaningful evidence (not a Cartesian test matrix):
 - Differential trace covering mention/reply/listen/ignore/bell/done/rejoin: maintained indices equal the frozen v1 replay oracle (test-only), including route precedence and roster order. Comparing the new transition to itself does not count as semantic evidence. One shared production transition, no SQL trigger policy.
 - Sparse receipt scenario: earlier unseen hole, later filtered/exact catch, repeat exact catch no write, pre-rejoin catch versus post-rejoin notification, truthful remaining and cursor/behind/presence distinction. Filter before limit; history context uses existing activity positions.
 - Two-process transaction race and short recovery tests: concurrent catches do not double-consume ordinary catch; atomic activity+audience; abort/rollback and commit-busy callback runs once. Existing native epoch/cancel/claim-before-send/after-send tests stay green; no stronger distributed guarantee claimed.
 - Discovery scenario with hints disabled and push absent, including an early withheld candidate and a later eligible one; expiry alone re-enables the earlier candidate. Verify failed evidence does not busy-loop. Preserve Pi omitted notification behavior.
-- Migration: one representative lossless legacy fixture including gaps/orphan receipts/case keys and optional fields; second run no-op; invalid input no writes; concurrent v1 writer/version gate; process death before commit rolls back. Use actual old artifact implementation or pinned installed binary for old-writer evidence, not v2 code pretending to be old.
 - Capacity evidence: adapt existing scripts/benchmark-idle-wait.mjs rather than add a daemon or general benchmark framework. Permit 300 workers directly (no max-workers config). Same artifact, 300 independent processes and shared synthetic host ledger. Run idle, then active bell discovery with push absent/hints disabled, then simultaneous catches. Report actual readiness count, completions, revision/selected-row instrumentation with positive controls, hydrated rows/bytes, CPU, busy/commit duration, discovery latency and ledger work separately. Bound run and fail loudly on incomplete workers; do not silently lower count. Existing 20s discovery window is a probe deadline, not an SLA. Compare small/larger unrelated histories to establish no full-history hydration on recipient hot reads; SQL exact counts may still scan index entries. Update instrumentation: old square_snapshot regex otherwise falsely counts zero after v2. No capacity success claim before running on implemented code.
 - Commands after implementation: npm test (already sandboxed); npm run test:cli-process; explicit benchmark via node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs. No live registry/session identities or native remote delivery during probes.
 
@@ -516,7 +493,7 @@ This is an explicit proposed amendment authorized by the requested boundary rede
 
 ## Binding plan
 
-The current lead agent remains holder of both deliveries. Assign implementation hands independently from acceptance boundaries; the reviewer of a candidate must not be its deliverer. Use both `reviewed` and `verified` gates. Do not bind an aggregate storage-plus-migration contract.
+The historical runtime plan assigned implementation and acceptance independently: the reviewer of a candidate was not its deliverer, and both `reviewed` and `verified` gates applied.
 
 **Runtime delivery Region:**
 ```text
@@ -556,9 +533,7 @@ guides/change-waits.md
 ```
 These are planning regions, not a requirement to edit every listed file. Host-ledger persistence and packages/agent-delivery transport internals are excluded. New private domain/artifact helper modules use the existing `square-` family; no generic query framework is introduced.
 
-**Migration delivery Region:** `artifact.ts`, `square-storage.ts`, the new private migration module `square-migration.ts`, `square-state.ts` for isolated v1 validation, `model.ts`, `cli/maintenance-commands.ts`, `cli/registry.ts`, `cli/program.ts`, `help.ts`, `test/migration.test.js`, its `test/fixtures/**`, and migration documentation. Depends on the runtime delivery's v2 schema/codec/shared transition. Sharing files is coordination, not an extra dependency.
-
-Verification declarations for both delivery snapshots include `npm test` and `npm run test:cli-process` (sandboxed by their scripts), with timeouts chosen from actual baseline duration rather than arbitrarily cutting off tests. Runtime evidence additionally runs the adapted benchmark:
+The historical runtime verification declarations included `npm test` and `npm run test:cli-process` (sandboxed by their scripts), with timeouts chosen from actual baseline duration rather than arbitrarily cutting off tests. Runtime evidence also included the adapted benchmark:
 ```sh
 node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 300 --mode session
 node --import ./test/sandbox-env.js scripts/benchmark-idle-wait.mjs --workers 300 --mode session --active --no-hints

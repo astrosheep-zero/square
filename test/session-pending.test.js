@@ -51,12 +51,13 @@ async function fixture(t, leaseMs, hasPending = true) {
 async function markPresentation(item, activity, outcome) {
   const artifact = createArtifactPort(item.file);
   try {
-    const { value: seat } = await artifact.read((facts) => facts.seat('Bob'));
+    const { value } = await artifact.read((facts) => ({ seat: facts.seat('Bob'), message: facts.activity(activity)?.messageIndex }));
+    const seat = value.seat, message = `msg/${value.message}`;
     const claim = await artifact.claimDelivery({ seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation },
-      activity: `act/${activity}`, kind: 'presentation', at: Date.now(), leaseMs: 1000, claimToken: `presentation-${activity}` });
+      message, kind: 'presentation', at: Date.now(), leaseMs: 1000, claimToken: `presentation-${activity}` });
     assert.equal(claim.status, 'acquired');
     assert.equal(await artifact.completeDelivery({ seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation },
-      activity: `act/${activity}`, claimToken: claim.claimToken, outcome, at: Date.now() }), true);
+      message, claimToken: claim.claimToken, outcome, at: Date.now() }), true);
   } finally { await artifact.close(); }
 }
 
@@ -92,7 +93,7 @@ test('several names owned by one owner share one coherent projection transaction
     return exec.call(this, sql, ...args);
   });
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/SELECT s\.\* FROM seats/.test(sql)) selecting.add(this);
+    if (/SELECT \* FROM endpoints WHERE owner_json/.test(sql)) selecting.add(this);
     if (sql.includes('act_index IN (SELECT value FROM json_each')) sayHydrations++;
     return prepare.call(this, sql, ...args);
   });
@@ -199,7 +200,7 @@ test('cached conversation payload keeps lease creation, renewal, removal and cur
   t.mock.method(Date, 'now', () => now);
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/SELECT \* FROM catch_leases/.test(sql)) leaseReads++;
+    if (/SELECT \* FROM receive_claims/.test(sql)) leaseReads++;
     if (sql.includes('act_index IN (SELECT value FROM json_each')) hydrations++;
     return prepare.call(this, sql, ...args);
   });
@@ -251,14 +252,14 @@ test('an unrelated index entry leaves projections cold while activity in a candi
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
     const statement = prepare.call(this, sql, ...args);
-    if (/SELECT \* FROM activities WHERE act_index=\?$/i.test(sql)) {
+    if (/FROM activities a .*WHERE a\.act_index=\?$/i.test(sql)) {
       const get = statement.get;
       t.mock.method(statement, 'get', function (index, ...values) {
         // Binding reconciliation reads Bob's establishing join time, not activity content.
         if (index !== 1) activitySnapshots++;
         return get.call(this, index, ...values);
       });
-    } else if (/SELECT \* FROM activities/i.test(sql)) activitySnapshots++;
+    } else if (/FROM activities a/i.test(sql)) activitySnapshots++;
     return statement;
   });
   const otherFile = path.join(item.root, 'unrelated.square');
@@ -360,7 +361,7 @@ test('an unreadable candidate stays quiet across reconciliation and repair resto
   const saved = fs.readFileSync(item.file);
   const cell = createArtifactPort(item.file);
   const bob = (await cell.read(facts => facts.seat('Bob'))).value;
-  try { await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.markSeen('Bob', [2], Date.now())); }
+  try { await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.channel.markSeen('Bob', [0], Date.now())); }
   finally { await cell.close(); }
   const corruptFile = path.join(item.root, 'CORRUPT.square');
   fs.writeFileSync(corruptFile, 'not a SQLite artifact');
@@ -370,7 +371,7 @@ test('an unreadable candidate stays quiet across reconciliation and repair resto
   let snapshotReads = 0;
   const prepare = DatabaseSync.prototype.prepare;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (/SELECT \* FROM activities/i.test(sql)) snapshotReads++;
+    if (/FROM activities a/i.test(sql)) snapshotReads++;
     return prepare.call(this, sql, ...args);
   });
   const waiting = armedWait(item.observer, {}, 8_000);
@@ -405,11 +406,12 @@ test('complete recipient discovery crosses 100 withheld candidates and expiry al
   await cell.transactAs({ kind: 'participant', seat: bob }, facts => facts.putLease('Bob', { leaseId: 'alice-catch', heartbeatAt: now, expiresAt: now + 400, filter: { participants: ['Alice'] } }, bob.generation));
   await item.bind();
   const complete = await sessionInbox("pi" + ":" + ('one'), item.env);
-  assert.equal(complete[0].notifications.length, 106, 'storage pages must not shrink the initial boundary key set');
+  assert.equal(complete[0].notifications.length, 1, 'paging must surface the eligible notification after 100 withheld ones');
+  assert.equal(complete[0].notifications[0].body, 'later eligible');
   const eligible = await item.observer.wait(1000);
   assert.deepEqual(eligible[0].notifications.map((note) => note.body), ['later eligible']);
   const revision = await readSquareRevision(item.file);
-  const later = eligible[0].notifications[0].actIndex;
+  const later = eligible[0].notifications[0].messageIndex;
   const excluded = new Set([pendingKey(eligible[0], later)]);
   const waiting = armedWait(item.observer, { excludeKeys: excluded, skipImmediate: true });
   await waiting.ready;
@@ -468,7 +470,7 @@ test('a takeover between revision capture and projection uses the new exact-body
   const pending = await observer.wait(4_000);
   assert.ok(transition);
   await transition;
-  assert.equal(pending[0].seat.generation, 'act/3');
+  assert.match(pending[0].seat.generation, /^endpoint\/[0-9a-f-]{36}$/);
   assert.deepEqual(pending[0].seat.owner, body);
   assert.deepEqual(pending[0].notifications.map(note => note.body), ['new generation pending']);
 });
@@ -493,7 +495,7 @@ test('a takeover after empty binding selection cannot be hidden behind a newer r
   const prepare = DatabaseSync.prototype.prepare, realpath = fs.promises.realpath;
   t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
     const statement = prepare.call(this, sql, ...args);
-    if (/SELECT s\.\* FROM seats/.test(sql)) {
+    if (/SELECT \* FROM endpoints WHERE owner_json/.test(sql)) {
       const all = statement.all;
       t.mock.method(statement, 'all', function (...values) {
         const rows = all.apply(this, values);

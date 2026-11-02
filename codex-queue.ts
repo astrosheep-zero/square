@@ -3,9 +3,8 @@ export { sendCodexQueue, CodexQueueSendError } from './packages/agent-delivery/s
 export type { CodexQueueRequest, CodexQueueFailureKind } from './packages/agent-delivery/src/codex-queue.js';
 
 import { codexBoundaryStore } from './codex-boundary-state.js';
-import type { WakeRequest, WakeOutcome, WakeTransportPort } from './ports.js';
-import { wakePreview } from './delivery.js';
-import type { WakeRoute } from './model.js';
+import type { WakeRequest, WakeOutcome, WakeTransportPort } from './channel-transport.js';
+import type { WakeRoute } from './channel-values.js';
 
 export interface CodexQueueTransportOptions {
   env?: NodeJS.ProcessEnv;
@@ -23,8 +22,7 @@ export class CodexQueueTransport implements WakeTransportPort {
       return { outcome: 'failed', signature: 'invalid_address', message: 'Codex route has no thread id.' };
     }
     const env = this.opts.env ?? process.env;
-    const payload = request.artifact === undefined ? undefined
-      : (await request.artifact.read((facts) => wakePreview(facts, request))).value;
+    const payload = request.presentation?.payload;
     if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
     if (!(await beforeSend())) return { outcome: 'not-capable' };
     try {

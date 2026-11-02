@@ -2,7 +2,7 @@
 // Regex mode intentionally uses JavaScript's built-in engine, without a ReDoS
 // timeout. Callers should use literal mode for plain text and avoid untrusted regexes.
 
-import { SquareError } from './model.js';
+import { SquareError } from './neutral.js';
 
 export function compileSearchPattern(pattern: string, fixed: boolean): RegExp {
   if (fixed) return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');

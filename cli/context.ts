@@ -4,7 +4,7 @@ import { harnessSessionSources } from '../participant-identity.js';
 import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
-import { type HardCap, parseParticipantList, validateName } from '../model.js';
+import { type HardCap, type WakeAddress, parseParticipantList, validateName } from '../model.js';
 import { Square, squareClock } from '../square-api.js';
 import type { OperationControl } from '../square-facade.js';
 
@@ -119,7 +119,6 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'status',
   'participants',
   'doctor',
-  'migrate',
 ]);
 
 export interface ParsedGlobalArgs {
@@ -175,7 +174,7 @@ export function squareInput(context: CommandContext) {
   return { cwd: context.cwd, env: context.env, path: context.squarePath };
 }
 
-export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: import('../model.js').WakeAddress } {
+export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: WakeAddress } {
   if (explicit !== undefined) return { owner: explicit };
   const configured = env.SQUARE_OWNER;
   if (configured !== undefined) return { owner: configured };

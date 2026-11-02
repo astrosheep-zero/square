@@ -1,5 +1,5 @@
 import { type DirectedNotificationRoute, collectPending } from './delivery.js';
-import { formatActivityId } from './square-core.js';
+import { formatMessageId, parseMessageId } from './message.js';
 import { participantIdentity, truncateChars } from './presentation.js';
 import { formatDuration } from './time.js';
 import type { DeliveryEvidence } from './ports.js';
@@ -9,7 +9,7 @@ import { createArtifactPort } from './artifact.js';
 export interface WakeAttempt {
   readonly nativeObservations?: readonly NonNullable<DeliveryEvidence['nativeObservations']>[number][];
   readonly at: number;
-  readonly attention: { readonly squarePath: string; readonly recipient: string; readonly actIndex: number };
+  readonly attention: { readonly squarePath: string; readonly recipient: string; readonly messageIndex: number };
   readonly routeKind: import('./model.js').WakeRouteKind;
   readonly outcome: 'accepted' | 'unknown' | 'failed';
   readonly signature?: string;
@@ -19,7 +19,7 @@ export interface WakeAttempt {
 }
 export interface WakeReleaseDiagnostic {
   readonly at: number;
-  readonly attention: { readonly squarePath: string; readonly recipient: string; readonly actIndex: number };
+  readonly attention: { readonly squarePath: string; readonly recipient: string; readonly messageIndex: number };
   readonly routeKind?: import('./model.js').WakeRouteKind;
   readonly attemptN?: number;
   readonly session?: string;
@@ -37,11 +37,11 @@ export type DeliveryHealthKind =
 export interface DeliveryHealthItem {
   squarePath: string;
   recipient: string;
-  actIndex: number;
+  messageIndex: number;
   actor: string;
   at: number;
   ageMs: number;
-  route: DirectedNotificationRoute;
+  route?: DirectedNotificationRoute;
   kind: DeliveryHealthKind;
   attempt?: WakeAttempt;
 }
@@ -70,7 +70,7 @@ export async function classifyDeliveryHealth(
     const current = (await artifact.read((facts) => pending.map((note) => {
       const seat = facts.seat(note.recipient);
       const evidence = seat === undefined ? [] : facts.deliveryEvidence(
-        seat.participant, seat.generation, formatActivityId(note.index),
+        seat.participant, seat.generation, formatMessageId(note.index),
       );
       return { note, seat, evidence };
     }))).value;
@@ -86,7 +86,7 @@ export async function classifyDeliveryHealth(
         row.outcome === 'accepted' || row.outcome === 'unknown' || row.outcome === 'failed'
       ));
       const attempt = attemptRow === undefined || seat === undefined ? undefined : deliveryAttempt(squarePath, attemptRow,
-        { squarePath, recipient: seat.participant, actIndex: note.index });
+        { squarePath, recipient: seat.participant, messageIndex: note.index });
       const kind: DeliveryHealthKind = presentation
         ? 'presented-not-delivered'
         : terminal?.outcome === 'accepted'
@@ -99,7 +99,7 @@ export async function classifyDeliveryHealth(
       items.push({
         squarePath,
         recipient: note.recipient,
-        actIndex: note.index,
+        messageIndex: note.index,
         actor: note.actor,
         at: note.at,
         ageMs,
@@ -136,7 +136,7 @@ export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], relea
       const details = group.slice(0, DETAIL_LIMIT - displayed);
       out.push(...details.map((item) => {
         const evidence = item.attempt?.signature === undefined ? '' : ` · ${displayField(item.attempt.signature)}`;
-        return `  · ${formatActivityId(item.actIndex)} → ${displayField(participantIdentity(item.recipient))} from ${displayField(participantIdentity(item.actor))} · ${formatDuration(item.ageMs)}${evidence}`;
+        return `  · ${formatMessageId(item.messageIndex)} → ${displayField(participantIdentity(item.recipient))} from ${displayField(participantIdentity(item.actor))} · ${formatDuration(item.ageMs)}${evidence}`;
       }));
       displayed += details.length;
     }
@@ -148,7 +148,7 @@ export function renderDeliveryHealth(items: readonly DeliveryHealthItem[], relea
       const observations = [...attempt.nativeObservations ?? []].sort((a, b) => a.observedAt - b.observedAt);
       const last = observations.at(-1)!;
       const states = observations.map((observation) => `${observation.state}${observation.reason ? ` (${observation.reason})` : ''}`).join(' → ');
-      return `  · ${formatActivityId(attempt.attention.actIndex)} → ${displayField(participantIdentity(attempt.attention.recipient))} · ${attempt.outcome} · native ${displayField(states)} · ${formatDuration(Math.max(0, now - last.observedAt))} · message ${displayField(last.messageId)}`;
+      return `  · ${formatMessageId(attempt.attention.messageIndex)} → ${displayField(participantIdentity(attempt.attention.recipient))} · ${attempt.outcome} · native ${displayField(states)} · ${formatDuration(Math.max(0, now - last.observedAt))} · message ${displayField(last.messageId)}`;
     }));
     if (nativeAttempts.length > DETAIL_LIMIT) out.push(`${DETAIL_LIMIT} of ${nativeAttempts.length} native custody details shown`);
   }
@@ -166,11 +166,11 @@ function formatRelease(release: WakeReleaseDiagnostic, now: number): string {
   const age = formatDuration(Math.max(0, now - release.at));
   const message = release.message === undefined ? '' : ` — ${displayField(release.message)}`;
   const diagnostic = release.diagnostic === undefined ? '' : ` · ${displayField(JSON.stringify(release.diagnostic))}`;
-  return `  · ${formatActivityId(release.attention.actIndex)} → ${displayField(participantIdentity(release.attention.recipient))} · ${route} · ${reason} · ${age}${message}${diagnostic}`;
+  return `  · ${formatMessageId(release.attention.messageIndex)} → ${displayField(participantIdentity(release.attention.recipient))} · ${route} · ${reason} · ${age}${message}${diagnostic}`;
 }
 
 function deliveryAttempt(squarePath: string, row: DeliveryEvidence,
-  attention: WakeAttempt['attention'] = { squarePath, recipient: row.participant, actIndex: Number(row.activity.slice(4)) }): WakeAttempt | undefined {
+  attention: WakeAttempt['attention'] = { squarePath, recipient: row.participant, messageIndex: parseMessageId(row.message) ?? 0 }): WakeAttempt | undefined {
   if (row.route?.kind === undefined || row.outcome === 'released' || row.outcome === 'dispatching') return undefined;
   return {
     at: row.at,
@@ -179,7 +179,7 @@ function deliveryAttempt(squarePath: string, row: DeliveryEvidence,
     outcome: row.outcome as 'accepted' | 'unknown' | 'failed',
     attemptN: row.attemptN,
     ...(row.signature === undefined ? {} : { signature: row.signature }),
-    ...(row.message === undefined ? {} : { message: row.message }),
+    ...(row.messageText === undefined ? {} : { message: row.messageText }),
     ...(row.diagnostic === undefined ? {} : { diagnostic: row.diagnostic }),
     ...(row.nativeObservations === undefined ? {} : { nativeObservations: row.nativeObservations }),
   };
@@ -188,11 +188,11 @@ function deliveryAttempt(squarePath: string, row: DeliveryEvidence,
 function deliveryRelease(squarePath: string, row: DeliveryEvidence): WakeReleaseDiagnostic {
   return {
     at: row.at,
-    attention: { squarePath, recipient: row.participant, actIndex: Number(row.activity.slice(4)) },
+    attention: { squarePath, recipient: row.participant, messageIndex: parseMessageId(row.message) ?? 0 },
     routeKind: row.route?.kind,
     attemptN: row.attemptN,
     ...(row.signature === undefined ? {} : { signature: row.signature }),
-    ...(row.message === undefined ? {} : { message: row.message }),
+    ...(row.messageText === undefined ? {} : { message: row.messageText }),
     ...(row.diagnostic === undefined ? {} : { diagnostic: row.diagnostic }),
   };
 }

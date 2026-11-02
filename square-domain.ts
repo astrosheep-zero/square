@@ -1,9 +1,46 @@
-import { SquareError, formatActivityId, parseActivityId, sameName, validateOwner, validateName, type Seat, type StoredAct } from './model.js';
+import { SquareError, nameKey, sameName, validateOwner, validateName, type ActDraft, type Seat, type StoredAct } from './model.js';
+import { wrapChannelWrite } from './channel-domain.js';
+import { newEndpointGeneration, type EndpointGeneration } from './message.js';
 import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
+import type { ChannelWrite, EndpointRef } from './channel-ports.js';
+import { validateEndpointGeneration as endpointGeneration } from './message.js';
+import { leaseOwnsNotification } from './catch-selection.js';
+import type { WatchLease } from './model.js';
+
+/** Pending messages the live catch currently owns; the lower pipeline only needs this coverage. */
+export function catchCoverage(read: SquareRead, name: string, lease: WatchLease): number[] {
+  const covered: number[] = [];
+  let cursor = -1;
+  for (;;) {
+    const page = read.channel.directed(name, { afterIndex: cursor, unseenOnly: true, currentGeneration: true }, { edge: 'oldest', limit: 100 });
+    for (const head of page.items) {
+      const relation = read.activityByMessage(head.index);
+      const route = relation === undefined ? undefined : read.directedAt(name, relation.index)?.route;
+      if (route !== undefined && leaseOwnsNotification(lease, { actor: head.from, route, recipient: name })) covered.push(head.index);
+    }
+    if (!page.hasMore || page.items.length === 0) break;
+    cursor = page.items[page.items.length - 1].index;
+  }
+  return covered;
+}
+
+/** Artifact-private landing effect; sender capabilities never expose another recipient's claim. */
+export function extendLandingCatchCoverage(read: SquareRead, putClaim: ChannelWrite['putReceiveClaim'], activity: StoredAct, audience: readonly LandedRecipient[]): void {
+  if (activity.kind !== 'say') return;
+  const index = activity.messageIndex;
+  for (const recipient of audience) {
+    const claim = read.channel.claimLease(recipient.recipient, 'agora');
+    if (claim === undefined || claim.expiresAt <= activity.at || recipient.generation !== undefined && claim.generation !== recipient.generation) continue;
+    const lease = read.lease(recipient.recipient);
+    if (lease === undefined || lease.leaseId !== claim.id
+      || !leaseOwnsNotification(lease, { actor: activity.actor, route: recipient.route, recipient: recipient.recipient })) continue;
+    if (!claim.suppressed.includes(index)) putClaim({ ...claim, suppressed: [...claim.suppressed, index] });
+  }
+}
 
 export interface LandingEffect {
-  readonly activity: StoredAct;
+  readonly activity: ActDraft & { readonly index: number };
   readonly participant?: ParticipantFact;
   readonly removeListeningOf?: string;
   readonly removeListening?: { readonly listener: string; readonly target: string };
@@ -13,27 +50,20 @@ export interface LandingEffect {
 export interface LandingFacts {
   readonly actor?: ParticipantFact;
   readonly standing: readonly ParticipantFact[];
+  /** Endpoint custody at landing time, so an address fences the generation it was written for. */
+  readonly generations: ReadonlyMap<string, EndpointGeneration>;
   readonly incoming: readonly AttentionFact[];
   readonly outgoing: readonly AttentionFact[];
   readonly replyAuthor?: string;
 }
 
 /** The single landing transition, shared by both adapters and explicit rebuild. */
-export function deriveLanding(activity: StoredAct, facts: LandingFacts): LandingEffect {
-  if (activity.kind === 'message') {
-    const audience: LandedRecipient[] = [];
-    for (const mention of activity.to) {
-      const recipient = facts.standing.find(item => sameName(item.name, mention))?.name;
-      if (recipient !== undefined && !audience.some(item => sameName(item.recipient, recipient)))
-        audience.push({ recipient, route: 'message' });
-    }
-    return { activity, audience };
-  }
-  const audience = activity.kind === 'say' ? resolveAudience({
+export function deriveLanding(activity: ActDraft & { readonly index: number }, facts: LandingFacts): LandingEffect {
+  const audience: LandedRecipient[] = activity.kind === 'say' ? resolveAudience({
     actor: activity.actor, recipients: facts.standing.map((item) => item.name),
     mentions: activity.mentions, replyAuthor: facts.replyAuthor, reach: activity.reach,
     incoming: facts.incoming, sameIdentity: sameName,
-  }).map(recipient => ({ ...recipient, generation: formatActivityId(facts.standing.find(p => sameName(p.name, recipient.recipient))!.lastJoinIndex!) })) : [];
+  }).map(recipient => ({ ...recipient, generation: facts.generations.get(nameKey(recipient.recipient)) })) : [];
   const actor = activity.actor;
   const previous = facts.actor ?? { name: actor, firstIndex: activity.index, joined: false, done: false, sayCount: 0 };
   const participant: ParticipantFact = {
@@ -61,10 +91,11 @@ export function deriveLanding(activity: StoredAct, facts: LandingFacts): Landing
   };
 }
 
-export function landingFacts(read: SquareRead, activity: StoredAct): LandingFacts {
+export function landingFacts(read: SquareRead, activity: ActDraft): LandingFacts {
   return {
     actor: read.participant(activity.actor),
-    standing: activity.kind === 'say' || activity.kind === 'message' ? read.roster().filter((item) => item.joined) : [],
+    generations: new Map(read.channel.endpoints().map(endpoint => [nameKey(endpoint.participant), endpoint.generation])),
+    standing: activity.kind === 'say' ? read.roster().filter((item) => item.joined) : [],
     incoming: activity.kind === 'say' ? read.incomingAttention(activity.actor) : [],
     outgoing: activity.kind === 'listen' || activity.kind === 'ignore' || activity.kind === 'unlisten' ? read.attention(activity.actor) : [],
     replyAuthor: activity.kind === 'say' && activity.reply !== undefined ? read.activity(activity.reply)?.actor : undefined,
@@ -72,13 +103,12 @@ export function landingFacts(read: SquareRead, activity: StoredAct): LandingFact
 }
 
 export interface LandingWriter extends Pick<SquareWrite,
-  'markSeen' | 'putLease' | 'removeLease' | 'updateWakeAddress' | 'reattachSeat' | 'detachSeat' | 'cancelThrough' |
-  'putDeliveryDeferral' | 'renewDeliveryDeferral' | 'releaseDeliveryDeferral' |
-  'claimDelivery' | 'prepareDelivery' | 'completeDelivery' | 'observeNativeDelivery'> {
-  /** Artifact-private seat persistence used only by this gate's lifecycle transition. */
+  'putLease' | 'removeLease' | 'updateWakeAddress' | 'reattachSeat' | 'detachSeat'> {
+  /** Artifact-private endpoint persistence used only by this gate's lifecycle transition. */
   storeSeat(seat: Seat): boolean;
-  removeSeat(seat: import('./ports.js').SeatRef): boolean;
+  removeSeat(seat: EndpointRef): boolean;
   applyLanding(effect: LandingEffect): void;
+  readonly channel: ChannelWrite;
 }
 export interface SquareWriteGate {
   readonly facts: SquareWrite;
@@ -86,8 +116,7 @@ export interface SquareWriteGate {
 }
 
 function validateGeneration(value: string): void {
-  if (typeof value !== 'string' || parseActivityId(value) === undefined)
-    throw new SquareError('invalid_args', 'Artifact authority requires a valid join generation.');
+  endpointGeneration(value);
 }
 
 /** Read probes and writes share the same captured-coordinate and attachment fence. */
@@ -99,14 +128,21 @@ export function assertCurrentSeat(read: SquareRead, expected: SeatRef, allowDeta
     throw new SquareError('already_joined', 'This participant is away; join again before writing.', { reason: 'needs_seat', activityUnsent: true });
 }
 
+function immutableAct(activity: StoredAct): StoredAct {
+  const copy = { ...activity, ...(activity.kind === 'say' && activity.mentions !== undefined ? { mentions: [...activity.mentions] } : {}) };
+  if (copy.kind === 'say' && copy.mentions !== undefined) Object.freeze(copy.mentions);
+  return Object.freeze(copy);
+}
+
 /** The artifact transaction supplies one captured authority; every mutation checks it here. */
 export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authority: ArtifactWriteAuthority): SquareWriteGate {
   if (authority === undefined || typeof authority !== 'object' || authority === null)
     throw new SquareError('invalid_args', 'Artifact writes require an explicit authority.');
-  const { applyLanding, ...mutations } = writes;
-  const seated = authority.kind === 'participant' || authority.kind === 'host-cleanup';
-  const expectedName = seated ? authority.seat?.participant : authority.kind === 'send' ? authority.actor : authority.participant;
-  if (!['participant', 'host-cleanup', 'join', 'takeover', 'send'].includes(authority.kind) || typeof expectedName !== 'string')
+  const { applyLanding, channel, ...mutations } = writes;
+  const seated = authority.kind === 'participant' || authority.kind === 'host-cleanup' || authority.kind === 'endpoint-cleanup';
+  const expectedName = seated ? authority.seat?.participant : authority.kind === 'send' ? authority.actor
+    : authority.kind === 'endpoint' ? authority.participant : authority.participant;
+  if (!['participant', 'host-cleanup', 'endpoint-cleanup', 'endpoint', 'join', 'takeover', 'send'].includes(authority.kind) || typeof expectedName !== 'string')
     throw new SquareError('invalid_args', 'Artifact write authority is malformed.');
   validateName(expectedName);
   if (seated) {
@@ -117,24 +153,26 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     if (authority.kind === 'takeover') validateGeneration(authority.expectedGeneration);
   }
 
-  const assertSeat = (seat: SeatRef, expected = authority.kind === 'participant' ? authority.seat : undefined, allowDetached = false) => {
+  const assertSeat = (seat: EndpointRef, expected = authority.kind === 'participant' || authority.kind === 'host-cleanup' || authority.kind === 'endpoint-cleanup' ? authority.seat : undefined, allowDetached = false) => {
     if (expected === undefined || !sameName(expected.participant, seat.participant)
       || seat.generation !== expected.generation || seat.owner !== expected.owner)
       throw new SquareError('already_joined', 'This write needs the current participant seat.');
     assertCurrentSeat(read, expected, allowDetached);
   };
-  const assertParticipant = (name: string, generation?: import('./square-core.js').ActivityId) => {
+  const assertParticipant = (name: string, generation?: string) => {
     if (authority.kind !== 'participant')
       throw new SquareError('already_joined', 'This write needs the current participant seat.');
-    assertSeat({ ...authority.seat, participant: name, generation: generation === undefined ? authority.seat.generation : generation });
+    assertSeat({ ...authority.seat, participant: name, generation: generation ?? authority.seat.generation });
   };
-
-  let reconnectSeat: Seat | undefined;
+  let reconnectSeat: EndpointRef | undefined;
   let takeoverPhase: 'ready' | 'done' | 'joined' | undefined = authority.kind === 'takeover' ? 'ready' : undefined;
+  let establishedSeat: Seat | undefined;
   if (authority.kind === 'participant') {
     assertSeat(authority.seat);
-  } else if (authority.kind === 'host-cleanup') {
+  } else if (authority.kind === 'host-cleanup' || authority.kind === 'endpoint-cleanup') {
     // A late host cleanup is allowed to inspect a stale coordinate and return a no-op.
+  } else if (authority.kind === 'endpoint') {
+    // Endpoint attach/takeover owns no activity.
   } else if (authority.kind === 'join') {
     const participant = read.participant(expectedName), seat = read.seat(expectedName);
     if (participant?.joined) {
@@ -149,7 +187,12 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
   }
 
   let lastActivity: StoredAct | undefined;
+  const lowerAuthority = authority.kind === 'join' || authority.kind === 'takeover'
+    ? { kind: 'endpoint' as const, participant: authority.participant, owner: authority.owner }
+    : authority.kind === 'host-cleanup' ? { kind: 'endpoint-cleanup' as const, seat: authority.seat } : authority;
+  const gatedChannel = wrapChannelWrite(read.channel, channel, lowerAuthority);
   const facts = Object.assign({}, read, {
+    channel: gatedChannel,
     land(activity: Parameters<SquareWrite['land']>[0]): StoredAct {
       const actor = 'actor' in activity ? activity.actor : undefined;
       if (actor === undefined) throw new SquareError('invalid_args', 'Participant activities require a named actor.');
@@ -157,9 +200,8 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       if (!sameName(actor, expectedName))
         throw new SquareError('already_joined', 'Activity actor does not match the artifact authority.');
 
-      if (authority.kind === 'send') {
-        if (activity.kind !== 'message')
-          throw new SquareError('invalid_args', 'Send authority may only publish channel messages.');
+      if (authority.kind === 'send' || authority.kind === 'endpoint' || authority.kind === 'endpoint-cleanup') {
+        throw new SquareError('invalid_args', 'This authority may not publish Agora activities.');
       } else if (authority.kind === 'participant') {
         assertSeat(authority.seat);
         if (activity.kind === 'join') throw new SquareError('invalid_args', 'A participant seat can only be re-established by join.');
@@ -184,34 +226,46 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       const index = read.header().nextActIndex;
       if (!Number.isSafeInteger(index) || index < 0 || index >= Number.MAX_SAFE_INTEGER)
         throw new SquareError('invalid_args', 'Square activity index is exhausted.');
-      const captured = authority.kind === 'takeover' && activity.kind === 'done'
-        ? read.seat(expectedName) : undefined;
-      const stored = { ...activity, index } as StoredAct;
-      applyLanding(deriveLanding(stored, landingFacts(read, stored)));
+      const captured = authority.kind === 'takeover' && activity.kind === 'done' ? read.seat(expectedName) : undefined;
+      const effect = deriveLanding({ ...activity, index }, landingFacts(read, activity));
+      let stored: StoredAct;
+      if (activity.kind === 'say') {
+        const published = gatedChannel.publishMessage({ from: activity.actor, at: activity.at,
+          body: activity.body ?? '', ...(activity.metadata === undefined ? {} : { metadata: activity.metadata }),
+          to: effect.audience.map(({ recipient, generation }) => ({ recipient, ...(generation === undefined ? {} : { generation }) })) });
+        // The published content lives in the message; only the relation is stored above it.
+        const { body: _body, metadata: _metadata, ...relation } = activity;
+        stored = { ...relation, index, messageIndex: published.index };
+      } else {
+        stored = { ...activity, index };
+      }
+      applyLanding({ ...effect, activity: stored });
 
       if (stored.kind === 'join') {
         if (authority.kind !== 'join' && authority.kind !== 'takeover') throw new SquareError('invalid_args', 'Seat authority cannot establish another seat.');
         const seat: Seat = {
           participant: stored.actor,
           owner: authority.owner,
-          generation: formatActivityId(stored.index),
+          generation: newEndpointGeneration(),
           attachment: 'attached',
           ...(authority.wakeAddress === undefined ? {} : { wakeAddress: authority.wakeAddress }),
         };
         mutations.storeSeat(seat);
+        establishedSeat = seat;
         const established = read.seat(seat.participant);
         if (established === undefined || established.owner !== seat.owner || established.generation !== seat.generation)
-          throw new SquareError('invalid_args', 'The join activity did not establish its artifact seat.');
+          throw new SquareError('invalid_args', 'The join activity did not establish its artifact endpoint.');
         if (authority.kind === 'takeover') takeoverPhase = 'joined';
       } else if (stored.kind === 'done' && seated) {
         if (!mutations.removeSeat(authority.seat))
-          throw new SquareError('already_joined', 'The participant seat changed while it was being completed.');
+          throw new SquareError('already_joined', 'The participant endpoint changed while it was being completed.');
       } else if (stored.kind === 'done' && authority.kind === 'takeover') {
         if (captured === undefined || !mutations.removeSeat({ participant: expectedName, owner: captured.owner, generation: captured.generation }))
-          throw new SquareError('already_joined', 'The participant seat changed while takeover was completing it.');
+          throw new SquareError('already_joined', 'The participant endpoint changed while takeover was completing it.');
         takeoverPhase = 'done';
       }
-      lastActivity = read.activity(index)!;
+      // The persisted fact is the relation; callers that present a say resolve its message content.
+      lastActivity = immutableAct(stored);
       return lastActivity;
     },
     updateWakeAddress(seat: SeatRef, wakeAddress?: import('./model.js').WakeAddress): boolean {
@@ -234,69 +288,13 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
         || current.generation !== expected.generation) return false;
       return mutations.detachSeat(seat);
     },
-    cancelThrough(seat: import('./ports.js').SeatRef, through: number): boolean {
-      assertSeat(seat);
-      if (!Number.isSafeInteger(through) || through < 0 || through >= read.header().nextActIndex)
-        throw new SquareError('invalid_args', 'Cancellation boundary must be an assigned activity index below the allocator.');
-      return mutations.cancelThrough(seat, through);
-    },
-    markSeen(name: string, indexes: readonly number[], at: number): number {
-      assertParticipant(name);
-      return mutations.markSeen(name, indexes, at);
-    },
-    putLease(name: string, lease: import('./model.js').WatchLease, generation?: import('./square-core.js').ActivityId): boolean {
+    putLease(name: string, lease: WatchLease, generation?: string): boolean {
       assertParticipant(name, generation);
-      return mutations.putLease(name, lease, generation);
+      return mutations.putLease(name, lease, generation, catchCoverage(read, name, lease));
     },
-    removeLease(name: string, leaseId: string, generation?: import('./square-core.js').ActivityId): boolean {
+    removeLease(name: string, leaseId: string, generation?: string): boolean {
       assertParticipant(name, generation);
       return mutations.removeLease(name, leaseId, generation);
-    },
-    putDeliveryDeferral(...args: Parameters<SquareWrite['putDeliveryDeferral']>): boolean {
-      assertSeat(args[0]);
-      return mutations.putDeliveryDeferral(...args);
-    },
-    renewDeliveryDeferral(...args: Parameters<SquareWrite['renewDeliveryDeferral']>): boolean {
-      assertSeat(args[0]);
-      return mutations.renewDeliveryDeferral(...args);
-    },
-    releaseDeliveryDeferral(...args: Parameters<SquareWrite['releaseDeliveryDeferral']>): boolean {
-      assertSeat(args[0]);
-      return mutations.releaseDeliveryDeferral(...args);
-    },
-    claimDelivery(input: import('./ports.js').DeliveryClaimInput): import('./ports.js').DeliveryClaimResult {
-      assertSeat(input.seat);
-      const evidence = read.deliveryEvidence(input.seat.participant, input.seat.generation, input.activity);
-      if (input.observationOf !== undefined) {
-        // Receiver adapters validate native identity/content before entering this transaction.
-        // This path records that existing message, rather than acquiring a second send.
-        if (input.kind !== 'presentation' || !evidence.some(row => row.kind === 'wake'
-          && row.claimToken === input.observationOf && ['dispatching', 'accepted', 'unknown'].includes(row.outcome)))
-          return { status: 'stale' };
-      } else {
-        const blocker = evidence.find(row => row.kind !== input.kind
-          && row.outcome !== 'failed' && row.outcome !== 'released');
-        if (blocker !== undefined) {
-          if (blocker.outcome === 'dispatching' && blocker.expiresAt !== undefined && blocker.expiresAt <= input.at) {
-            // Normalize abandoned custody to unknown in the same transaction, never steal it.
-            return mutations.claimDelivery({ ...input, kind: blocker.kind });
-          }
-          return { status: blocker.outcome === 'dispatching' ? 'busy' : 'terminal', evidence: blocker };
-        }
-      }
-      return mutations.claimDelivery(input);
-    },
-    prepareDelivery(input: import('./ports.js').DeliveryPreparation): boolean {
-      assertSeat(input.seat);
-      return mutations.prepareDelivery(input);
-    },
-    completeDelivery(input: import('./ports.js').DeliveryCompletion): boolean {
-      assertSeat(input.seat);
-      return mutations.completeDelivery(input);
-    },
-    observeNativeDelivery(input: Parameters<SquareWrite['observeNativeDelivery']>[0]): boolean {
-      assertSeat(input.seat);
-      return mutations.observeNativeDelivery(input);
     },
   }) as SquareWrite;
 
@@ -305,8 +303,8 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     complete() {
       if (authority.kind !== 'takeover') return;
       const seat = read.seat(expectedName);
-      if (takeoverPhase !== 'joined' || lastActivity?.kind !== 'join' || seat === undefined
-        || seat.owner !== authority.owner || seat.generation !== formatActivityId(lastActivity.index))
+      if (takeoverPhase !== 'joined' || lastActivity?.kind !== 'join' || seat === undefined || establishedSeat === undefined
+        || seat.owner !== establishedSeat.owner || seat.generation !== establishedSeat.generation)
         throw new SquareError('already_joined', 'Takeover did not complete its replacement join.');
     },
   };

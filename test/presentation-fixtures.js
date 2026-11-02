@@ -9,7 +9,9 @@ export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex
     const { value: evidence } = await artifact.read((facts) => {
       const seat = facts.seat(name);
       if (seat === undefined || seat.owner !== harnessOwner({ channel: 'pi', session: sessionId })) return [];
-      return facts.deliveryEvidence(seat.participant, seat.generation, formatActivityId(actIndex))
+      const activity = facts.activity(actIndex);
+      if (activity?.kind !== 'say' || activity.messageIndex === undefined) return [];
+      return facts.deliveryEvidence(seat.participant, seat.generation, `msg/${activity.messageIndex}`)
         .filter((row) => row.kind === 'presentation');
     });
     return evidence.some((row) => row.outcome === 'presented');

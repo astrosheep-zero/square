@@ -1,5 +1,5 @@
-import { diagnoseSquare, migrateSquare } from '../square-api.js';
-import { commandPrefix, renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
+import { diagnoseSquare } from '../square-api.js';
+import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
 
 import { requireSquarePath, squareInput, type CommandSpec, usage } from './context.js';
 
@@ -7,34 +7,6 @@ interface DoctorResult {
   output: string;
   exitCode?: number;
 }
-
-interface MigrateResult {
-  output: string;
-}
-
-export const migrateCommand: CommandSpec<undefined, MigrateResult> = {
-  parse(argv, context) {
-    if (argv.length > 0) usage(context.command);
-    return undefined;
-  },
-  async execute(_intent, context) {
-    const squarePath = requireSquarePath(context);
-    const outcome = await migrateSquare(squareInput(context));
-    const body = outcome.status === 'migrated'
-      ? [
-        '✓ migrated to current row storage',
-        ...(outcome.counts === undefined ? [] : [
-          `  · ${outcome.counts.activities} activities · ${outcome.counts.receipts} receipts · ${outcome.counts.leases} leases · ${outcome.counts.routes} routes`,
-          `  · ${outcome.counts.recoveredSeats} recovered seats · ${outcome.counts.unownedStanding} unowned standing · ${outcome.counts.sharedBodySeats} shared-body seats · ${outcome.counts.skippedEvidence} skipped evidence`,
-        ]),
-      ].join('\n')
-      : '· already current format — nothing changed';
-    return { output: withPathOutput(squarePath, body, { participantCount: outcome.standing }) };
-  },
-  present(result) {
-    process.stdout.write(result.output);
-  },
-};
 
 export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   parse(argv, context) {
@@ -44,9 +16,6 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
   async execute(_intent, context) {
     const squarePath = requireSquarePath(context);
     const diagnosis = await diagnoseSquare(squareInput(context));
-    if (diagnosis.migrationRequired !== undefined) {
-      return { output: withPathOutput(squarePath, `${diagnosis.migrationRequired}\n${commandPrefix(squarePath)} migrate\n`), exitCode: 2 };
-    }
     if (diagnosis.unfixable !== undefined || diagnosis.standingCount === undefined) {
       return {
         output: withPathOutput(

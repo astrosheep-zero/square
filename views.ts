@@ -1,6 +1,6 @@
 import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries } from './decisions.js';
-import { SquareError, nameKey, type StoredAct } from './model.js';
+import { SquareError, nameKey, type HydratedAct } from './model.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
 import { inSquareCount } from './runtime.js';
 import { perceiveActivity } from './perception-projection.js';
@@ -19,17 +19,18 @@ const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
 export const NON_READ = ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'] as const;
 const ARCHIVE = new Set(['join', 'done', 'say']);
 
-/** The one StoredAct-to-public-Activity field mapping. Rejects read bookkeeping. */
-export function toPublicActivity(stored: StoredAct): Activity {
-  if (stored.kind === 'read' || stored.kind === 'message') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
+/** The one stored-to-public Activity field mapping. Rejects read bookkeeping. */
+export function toPublicActivity(stored: HydratedAct): Activity {
+  if (stored.kind === 'read') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
+    ...(stored.kind === 'say' && stored.messageIndex !== undefined ? { messageId: `msg/${stored.messageIndex}` as import('./message.js').MessageId } : {}),
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
     ...('metadata' in stored && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
     mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}),
     ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
 }
-export function toPerceivedActivity(facts: SquareRead, stored: StoredAct, viewer: string): PerceivedActivity {
+export function toPerceivedActivity(facts: SquareRead, stored: HydratedAct, viewer: string): PerceivedActivity {
   const via = facts.directedAt(viewer, stored.index)?.route;
   return { ...toPublicActivity(stored), perception: perceiveActivity(facts, stored, viewer),
     ...(via === undefined ? {} : { via }) };
@@ -99,7 +100,7 @@ export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: num
   return { activities, visibleActivities, totalMatches, ...(continuation === undefined ? {} : { continuation }) };
 }
 export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
-  return activities.flatMap((activity) => activity.kind === 'read' || activity.kind === 'message' ? [] : [toPublicActivity(activity)]);
+  return activities.flatMap((activity) => activity.kind === 'read' ? [] : [toPublicActivity(activity)]);
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
   const known = resolveKnownName(facts, name);
@@ -142,7 +143,10 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
   const header = facts.header(), standingCount = inSquareCount(facts);
   const listener = participants.find((p) => p.presence !== 'never-joined' && nameKey(p.name) === nameKey(viewer));
   const latest = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0];
-  const latestAct = latest === undefined ? undefined : facts.activity(latest.index);
+  const joinHeads = observe ? facts.activityHeads({ kinds: ['join'], afterIndex: latest?.index ?? -1 }, { edge: 'newest', limit: 3 }).items : [];
+  const indexes = [...new Set([...(latest === undefined ? [] : [latest.index]), ...joinHeads.map(head => head.index)])];
+  const hydrated = new Map(facts.activities(indexes).map(activity => [activity.index, activity]));
+  const latestAct = latest === undefined ? undefined : hydrated.get(latest.index);
   const data: StatusResult = {
     hardCap: header.hardCap,
     ...(header.throttlePerMinute === undefined ? {} : { throttlePerMinute: header.throttlePerMinute }),
@@ -152,9 +156,12 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
   };
   if (!observe) return data;
   const afterIndex = latestAct?.index ?? -1;
-  const joins = facts.activities(facts.activityHeads({ kinds: ['join'], afterIndex }, { edge: 'newest', limit: 3 }).items.map((h) => h.index)).map((activity) => ({
-    rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0,
-    activity: toPublicActivity(activity) }));
+  const joins = joinHeads.flatMap(head => {
+    const activity = hydrated.get(head.index);
+    return activity === undefined ? [] : [{
+      rejoined: facts.activityCount({ kinds: ['done'], actors: [activity.actor!], actorMatch: 'exact', beforeIndex: activity.index }) > 0,
+      activity: toPublicActivity(activity) }];
+  });
   const canonicalViewer = facts.participant(viewer)?.name ?? viewer;
   return {
     ...data,

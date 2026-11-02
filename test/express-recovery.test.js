@@ -322,7 +322,7 @@ test('selected artifact corruption never advertises a safely unsent activity', a
     await writer.express('original', { force: true });
   });
   const database = new DatabaseSync(file);
-  const before = database.prepare('SELECT revision, next_act_index FROM square_meta').get();
+  const before = database.prepare('SELECT revision, next_act_index FROM storage_meta, square_meta').get();
   database.prepare('UPDATE activities SET payload_json=? WHERE act_index=1').run('{"body":42}');
   database.close();
   const square = await Square.at({ path: file });
@@ -332,6 +332,6 @@ test('selected artifact corruption never advertises a safely unsent activity', a
       (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
   } finally { await square.close(); }
   const after = new DatabaseSync(file);
-  try { assert.deepEqual(after.prepare('SELECT revision, next_act_index FROM square_meta').get(), before); }
+  try { assert.deepEqual(after.prepare('SELECT revision, next_act_index FROM storage_meta, square_meta').get(), before); }
   finally { after.close(); }
 });

@@ -17,3 +17,17 @@ export function matchesCatchSelection(
   return audienceIncludes(audience, filter.mention)
     || (replyAuthor !== undefined && sameName(replyAuthor, filter.mention));
 }
+
+/** One directed arrival and the upper reason it reached its recipient. */
+export interface RoutedNotification {
+  readonly actor: string;
+  readonly route: import('./model.js').DirectedNotificationRoute;
+  readonly recipient: string;
+}
+
+/** A live catch owns every matching notification, independent of its page size. */
+export function leaseOwnsNotification(lease: import('./model.js').WatchLease, notification: RoutedNotification): boolean {
+  return matchesCatchSelection(notification.actor, notification.route === 'bell' ? { kind: 'bell' }
+    : { kind: 'mentions', names: notification.route === 'mention' ? [notification.recipient] : [] }, lease.filter ?? {},
+  notification.route === 'reply' ? notification.recipient : undefined);
+}

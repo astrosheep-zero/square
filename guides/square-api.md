@@ -275,21 +275,33 @@ participant selection, seat discovery and host cleanup methods do not take an `O
 
 ## Channel endpoints and point-to-point messages
 
-`@astrosheep/square/channel` is the foundational endpoint and messaging layer over the same
-`SquareArtifactPort`; the Agora resource (`Square` / `Participant`) delegates its shared operations to
-it instead of owning a second implementation. `Channel` exposes `open`, `create`, `inMemory`,
-`attach`, `reattach`, `endpoint`, `endpointsOf`, `listEndpoints`, `detach`, `endHeld`, `remove`,
-`cancelDeliveries`, `send`, `history` and `close`. `ChannelEndpoint` exposes `pending`, `ack`,
-`receive`, `leave`, `send`, `deferDelivery`, `renewDeliveryDeferral` and `releaseDeliveryDeferral`.
-`Square.send`, `Square.seatsOf`, `Square.detach`, `Square.endHeld`, `Square.cancelDeliveries`,
-`Square.close` and the matching `Participant` methods delegate to those same implementations.
+`@astrosheep/square/channel` exports the endpoint and messaging resource `Channel`; the Agora
+resource (`Square` / `Participant`) uses the same message substrate. `Channel` has static `open`,
+`create` and `inMemory`, a `location` property, and methods `attach`, `reattach`, `endpoint`,
+`endpointsOf`, `listEndpoints`, `detach`, `cancelDeliveries`, `remove`, `send`, `history` and
+`close`. Obtain a `ChannelEndpoint` from a Channel; it has `name` and `generation` properties and
+methods `pending`, `ack`, `receive`, `deferDelivery`, `renewDeliveryDeferral`,
+`releaseDeliveryDeferral`, `send` and `leave`. Endpoint generations are opaque strings: retain
+and compare them for equality, without interpreting their contents.
+
+The subpath exports the types `MessageId`, `MessageCursor`, `MessageQuery`, `MessageSearch`,
+`MessageMetadata`, `ChannelTruncate`, `ChannelSendInput`, `ChannelSendResult`, `ChannelMessage`,
+`ChannelPendingOptions`, `ChannelPendingResult`, `ChannelReceiveResult`, `ChannelHistoryQuery`,
+`ChannelHistoryResult`, `AckResult`, `ChannelEndpointSummary`, `ChannelEndpointHold`,
+`DeliveryDeferral`, `MetadataMatch`, `Owner`, `OperationControl`, `WakeAddress`, `WakeTransportPort`,
+`ChannelOpenInput`, `ChannelCreateInput`, `HarnessSessionChannel` and `ResolvedHarnessSession`.
+It also exports `harnessOwner`, `decodeHarnessOwner`, `localUserOwner` and `resolveHarnessSession`.
+The package root exports `MessageId`, `MessageCursor` and `MessageQuery`, but not `MessageMetadata`
+or `MessageSearch` under those names; its Agora equivalents are `ActivityMetadata` and `ActivitySearch`.
+
+Square and Participant expose their own Agora lifecycle operations; in particular,
+`square.endHeld` lands a fenced `done`, whereas `channel.remove` removes an endpoint and is not
+`Channel.endHeld`.
 `Square.history` and `Participant.pending` remain Agora projections, not channel reads: Agora
 history selects joins, says, departures and listener changes but never native messages, and Agora
 pending selects addressed, unconsumed says as perceived activities.
 
-- `Channel.create` and `Channel.inMemory` build an endpoint artifact with empty `warmup`: the Agora
-  chatroom guide belongs to `Square.build` / `Square.inMemory`, not to a point-to-point channel.
-- `Channel.send({from, to, body, truncate?, metadata?})` addresses standing members explicitly.
+- `Channel.send({from, to, body, truncate?, metadata?})` addresses standing endpoints explicitly.
   `truncate` defaults to `false`, so the full body is delivered and presentation records a receipt.
   An explicit positive integer at least as long as the body is likewise unclipped; when the body is
   longer, the landed message stores `preview`, so presentation shows that preview and records clipped
@@ -305,7 +317,7 @@ pending selects addressed, unconsumed says as perceived activities.
   transaction. Nothing is consumed by `pending` or `history`.
 - `Channel.history(query?, control?)` returns `{messages}` for native messages and says, selecting
   the newest page oldest-first by default; `order: 'desc'` reverses the page. It shares the
-  `ActivityQuery` filters (`at`, `from`, `match`, `search`, `cursor`) but has no Agora
+  `MessageQuery` filters (`at`, `from`, `match`, `search`, `cursor`) but has no Agora
   `contextBefore`/`contextAfter`, `since`, `mention` or `observe` options. Its default page size is
   100; `limit` accepts 1–100 or `null` for all matches.
 - `listEndpoints(control?)` reports every standing endpoint without an owner argument as
@@ -322,7 +334,7 @@ pending selects addressed, unconsumed says as perceived activities.
 
 ## Shared history and pending filters
 
-`HistoryQuery` and `PendingOptions` extend the same exported `ActivityQuery`:
+Agora `HistoryQuery` and `PendingOptions` extend the exported `ActivityQuery`:
 
 ```ts
 interface ActivityQuery {
@@ -333,6 +345,12 @@ interface ActivityQuery {
   cursor?: { id: ActivityId; direction: 'before' | 'after' };
 }
 ```
+
+Channel `ChannelHistoryQuery` and `ChannelPendingOptions` extend `MessageQuery`, whose `at` IDs
+and `MessageCursor.id` are `MessageId` (`msg/N`) rather than `ActivityId` (`act/N`). The message
+query types are exported from `@astrosheep/square/channel` and the package root. Channel history,
+pending, receive and ack use `msg/N`; Agora history, pending and ack use `act/N`. A say has both
+coordinates, which are not interchangeable.
 
 - Filters combine with AND. IDs in `at` and senders in `from` each combine with OR; an absent array
   is unrestricted, while an explicitly empty array matches nothing. `at` is an exact ID selection;
@@ -347,7 +365,7 @@ interface ActivityQuery {
   history searches says and departures, not joins. Participant `pending` selects addressed,
   unconsumed says; `ChannelEndpoint` `pending`/`receive` select addressed, unconsumed messages and
   says.
-- A cursor is an exclusive activity-ID boundary, independent of `limit`: before excludes the anchor
+- A cursor is an exclusive boundary in its own coordinate space, independent of `limit`: before excludes the anchor
   and everything newer; after excludes the anchor and everything older. No consumption is involved.
   Storage applies the shared filters before limiting and uses the same predicates for counts.
 - Agora history keeps its archive-specific `order`, `mention`, `since` and context options. By
@@ -362,7 +380,8 @@ interface ActivityQuery {
 The SDK accepts only `search` and `cursor`, not the removed `grep` / `fixed` / `before` / `after`
 fields. CLI flags and tool arguments keep those familiar spellings and translate at the adapter
 boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--after act/12` becomes
-`cursor: {id: 'act/12', direction: 'after'}`. The artifact format and stored activities do not change.
+`cursor: {id: 'act/12', direction: 'after'}`. The query surface keeps these `act/N` and `msg/N` coordinates; format 11 is a separate fresh-store
+breaking upgrade rather than a query change.
 
 ## Pending query and exact acknowledgement
 
@@ -370,13 +389,15 @@ boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--a
 query from explicit consumption. Agora `pending` returns addressed, unconsumed `say` records as
 perceived activities, so native messages never appear there. `ChannelEndpoint` from
 `@astrosheep/square/channel` returns `{messages}` for both native messages and says; `ack` records
-the same receipts in either case. Neither layer keeps a second inbox, read horizon or storage.
+receipts for the addressed message IDs. Neither layer keeps a second inbox, read horizon or storage.
 
-`Channel.send` / `Square.send` address joined members, including detached members. Attachment gates
-proactive wake, not landing: a detached recipient retains its unread addressed activity without a
-wake and can query/ack it after reattachment. Recipient validation remains all-or-nothing; a missing
-or departed recipient rejects the entire send without landing activity or waking other recipients.
-An omitted `truncate` sends the full body; truncation is an explicit per-message choice.
+Agora publication is participant-scoped: `Participant.express(...)` publishes a say/activity for
+that standing participant. Standalone `Channel.send` addresses standing Channel endpoints, without
+requiring Agora membership, and lands a Channel message, not an Agora activity. Attachment gates
+proactive wake, not landing: a detached Channel recipient retains its unread addressed item and can
+query/ack it after reattachment. Recipient validation is all-or-nothing; a missing or departed
+recipient rejects the entire send without landing a message or waking other recipients. An omitted
+`truncate` sends the full body; truncation is an explicit per-message choice.
 
 ```ts
 import type { ChannelEndpoint, MetadataMatch } from '@astrosheep/square/channel';
@@ -401,15 +422,19 @@ async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
   Both read full stored bodies, never clipped previews or delivery remnants.
 - Limit defaults to 100 and must be an integer from 1 through 100. The shared filters above are
   available alongside that limit. Storage applies addressedness, consumption and all supplied
-  filters **before** limiting. `remaining` counts matching unconsumed activities outside the returned
-  page in the same read transaction. It is not the global unread count or a durable cursor.
+  filters **before** limiting. `remaining` counts matching unconsumed activities for Agora and
+  messages for Channel outside the returned page in the same read transaction. It is not the global
+  unread count or a durable cursor.
 - A pending query consumes nothing, changes no read horizon and writes no delivery/presentation
   evidence. Deferrals, catch leases, cancellation and prior clipped presentation do not hide these
-  explicit reads. Like catch, pending includes historical addressed receipt holes before a rejoin;
-  it is not the proactive delivery eligibility query.
-- `ack(ids: readonly ActivityId[], control?)` returns `{consumed: number}`, the count of newly
+  explicit reads. Agora catch and pending include historical addressed activity receipt holes from
+  before a rejoin; they are not proactive delivery eligibility queries. Channel pending, receive and
+  ack use only addresses valid for the current endpoint generation. Ordinary unfenced `Channel.send`
+  messages remain addressed across takeover or rejoin until consumed.
+- Agora `ack(ids: readonly ActivityId[], control?)` and Channel `ack(ids: readonly MessageId[], control?)`
+  return `{consumed: number}`, the count of newly
   consumed exact IDs. It validates that **every** supplied ID is addressed to this participant before
-  recording any receipts. Malformed, nonexistent or unaddressed IDs reject the whole batch with
+  recording any receipts; Channel also checks that the address is valid for the current generation. Malformed, nonexistent or unaddressed IDs reject the whole batch with
   `invalid_args` (`reason: 'not_addressed'` for valid but unaddressed IDs). There is no implicit prefix
   acknowledgement, no match reselection and no requirement for an earlier pending call.
 - Duplicate IDs, repeated acknowledgement and an empty array are idempotent. Existing receipt
@@ -537,42 +562,32 @@ It overlaps at most four receiving sessions per dispatch, preserving order withi
 session and draining started work even on failure. Claims, final freshness checks and
 uncertain-delivery suppression remain unchanged. Paseo inventory discovery is asynchronous;
 overlapping attempts share only the in-flight inventory read, never a cached idle status.
-The standalone `discoverPaseoAgents` export now returns a promise.
+Paseo inventory discovery returns a promise.
 
-`discover(input, options?, control?)`, `inbox(input, owner, options?, control?)`,
-`diagnoseSquare(input, control?)`, and `migrateSquare(input, control?)` are ordinary public exports.
-They are not methods on a synthetic cross-square object. Diagnose/migrate resolve a path without
-opening a valid current-format Square first.
+`discover(input, options?, control?)`, `inbox(input, owner, options?, control?)`, and
+`diagnoseSquare(input, control?)` are ordinary public exports. They are not methods on a synthetic
+cross-square object. Diagnose resolves a path without opening a valid current-format Square first.
 
-## Artifact format and explicit migration
+## Artifact format
 
-The current artifact format is 9. It stores opaque owners rather than harness coordinates,
-preserves the attached/detached seat distinction, and stores point-to-point messages as their own
-`message` records alongside Agora `say` records. Seats, delivery evidence, cancellation and
-independent delivery deferrals remain separate from conversation activities and catch ownership.
-Ordinary opens refuse older formats with migration guidance and never convert them implicitly.
+The current artifact format is 11. It is a breaking fresh-store format, not an upgrade of format
+10. A full Square file combines three separately owned layers in one SQLite database and one
+transaction: the neutral storage revision header, the same Channel message/endpoint/delivery
+tables used by a standalone Channel, and the Agora social tables plus the activity allocator and
+square settings. Standalone Channel storage uses its own format identity and version and contains
+only the neutral and Channel structures; it never creates or reads Agora tables.
 
-Stop all sessions and services using the artifact, make an offline backup, then run
-`square --location <path.square> migrate` and `doctor` before reopening with upgraded runtimes.
-Supported formats 2–8 convert to 9 in one transaction. Format 6's Body coordinates become encoded
-owners while attachment, generations, wakes, evidence and revisions survive. Formats 4/5 gain
-attached seats; format 4 also gains empty deferral support. Formats 4–8 never consult HostLedger;
-format 8 already removed hold/resume activities. Legacy direct-delivery says become native
-`message` records, preserving an empty or nonempty body, metadata, addressed recipients and any
-stored preview.
-Historic host-cleanup departures cannot be distinguished from voluntary `done` and stay done.
-For formats 2/3, also freeze and back up the legacy HostLedger used for verified owner/evidence
-import; no authority is manufactured for done participants. Replay-critical native ambiguity
-refuses rather than disappears, including any nonempty legacy token-only tombstones.
-Current-format migration is a byte-preserving no-op. See [migration.md](migration.md) for the
-narrow metadata policy, source-preserving refusal and filesystem requirements. Updating a package
-does not migrate files or install a new runtime.
+Ordinary opens accept only the exact current identity, version and owned schema. Any other
+identity or version is refused read-only, with no conversion, no write and no migrate command.
+There is no automatic upgrade, compatibility decoder or recovery instruction. Stop any session
+using an older `.square` file and start a fresh square; the old bytes are never touched.
 
 ## SDK breaking migration: opaque owners
 
 Artifact format 7 introduced opaque owners, format 8 removed hold/resume activities, and format 9
-stores native messages. Current artifacts use format 9 and require explicit migration from formats
-2–8.
+stores native messages. Format 10 unified message content while keeping Agora relations separate.
+Format 11 splits neutral storage, standalone Channel and Agora, and has no migration from any
+older format. Current artifacts must be created fresh at format 11.
 `Body`, `sameBody` and `validateBody` are removed from the core and public API. Replace identity
 objects with an explicit owner at each identity-bearing operation; do not put identity on a resource:
 
@@ -613,5 +628,5 @@ are deleted. Consumers must open/close an actual Square and select a Participant
 full archive reads with `limit: null`. SDK express now waits by default. MCP constructor configuration
 uses `path`, consistent with `Square.at`, rather than `squarePath`.
 
-External consumers must migrate before taking this source version. Editing source does not update
+External consumers must adapt their code before taking this source version. Editing source does not update
 an installed plugin, build, or running extension.

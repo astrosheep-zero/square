@@ -242,7 +242,7 @@ test('binding time is the establishing join and fences late same-body joins at p
   const after = bindings.find(row => row.seat.participant === 'After').seat;
   assert.deepEqual(await artifactFacts(f.squarePath, facts => [
     facts.cancelledThrough('Before', before.generation), facts.cancelledThrough('After', after.generation),
-  ]), [0, undefined]);
+  ]), [undefined, undefined]);
   const ended = await bridge({ operation: 'end', bindings: [], endedAt: 1500 });
   assert.deepEqual(ended.retired.map(row => row.participant), ['Before']);
   await join('Before', 3000, true);

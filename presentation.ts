@@ -1,4 +1,4 @@
-import { type StoredAct, type PublicAct, type RoomChangeAct, sameName, isSquareError } from './model.js';
+import { type HydratedAct, type PublicAct, type RoomChangeAct, sameName, isSquareError } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
@@ -212,7 +212,7 @@ interface RenderedEvent {
   bodyClipped: boolean;
 }
 
-function eventId(event: StoredAct | Activity): string {
+function eventId(event: HydratedAct | Activity): string {
   return 'index' in event ? formatActivityId(event.index) : event.id;
 }
 function replyId(reply: number | string): string {
@@ -220,7 +220,7 @@ function replyId(reply: number | string): string {
 }
 
 function renderEventCliFacts(
-  event: StoredAct | Activity,
+  event: HydratedAct | Activity,
   opts: { now?: number; preview?: number; mention?: string } = {}
 ): RenderedEvent {
   const now = opts.now;
@@ -253,21 +253,21 @@ function renderEventCliFacts(
         bodyClipped: body.clipped,
       };
     }
-    case 'message':
+    case 'say':
     case 'read':
       return { text: '', bodyClipped: false };
   }
 }
 
 export function renderEventCli(
-  event: StoredAct | Activity,
+  event: HydratedAct | Activity,
   opts: { now?: number; preview?: number; mention?: string } = {}
 ): string {
   return renderEventCliFacts(event, opts).text;
 }
 
 function renderPresenceOnlySay(
-  event: Extract<StoredAct, { kind: 'say' }> | Activity,
+  event: Extract<HydratedAct, { kind: 'say' }> | Activity,
   opts: { now?: number } = {}
 ): string {
   const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
@@ -285,7 +285,7 @@ function renderPresenceOnlySay(
 }
 
 export function renderAmbientEventFacts(
-  event: StoredAct | Activity,
+  event: HydratedAct | Activity,
   viewer: string,
   opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
 ): RenderedEvent {
@@ -301,7 +301,7 @@ export function renderAmbientEventFacts(
 }
 
 export function renderAmbientEvent(
-  event: StoredAct | Activity,
+  event: HydratedAct | Activity,
   viewer: string,
   opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
 ): string {
@@ -391,13 +391,13 @@ export function renderPresenceAnchor(names: readonly string[]): string {
 const GREP_PREVIEW_CHARS = 160;
 
 export function renderGrepActivitiesView(
-  visible: readonly StoredAct[],
+  visible: readonly HydratedAct[],
   totalMatches: number,
   noTruncate: boolean | undefined,
   squarePath: string,
   pattern: string,
   fixed = false,
-  perception?: (act: StoredAct) => Perception,
+  perception?: (act: HydratedAct) => Perception,
 ): string {
   const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
   if (totalMatches === 0) return `○ no activity matched ${quoteShell(pattern)}`;

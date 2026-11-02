@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { SquareError } from './model.js';
-import type { SquareLocation } from './square-facade.js';
+import { SquareError } from './neutral.js';
+interface SquareLocation { readonly path?: string; readonly cwd?: string; readonly env?: NodeJS.ProcessEnv }
 
 export function squareLocation(input: SquareLocation): string {
   const selected = input.path ?? (input.env ?? process.env).SQUARE_LOCATION;

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { presentPending } from '../dist/presentation-operations.js';
@@ -40,7 +40,8 @@ async function fixture(t, extra = {}) {
   resources.push(artifact);
   const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
   const say = async (value = metadata, mentions = ['Bob']) => (await alice.express({ body: 'ready', metadata: value, mentions, force: true })).activity;
-  return { root, location, env, square, alice, receiver, bob, bobWakeAddress, artifact, seat, say, open };
+  const messageOf = async activity => `msg/${(await artifact.read(facts => facts.activity(Number(activity.id.slice(4))).messageIndex)).value}`;
+  return { root, location, env, square, alice, receiver, bob, bobWakeAddress, artifact, channel: channelArtifact(artifact), seat, say, open, messageOf };
 }
 
 function armed(observer, timeoutMs = 2000, options = {}) {
@@ -132,7 +133,7 @@ test('producer, sweep and session projection suppress OR leases without consumpt
   const two = await f.bob.deferDelivery({ match, durationMs: 10000 });
   const activity = await f.say();
   let sends = 0;
-  const input = { artifact: f.artifact, location: f.location, transport: { attempt: async (_request, _timeout, beforeSend) => {
+  const input = { artifact: f.channel, location: f.location, transport: { attempt: async (_request, _timeout, beforeSend) => {
     assert.equal(await beforeSend(), true); sends++; return { outcome: 'accepted' };
   } } };
   await deliverPending(input);
@@ -167,14 +168,14 @@ test('atomic claims and final transport checks stop races, while already dispatc
   const f = await fixture(t);
   const activity = await f.say();
   let lease, attempts = 0, sends = 0;
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, transport: {
     probe: async () => { lease = await f.bob.deferDelivery({ match, durationMs: 10000 }); return true; },
     attempt: async () => { attempts++; return { outcome: 'accepted' }; },
   } });
   assert.equal(attempts, 0, 'claim must recheck deferral');
   assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, transport: {
     attempt: async (_request, _timeout, beforeSend) => {
       attempts++;
       lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
@@ -186,7 +187,7 @@ test('atomic claims and final transport checks stop races, while already dispatc
   assert.equal(sends, 0);
   assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.every(row => row.outcome === 'released'), true);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, transport: {
     attempt: async (_request, _timeout, beforeSend) => {
       attempts++;
       assert.equal(await beforeSend(), true);
@@ -200,7 +201,7 @@ test('atomic claims and final transport checks stop races, while already dispatc
   assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.at(-1).outcome, 'accepted');
   assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: async () => { attempts++; return { outcome: 'accepted' }; } } });
+  await deliverPending({ artifact: f.channel, location: f.location, transport: { attempt: async () => { attempts++; return { outcome: 'accepted' }; } } });
   assert.equal(attempts, 2, 'accepted send is not replayed');
 });
 
@@ -208,7 +209,7 @@ test('presentation suppresses before the sink but retains successful post-sink e
   const f = await fixture(t);
   const activity = await f.say();
   let writes = 0;
-  const input = { artifact: f.artifact, location: f.location, participant: 'Bob', activity: activity.id, seat: f.seat,
+  const input = { artifact: f.artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity), seat: f.seat,
     sink: { present: () => { writes++; } } };
   const batch = await sessionInbox(f.seat.owner, f.env);
   let lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
@@ -237,7 +238,7 @@ test('presentation suppresses before the sink but retains successful post-sink e
   assert.equal((await presentPending(input)).presented, false);
   assert.equal(writes, 1, 'lease release cannot replay an already successful sink');
   let wakeAttempts = 0;
-  await deliverPending({ artifact: f.artifact, location: f.location,
+  await deliverPending({ artifact: f.channel, location: f.location,
     transport: { attempt: async () => { wakeAttempts++; return { outcome: 'accepted' }; } },
   });
   assert.equal(wakeAttempts, 0, 'a successful presentation must prevent wake replay');
@@ -290,7 +291,7 @@ test('budget omissions settle with the winning batch and never drain again after
   const state = (await f.artifact.read(facts => activities.map(activity => ({
     id: activity.id,
     receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
-    evidence: facts.deliveryEvidence('Bob', f.seat.generation, activity.id).map(row => row.outcome),
+    evidence: facts.deliveryEvidence('Bob', f.seat.generation, activity.messageId).map(row => row.outcome),
   })))).value;
   const omitted = state.filter(item => !context.includes(`id="${item.id}"`));
   assert.ok(omitted.length > 0);
@@ -305,7 +306,7 @@ test('budget omissions settle with the winning batch and never drain again after
     assert.equal(await presentPendingAtBoundary(f.seat.owner, () => { sends++; }, () => stale, f.env), undefined);
   }
   let wakes = 0;
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, transport: {
     attempt: async () => { wakes++; return { outcome: 'accepted' }; },
   } });
   assert.equal(wakes, 0, 'omitted items cannot fall back to a wake either');
@@ -327,7 +328,7 @@ test('a successful single sink settles despite cancellation of both operation an
     const artifact = captured ? createArtifactPort(f.location, undefined, controller.signal) : f.artifact;
     if (captured) t.after(() => artifact.close());
     let effects = 0;
-    const result = await presentPending({ artifact, location: f.location, participant: 'Bob', activity: activity.id,
+    const result = await presentPending({ artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity),
       seat: f.seat, signal: controller.signal, sink: { present() { effects++; controller.abort(new Error('after success')); } } });
     assert.equal(result.presented, true);
     assert.equal(effects, 1);
@@ -337,7 +338,7 @@ test('a successful single sink settles despite cancellation of both operation an
     }))).value;
     assert.ok(state.receipt);
     assert.deepEqual(state.evidence, ['presented']);
-    assert.equal((await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', activity: activity.id,
+    assert.equal((await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity),
       sink: { present() { assert.fail('successful effect must not replay'); } } })).presented, false);
   });
 });
@@ -355,7 +356,7 @@ test('pre-sink cancellation releases custody but a throwing sink retains uncerta
       const result = await artifact.read(...args);
       if (++reads === 2) controller.abort(cancelled); // final eligibility read succeeded, sink has not run
       return result;
-    } } : artifact, location: f.location, participant: 'Bob', activity: activity.id, seat: f.seat, signal: controller.signal,
+    } } : artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity), seat: f.seat, signal: controller.signal,
     sink: { present() {
       assert.equal(phase, 'rejected', 'cancellation before the sink must suppress the effect');
       controller.abort(cancelled);
@@ -449,7 +450,7 @@ test('a matching lease affects only its recipient, not other current recipients'
   await f.bob.deferDelivery({ match, durationMs: 10000 });
   await f.say(metadata, ['Bob', 'Cara']);
   const recipients = [];
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: {
+  await deliverPending({ artifact: f.channel, location: f.location, transport: {
     attempt: async (request, _timeout, beforeSend) => {
       assert.equal(await beforeSend(), true);
       recipients.push(request.participant);
@@ -467,7 +468,7 @@ test('native previews for both native addresses revalidate current-generation de
   for (const [routeKind, address] of [['claude-native', { endpoint: '/tmp/unused-deferral-test.sock', sessionId: 'Bob', loaded: 'true' }], ['opencode-server', { sessionId: 'Bob' }]]) {
     await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: routeKind, address }));
     const input = { location: f.location, participant: 'Bob', generation: f.seat.generation,
-      index: Number(activity.id.slice(4)), now: Date.now(), route: { kind: routeKind, address } };
+      index: Number((await f.messageOf(activity)).slice(4)), now: Date.now(), route: { kind: routeKind, address } };
     assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, input))).value, undefined);
     previews.push(input);
   }
@@ -504,7 +505,7 @@ test('active observer expiry follows renewal while a one-shot producer never sle
   const renewed = await f.bob.renewDeliveryDeferral(lease.id, 400);
   assert.ok(renewed);
   let sends = 0;
-  await deliverPending({ artifact: f.artifact, location: f.location, transport: { attempt: async () => { sends++; return { outcome: 'accepted' }; } } });
+  await deliverPending({ artifact: f.channel, location: f.location, transport: { attempt: async () => { sends++; return { outcome: 'accepted' }; } } });
   assert.equal(sends, 0);
   assert.ok(Date.now() < Date.parse(renewed.expiresAt), 'producer returns while the lease is still live');
   const eligible = await waiting.result;

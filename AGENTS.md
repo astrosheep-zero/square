@@ -73,7 +73,7 @@ CLI voice:
 Implementation taste:
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
 - Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
-- Cross-square discovery/inbox and path-based diagnose/migrate remain standalone exports, not extra methods on a synthetic resource.
+- Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
 - The authoritative artifact is one versioned SQLite `.square` database containing the square's state; there is no independent runtime sidecar. SQLite-owned recovery journals are allowed.

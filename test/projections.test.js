@@ -11,7 +11,9 @@ import { catchPresence, entryPresentation, selectHistory, NON_READ, queryPartici
 const queryContext = { location: 'memory', now: 100_000 };
 
 function fixture(acts, observations = {}) {
-  return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
+  let messageIndex = 0;
+  const imported = acts.map(act => act.kind === 'say' ? { ...act, messageIndex: messageIndex++ } : act);
+  return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts: imported,
     runtime: { nextActIndex: (acts.at(-1)?.index ?? -1) + 1, observations, leases: {} } };
 }
 async function archiveSquare(t, state) {
@@ -56,7 +58,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     assert.deepEqual(recovered, {
       participant: 'Bob', standingCount: 2,
       ownActivityCount: 1, hardCap: 5,
-      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: acts[10] }],
+      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: { ...acts[10], messageIndex: 8 } }],
     });
     assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
     assert.deepEqual(reads.ordinals, []);
@@ -229,8 +231,8 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
     assert.equal(projection.joinCount, 4);
     assert.deepEqual(projection.joins.map(({ activity, rejoined }) => [activity.id, rejoined]), [['act/5', false], ['act/6', true], ['act/7', false]]);
     assert.deepEqual(projection.joins[0].activity, { id: 'act/5', at: 5, kind: 'join', actor: 'bob', mentions: [] });
-    assert.deepEqual(reads.batches, [[5, 6, 7]]);
-    assert.deepEqual(reads.singles, [3]);
+    assert.deepEqual(reads.batches, [[3, 5, 6, 7]]);
+    assert.deepEqual(reads.singles, []);
     assert.deepEqual(reads.ordinals, []);
     const { observation: own } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'ALICE', true))).value;
     assert.equal(own.latestPerception, 'full');

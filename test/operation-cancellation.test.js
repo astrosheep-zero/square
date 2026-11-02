@@ -117,7 +117,7 @@ test('a published build keeps its result when cancellation follows publication',
   const link = fs.promises.link;
   fs.promises.link = async (...args) => { await link(...args); controller.abort(new Error('late response cancellation')); };
   try {
-    const result = await Square.build({ path: location, env: {}, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
+    const result = await Square.build({ path: location, env: { SQUARE_INDEX: path.join(root, 'index.ndjsonl') }, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
     assert.equal(result.location, location);
     assert.equal((await result.status()).hardCap, 3);
     await result.close();

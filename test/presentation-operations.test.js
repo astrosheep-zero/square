@@ -14,11 +14,12 @@ async function fixture(t) {
   const alice = await join('Alice', 1), bob = await join('Bob', 2);
   const item = (await artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
     facts.land({ kind: 'say', actor: 'Alice', at: 3, mentions: ['Bob'], body: 'full consumption' }))).value;
+  const message = `msg/${item.messageIndex}`;
   const read = () => artifact.read(facts => ({
-    receipt: facts.receipt('Bob', item.index), evidence: facts.deliveryEvidence('Bob', bob.generation, `act/${item.index}`),
+    receipt: facts.channel.receipt('Bob', item.messageIndex), evidence: facts.channel.deliveryEvidence('Bob', bob.generation, message),
     header: facts.header(),
   })).then(result => result.value);
-  return { artifact, bob, item, read, input: { artifact, location: 'memory://presentation', participant: 'Bob', seat: bob, activity: item.index, now: 7 } };
+  return { artifact, bob, item, message, read, input: { artifact, location: 'memory://presentation', participant: 'Bob', seat: bob, message, now: 7 } };
 }
 
 test('receipt write failure rolls back both captured full receipt and attempt completion in the actual Square transaction', async t => {
@@ -26,14 +27,15 @@ test('receipt write failure rolls back both captured full receipt and attempt co
   const failure = new Error('receipt write failed');
   let beforeSettlement, writes = 0, effects = 0;
   const artifact = { ...f.artifact, settleAs: (authority, change) => f.artifact.settleAs(authority, facts => change({ ...facts,
-    markSeen(...args) {
-      writes++;
-      assert.equal(facts.deliveryEvidence('Bob', f.bob.generation, `act/${f.item.index}`)[0].outcome, 'presented',
-        'attempt completion has already been written in this transaction');
-      facts.markSeen(...args);
-      assert.ok(facts.receipt('Bob', f.item.index), 'the injected failure is after a real receipt write');
-      throw failure;
-    },
+    channel: { ...facts.channel,
+      markSeen(...args) {
+        writes++;
+        assert.equal(facts.channel.deliveryEvidence('Bob', f.bob.generation, f.message)[0].outcome, 'presented',
+          'attempt completion has already been written in this transaction');
+        facts.channel.markSeen(...args);
+        assert.ok(facts.channel.receipt('Bob', f.item.messageIndex), 'the injected failure is after a real receipt write');
+        throw failure;
+      } },
   })) };
   await assert.rejects(presentPending({ ...f.input, artifact, sink: { async present() {
     effects++;
@@ -50,7 +52,7 @@ test('Square full/clipped sinks preserve semantic timestamps; clipped success re
     const f = await fixture(t);
     const result = await presentPending({ ...f.input, markSeen: full, sink: { present(item) { assert.equal(item.body, 'full consumption'); } } });
     assert.equal(result.presented, true);
-    assert.equal(result.activity.index, f.item.index);
+    assert.equal(result.message.index, f.item.messageIndex);
     const state = await f.read();
     assert.equal(state.evidence[0].outcome, full ? 'presented' : 'clipped');
     assert.equal(state.evidence[0].at, 7);
@@ -65,5 +67,5 @@ test('Square retains a throwing sink as unknown, rethrows its original exception
   const state = await f.read();
   assert.equal(state.receipt, undefined);
   assert.equal(state.evidence[0].outcome, 'unknown');
-  assert.equal(state.evidence[0].message, failure.message);
+  assert.equal(state.evidence[0].messageText, failure.message);
 });

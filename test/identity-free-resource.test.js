@@ -24,7 +24,9 @@ test('one identity-free memory resource carries explicit current seats for multi
   assert.equal(alice.observation.deliveryAvailable, false);
   assert.equal(bob.observation.deliveryAvailable, true);
   const aliceSeat = (await square.seatsOf(aliceBody))[0];
-  assert.deepEqual(aliceSeat, { name: 'Alice', generation: 'act/0', attachment: 'attached' });
+  assert.equal(aliceSeat.name, 'Alice');
+  assert.match(aliceSeat.generation, /^endpoint\/[0-9a-f-]{36}$/);
+  assert.equal(aliceSeat.attachment, 'attached');
   assert.deepEqual((await square.seatsOf(bobBody)).map(seat => seat.name), ['Bob']);
   assert.equal((await square.participant('Alice', { owner: aliceBody })).name, 'Alice');
   assert.equal((await square.participant('Bob', { owner: bobBody })).name, 'Bob');

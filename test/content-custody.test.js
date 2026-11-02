@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { deliverPending } from '../dist/delivery-operations.js';
+import { squareWakeProjection } from '../dist/wake-preview.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 import { observeSessionPending } from '../dist/inbox.js';
+import { formatMessageId } from '../dist/message.js';
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-content-custody-'));
@@ -27,11 +29,11 @@ async function fixture(t) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { location, producer, receiver, seat, activity, observer,
-    claim: (kind, token, extra = {}) => producer.claimDelivery({ seat, activity, kind, claimToken: token, at: 10, leaseMs: 10, ...extra }),
-    settle: (token, outcome) => producer.completeDelivery({ seat, activity, claimToken: token, outcome, at: 12 }),
+    claim: (kind, token, extra = {}) => producer.claimDelivery({ seat, message: activity, kind, claimToken: token, at: 10, leaseMs: 10, ...extra }),
+    settle: (token, outcome) => producer.completeDelivery({ seat, message: activity, claimToken: token, outcome, at: 12 }),
     evidence: async () => (await producer.read(f => f.deliveryEvidence('Bob', seat.generation, activity))).value,
-    seen: async () => (await producer.read(f => f.receipt('Bob', Number(activity.slice(4))))).value,
-    present: (sink, extra = {}) => presentPending({ artifact: receiver, location, seat, participant: 'Bob', activity, sink: { present: sink }, ...extra }),
+    seen: async () => (await producer.read(f => f.channel.receipt('Bob', Number(activity.slice(4))))).value,
+    present: (sink, extra = {}) => presentPending({ artifact: receiver, location, seat, participant: 'Bob', message: activity, sink: { present: sink }, ...extra }),
   };
 }
 
@@ -49,7 +51,7 @@ for (const first of ['paseo', 'pi']) test(`${first} wins content custody across 
       effects.push('paseo');
     },
   });
-  const wake = () => deliverPending({ artifact: f.producer, location: f.location, activity: f.activity, transport });
+  const wake = () => deliverPending({ artifact: channelArtifact(f.producer), preparePresentation: squareWakeProjection(f.producer), location: f.location, message: f.activity, transport });
   const native = () => f.present(async () => {
     if (first === 'pi') { entered.resolve(); await release.promise; }
     effects.push('pi');
@@ -94,7 +96,7 @@ test('failed wake wakes the native observer again without another activity', asy
   const waiting = f.observer.wait(1000, { onChangeArmed: armed.resolve });
   await armed.promise;
   assert.equal(await f.settle('first', 'failed'), true);
-  assert.equal((await waiting)[0].notifications[0].actIndex, Number(f.activity.slice(4)));
+  assert.equal((await waiting)[0].notifications[0].messageIndex, Number(f.activity.slice(4)));
   let sends = 0;
   assert.equal((await f.present(() => { sends++; })).presented, true);
   assert.equal(sends, 1);
@@ -107,9 +109,9 @@ test('observation refers to an exact existing wake, without granting another inj
   assert.equal((await f.claim('presentation', 'bad-observation', { observationOf: 'wrong-token' })).status, 'stale');
   assert.equal((await f.claim('wake', 'invalid-observation', { observationOf: 'wake-token' })).status, 'stale');
   const foreign = await f.producer.transactAs({ kind: 'send', actor: 'Worker' }, facts =>
-    facts.land({ kind: 'message', actor: 'Worker', at: 13, body: 'different report', to: ['Bob'] }));
+    facts.channel.publishMessage({ from: 'Worker', at: 13, body: 'different report', to: [{ recipient: 'Bob' }] }));
   assert.equal((await f.claim('presentation', 'wrong-activity', {
-    activity: `act/${foreign.value.index}`, observationOf: 'wake-token',
+    message: formatMessageId(foreign.value.index), observationOf: 'wake-token',
   })).status, 'stale');
   assert.equal((await f.present(() => assert.fail('no second injection'))).presented, false);
   assert.equal(await f.seen(), undefined);

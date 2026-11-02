@@ -47,7 +47,7 @@ export async function recordClaudeDeliveryStatus(input: ClaudeDeliveryStatus, en
       const { seat, evidence } = match[0];
       const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
       return (await artifact.transactAs({ kind: 'participant', seat: ref }, (facts) =>
-        facts.observeNativeDelivery({ seat: ref, claimToken: evidence.claimToken!, observation: {
+        facts.channel.observeNativeDelivery({ seat: ref, claimToken: evidence.claimToken!, observation: {
           eventId: input.eventId, messageId: input.messageId, state: input.state,
           ...(input.reason === undefined ? {} : { reason: input.reason }), observedAt: input.observedAt,
         }}))).value;

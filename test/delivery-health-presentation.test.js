@@ -3,12 +3,12 @@ import test from 'node:test';
 
 import { renderDeliveryHealth } from '../dist/delivery-health.js';
 
-function deliveryItem(kind, actIndex, fields = {}) {
+function deliveryItem(kind, messageIndex, fields = {}) {
   return {
     squarePath: '/tmp/SQUARE.square',
-    recipient: `Recipient-${actIndex}`,
-    actIndex,
-    actor: `Actor-${actIndex}`,
+    recipient: `Recipient-${messageIndex}`,
+    messageIndex,
+    actor: `Actor-${messageIndex}`,
     at: 0,
     ageMs: 0,
     route: 'mention',
@@ -30,7 +30,7 @@ test('delivery health presentation bounds details without losing classified tota
     '○ presented-not-delivered: 5',
     '✕ unreachable: 5',
   ]);
-  assert.equal(lines.filter((line) => line.startsWith('  · act/')).length, 20);
+  assert.equal(lines.filter((line) => line.startsWith('  · msg/')).length, 20);
   assert.equal(lines.at(-1), '20 of 25 pending details shown');
 });
 
@@ -38,14 +38,14 @@ test('delivery health presentation keeps one short detail line stable', () => {
   assert.deepEqual(renderDeliveryHealth([deliveryItem('awaiting', 7, { recipient: 'Bob', actor: 'Alice' })]), [
     '· delivery attention · 1 pending',
     '○ awaiting: 1',
-    '  · act/7 → @Bob from @Alice · 0ms',
+    '  · msg/7 → @Bob from @Alice · 0ms',
   ]);
 });
 
 test('delivery diagnostics show release reasons even when nothing is pending', () => {
   const releases = [{
     at: 0,
-    attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', actIndex: 7 },
+    attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', messageIndex: 7 },
     routeKind: 'paseo',
     attemptN: 1,
     signature: 'agent_not_idle',
@@ -56,7 +56,7 @@ test('delivery diagnostics show release reasons even when nothing is pending', (
 
   assert.equal(lines[0], '✓ no pending delivery attention');
   assert.equal(lines[1], '· recent wake releases · 1');
-  assert.match(lines[2], /act\/7 → @Bob · paseo · agent_not_idle · 1s/);
+  assert.match(lines[2], /msg\/7 → @Bob · paseo · agent_not_idle · 1s/);
   assert.match(lines[2], /The registered Paseo agent is not idle/);
   assert.match(lines[2], /selection/);
 });
@@ -64,7 +64,7 @@ test('delivery diagnostics show release reasons even when nothing is pending', (
 test('native custody remains visible beyond pending detail limits and never renders transport secrets', () => {
   const items = Array.from({ length: 25 }, (_, i) => deliveryItem('awaiting', i));
   const native = {
-    at: 0, attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', actIndex: 99 },
+    at: 0, attention: { squarePath: '/tmp/SQUARE.square', recipient: 'Bob', messageIndex: 99 },
     outcome: 'unknown', routeKind: 'claude-native', attemptN: 1, claimToken: 'SECRET-TOKEN',
     nativeDelivery: { harness: 'claude', endpoint: '/SECRET-SOCKET', payload: 'SECRET-PAYLOAD' },
     nativeObservations: [{ eventId: 'event-1', messageId: 'message-1', state: 'held', reason: 'no-mode-asserted', observedAt: 0 }],
@@ -72,7 +72,7 @@ test('native custody remains visible beyond pending detail limits and never rend
   for (const pending of [items, []]) {
     const text = renderDeliveryHealth(pending, [], 1_000, [native]).join('\n');
     assert.match(text, /Claude native custody · 1/);
-    assert.match(text, /act\/99 → @Bob · unknown · native held \(no-mode-asserted\) · 1s · message message-1/);
+    assert.match(text, /msg\/99 → @Bob · unknown · native held \(no-mode-asserted\) · 1s · message message-1/);
     assert.doesNotMatch(text, /SECRET/);
   }
 });
@@ -86,13 +86,13 @@ test('delivery health presentation ellipsizes recipient, actor, and wake signatu
     actor,
     attempt: {
       at: 0,
-      attention: { squarePath: '/tmp/SQUARE.square', recipient, actIndex: 7 },
+      attention: { squarePath: '/tmp/SQUARE.square', recipient, messageIndex: 7 },
       routeKind: 'paseo',
       outcome: 'accepted',
       signature,
       attemptN: 1,
     },
-  })]).filter((line) => line.startsWith('  · act/'));
+  })]).filter((line) => line.startsWith('  · msg/'));
 
   const fields = detail.match(/→ (.+) from (.+) · 0ms · (.+)$/)?.slice(1);
   assert.ok(fields);

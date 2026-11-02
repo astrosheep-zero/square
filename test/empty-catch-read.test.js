@@ -56,7 +56,7 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
     if (!probed) {
       probed = true;
       assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
-      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.markSeen('Bob', [2], 50));
+      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.channel.markSeen('Bob', [0], 50));
       await cell.transactAs({ kind: 'participant', seat: seats.get('Alice') }, facts => {
         facts.land({ kind: 'say', actor: 'Alice', at: 51, body: 'selected by writer', mentions: ['Bob'] });
         facts.land({ kind: 'say', actor: 'Alice', at: 52, body: 'remaining', mentions: ['Bob'] });
@@ -83,11 +83,12 @@ test('exact-ID catches retain their repeatable receipt transaction and never use
   const marked = [];
   artifact.read = (select, signal) => cell.read(facts => select({ ...facts, directed() { assert.fail('ID catch must not probe a directed page'); } }), signal);
   artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, facts => change({
-    ...facts, markSeen(name, indexes, at) { marked.push([...indexes]); return facts.markSeen(name, indexes, at); },
+    ...facts, channel: { ...facts.channel,
+      markSeen(name, indexes, at) { marked.push([...indexes]); return facts.channel.markSeen(name, indexes, at); } },
   }), signal);
   const first = await bob.catch({ id: 'act/2' });
   assert.deepEqual(await bob.catch({ id: 'act/2' }), first);
-  assert.deepEqual(marked, [[2], [2]]);
+  assert.deepEqual(marked, [[0], [0]]);
 });
 
 test('empty catch validates caller, filters, limits, and semantic time without a writer', async t => {

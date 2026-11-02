@@ -1,13 +1,19 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { Owner, StoredAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
+import type { MessageId } from './message.js';
+import type { Owner, HydratedAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
+import type { OperationControl } from './neutral.js';
+import type { MessageSearch as ActivitySearch, AckResult } from './channel-facade.js';
+export type { ChannelTruncate, ChannelSendInput, ChannelSendResult, ChannelEndpointSummary, ChannelMessage, ChannelPendingResult, MessageCursor, MessageQuery, ChannelHistoryQuery, ChannelPendingOptions, ChannelHistoryResult, ChannelReceiveResult, MessageSearch as ActivitySearch, AckResult, ChannelEndpointHold as HeldSeat } from './channel-facade.js';
+export type { CatchWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError } from './neutral.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
+export type { MessageId } from './message.js';
 export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
-/** Indexed archive event, including read bookkeeping. */
-export type ArchiveRecord = Readonly<StoredAct>;
+/** Indexed archive event, including read bookkeeping and a say's linked content. */
+export type ArchiveRecord = Readonly<HydratedAct>;
 export interface Activity {
   readonly id: ActivityId;
   readonly at: number;
@@ -19,6 +25,8 @@ export interface Activity {
   readonly reach?: Reach;
   readonly target?: string;
   readonly reply?: ActivityId;
+  /** Channel message owning a say's body and metadata. */
+  readonly messageId?: import('./message.js').MessageId;
 }
 export interface PerceivedActivity extends Activity {
   readonly perception: Perception;
@@ -50,57 +58,6 @@ export interface ExpressResult {
   readonly hint?: string;
   readonly observation?: ExpressObservation;
 }
-export type ChannelTruncate = number | false;
-export interface ChannelSendInput {
-  readonly from: string;
-  readonly to: string | readonly string[];
-  readonly body: string;
-  readonly truncate?: ChannelTruncate;
-  readonly metadata?: ActivityMetadata;
-}
-export interface ChannelSendResult {
-  readonly id: ActivityId;
-  readonly at: number;
-  readonly from: string;
-  readonly to: readonly string[];
-  readonly body: string;
-  readonly metadata?: ActivityMetadata;
-}
-/** One standing endpoint's public facts; readable across owners. */
-export interface ChannelEndpointSummary {
-  readonly name: string;
-  readonly generation: ActivityId;
-  readonly attachment: 'attached' | 'detached';
-  readonly deliveryAvailable: boolean;
-  readonly unreadCount: number;
-  readonly lastActiveAt?: number;
-}
-/** Symmetric point-to-point record: the sent shape, plus its landing time and ID. */
-export interface ChannelMessage {
-  readonly id: ActivityId;
-  readonly at: number;
-  readonly from: string;
-  readonly to: readonly string[];
-  readonly body: string;
-  readonly metadata?: ActivityMetadata;
-}
-export interface ChannelPendingResult {
-  readonly messages: readonly ChannelMessage[];
-  readonly remaining: number;
-}
-export interface ChannelHistoryQuery extends ActivityQuery {
-  readonly limit?: number | null;
-  readonly order?: 'asc' | 'desc';
-}
-export interface ChannelHistoryResult {
-  readonly messages: readonly ChannelMessage[];
-}
-export interface ChannelReceiveResult extends ChannelPendingResult {
-  /** Newly consumed messages in this transaction. */
-  readonly consumed: number;
-  /** Matching unconsumed messages left after this transaction. */
-  readonly remaining: number;
-}
 export interface ListenerChangeResult {
   readonly activity: Activity | null;
   readonly observation?: ListenerObservation;
@@ -120,10 +77,6 @@ export interface CatchOptions extends ObservationOptions {
   readonly mention?: boolean;
   readonly limit?: number;
   readonly replace?: boolean;
-}
-export interface ActivitySearch {
-  readonly text: string;
-  readonly mode: 'literal' | 'regex';
 }
 export interface ActivityCursor {
   readonly id: ActivityId;
@@ -146,10 +99,6 @@ export interface PendingResult {
   /** Matching unconsumed activities outside this page. */
   readonly remaining: number;
 }
-export interface AckResult {
-  /** Newly consumed addressed IDs; repeated acknowledgement is a no-op. */
-  readonly consumed: number;
-}
 export type CatchReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
 export interface CatchResult {
   readonly activities: readonly PerceivedActivity[];
@@ -158,33 +107,6 @@ export interface CatchResult {
   /** Occasional participant-facing nudge; not part of any activity. */
   readonly hint?: string;
   readonly observation?: CatchObservation;
-}
-export interface CatchWaitStart {
-  readonly idleMs: number;
-  readonly replacementRequested: boolean;
-  readonly replaced: boolean;
-}
-export type OperationProgress =
-  | {
-      readonly kind: 'waiting';
-      readonly reason: 'throttled';
-      readonly delayMs?: number;
-    }
-  | ({ readonly kind: 'catch-started'; readonly participant: string } & CatchWaitStart);
-export interface OperationControl {
-  readonly signal?: AbortSignal;
-  readonly onProgress?: (progress: OperationProgress) => void;
-}
-export interface OperationFailureDetail {
-  readonly operation: 'express' | 'join' | 'catch' | 'history' | 'other';
-  readonly subject?: 'caller' | 'filter' | 'recipient';
-  readonly participant?: string;
-  readonly expressEffect?: 'unsent' | 'landed' | 'unknown';
-  readonly landedId?: ActivityId;
-  readonly historyBounds?: { readonly maxLimit: number; readonly totalMatches: number };
-}
-export interface OperationError extends Error {
-  readonly operation?: OperationFailureDetail;
 }
 export interface HistoryQuery extends ActivityQuery, ObservationOptions {
   /** Ten by default; null explicitly reads the full archive. */
@@ -233,7 +155,7 @@ export interface JoinResult {
 }
 export interface Participant {
   readonly name: string;
-  readonly generation: ActivityId;
+  readonly generation: string;
   express(body: string | undefined, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
   express(input: ExpressInput, control?: OperationControl): Promise<ExpressResult>;
   listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
@@ -249,11 +171,7 @@ export interface Participant {
   renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
   releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
-export interface HeldSeat {
-  readonly name: string;
-  readonly generation: ActivityId;
-  readonly attachment: 'attached' | 'detached';
-}
+
 export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'away' | 'done';
 export interface ParticipantSummary {
   readonly name: string;

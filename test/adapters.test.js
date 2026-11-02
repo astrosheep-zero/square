@@ -74,7 +74,7 @@ function sampleInbox() {
     location: '/tmp/SQUARE.square',
     seat: { participant: 'Bob', owner: ':', generation: 'act/0' },
     joinedAt: 1,
-    notifications: [{ actIndex: 7, actor: 'Alice', at: 8, route: 'mention', body: 'hello @Bob' }],
+    notifications: [{ messageIndex: 7, actIndex: 7, actor: 'Alice', at: 8, route: 'mention', body: 'hello @Bob' }],
   }];
 }
 
@@ -624,7 +624,7 @@ test('Pi inbox helpers expose stable notification identity without invocation hi
 
 test('Pi square card collapses to who reached you, where, and their opening line, and expands to Markdown bodies', () => {
   const membership = (notifications) => ({ ...sampleInbox()[0], notifications });
-  const note = (overrides = {}) => ({ actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
+  const note = (overrides = {}) => ({ messageIndex: 7, actIndex: 7, actor: 'Alice', route: 'mention', body: 'hello @Bob', ...overrides });
   const theme = { fg: (_color, text) => `<${text}>` };
   const details = pendingCardDetails([membership([note({ route: 'bell', body: '\nhello **@Bob**\nsecond' }), note({ actor: 'Cara', route: 'reply', actIndex: 8 })])]);
   assert.deepEqual(details.items, [

@@ -88,4 +88,4 @@ policy. Neither detach nor a deferral can recall an already-dispatched external 
 Tests exercise foreign/stale/detached handles, same-owner restoration with unread activity intact,
 voluntary leave, explicit takeover, permanent deletion, exact-owner adapter lifecycle, generation
 fences and delivery eligibility. Assertions belong to authoritative facts, not helper ordering or
-display copy. Migration is offline and explicit; see [migration.md](migration.md).
+display copy.
