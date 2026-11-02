@@ -44,7 +44,9 @@ export function renderAttentionDescription({ actor, route }: Pick<AttentionPrevi
 
 /** Full notification text for human-facing expansion, never the bounded model preview. */
 export function renderAttentionFull(attention: AttentionPreview): string {
-  return attention.delivery?.mode === 'direct' ? renderDirectBlock(attention) : renderAttentionBlock(attention, attention.body);
+  return attention.delivery?.mode === 'direct'
+    ? renderDirectBlock(attention, attention.body.replace(/\r\n/g, '\n'))
+    : renderAttentionBlock(attention, attention.body);
 }
 
 /** Attribute values keep their quotes; the stored body and the human card stay unescaped. */
@@ -58,7 +60,7 @@ function escapeAttribute(value: string): string {
 
 /** A body may quote the envelope's own tags; in the preview they must never read as one. */
 function escapeSquareTags(text: string): string {
-  return text.replace(/<(\/?)(square-|system-reminder)/gi, '<\\$1$2');
+  return text.replace(/<(\/?)(square-|channel-|system-reminder)/gi, '<\\$1$2');
 }
 
 function renderAttentionBlock(attention: AttentionPreview, body: string): string {
@@ -72,8 +74,19 @@ function renderAttentionBlock(attention: AttentionPreview, body: string): string
   ].join('\n');
 }
 
-function renderDirectBlock(attention: AttentionPreview): string {
-  return escapeSquareTags(previewAttentionBody(attention.body, attention.delivery));
+/** The fixed point-to-point envelope: a recipient must see who, which channel and which message. */
+function renderDirectBlock(attention: AttentionPreview, bodyText = previewAttentionBody(attention.body, attention.delivery)): string {
+  const attributes = [
+    `channel="${escapeAttribute(displayAttentionPath(attention.squarePath))}"`,
+    `from="${escapeAttribute(attention.actor)}"`,
+    `to="${escapeAttribute(attention.recipient)}"`,
+    `id="${escapeAttribute(formatActivityId(attention.actIndex))}"`,
+  ];
+  return [
+    `<channel-message ${attributes.join(' ')}>`,
+    escapeSquareTags(bodyText),
+    '</channel-message>',
+  ].join('\n');
 }
 
 /** Shared model-facing envelope; transport correlation and human cards stay outside it. */

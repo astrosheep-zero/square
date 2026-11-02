@@ -67,6 +67,31 @@ export interface ChannelSendResult {
   readonly body: string;
   readonly metadata?: ActivityMetadata;
 }
+/** One standing endpoint's public facts; readable across owners. */
+export interface ChannelEndpointSummary {
+  readonly name: string;
+  readonly generation: ActivityId;
+  readonly attachment: 'attached' | 'detached';
+  readonly deliveryAvailable: boolean;
+  readonly unreadCount: number;
+  readonly lastActiveAt?: number;
+}
+/** Symmetric point-to-point record: the sent shape, plus its landing time and ID. */
+export interface ChannelMessage {
+  readonly id: ActivityId;
+  readonly at: number;
+  readonly from: string;
+  readonly to: readonly string[];
+  readonly body: string;
+  readonly metadata?: ActivityMetadata;
+}
+export interface ChannelReceiveResult {
+  readonly messages: readonly ChannelMessage[];
+  /** Newly consumed messages in this transaction. */
+  readonly consumed: number;
+  /** Matching unconsumed messages left after this transaction. */
+  readonly remaining: number;
+}
 export interface ListenerChangeResult {
   readonly activity: Activity | null;
   readonly observation?: ListenerObservation;

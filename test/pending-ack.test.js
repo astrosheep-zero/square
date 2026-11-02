@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Channel } from '../dist/channel.js';
-import { Square } from '../dist/square-api.js';
+import { Square, harnessOwner } from '../dist/square-api.js';
+import { sessionInbox } from '../dist/inbox.js';
 import { parseActivityId } from '../dist/square-core.js';
 
 const match = { fields: [{ path: ['job', 'id'], equals: 7 }] };
@@ -188,4 +189,28 @@ test('pending and even empty ack require the captured attached owner and generat
   assert.deepEqual(await current.ack([sent.id]), { consumed: 1 });
   await current.leave();
   await assertFenced(current);
+});
+
+test('unconsumed direct messages stay in the proactive inbox across a takeover, unlike earlier chat', async t => {
+  let now = 1000;
+  const { channel, square, endpoint, options } = await fixture(t, () => now);
+  const owner = harnessOwner({ channel: 'pi', session: 'takeover-direct' });
+  await channel.attach('Other', { owner: 'test:other' });
+  const other = await square.participant('Other', { owner: 'test:other' });
+  await other.express('chat hello @Recipient');
+  const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'direct before takeover', metadata: { job: { id: 7 } } });
+  const before = (await sessionInbox('test:recipient', options.env)).flatMap(row => row.notifications);
+  const mention = before.map(note => note.actIndex).find(index => index !== parseActivityId(sent.id));
+  assert.deepEqual(before.map(note => note.actIndex), [mention, parseActivityId(sent.id)], 'fixture owner sees the mention and the direct message');
+  now = 2000;
+  const taken = await channel.attach('Recipient', { owner, takeover: true });
+  assert.notEqual(taken.generation, endpoint.generation);
+  const inbox = (await sessionInbox(owner, options.env)).flatMap(row => row.notifications);
+  assert.deepEqual(inbox.map(note => note.actIndex), [parseActivityId(sent.id)], 'the unconsumed direct message survives the new generation while earlier chat does not');
+  assert.deepEqual(inbox.map(note => note.delivery), [{ mode: 'direct' }]);
+  const received = await taken.receive({ match });
+  assert.deepEqual(received.messages.map(message => message.id), [sent.id]);
+  assert.equal(received.consumed, 1);
+  assert.deepEqual((await sessionInbox(owner, options.env)).flatMap(row => row.notifications), [], 'receipts remove it from the proactive horizon');
+  assert.deepEqual((await taken.pending()).activities.map(activity => activity.id), [`act/${mention}`], 'explicit pending still reads the historical mention hole');
 });

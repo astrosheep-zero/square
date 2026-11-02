@@ -273,13 +273,14 @@ test('send preserves full body in history, stores truncated preview when clipped
   await channel.attach('Recipient', { owner });
   const source = 'a\r\n' + 'x'.repeat(230), normalized = source.replace(/\r\n/g, '\n');
   for (const [input, fullExpected, previewExpected, clipped] of [
-    [{ body: source }, normalized, 'a\n' + 'x'.repeat(198) + '… (truncated 32 chars)', true],
+    [{ body: source }, normalized, normalized, false],
     [{ body: 'x'.repeat(200) }, 'x'.repeat(200), 'x'.repeat(200), false],
     [{ body: 'short\r\ntext' }, 'short\ntext', 'short\ntext', false],
     [{ body: source, truncate: false }, normalized, normalized, false],
     [{ body: 'abc  \r\nrest', truncate: 5 }, 'abc  \nrest', 'abc… (truncated 5 chars)', true],
     [{ body: source, truncate: 1 }, normalized, 'a… (truncated 231 chars)', true],
     [{ body: source, truncate: 1000 }, normalized, normalized, false],
+    [{ body: source, truncate: 231 }, normalized, 'a\n' + 'x'.repeat(229) + '… (truncated 1 chars)', true],
   ]) {
     const sent = await channel.send({ from: 'Coordinator', to: 'Recipient', ...input });
     assert.equal(sent.body, previewExpected);
@@ -328,4 +329,57 @@ test('caller-owned artifact lifetime outlives a borrowing channel', async t => {
   try {
     assert.equal((await reopened.endpoint('Recipient', { owner: 'test:recipient' })).name, 'Recipient');
   } finally { await reopened.close(); }
+});
+
+test('Channel builds carry no Agora warmup, while the Agora resource keeps its guide', async t => {
+  const { channel, square } = await fixture(t);
+  const warmup = async resource => (await resource.artifact.read(facts => facts.header().warmup)).value;
+  assert.deepEqual(await warmup(square), [], 'a channel artifact holds no chatroom tutorial');
+  assert.deepEqual(await warmup(channel), []);
+  const memory = Channel.inMemory({ description: '# Ephemeral\n' });
+  const agora = Square.inMemory({ markdown: '# Agora\n' });
+  try {
+    assert.deepEqual(await warmup(memory), []);
+    assert.ok((await warmup(agora)).length > 0, 'Square.inMemory still injects the participant guide');
+  } finally { await memory.close(); await agora.close(); }
+});
+
+test('listEndpoints reports every standing endpoint across owners without an owner argument', async t => {
+  const { channel } = await fixture(t);
+  const recipient = await channel.attach('Recipient', { owner: 'test:recipient',
+    wakeAddress: { kind: 'paseo', address: { agentId: 'endpoint-recipient' } } });
+  const away = await channel.attach('Away', { owner: 'test:away' });
+  await channel.detach('Away', { owner: 'test:away', generation: away.generation });
+  await channel.send({ from: 'Coordinator', to: 'Recipient', body: 'unread notice' });
+  assert.deepEqual((await channel.listEndpoints()).map(({ name, generation, attachment, deliveryAvailable, unreadCount }) =>
+    ({ name, generation, attachment, deliveryAvailable, unreadCount })), [
+    { name: 'Recipient', generation: recipient.generation, attachment: 'attached', deliveryAvailable: true, unreadCount: 1 },
+    { name: 'Away', generation: away.generation, attachment: 'detached', deliveryAvailable: false, unreadCount: 0 },
+  ]);
+  const abort = new AbortController();
+  abort.abort(new Error('cancel endpoint listing'));
+  await assert.rejects(channel.listEndpoints({ signal: abort.signal }), /cancel endpoint listing/);
+});
+
+test('endpoint.receive consumes matching messages atomically and reports exact remaining counts', async t => {
+  const { channel, square } = await fixture(t);
+  const endpoint = await channel.attach('Recipient', { owner: 'test:recipient' });
+  const first = await channel.send({ from: 'Worker', to: 'Recipient', body: 'one', metadata });
+  const second = await channel.send({ from: 'Worker', to: ['Recipient', 'Recipient'], body: 'two', metadata });
+  await channel.send({ from: 'Worker', to: 'Recipient', body: 'other job', metadata: { job: { id: 8 } } });
+  assert.deepEqual(await endpoint.receive({ match, limit: 1 }), {
+    messages: [{ id: first.id, at: first.at, from: 'Worker', to: ['Recipient'], body: 'one', metadata }], consumed: 1, remaining: 1,
+  });
+  assert.deepEqual(await endpoint.receive({ match }), {
+    messages: [{ id: second.id, at: second.at, from: 'Worker', to: ['Recipient'], body: 'two', metadata }], consumed: 1, remaining: 0,
+  });
+  assert.deepEqual(await endpoint.receive({ match }), { messages: [], consumed: 0, remaining: 0 });
+  assert.equal((await endpoint.pending()).activities.length, 1, 'unmatched messages stay unconsumed');
+  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Recipient', parseActivityId(first.id)))).value), true);
+  for (const limit of [0, 101, 1.5, '10'])
+    await assert.rejects(endpoint.receive({ limit }), error => error.code === 'invalid_args'
+      && error.message === 'Pending limit must be a positive integer no greater than 100.');
+  const abort = new AbortController();
+  abort.abort(new Error('cancel receive'));
+  await assert.rejects(endpoint.receive({ match }, { signal: abort.signal }), /cancel receive/);
 });

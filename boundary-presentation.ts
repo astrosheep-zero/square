@@ -32,7 +32,7 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
   const queued = inbox.flatMap((membership) =>
     membership.notifications.map((notification) => ({ membership, notification }))
   );
-  const blocks: string[] = [];
+  const directBlocks: string[] = [];
   const agoraBlocks: string[] = [];
   const deliveries: (ActivityDelivery | undefined)[] = [];
   let remainingAgora = queued.filter(({ notification }) => notification.delivery?.mode !== 'direct').length;
@@ -54,7 +54,9 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
       body: notification.body,
       delivery: notification.delivery,
     });
-    if (notification.delivery?.mode !== 'direct') {
+    if (notification.delivery?.mode === 'direct') {
+      directBlocks.push(block);
+    } else {
       remainingAgora -= 1;
       const omittedAfter = omitted + remainingAgora;
       const prospective = renderSquareReminder([...agoraBlocks, block, ...(omittedAfter > 0 ? [omission(omittedAfter)] : [])]);
@@ -64,13 +66,12 @@ function renderBoundary(inbox: PendingMembership[]): BoundaryRender {
       }
       agoraBlocks.push(block);
     }
-    blocks.push(block);
     deliveries.push(notification.delivery);
     coverage.markSeen = !attentionBodyIsClipped(notification.body, notification.delivery);
   }
 
   return {
-    context: renderSquareReminder([...blocks, ...(omitted > 0 ? [omission(omitted)] : [])], deliveries),
+    context: renderSquareReminder([...directBlocks, ...agoraBlocks, ...(omitted > 0 ? [omission(omitted)] : [])], deliveries),
     entries,
   };
 }

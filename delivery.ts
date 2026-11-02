@@ -41,10 +41,18 @@ export function automaticWakeEligible(evidence: readonly DeliveryEvidence[], now
   return automaticDispatchEligible(custody(evidence), now);
 }
 
+/** A direct message is point-to-point, so it stays eligible across a seat takeover. */
+function directDelivery(facts: SquareRead, index: number): boolean {
+  const activity = facts.activity(index);
+  return activity?.kind === 'say' && activity.delivery?.mode === 'direct';
+}
+
 /** Notification pending is not cursor suffix or historical catch membership. */
 export function pendingHead(facts: SquareRead, name: string, index: number): DirectedHead | undefined {
   const participant = facts.participant(name);
-  if (!participant?.joined || index <= (participant.lastJoinIndex ?? -1) || facts.receipt(participant.name, index)) return undefined;
+  if (!participant?.joined || facts.receipt(participant.name, index)) return undefined;
+  // Unconsumed direct messages survive a takeover; Agora chat before a voluntary rejoin does not.
+  if (index <= (participant.lastJoinIndex ?? -1) && !directDelivery(facts, index)) return undefined;
   return facts.directedAt(participant.name, index);
 }
 
@@ -61,10 +69,12 @@ export function pendingHeads(facts: SquareRead, name: string): DirectedHead[] {
   const participant = facts.participant(name);
   if (!participant?.joined) return [];
   const heads: DirectedHead[] = [];
-  let afterIndex = participant.lastJoinIndex ?? -1;
+  const eligible = (head: DirectedHead) => head.index > (participant.lastJoinIndex ?? -1)
+    || directDelivery(facts, head.index);
+  let afterIndex = -1;
   for (;;) {
     const page = facts.directed(participant.name, { afterIndex, unseenOnly: true }, { edge: 'oldest', limit: 100 });
-    heads.push(...page.items);
+    heads.push(...page.items.filter(eligible));
     if (!page.hasMore) break;
     afterIndex = page.items.at(-1)!.index;
   }

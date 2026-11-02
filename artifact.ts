@@ -52,26 +52,26 @@ function normalizedLines(value: string): string[] {
     return normalized === '' ? [] : normalized.split('\n');
 }
 /** All build paths share configuration validation and lazy guide preparation. */
-export function prepareSquareBuild(options: Omit<BuildOptions, 'force'>, snippet: string): SquareState {
+export function prepareSquareBuild(options: Omit<BuildOptions, 'force'>, snippet: string, includeGuides = true): SquareState {
     if (options.hardCap !== undefined && options.hardCap !== null
         && (!Number.isSafeInteger(options.hardCap) || options.hardCap < 1))
         throw new SquareError('invalid_args', 'hardCap must be a positive integer or null');
     if (options.throttlePerMinute !== undefined
         && (!Number.isSafeInteger(options.throttlePerMinute) || options.throttlePerMinute < 1))
         throw new SquareError('invalid_args', 'throttlePerMinute must be a positive integer');
-    const guides = [readGuide('participant')];
-    if (options.template !== undefined)
+    const guides = includeGuides ? [readGuide('participant')] : [];
+    if (includeGuides && options.template !== undefined)
         guides.push(readGuide(options.template));
     return {
         hardCap: options.hardCap ?? null,
         ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
-        preamble: normalizedLines(snippet), warmup: normalizedLines(guides.join('\n\n')),
+        preamble: normalizedLines(snippet), warmup: includeGuides ? normalizedLines(guides.join('\n\n')) : [],
         acts: [], runtime: emptyRuntimeState(),
     };
 }
 /** File build owns publication and CLI conflict semantics, not host resources. */
-export async function createSquare(location: string, options: BuildOptions, snippet: string, signal?: AbortSignal): Promise<Pick<SquareState, 'hardCap' | 'throttlePerMinute'>> {
-    const state = prepareSquareBuild(options, snippet);
+export async function createSquare(location: string, options: BuildOptions, snippet: string, signal?: AbortSignal, includeGuides = true): Promise<Pick<SquareState, 'hardCap' | 'throttlePerMinute'>> {
+    const state = prepareSquareBuild(options, snippet, includeGuides);
     if (options.force) {
         await writeSquareFile(location, state, signal);
     } else if (!await createSquareFile(location, state, signal)) {

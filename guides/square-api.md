@@ -271,6 +271,41 @@ Operations that accept an `OperationControl` use a final argument with `signal` 
 `onProgress`. Listener/lifecycle operations take optional observation options before that argument;
 participant selection, seat discovery and host cleanup methods do not take an `OperationControl`.
 
+## Channel endpoints and point-to-point messages
+
+`@astrosheep/square/channel` is the foundational endpoint and messaging layer over the same
+`SquareArtifactPort`; the Agora resource (`Square` / `Participant`) delegates its shared operations to
+it instead of owning a second implementation. `Channel` exposes `open`, `create`, `inMemory`,
+`attach`, `reattach`, `endpoint`, `endpointsOf`, `listEndpoints`, `detach`, `endHeld`, `remove`,
+`cancelDeliveries`, `send`, `history` and `close`. `ChannelEndpoint` exposes `pending`, `ack`,
+`receive`, `leave`, `send`, `deferDelivery`, `renewDeliveryDeferral` and `releaseDeliveryDeferral`.
+`Square.send`, `Square.history`, `Square.seatsOf`, `Square.detach`, `Square.endHeld`,
+`Square.cancelDeliveries`, `Square.close` and the matching `Participant` methods delegate to those
+same implementations.
+
+- `Channel.create` and `Channel.inMemory` build an endpoint artifact with empty `warmup`: the Agora
+  chatroom guide belongs to `Square.build` / `Square.inMemory`, not to a point-to-point channel.
+- `Channel.send({from, to, body, truncate?, metadata?})` addresses standing members explicitly.
+  `truncate` defaults to `false`, so the full body is delivered and presentation records a receipt.
+  An explicit positive integer longer than the body is likewise unclipped; when the body is longer,
+  the delivery carries `{mode: 'direct', preview}` so presentation shows the preview and records
+  `'clipped'` without consuming the full stored body. `pending`, `receive` and `ack` still read and
+  consume that full body. Any other `truncate` value is refused before landing.
+- `endpoint.receive(options?, control?)` selects the oldest unconsumed addressed messages matching the
+  shared filters and records their receipts in one transaction, returning
+  `{messages, consumed, remaining}`. Each `ChannelMessage` is `{id, at, from, to, body, metadata?}`,
+  symmetric with the send result. `remaining` counts matching unconsumed messages left after that
+  transaction. Nothing is consumed by `pending` or `history`.
+- `listEndpoints(control?)` reports every standing endpoint without an owner argument as
+  `{name, generation, attachment, deliveryAvailable, unreadCount, lastActiveAt?}`. `endpointsOf(owner)`
+  remains the owner-scoped custody list, and neither operation joins, restores or reveals an address.
+- Direct notifications render inside the fixed `<channel-message channel="..." from="..." to="..."
+  id="act/N">` envelope, so a recipient sees the channel, sender and message ID. Body text that would
+  read as `<channel-`, `<square-` or `<system-reminder` is escaped. In a mixed boundary the Agora
+  omission line follows the `<square-activity>` blocks and never trails after direct messages.
+- An unconsumed direct message stays eligible for the proactive inbox and wake horizon across a seat
+  takeover or rejoin. Earlier Agora activity still ends at the recipient's new read horizon.
+
 ## Shared history and pending filters
 
 `HistoryQuery` and `PendingOptions` extend the same exported `ActivityQuery`:
@@ -317,12 +352,14 @@ boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--a
 
 `Participant.pending(options?, control?)` and `Participant.ack(ids, control?)` separate a read-only
 query from explicit consumption. `ChannelEndpoint` from `@astrosheep/square/channel` exposes the
-identical methods by forwarding to its captured Participant; it has no independent inbox or storage.
+identical methods from the channel implementation the Participant handle delegates to; neither keeps
+a second inbox, read horizon or storage.
 
 `Channel.send` / `Square.send` address joined members, including detached members. Attachment gates
 proactive wake, not landing: a detached recipient retains its unread addressed activity without a
 wake and can query/ack it after reattachment. Recipient validation remains all-or-nothing; a missing
 or departed recipient rejects the entire send without landing activity or waking other recipients.
+An omitted `truncate` sends the full body; truncation is an explicit per-message choice.
 
 ```ts
 import type { ChannelEndpoint, MetadataMatch } from '@astrosheep/square/channel';
