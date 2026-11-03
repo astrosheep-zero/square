@@ -32,7 +32,7 @@ test('shipped Claude MCP correlates main/child calls and removes call maps', {
   fs.writeFileSync(path.join(root, 'controller.log'), `${run.stdout ?? ''}${run.stderr ?? ''}`);
   assert.equal(run.status, 0, `Runtime failed: ${root}\n${run.stderr}\n${run.stdout}`);
   // Prove that the candidate hook/manifest, not a stand-in, executed.
-  for (const name of ['hooks/register.js', 'hooks/hooks.json', '.mcp.json', '.claude-plugin/plugin.json']) {
+  for (const name of ['mods/square.js', 'hooks/hooks.json', '.mcp.json', '.claude-plugin/plugin.json']) {
     assert.equal(fs.readFileSync(path.join(root, 'plugin', name), 'utf8'), fs.readFileSync(path.join(plugin, name), 'utf8'));
   }
   const api = json(path.join(root, 'api.json'));

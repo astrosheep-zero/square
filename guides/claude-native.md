@@ -1,7 +1,7 @@
 # Claude native inbox
 
 Square's Claude plugin is a mod, not a shell-hook injector. Its `hooks/hooks.json`
-contains only `{"modules":["./register.js"]}`. Install with `square install claude`
+contains only `{"modules":["../mods/square.js"]}`, pointing to the mod implementation. Install with `square install claude`
 and load/approve it in a trusted interactive Claude terminal. Installation is
 not evidence of a live receiver.
 

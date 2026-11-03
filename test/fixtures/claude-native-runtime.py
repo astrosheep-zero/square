@@ -9,7 +9,7 @@ tool_pending=threading.Event()
 if R.exists(): shutil.rmtree(R)
 fixture=Fixture(REPO,R)
 calls=fixture.calls
-shipped_module=(R/'plugin/hooks/register.js').read_bytes()
+shipped_module=(R/'plugin/mods/square.js').read_bytes()
 NODE=shutil.which('node')
 DRIVER=str(REPO/'test/fixtures/claude-runtime-driver.mjs')
 SANDBOX=str(REPO/'test/sandbox-env.js')
@@ -56,9 +56,9 @@ with fixture.run(args,reply):
    out=driver('send');sent_native=True;native_at=time.time();actions.append('shipped Square coordinator sent native body: '+out.strip());(R/'dispatch-result.json').write_text(out)
    if MODE=='cancel':os.write(master,b'\x1b');actions.append('pressed Esc during synthetic request with pending Square activity');phase='cancel';baseline=len(records)
   if phase=='cancel' and any(x.get('kind')=='cancel' for x in records[baseline:]):
-   (R/'cancel-evidence.json').write_text(driver('inspect'));plugin=R/'plugin/hooks/register.js';plugin.write_text(plugin.read_text()+'\n// reload probe\n');actions.append('hot reload after abort');phase='cancel-reload';baseline=len(ready)
+   (R/'cancel-evidence.json').write_text(driver('inspect'));plugin=R/'plugin/mods/square.js';plugin.write_text(plugin.read_text()+'\n// reload probe\n');actions.append('hot reload after abort');phase='cancel-reload';baseline=len(ready)
   if phase=='cancel-reload' and len(ready)>baseline:
-   time.sleep(1);(R/'plugin/hooks/register.js').write_bytes(shipped_module);(R/'cancel-reload-evidence.json').write_text(driver('inspect'));actions.append('explicit stale-frame replay probe: '+driver('replay').strip());phase='cancel-replay';baseline=len(records)
+   time.sleep(1);(R/'plugin/mods/square.js').write_bytes(shipped_module);(R/'cancel-reload-evidence.json').write_text(driver('inspect'));actions.append('explicit stale-frame replay probe: '+driver('replay').strip());phase='cancel-replay';baseline=len(records)
   if phase=='cancel-replay' and any(x.get('kind')=='guard' and x.get('out')=={'recognized':True,'current':False} for x in records[baseline:]):
    actions.append('recognized cancelled frame consumed before queue');actions.append('new activity after abort: '+driver('send').strip());phase='cancel-new';baseline=len(records)
   if phase=='cancel-new' and any(x.get('kind')=='stored' and x.get('out',{}).get('current') for x in records[baseline:]):
@@ -71,9 +71,9 @@ with fixture.run(args,reply):
    if MODE not in ['busy','lifecycle']:time.sleep(1);break
    old_id=ready[-1]['id'];os.write(master,b'/clear\r');actions.append('typed isolated /clear');phase='clear'
   if phase=='clear' and ready and ready[-1]['id']!=old_id:
-   actions.append('classic start registered changed session id after clear');plugin=R/'plugin/hooks/register.js';plugin.write_text(plugin.read_text()+'\n// reload probe\n');phase='reload';baseline=len(ready)
+   actions.append('classic start registered changed session id after clear');plugin=R/'plugin/mods/square.js';plugin.write_text(plugin.read_text()+'\n// reload probe\n');phase='reload';baseline=len(ready)
   if phase=='reload' and len(ready)>baseline:
-   actions.append('hot reload registered same current session id');(R/'plugin/hooks/register.js').write_bytes(shipped_module)
+   actions.append('hot reload registered same current session id');(R/'plugin/mods/square.js').write_bytes(shipped_module)
    if MODE!='lifecycle':time.sleep(1);break
    os.write(master,('/resume '+old_id+'\r').encode());actions.append('typed isolated /resume '+old_id);phase='resume';baseline=len(ready)
   if phase=='resume' and len(ready)>baseline:
@@ -81,7 +81,7 @@ with fixture.run(args,reply):
   if phase=='resume-delivery' and any(x.get('kind')=='stored' and x.get('out',{}).get('current') for x in records[baseline:]):
    actions.append('resumed receiver stored NEW Square activity');time.sleep(1);break
 summary={'argv':args,'fakeEndpoint':fixture.endpoint,'mode':MODE,'actions':actions,'sent_prompt':sent_prompt,'sent_native':sent_native,'requests':len(calls),'exit':p.returncode,'seconds':round(time.time()-beg,1)}
-(R/'plugin/hooks/register.js').write_bytes(shipped_module)
+(R/'plugin/mods/square.js').write_bytes(shipped_module)
 (R/'square-evidence.json').write_text(driver('inspect'))
 assert sent_native and body_in_api, 'no native body in a Claude request'
 (R/'live-summary.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary,indent=2))

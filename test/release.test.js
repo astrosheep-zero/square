@@ -59,11 +59,11 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(paseoPlugin.requirements.paseo, '>=0.11.2');
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
-  assert.deepEqual(claudeHooks, { modules: ['./register.js'] });
+  assert.deepEqual(claudeHooks, { modules: ['../mods/square.js'] });
   assert.deepEqual(claudeMcp, { mcpServers: { square: {
     command: 'square', args: ['mcp-server'], env: { SQUARE_CLAUDE_MCP_CONTEXT: '1' },
   } } });
-  const claudeMod = fs.readFileSync(path.join(root, 'plugins', 'claude', 'hooks', 'register.js'), 'utf8');
+  const claudeMod = fs.readFileSync(path.join(root, 'plugins', 'claude', 'mods', 'square.js'), 'utf8');
   assert.match(claudeMod, /export function register\(on\)/);
   assert.match(claudeMod, /on\('session.receive'/);
   assert.match(claudeMod, /on\('session.append'/);
@@ -124,7 +124,7 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.ok(packed.files.some((entry) => entry.path === entryPath));
   for (const file of [
     'plugins/claude/.mcp.json',
-    'plugins/claude/hooks/register.js',
+    'plugins/claude/mods/square.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',
     'plugins/codex/hooks/hooks.json',

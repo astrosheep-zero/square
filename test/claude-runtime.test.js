@@ -33,7 +33,7 @@ test('shipped Claude mod real runtime scheduling and lifecycle', { skip: !enable
     const requests = JSON.parse(fs.readFileSync(path.join(dir, 'api.json'), 'utf8'));
     const bodyRequests = requests.filter((request) => JSON.stringify(request.data.messages).includes('Notification BODY: shipped Square native probe.'));
     assert.ok(summary.sent_native && bodyRequests.length, mode);
-    for (const name of ['hooks/register.js', 'hooks/hooks.json', 'types.d.ts', '.mcp.json', '.claude-plugin/plugin.json']) assert.equal(fs.readFileSync(path.join(dir, 'plugin', name), 'utf8'), fs.readFileSync(path.join(repo, 'plugins', 'claude', name), 'utf8'));
+    for (const name of ['mods/square.js', 'hooks/hooks.json', 'types.d.ts', '.mcp.json', '.claude-plugin/plugin.json']) assert.equal(fs.readFileSync(path.join(dir, 'plugin', name), 'utf8'), fs.readFileSync(path.join(repo, 'plugins', 'claude', name), 'utf8'));
     if (mode === 'busy') assert.ok(bodyRequests.some((request) => JSON.stringify(request.data.messages).includes('tool_result')));
     if (mode === 'hold') {
       assert.ok(summary.actions.includes('while held no queued/stored callback: True'));
