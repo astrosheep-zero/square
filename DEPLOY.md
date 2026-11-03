@@ -8,7 +8,7 @@ an existing local Square package is already configured; that source is preserved
 
 - For Claude native inbox delivery: macOS Claude Code, with the
   Square mod actually loaded in a trusted/approved interactive terminal
-- For OpenCode native body delivery: installed **2.0.20** with the Square v2 server plugin loaded
+- For OpenCode native body delivery: a compatible OpenCode 2.x host with the Square v2 server plugin loaded; the installed host tested is 2.0.20
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
 ## Steps
@@ -26,8 +26,10 @@ body previews through OpenCode's own session capability while idle or busy;
 only an exact matching prepared primary context records presentation. Native
 admission alone is not presentation. User cancellation suppresses the local
 pending batch, not OpenCode's already admitted inbox or unrelated execution.
-No legacy tool-output injection fallback is installed; other builds are not
-claimed as validated.
+The plugin checks for the v2 version family and the required location, session,
+and event capabilities at setup. Other 2.x releases with those APIs are eligible,
+but have not been individually validated; future API changes can still break
+compatibility. No legacy tool-output injection fallback is installed.
 
 Pi treats local paths and npm names as different package identities. Do not configure
 both sources for Square: they register the same tools twice. `square install pi`
