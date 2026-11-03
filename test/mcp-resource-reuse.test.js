@@ -163,7 +163,7 @@ test('a resource owner lends one connection, refuses a second location, and clos
   assert.equal(owner.artifact(path.join(cwd, '.', 'square.square')), artifact, 'same path resolves to one connection');
   assert.throws(() => owner.artifact(path.join(cwd, 'other.square')), /already holds/);
 
-  const borrowed = await Square.at({ path: squarePath, env: { SQUARE_INDEX: path.join(cwd, 'index.ndjsonl') }, resources: owner });
+  const borrowed = await Square.at({ path: squarePath, env: { SQUARE_DELIVERY: path.join(cwd, 'delivery.sqlite') }, resources: owner });
   await borrowed.close();
   assert.ok((await artifact.read((facts) => facts.header())).value.nextActIndex >= 0, 'closing a borrowed view leaves the connection open');
 

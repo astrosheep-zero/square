@@ -28,6 +28,11 @@ test('activity metadata lands as an immutable fact through local reads and direc
     const sent = await alice.express({ body: 'with metadata', metadata }, { force: true });
     assert.deepEqual(sent.activity.metadata, metadata);
     assert.equal(Object.isFrozen(sent.activity.metadata), true);
+    assert.equal(Object.isFrozen(sent.activity.metadata.nested), true);
+    assert.equal(Object.isFrozen(sent.activity.metadata.values), true);
+    assert.notEqual(sent.activity.metadata, metadata);
+    metadata.nested.ok = false;
+    assert.equal(sent.activity.metadata.nested.ok, true);
     const bodyResult = await alice.express({ body: 'ordinary words', metadata: { kind: 'body' }, force: true, observe: true });
     assert.match(renderExpression('memory', bodyResult), /your words land/);
     assert.doesNotMatch(renderExpression('memory', bodyResult), /structured activity lands/);
@@ -118,7 +123,7 @@ test('stored say validation rejects blank bodies with empty metadata', async () 
       await alice.express({ body: 'valid', metadata: {}, force: true });
     } finally { await square.close(); }
     const database = new DatabaseSync(location);
-    try { database.prepare('UPDATE messages SET body_json=?, metadata_json=? WHERE msg_index=0').run('"   "', '{}'); }
+    try { database.prepare("UPDATE activities SET payload_json=json_set(payload_json, '$.body', ?, '$.metadata', json(?)) WHERE kind='say'").run('   ', '{}'); }
     finally { database.close(); }
     const reopened = await Square.at({ path: location });
     try { await assert.rejects(reopened.history({ limit: null }), /non-empty body or non-empty metadata/); }

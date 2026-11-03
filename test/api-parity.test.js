@@ -213,13 +213,13 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.equal(plainJoin.value.observation, undefined);
   assert.ok(dataJoin.hydrated > 0, 'join text hydrates the recent-activity feed it prints');
   assert.ok(fullJoin.hydrated > 0);
-  assert.equal(fullJoin.reads - plainJoin.reads, 1);
+  assert.equal(plainJoin.hydrated, 0, 'a plain join does not read the optional recent feed');
   const dataExpress = await measure(() => call('express', { as: 'Alice', body: 'data', force: true }));
   const plainExpress = await measure(() => alice.express('plain', { force: true }));
   const fullExpress = await measure(() => alice.express('presented', { force: true, observe: true }));
   assert.ok(dataExpress.hydrated > 0, 'express text hydrates the pending feed it prints');
   assert.equal(plainExpress.value.observation, undefined);
-  assert.equal(fullExpress.reads - plainExpress.reads, 1);
+  assert.equal(plainExpress.hydrated, 0, 'a plain express does not read the optional feed');
   assert.deepEqual(fullExpress.value.observation.context.activities.map((act) => act.preview), ['for Alice']);
   const caught = await measure(() => call('catch', { as: 'Alice' }));
   assert.match(caught.value, /for Alice/);
@@ -227,7 +227,7 @@ test('optional observations add only requested reads; rendering transports pay f
   const plainEmpty = await measure(() => alice.catch()), fullEmpty = await measure(() => alice.catch({ observe: true }));
   const { observation: presence, ...empty } = fullEmpty.value;
   assert.deepEqual(plainEmpty.value, empty);
-  assert.equal(fullEmpty.reads - plainEmpty.reads, 1);
+  assert.equal(plainEmpty.hydrated, 0, 'an empty catch does not hydrate activities');
   assert.ok(presence.presence);
   const archive = await measure(() => call('history'));
   assert.ok(archive.hydrated > 0);

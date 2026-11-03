@@ -126,12 +126,12 @@ test('two processes serialize unseen selection plus sparse receipt insertion wit
   const script = `import {createArtifactPort} from './dist/artifact.js';
     const p=createArtifactPort(process.argv[1]);
     const seat=(await p.read(facts=>facts.seat('Bob'))).value;
-    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.messageIndex);w.channel.markSeen('Bob',ids,3);return ids;});
+    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
     console.log(JSON.stringify(result));await p.close();`;
   const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
   for (const o of outcomes) assert.equal(o.code, 0, o.err);
   const results = outcomes.map(o => JSON.parse(o.out));
-  assert.deepEqual(results.flatMap(r => r.value), [0]);
+  assert.deepEqual(results.flatMap(r => r.value), [2]);
   assert.deepEqual(results.map(r => r.changed).sort(), [false, true]);
   assert.equal(await port.revision(), seededRevision + 1);
 });

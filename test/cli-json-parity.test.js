@@ -36,8 +36,8 @@ async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
 
   async function parity(name, args, operation, exitCode = 0) {
-    // Each mutating call starts from an identical copy of the CLI artifact. The SDK
-    // oracle's independent discovery index cannot perturb the CLI artifact or inbox.
+    // Each mutating call starts from an identical copy of the CLI artifact.
+    // Filesystem discovery sees both files, so both remain in scope for inbox parity.
     const copy = path.join(cwd, 'oracle.square');
     fs.copyFileSync(file, copy);
     assert.deepEqual(fs.readFileSync(copy), fs.readFileSync(file));

@@ -1,16 +1,17 @@
 import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
 export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
-import type { MessageId } from './message.js';
 import type { Owner, HydratedAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
-import type { WakeTransportPort, SquareResourceOwner } from './ports.js';
+import type { SquareResourceOwner } from './ports.js';
 import type { OperationControl } from './neutral.js';
-import type { MessageSearch as ActivitySearch, AckResult } from './channel-facade.js';
-export type { ChannelTruncate, ChannelSendInput, ChannelSendResult, ChannelEndpointSummary, ChannelMessage, ChannelPendingResult, MessageCursor, MessageQuery, ChannelHistoryQuery, ChannelPendingOptions, ChannelHistoryResult, ChannelReceiveResult, MessageSearch as ActivitySearch, AckResult, ChannelEndpointHold as HeldSeat } from './channel-facade.js';
+export interface ActivitySearch { readonly text: string; readonly mode: 'literal' | 'regex' }
+export interface AckResult { readonly consumed: number }
+import type { FutureAck } from './square-post.js';
+export type { NotificationId, SendInput, SendResult, FutureAck } from './square-post.js';
+export interface HeldSeat { readonly name: string; readonly generation: string }
 export type { CatchWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError } from './neutral.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
-export type { MessageId } from './message.js';
 export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 /** Indexed archive event, including read bookkeeping and a say's linked content. */
 export type ArchiveRecord = Readonly<HydratedAct>;
@@ -25,8 +26,6 @@ export interface Activity {
   readonly reach?: Reach;
   readonly target?: string;
   readonly reply?: ActivityId;
-  /** Channel message owning a say's body and metadata. */
-  readonly messageId?: import('./message.js').MessageId;
 }
 export interface PerceivedActivity extends Activity {
   readonly perception: Perception;
@@ -123,7 +122,6 @@ export interface HistoryResult {
 }
 export interface OpenOptions {
   readonly clock?: () => number;
-  readonly wakeTransport?: WakeTransportPort | false;
 }
 export interface SquareLocation {
   readonly path?: string;
@@ -164,7 +162,9 @@ export interface Participant {
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
   catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
   pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
+  /** Local custody only: ledger-only detach/delete is observed on privileged reconciliation. */
   ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult>;
+  ack(input: FutureAck, control?: OperationControl): Promise<AckResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
   deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral>;

@@ -1,7 +1,6 @@
-import fs from 'node:fs';
+import path from 'node:path';
 
-import { doctorDeliveryHealth } from './delivery-health.js';
-import { wakeGraceMs } from './notifications.js';
+import { DeliveryLedger } from './delivery-ledger.js';
 import { truncateExternalDiagnostic } from './presentation.js';
 
 import {
@@ -60,15 +59,6 @@ async function doctorHost(label: string, inspect: () => Promise<string[]>): Prom
   }
 }
 
-function readableSquarePath(squarePath: string | undefined): squarePath is string {
-  if (squarePath === undefined) return false;
-  try {
-    return fs.statSync(squarePath).isFile() && (fs.accessSync(squarePath, fs.constants.R_OK), true);
-  } catch {
-    return false;
-  }
-}
-
 const TARGETS: readonly HarnessTarget[] = [
   {
     name: 'claude',
@@ -119,10 +109,14 @@ const TARGETS: readonly HarnessTarget[] = [
   {
     name: 'delivery',
     capabilities: ['doctor'],
-    async doctor({ squarePath }) {
-      return result(readableSquarePath(squarePath)
-        ? await doctorDeliveryHealth(squarePath, wakeGraceMs())
-        : ['○ delivery health skipped (no readable square path)']);
+    async doctor({ homeDir }) {
+      return doctorHost('delivery', async () => {
+        const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.sqlite') });
+        try {
+          const health = await ledger.health();
+          return [`· delivery health · ${health.unknownAttempts.length} unknown attempts · ${health.repeatedFailures.length} repeated failures · ${health.sessionsWithoutRoute.length} sessions without route`];
+        } finally { await ledger.close(); }
+      });
     },
   },
 ];

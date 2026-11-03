@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { deadline, validSignal, validTimeout } from './deadline.js'
+import { deadline, DEFAULT_TIMEOUT_MS, validSignal, validTimeout } from './deadline.js'
 import { ConnectionError } from './errors.js'
 import { isIdentity, isRecord } from './guards.js'
 import {
@@ -68,25 +68,32 @@ export async function sendPaseoText(target: PaseoTarget, text: string, options: 
   if (connection === undefined || typeof text !== 'string' || text.length === 0 ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
     (options.inputId !== undefined && !isIdentity(options.inputId)) ||
+    (options.beforeSend !== undefined && typeof options.beforeSend !== 'function') ||
     (options.delivery !== undefined && options.delivery !== 'steer')) {
     throw new TypeError('Invalid sendText arguments.')
   }
   const inputId = options.inputId ?? randomUUID()
   const attempt = { harness: 'paseo' as const, agentId: target.agentId, inputId }
   const scope = deadline(options.timeoutMs, options.signal)
+  const until = Date.now() + (options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const client = await openPaseoClient(connection.target, connection.credential, options.timeoutMs)
   // The connection is the uncertainty boundary: before it, nothing was written.
   let connected = false
+  let sent = false
   try {
     scope.check()
     await scope.wait(client.connect())
     connected = true
     scope.check()
+    if (options.beforeSend && !await scope.wait(options.beforeSend())) return { ...attempt, state: 'unavailable', code: 'aborted' }
+    scope.check()
+    if (Date.now() >= until) return { ...attempt, state: 'unavailable', code: 'timeout' }
+    sent = true
     await scope.wait(client.sendAgentMessage(target.agentId, text, { messageId: inputId, activeTurnBehavior: 'steer' }))
     return { ...attempt, state: 'admitted' }
   } catch (error) {
     if (scope.code !== undefined) {
-      return { ...attempt, state: connected ? 'unknown' : 'unavailable', code: scope.code }
+      return { ...attempt, state: sent ? 'unknown' : 'unavailable', code: scope.code }
     }
     if (error instanceof Error && error.name === 'DaemonAuthenticationError') {
       return { ...attempt, state: 'unavailable', code: 'authentication_failed' }

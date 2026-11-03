@@ -1,5 +1,3 @@
-import { escapeSquareTags, projectChannelNotification } from './channel-presentation.js';
-export { projectChannelNotification, renderSquareReminder } from './channel-presentation.js';
 import { homedir } from 'node:os';
 import type { DirectedNotificationRoute } from './model.js';
 import { formatActivityId } from './square-core.js';
@@ -12,7 +10,7 @@ export interface AttentionPreview {
   actor: string;
   route: DirectedNotificationRoute;
   body: string;
-  preview?: string;
+  metadataOnly?: boolean;
 }
 
 export function previewAttentionBody(body: string): string {
@@ -33,14 +31,18 @@ export function renderAttentionDescription({ actor, route }: Pick<AttentionPrevi
     case 'bell': return `${actor} rang the bell`;
   }
 }
+function escapeSquareTags(text: string): string {
+  return text.replace(/<(\/?)(square-|channel-|system-reminder)/gi, '<\\$1$2');
+}
 function escapeAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 /** The sole source adapter: transports and cards consume this projection, not delivery modes. */
 export function projectNotification(attention: AttentionPreview) {
-  const body = attention.body.replace(/\r\n/g, '\n');
+  const body = attention.metadataOnly ? '(structured activity)' : attention.body.replace(/\r\n/g, '\n');
   const description = renderAttentionDescription(attention);
   const remaining = body.length - ATTENTION_BODY_MAX;
+  const isFull = !attention.metadataOnly && remaining <= 0;
   const preview = previewAttentionBody(body);
   const attributes = [
     `square="${escapeAttribute(displayAttentionPath(attention.squarePath))}"`,
@@ -50,26 +52,14 @@ export function projectNotification(attention: AttentionPreview) {
     ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
   ];
   return {
-    text: [`<square-activity ${attributes.join(' ')}>`, `${description}.`, '', escapeSquareTags(preview), '</square-activity>'].join('\n'),
+    text: [`<square-activity ${attributes.join(' ')}>`, `${description}.`, '', escapeSquareTags(preview),
+      ...(!isFull ? ['', escapeSquareTags(`Use square_catch with location=${JSON.stringify(attention.squarePath)}, as=${JSON.stringify(attention.recipient)}, id=${JSON.stringify(formatActivityId(attention.actIndex))} for the full activity.`)] : []),
+      '</square-activity>'].join('\n'),
     full: ['<square-activity>', `· ${displayAttentionPath(attention.squarePath)} · ${attention.recipient} · ${formatActivityId(attention.actIndex)}`,
       `● ${description}`, '', body, '</square-activity>'].join('\n'),
-    preview, description, clipped: remaining > 0, agora: true,
+    preview, description, isFull,
   };
 }
-/** One stored message: Agora framing when an upper say owns it, Channel's raw frame otherwise. */
-export function projectMessageNotification(input: {
-  squarePath: string;
-  recipient: string;
-  actor: string;
-  body: string;
-  preview?: string;
-  agora?: { readonly actIndex: number; readonly route: DirectedNotificationRoute };
-}) {
-  if (input.agora === undefined) return projectChannelNotification(input);
-  return projectNotification({ squarePath: input.squarePath, recipient: input.recipient, actor: input.actor,
-    route: input.agora.route, actIndex: input.agora.actIndex, body: input.body });
-}
-
 /** Full human expansion never substitutes a sender-owned preview for the stored body. */
 export function renderAttentionFull(attention: AttentionPreview): string { return projectNotification(attention).full; }
 export function renderAttentionPreview(attention: AttentionPreview): string { return projectNotification(attention).text; }

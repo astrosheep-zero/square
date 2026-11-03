@@ -23,7 +23,9 @@ process.env.CLAUDE_CODE_CHILD_SESSION = '';
 process.env.CODEX_THREAD_ID = '';
 process.env.OPENCODE_SESSION_ID = '';
 process.env.PASEO_AGENT_ID = '';
-// The index is disposable test discovery state; artifact seats and evidence are authoritative.
+// Every test process owns its disposable delivery ledger, never the live user's ledger.
+process.env.SQUARE_DELIVERY = path.join(state, 'delivery.sqlite');
+delete process.env.SQUARE_HOST_LEDGER_ROOT;
 process.env.SQUARE_INDEX = path.join(state, 'index.ndjsonl');
 
 process.on('exit', () => fs.rmSync(state, { recursive: true, force: true }));

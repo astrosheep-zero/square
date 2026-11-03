@@ -12,7 +12,7 @@ export interface Queueable<O = SendOptions> { queue(text: string, options?: O): 
 export type OpenCodeAgent = Steerable<KeyedSendOptions> & Queueable<KeyedSendOptions> & { readonly harness: 'opencode'; readonly sessionId: string }
 export type ClaudeAgent = Steerable & { readonly harness: 'claude'; readonly sessionId: string }
 export type PiAgent = Steerable & Queueable & { readonly harness: 'pi'; readonly sessionId: string }
-export type PaseoAgent = Steerable<KeyedSendOptions> & { readonly harness: 'paseo'; readonly agentId: string }
+export type PaseoAgent = Steerable<KeyedSendOptions & { readonly beforeSend?: () => Promise<boolean> }> & { readonly harness: 'paseo'; readonly agentId: string }
 export type CodexAppServerAgent = Steerable & Queueable & { readonly harness: 'codex'; readonly transport: 'app-server'; readonly sessionId: string }
 export type CodexCliAgent = Queueable & { readonly harness: 'codex'; readonly transport: 'cli'; readonly sessionId: string }
 export type CodexAgent = CodexAppServerAgent | CodexCliAgent
@@ -156,7 +156,7 @@ export async function connect(options: OpenCodeConnectOptions | ClaudeConnectOpt
     if (!spec.keyed && id !== undefined) throw new DeliveryError('invalid_arguments')
     try {
       const result = await opened.send(text, spec.keyed
-        ? { delivery, inputId: id, timeoutMs: options.timeoutMs, signal: options.signal }
+        ? { delivery, inputId: id, timeoutMs: options.timeoutMs, signal: options.signal, ...(spec.harness === 'paseo' ? { beforeSend: options.beforeSend } : {}) }
         : { delivery, timeoutMs: options.timeoutMs, signal: options.signal })
       if (result.state !== spec.accepted) throw failure(result, 'send', id)
       return { id: spec.id(result), proof: spec.proof }

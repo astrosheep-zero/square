@@ -18,6 +18,8 @@ export interface ClaudeNativeTarget {
 export interface ClaudeNativeControl {
   readonly deadline: number
   readonly signal?: AbortSignal
+  /** Final asynchronous eligibility check after connecting, before writing bytes. */
+  readonly beforeSend?: () => Promise<boolean>
 }
 export type NativeWriteResult =
   | { readonly outcome: 'written'; readonly message?: never }
@@ -58,6 +60,10 @@ export async function writeClaudeNative(target: ClaudeNativeTarget, text: string
     scope.check()
     if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')
     socket = await connectLocal(endpoint, { signal: scope.signal })
+    scope.check()
+    if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')
+    if (control.beforeSend && !await scope.wait(control.beforeSend()))
+      return { outcome: 'unavailable', code: 'aborted', message: 'Native inbox write suppressed.' }
     scope.check()
     if (Date.now() >= control.deadline) throw new LocalEndpointError('timeout')
     // A receiver that never drains must not hold the caller past its deadline.

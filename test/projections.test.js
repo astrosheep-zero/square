@@ -11,9 +11,7 @@ import { catchPresence, entryPresentation, selectHistory, NON_READ, queryPartici
 const queryContext = { location: 'memory', now: 100_000 };
 
 function fixture(acts, observations = {}) {
-  let messageIndex = 0;
-  const imported = acts.map(act => act.kind === 'say' ? { ...act, messageIndex: messageIndex++ } : act);
-  return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts: imported,
+  return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
     runtime: { nextActIndex: (acts.at(-1)?.index ?? -1) + 1, observations, leases: {} } };
 }
 async function archiveSquare(t, state) {
@@ -58,7 +56,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     assert.deepEqual(recovered, {
       participant: 'Bob', standingCount: 2,
       ownActivityCount: 1, hardCap: 5,
-      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: { ...acts[10], messageIndex: 8 } }],
+      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: acts[10] }],
     });
     assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
     assert.deepEqual(reads.ordinals, []);
@@ -66,7 +64,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
   } finally { await cell.close(); }
 });
 
-test('unread summaries retain sender spelling, seen rows beyond a hole, and the last index across pages', async () => {
+test('unread summaries retain sender spelling, exclude seen rows beyond a hole, and keep the last index across pages', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0, index: 0 },
     { kind: 'join', actor: 'Bob', at: 1, index: 1 },
@@ -81,9 +79,9 @@ test('unread summaries retain sender spelling, seen rows beyond a hole, and the 
     const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'Bob', 100_000))).value;
     assert.deepEqual(recovered.activitySummaries.map(({ name, count, latestActivityAgeMs, preview }) =>
       [name, count, latestActivityAgeMs, preview.index]), [
-      ['Cara', 1, 99_000, 103], ['Alice', 100, 99_100, 102], ['alice', 1, 99_995, 104],
+      ['Alice', 100, 99_100, 102], ['alice', 1, 99_995, 104],
     ]);
-    assert.deepEqual(reads.batches, [[102, 103, 104]]);
+    assert.deepEqual(reads.batches, [[102, 104]]);
     assert.ok(reads.directed >= 3, 'the directed suffix spans pages after the cursor query');
   } finally { await cell.close(); }
 });

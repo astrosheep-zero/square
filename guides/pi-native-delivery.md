@@ -1,65 +1,16 @@
 # Pi shared native delivery
 
-The shipped `plugins/pi/square-pi.js` remains the **only Square Pi extension**.
-Both its activity steer and advisory `nextTurn` send call the SDK-free shared
-`sendPiMessage` leaf compiled from `packages/agent-delivery/src`. Square keeps
-framing, custom type, display, preview/UI, observation/presentation evidence,
-uncertain-landing and canceled-batch suppression; the leaf neither schedules nor tracks.
+`plugins/pi/square-pi.js` is the Square Pi extension. It watches the host delivery ledger and uses
+the shared Pi send leaf for native injection. A receiver-pull presentation and producer-push handoff
+compete through ledger attempt state, not route declarations. Accepted or uncertain handoff is not a
+presentation receipt and must not be blindly replayed. The boundary's bounded batch renderer records
+receipts only for presented cards. Square folds a receipt into read state only when its activity card
+contained the full body; shortened cards point to catch.
 
-An attached Pi seat with a registered wake address belongs to that explicit sender route,
-including Paseo, HTTP, or a native address. The Pi boundary observer presents only while the
-current seat has no registered address; it checks again before claiming and before presentation.
-If the observer is stopped, or the registered sender is unknown, stopped, or busy, activity stays
-pending rather than switching routes. A Paseo environment variable does not invent a fallback for
-an addressless Pi seat.
+Pi session start and shutdown attach and detach the ledger session, not Square seats. Interactive
+cancellation suppresses outstanding local deliveries without marking activity seen; activity after
+cancellation can notify normally. A send already past its final check cannot be recalled.
 
-Pi injection and external wake injection acquire mutually exclusive artifact-owned content custody.
-An accepted or uncertain Paseo wake suppresses native Pi reinjection without asserting presentation
-or consumption. Only proven failed/released attempts can return to the automatic queue. Missing
-landing events, thrown sinks and expired claims do not authorize replay. Renderer details describe
-only the batch that won custody, not the earlier observed inbox. Budget-omitted activities belong to
-that same delivered batch: the omission line settles their presentation as `clipped`, without a
-full-consumption receipt. They stay available to explicit catch, but never get paged into later
-model completions or replayed on extension reload. See `delivery-primitives.md`.
-
-For independent existing-session delivery, opt into its local receiver:
-
-```sh
-mkdir -m 700 /private/path/delivery
-pi --agent-delivery-socket /private/path/delivery/p.sock
-```
-
-The parent must already be private and caller-owned. Explicit macOS Unix endpoint
-only; no discovery, registry, daemon or second extension. The flag is read lazily
-at session start. Missing flag creates no socket. Occupied paths fail closed.
-Session replacement closes outstanding connections and rebinds the same endpoint
-to the new identity; old targets reject.
-
-`observed` / `message_end` means only the matching native extension event was seen.
-Pi 1.1.0 emits that event before final append. It is **not durable admission,
-final append, model processing, completion or display**. No branch polling or
-cross-extension transform compatibility is promised.
-
-Standalone extensions can register `createPiReceiver` from the package's `./pi`
-subpath and use `sendPiMessage` directly. Factory registration creates no
-resources; start/shutdown own them. Session replacement and shutdown await the
-pending observer's retirement, including cleanup already begun by run cancellation.
-Cancellation releases native landing waits; it does not leave the observer running
-behind a completed lifecycle hook. Restart after cancellation waits for the old
-observer before opening its successor. Shutdown waits for in-flight automatic
-startup before ending that session, and awaits the session-end work. Raw SDK hosts
-must emit and await `session_shutdown` before `dispose()`;
-disposal alone does not retire extension-owned observers or receivers.
-
-Transport frame/key constraints, client
-`connectExisting`/`sendText` usage, receipt states, bounds and the exact validated
-runtime evidence live in `@astrosheep/agent-delivery` `README.md` and
-`VALIDATION.md`. Reproducer:
-
-```sh
-npm run build
-node --import ./test/sandbox-env.js packages/agent-delivery/test/pi-runtime.mjs /absolute/installed/pi-1.1.0-package-root
-```
-
-No real accounts/settings/sessions are used. Terminal keystrokes/rendering, other
-Pi builds and platforms are not dynamically validated.
+The `message_end` event is a native observation, not proof of model comprehension or final durable
+append. Independent existing-session Pi delivery, socket constraints and runtime evidence are in
+[agent-delivery's README](../packages/agent-delivery/README.md) and `VALIDATION.md`.

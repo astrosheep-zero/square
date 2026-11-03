@@ -11,15 +11,12 @@ async function bridge($, value, budget = 2800) {
 }
 async function snapshot($, id) { return (await $.state.get({ plugin: 'square', key: 'inbox', id })).value; }
 async function cancellation($, id) { return (await $.state.get({ plugin: 'square', key: 'cancelAt', id })).value; }
-function confirmLater($, c, operation, text) {
+function confirmLater($, c, operation, text, refs) {
   // State reads are dispatch snapshots. This ONE fresh timer dispatch is not polling.
   // Reload cancels it; lost evidence stays unknown and is never blindly replayed.
   try { $.clock.after(0, () => {
     (async () => {
-      if (await $.session.id() !== c.sessionId) return;
-      const old = await snapshot($, c.sessionId);
-      const cancelled = await cancellation($, c.sessionId);
-      await bridge($, { ...c, cancelAt: cancelled?.at, cancelledBindings: cancelled?.bindings, bindings: old?.bindings, operation, text });
+      await bridge($, { ...c, operation, text, refs });
     })().catch(() => undefined);
   }); } catch { /* denied scheduling leaves evidence unknown, never a second next */ }
 }
@@ -112,10 +109,10 @@ export function register(on) {
     const old = await snapshot($, c.sessionId).catch(() => undefined);
     const cancelled = await cancellation($, c.sessionId).catch(() => undefined);
     const guard = await bridge($, { ...c, cancelAt: cancelled?.at, cancelledBindings: cancelled?.bindings, bindings: old?.bindings, operation: 'guard', text: e.text }).catch(() => undefined);
-    if (guard?.recognized && !guard.current) return { consumed: 'Square delivery is stale or cancelled' };
+    if (!guard || (guard.recognized && !guard.current)) return { consumed: 'Square delivery is stale, cancelled, or unavailable' };
     // Preserve native policy: hold/refuse reject this gate; never call next twice.
     const result = await next(e);
-    if (guard?.current && result.text === e.text) confirmLater($, c, 'admitted', result.text);
+    if (guard?.current && result.text === e.text) confirmLater($, c, 'admitted', result.text, guard.refs);
     return result;
   });
   on('session.append', async ($, e, next) => {

@@ -46,6 +46,17 @@ async function received(f, count) {
   assert.equal(f.frames.length, count)
 }
 
+test('native final fence suppresses the write after connecting', async (t) => {
+  const f = await fixture(t)
+  let checked = false
+  const result = await writeClaudeNative({ sessionId: 'explicit-session', endpoint: f.endpoint, claudeHome: f.home }, 'text', {
+    deadline: deadline(), beforeSend: async () => { checked = true; return false },
+  })
+  assert.equal(checked, true)
+  assert.equal(result.outcome, 'unavailable')
+  assert.deepEqual(f.frames, [])
+})
+
 const connectClaude = (f, extra = {}) => connect({ harness: 'claude', sessionId: 'explicit-session', endpoint: f.endpoint, claudeHome: f.home, ...extra })
 const code = (expected) => (error) => {
   assert.ok(error instanceof DeliveryError, `expected DeliveryError, got ${error}`)

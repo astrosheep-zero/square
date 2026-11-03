@@ -1,253 +1,141 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { setTimeout as sleep } from 'node:timers/promises';
-import { createArtifactPort, prepareSquareBuild, writeSquareFile } from '../dist/artifact.js';
-import { automaticWakeEligible } from '../dist/delivery.js';
-import { observeSessionPending } from '../dist/inbox.js';
-import { rememberSquarePath } from '../dist/square-index.js';
-import { receiveOpenCodePending, observeOpenCodeContext } from '../dist/plugins/opencode-shared/delivery.js';
-import { createOpenCodeWakeTransport } from '../dist/plugins/opencode/index.js';
-
-async function until(predicate, message) {
-  const deadline = Date.now() + 4_000;
-  while (!await predicate()) {
-    assert.ok(Date.now() < deadline, message);
-    await sleep(10);
-  }
-}
-const accepted = input => ({ ...input, type: 'user', payload: { text: input.text }, time: { created: Date.now() } });
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { harnessOwner } from '../dist/owner.js';
+import { observeOpenCodeContext, receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
+import plugin, { createOpenCodeWakeTransport } from '../dist/plugins/opencode/index.js';
 
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-opencode-receiver-'));
-  const location = path.join(root, 'TEST.square');
-  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const state = await prepareSquareBuild({ force: true, hardCap: null }, 'receiver');
-  state.acts = [];
-  state.runtime.nextActIndex = 0;
-  await writeSquareFile(location, state);
-  const artifact = createArtifactPort(location);
-  const body = "opencode" + ":" + ('native-session');
-  const join = (participant, body, wakeAddress) => artifact.transactAs({ kind: 'join', participant, owner: body, wakeAddress }, facts => {
-    facts.land({ kind: 'join', actor: participant, at: Date.now() });
-    return facts.seat(participant);
-  }).then(result => result.value);
-  const alice = await join('Alice', "test" + ":" + ('author'));
-  const bob = await join('Bob', body, { kind: 'opencode-server', address: { sessionId: 'native-session' } });
-  const say = text => artifact.transactAs({ kind: 'participant', seat: alice }, facts =>
-    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: text, mentions: ['Bob'] })).then(result => result.value.messageIndex);
-  const bind = () => rememberSquarePath(location, body, env.SQUARE_INDEX);
-  const evidence = index => artifact.read(facts => facts.deliveryEvidence('Bob', bob.generation, `msg/${index}`)).then(result => result.value);
-  const receipt = index => artifact.read(facts => facts.channel.receipt('Bob', index)).then(result => result.value);
-  const messageOf = index => artifact.read(facts => facts.channel.message(index)).then(result => result.value);
-  const receivers = [];
-  const start = prompt => {
-    const abort = new AbortController();
-    const transport = createOpenCodeWakeTransport({ sessionId: 'native-session', session: { get: async () => ({ id: 'native-session' }), prompt } }, abort.signal);
-    const running = receiveOpenCodePending('native-session', transport, env, abort.signal);
-    // Retain any unexpected receiver failure until cleanup asserts it.
-    void running.catch(() => {});
-    const receiver = { abort, running };
-    receivers.push(receiver);
-    return receiver;
-  };
-  t.after(async () => {
-    for (const receiver of receivers) receiver.abort.abort();
-    await Promise.all(receivers.map(receiver => receiver.running));
-    await artifact.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-  return { location, env, artifact, body, alice, bob, say, bind, evidence, receipt, messageOf, start };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-ledger-'));
+  const env = { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
+  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  t.after(async () => { await ledger.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const owner = harnessOwner({ channel: 'opencode', session: 'ses_test' });
+  const session = await ledger.attach({ owner, expectedGeneration: null, routes: [{ kind: 'opencode-server', address: { sessionId: 'ses_test' } }] });
+  return { ledger, owner, generation: session.generation, env };
 }
+const hash = text => createHash('sha256').update(text).digest('hex');
+const context = text => [{ id: 'native-message', role: 'user', content: [{ type: 'text', text }] }];
+const transport = send => ({ kind: 'opencode-server', send });
 
-// Native acceptance/uncertainty remains presentation-pending for all shared observers.
-// Only automatic wake preselection applies the additional evidence policy.
-test('uncertain wake evidence suppresses another injection, including expired dispatch', async t => {
-  const item = await fixture(t);
-  await item.bind();
-  const index = await item.say('still owes context');
-  const activity = `msg/${index}`;
-  const claim = { seat: item.bob, message: activity, kind: 'wake', at: 1, leaseMs: 1, claimToken: 'interrupted' };
-  assert.equal((await item.artifact.claimDelivery(claim)).status, 'acquired');
-  assert.equal(automaticWakeEligible(await item.evidence(index), Date.now()), false);
-  assert.equal((await item.artifact.claimDelivery({ ...claim, at: 3, claimToken: 'later' })).evidence.outcome, 'unknown');
-  const observer = await observeSessionPending(item.body, item.env);
-  try { assert.deepEqual(await observer.read(), []); }
-  finally { observer.close(); }
-  const wake = { ...(await item.evidence(index))[0], outcome: 'failed' };
-  assert.equal(automaticWakeEligible([wake], 10), true);
-  assert.equal(automaticWakeEligible([{ ...wake, outcome: 'accepted' }], 10), false);
-  const presentation = { ...wake, kind: 'presentation', outcome: 'dispatching', expiresAt: 11 };
-  assert.equal(automaticWakeEligible([presentation], 10), false);
-  assert.equal(automaticWakeEligible([presentation], 11), false);
-  assert.equal(automaticWakeEligible([{ ...presentation, outcome: 'unknown' }], 12), false);
+test('v2 records the native input identity before confirmed native acceptance', async () => {
+  let sent, correlation;
+  const target = { sessionId: 'ses_test', session: { prompt: async input => {
+    sent = input;
+    return { id: input.id, sessionID: input.sessionID, type: 'user', delivery: input.delivery, payload: { text: input.text }, time: { created: Date.now() } };
+  } } };
+  const adapter = createOpenCodeWakeTransport(target, new AbortController().signal);
+  const outcome = await adapter.send({ text: 'hello' }, { sessionId: 'ses_test' }, {
+    token: 'handoff', deadline: Date.now() + 1000, signal: new AbortController().signal,
+    prepare: async value => { correlation = value; return true; }, beforeSend: async () => true,
+  });
+  assert.equal(outcome, 'accepted');
+  assert.equal(correlation.token, 'handoff');
+  assert.equal(correlation.messageId, sent.id);
+  assert.equal(correlation.payloadHash, hash(sent.text));
 });
 
-test('initial native acceptance is not receipt; exact prepared context confirms once and activity during send is not lost', async t => {
-  const item = await fixture(t);
-  await item.bind();
-  const first = await item.say('first native attention');
-  const calls = [];
-  let release;
-  const blocked = new Promise(resolve => { release = resolve; });
-  item.start(async input => {
-    calls.push(input);
-    const rows = await item.evidence(calls.length === 1 ? first : second);
-    assert.equal(rows[0].outcome, 'dispatching');
-    assert.equal(rows[0].correlation.token, input.id, 'correlation is durable before native I/O');
-    if (calls.length === 1) await blocked;
-    return accepted(input);
-  });
-  await until(() => calls.length === 1, 'initial pending activity did not reach native boundary');
-  const second = await item.say('arrived during native send');
-  release();
-  await until(async () => (await item.evidence(second)).some(row => row.outcome === 'accepted'), 'activity during send was lost');
-  assert.equal(calls.length, 2);
-  assert.equal(await item.receipt(first), undefined);
-  const context = (input, changes = {}) => ({ id: input.id, role: 'user', content: [{ type: 'text', text: input.text }], ...changes });
+test('exact context hash confirms the current handoff, never a changed message or canceled card', async t => {
+  const f = await fixture(t);
+  await f.ledger.post({ owner: f.owner, key: 'first', text: 'hello' });
+  const result = await f.ledger.dispatchHandoff(f.owner, 'first', transport(async (card, _address, c) => {
+    assert.ok(await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) }));
+    return 'accepted';
+  }), { generation: f.generation, timeoutMs: 1000 });
+  assert.equal(result.outcome, 'accepted');
   const signal = new AbortController().signal;
-  await observeOpenCodeContext('native-session', [context(calls[0], { id: 'wrong-token' }), context(calls[0], { role: 'assistant' }),
-    context(calls[0], { content: [{ type: 'text', text: calls[0].text + 'changed' }] })], item.env, signal);
-  assert.equal(await item.receipt(first), undefined);
-  await observeOpenCodeContext('native-session', [context(calls[0])], item.env, signal);
-  const received = await item.receipt(first);
-  assert.ok(received);
-  await observeOpenCodeContext('native-session', [context(calls[0])], item.env, signal);
-  assert.deepEqual(await item.receipt(first), received);
-  assert.equal(await item.receipt(second), undefined);
-  await sleep(100);
-  assert.equal(calls.length, 2, 'accepted wake cannot replay while waiting for context');
+  await observeOpenCodeContext('ses_test', f.generation, context('tampered'), f.env, signal);
+  assert.deepEqual(await f.ledger.receipts(f.owner), []);
+  await observeOpenCodeContext('ses_test', f.generation, context('hello'), f.env, signal);
+  assert.equal((await f.ledger.receipts(f.owner)).length, 1);
+
+  await f.ledger.post({ owner: f.owner, key: 'second', text: 'later' });
+  await f.ledger.dispatchHandoff(f.owner, 'second', transport(async (card, _address, c) => {
+    await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
+    return 'accepted';
+  }), { generation: f.generation, timeoutMs: 1000 });
+  await f.ledger.cancel({ owner: f.owner, generation: f.generation });
+  await observeOpenCodeContext('ses_test', f.generation, context('later'), f.env, signal);
+  assert.equal((await f.ledger.receipts(f.owner)).length, 1);
+
+  await f.ledger.post({ owner: f.owner, key: 'third', text: 'stale' });
+  await f.ledger.dispatchHandoff(f.owner, 'third', transport(async (card, _address, c) => {
+    await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
+    return 'accepted';
+  }), { generation: f.generation, timeoutMs: 1000 });
+  await f.ledger.attach({ owner: f.owner, expectedGeneration: f.generation, routes: [{ kind: 'opencode-server', address: { sessionId: 'ses_test' } }] });
+  await observeOpenCodeContext('ses_test', f.generation, context('stale'), f.env, signal);
+  assert.equal((await f.ledger.receipts(f.owner)).length, 1);
 });
 
-test('failed wake is retried on startup; unknown evidence settles without spin or replay on new conversation', async t => {
-  const item = await fixture(t);
-  await item.bind();
-  const index = await item.say('failed before native receiver starts');
-  const claim = { seat: item.bob, message: `msg/${index}`, kind: 'wake', at: Date.now(), leaseMs: 1000, claimToken: 'failed' };
-  assert.equal((await item.artifact.claimDelivery(claim)).status, 'acquired');
-  assert.equal(await item.artifact.completeDelivery({ ...claim, outcome: 'failed' }), true);
+test('interrupt cancels the captured generation without suppressing later cards', async t => {
+  const f = await fixture(t);
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = f.env.SQUARE_DELIVERY;
+  const hooks = {}, queue = [];
+  let wake;
   const calls = [];
-  item.start(async input => { calls.push(input); return {}; });
-  await until(async () => (await item.evidence(index)).some(row => row.outcome === 'unknown'), 'failed activity was not retried');
-  assert.deepEqual((await item.evidence(index)).map(row => row.outcome), ['failed', 'unknown']);
-  let transactions = 0;
-  const exec = DatabaseSync.prototype.exec;
-  t.mock.method(DatabaseSync.prototype, 'exec', function(sql, ...args) {
-    if (/^BEGIN\b/.test(sql)) transactions++;
-    return exec.call(this, sql, ...args);
+  const events = { push(event) { queue.push(event); wake?.(); } };
+  const stop = await plugin.setup({ app: { version: '2.0.0' }, location: { directory: os.tmpdir(), project: { id: 'project' } },
+    session: {
+      hook: async (name, callback) => { hooks[name] = callback; },
+      get: async ({ sessionID }) => ({ id: sessionID, projectID: 'project', location: { directory: os.tmpdir() } }),
+      prompt: async input => { calls.push(input); return { id: input.id, sessionID: input.sessionID, type: 'user', delivery: input.delivery, payload: { text: input.text }, time: { created: Date.now() } }; },
+    }, event: { async *subscribe({ signal }) {
+      while (!signal.aborted) {
+        if (!queue.length) await new Promise(resolve => { wake = resolve; signal.addEventListener('abort', resolve, { once: true }); });
+        wake = undefined;
+        while (queue.length) yield queue.shift();
+      }
+    } },
   });
-  await sleep(100);
-  const settled = transactions;
-  await sleep(150);
-  assert.equal(transactions, settled, 'own claim/completion evidence must not repeatedly reproject');
-  assert.equal(calls.length, 1);
-  const later = await item.say('substantive new activity');
-  await until(async () => (await item.evidence(later)).some(row => row.outcome === 'unknown'), 'new activity did not wake receiver');
-  assert.equal(calls.length, 2, 'unknown wake must remain excluded on a substantive change');
-  assert.equal(calls.filter(call => call.text.includes('failed before native receiver starts')).length, 1);
+  try {
+  const until = async predicate => {
+    const deadline = Date.now() + 5000;
+    while (!await predicate()) { if (Date.now() >= deadline) throw Error(`timed out waiting for receiver; calls=${calls.length}; session=${JSON.stringify(await f.ledger.session(f.owner))}`); await new Promise(resolve => setTimeout(resolve, 10)); }
+  };
+  await hooks.prompt({ sessionID: 'ses_test' });
+  const before = (await f.ledger.session(f.owner)).generation;
+  await f.ledger.post({ owner: f.owner, key: 'first', text: 'first' });
+  await until(() => calls.length === 1);
+  events.push({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } });
+  await until(async () => (await f.ledger.session(f.owner)).generation !== before);
+  const after = (await f.ledger.session(f.owner)).generation;
+  assert.deepEqual(await f.ledger.pending(f.owner, { generation: after }), []);
+  await f.ledger.post({ owner: f.owner, key: 'second', text: 'second' });
+  await until(() => calls.length === 2);
+  await f.ledger.attach({ owner: f.owner, expectedGeneration: after, routes: [{ kind: 'opencode-server', address: { sessionId: 'ses_test' } }] });
+  events.push({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  await hooks.prompt({ sessionID: 'ses_test' });
+  await f.ledger.post({ owner: f.owner, key: 'third', text: 'third' });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(calls.length, 2, 'a lost cancellation fence must not restart the watcher');
+  } finally {
+    await stop();
+    if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous;
+  }
 });
 
-test('empty startup notices new membership; catch release and expiry wake pending; cancellation closes native wait and watchers', async t => {
-  const item = await fixture(t);
-  const calls = [];
-  let opened = 0, closed = 0;
-  const watch = fs.watch;
-  t.mock.method(fs, 'watch', function(...args) {
-    const watcher = watch.apply(this, args);
-    opened++;
-    const close = watcher.close.bind(watcher);
-    watcher.close = () => { closed++; close(); };
-    return watcher;
-  });
-  const lease = expiresAt => item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts =>
-    facts.putLease('Bob', { leaseId: 'catch', heartbeatAt: Date.now(), expiresAt, filter: { mention: 'Bob' } }, item.bob.generation));
-  await lease(Date.now() + 10_000);
-  const index = await item.say('owned by catch');
-  const receiver = item.start(async (input, { signal }) => {
-    calls.push(input);
-    if (calls.length < 3) return accepted(input);
-    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
-  });
-  await sleep(50);
-  await item.bind();
-  await sleep(100);
-  assert.equal(calls.length, 0);
-  await item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts => facts.removeLease('Bob', 'catch', item.bob.generation));
-  await until(async () => (await item.evidence(index)).some(row => row.outcome === 'accepted'), 'lease removal did not wake delivery');
-  await lease(Date.now() + 250);
-  const expiry = await item.say('released by lease expiry');
-  await until(async () => (await item.evidence(expiry)).some(row => row.outcome === 'accepted'), 'expiry alone did not wake delivery');
-  assert.equal(calls.length, 2);
-  const pending = await item.say('cancel native waiting');
-  await until(() => calls.length === 3, 'native send not entered');
-  receiver.abort.abort();
-  await receiver.running;
-  assert.ok(opened > 0);
-  assert.equal(closed, opened, 'receiver shutdown must release all shared watcher subscriptions');
-  assert.equal(await item.receipt(pending), undefined);
-  await item.say('after receiver shutdown');
-  await sleep(100);
-  assert.equal(calls.length, 3);
-});
-
-
-test('receipt and takeover during native I/O exclude stale batch/context while new exact-body membership is discovered', async t => {
-  const item = await fixture(t);
-  await item.bind();
-  const first = await item.say('in flight before takeover');
-  const caught = await item.say('caught while first send waits');
-  const calls = [];
-  let release;
-  const blocked = new Promise(resolve => { release = resolve; });
-  item.start(async input => {
-    calls.push(input);
-    if (calls.length === 1) await blocked;
-    return accepted(input);
-  });
-  await until(() => calls.length === 1, 'first native I/O was not entered');
-  const caughtMessage = await item.messageOf(caught);
-  await item.artifact.transactAs({ kind: 'participant', seat: item.bob }, facts => facts.channel.markSeen('Bob', [caughtMessage.index], Date.now()));
-  await item.artifact.transactAs({ kind: 'takeover', participant: 'Bob', owner: 'opencode:native-session:agent:other-agent',
-    expectedGeneration: item.bob.generation, wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts => {
-    facts.land({ kind: 'done', actor: 'Bob', at: Date.now() });
-    facts.land({ kind: 'join', actor: 'Bob', at: Date.now() });
-  });
-  await item.say('belongs only to replacement agent');
-  await item.artifact.transactAs({ kind: 'join', participant: 'Cara', owner: item.body,
-    wakeAddress: { kind: 'opencode-server', address: { sessionId: 'native-session' } } }, facts =>
-    facts.land({ kind: 'join', actor: 'Cara', at: Date.now() }));
-  const fresh = (await item.artifact.transactAs({ kind: 'participant', seat: item.alice }, facts =>
-    facts.land({ kind: 'say', actor: 'Alice', at: Date.now(), body: 'new exact-body member', mentions: ['Cara', 'Bob'] }))).value.messageIndex;
-  release();
-  await until(async () => (await item.artifact.read(facts =>
-    facts.deliveryEvidence('Cara', facts.seat('Cara').generation, `msg/${fresh}`))).value.some(row => row.outcome === 'accepted'),
-  'new exact-body membership did not receive pending activity');
-  const newMessageCalls = calls.filter(call => call.text.includes('new exact-body member'));
-  assert.equal(newMessageCalls.length, 2, 'both current seats with the exact native address receive the new activity');
-  assert.deepEqual(newMessageCalls.map(call => call.text.match(/<square-activity[^>]* as="([^"]+)"/)?.[1]).sort(), ['Bob', 'Cara']);
-  assert.match(calls[1].text, /new exact-body member/);
-  await observeOpenCodeContext('native-session', [{ id: calls[0].id, role: 'user', content: [{ type: 'text', text: calls[0].text }] }],
-    item.env, new AbortController().signal);
-  assert.equal(await item.receipt(first), undefined, 'old prepared context cannot consume under a new generation');
-  assert.ok(await item.receipt(caught));
-  await sleep(100);
-  assert.equal(calls.length, 3, 'the old in-flight attempt plus both exact-address deliveries remain accounted for');
-});
-
-test('an unreadable indexed candidate stays quiet and native delivery resumes after repair', async t => {
-  const item = await fixture(t);
-  await item.bind();
-  const index = await item.say('repair restores native attention');
-  const saved = fs.readFileSync(item.location);
-  fs.writeFileSync(item.location, 'not a SQLite artifact');
-  const calls = [];
-  item.start(async input => { calls.push(input); return accepted(input); });
-  await sleep(100);
-  assert.equal(calls.length, 0, 'unreadable candidate cannot authorize native sending');
-  fs.writeFileSync(item.location, saved);
-  await until(async () => (await item.evidence(index)).some(row => row.outcome === 'accepted'), 'repair did not restore native delivery');
-  assert.equal(calls.length, 1);
+test('watcher pulls ledger cards and competing presentation custody prevents duplicate handoff', async t => {
+  const f = await fixture(t);
+  await f.ledger.post({ owner: f.owner, key: 'held', text: 'held' });
+  const claim = await f.ledger.claimPresentation(f.owner, { generation: f.generation, budgetChars: 1000 });
+  await f.ledger.post({ owner: f.owner, key: 'free', text: 'free' });
+  const abort = new AbortController();
+  const sent = [];
+  let resolve;
+  const landed = new Promise(done => { resolve = done; });
+  const running = receiveOpenCodePending('ses_test', f.generation, transport(async card => {
+    sent.push(card.key); resolve(); return 'accepted';
+  }), f.env, abort.signal);
+  let timer;
+  try { await Promise.race([landed, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('watcher timed out')), 5000); })]); }
+  finally { clearTimeout(timer); abort.abort(); await running; }
+  assert.deepEqual(sent, ['free']);
+  await claim.settle('released');
 });

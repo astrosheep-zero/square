@@ -23,7 +23,6 @@ const ARCHIVE = new Set(['join', 'done', 'say']);
 export function toPublicActivity(stored: HydratedAct): Activity {
   if (stored.kind === 'read') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
-    ...(stored.kind === 'say' && stored.messageIndex !== undefined ? { messageId: `msg/${stored.messageIndex}` as import('./message.js').MessageId } : {}),
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
     ...('metadata' in stored && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),

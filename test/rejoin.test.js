@@ -15,7 +15,7 @@ test('a departed participant steps back in before speaking, and only the return 
   const refused = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
   const refusal = refused.stdout + refused.stderr;
   assert.equal(refused.status, 2, refusal);
-  assert.match(refusal, /Bob needs a current attached endpoint/);
+  assert.match(refusal, /Bob needs to join first/);
   assert.match(refusal, /draft kept/);
   assert.match(refusal.trim().split('\n').at(-1), /^square .* join$/);
   assert.equal((await readSquareSnapshot(file)).state.acts.at(-1).kind, 'done');

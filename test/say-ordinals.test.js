@@ -4,22 +4,21 @@ import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSqliteDriver, initializeSqlite } from '../dist/square-sqlite.js';
-import { channelLowerSchema } from '../dist/channel-sqlite-schema.js';
 
 function state() {
   return {
     hardCap: null, preamble: [], warmup: [],
     acts: [
       { kind: 'join', actor: 'Bob', at: 0, index: 1 },
-      { kind: 'say', actor: 'Alice', body: 'before join', at: 1, index: 2, messageIndex: 0 },
+      { kind: 'say', actor: 'Alice', body: 'before join', at: 1, index: 2 },
       { kind: 'join', actor: 'alice', at: 2, index: 5 },
-      { kind: 'say', actor: 'ALICE', body: 'second', at: 3, index: 9, messageIndex: 1 },
-      { kind: 'say', actor: 'Bob', body: 'first', at: 4, index: 12, messageIndex: 2 },
+      { kind: 'say', actor: 'ALICE', body: 'second', at: 3, index: 9 },
+      { kind: 'say', actor: 'Bob', body: 'first', at: 4, index: 12 },
       { kind: 'done', actor: 'Alice', at: 5, index: 14 },
       { kind: 'join', actor: 'Alice', at: 6, index: 18 },
-      { kind: 'say', actor: 'alice', body: 'after rejoin', at: 7, index: 23, messageIndex: 3 },
+      { kind: 'say', actor: 'alice', body: 'after rejoin', at: 7, index: 23 },
       { kind: 'listen', actor: 'Alice', target: 'Bob', at: 8, index: 27 },
-      { kind: 'say', actor: 'Bob', body: 'second', at: 9, index: 30, messageIndex: 4 },
+      { kind: 'say', actor: 'Bob', body: 'second', at: 9, index: 30 },
       { kind: 'done', actor: 'Bob', at: 10, index: 33 },
       { kind: 'done', actor: 'Alice', at: 10, index: 34 },
     ],
@@ -52,7 +51,7 @@ test('say ordinals preserve lifetime prefix numbering across gaps, case changes,
 test('missing participant projections retain prefix-count ordinals instead of losing selected says', () => {
   const db = new DatabaseSync(':memory:');
   try {
-    initializeSqlite(db, state(), 0, channelLowerSchema);
+    initializeSqlite(db, state(), 0);
     const facts = createSqliteDriver(db);
     db.prepare('DELETE FROM participants WHERE name_key_json=?').run(JSON.stringify('alice'));
     assert.equal(facts.participant('Alice'), undefined);

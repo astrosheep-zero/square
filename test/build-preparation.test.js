@@ -14,7 +14,7 @@ test('file, memory and public builds share configuration and guide preparation',
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-build-preparation-'));
   const markdown = '  context\r\nsecond line  ';
   const options = { markdown, throttlePerMinute: 3 };
-  const env = { SQUARE_INDEX: path.join(dir, 'index.ndjsonl') };
+  const env = { SQUARE_DELIVERY: path.join(dir, 'delivery.sqlite') };
   const expected = prepareSquareBuild(options, markdown);
   assert.equal(expected.hardCap, null);
   assert.deepEqual(expected.preamble, ['context', 'second line']);

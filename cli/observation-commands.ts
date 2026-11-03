@@ -500,4 +500,10 @@ function hookCommand(runHook: (input: string) => string | Promise<string>): Comm
 }
 
 export const claudeModCommand = hookCommand(runClaudeMod);
-export const codexHookCommand = hookCommand(runCodexHook);
+export const codexHookCommand: CommandSpec<undefined, string> = {
+  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
+  execute: async () => runCodexHook(await readStdin(), process.env, text => new Promise<void>((resolve, reject) => {
+    process.stdout.write(text, error => error ? reject(error) : resolve());
+  })),
+  present: () => {},
+};

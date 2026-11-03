@@ -1,9 +1,11 @@
 import { SquareError } from './neutral.js';
-import type { MessageMetadata, JsonValue } from './channel-values.js';
-import type { ChannelRead, EndpointRef } from './channel-ports.js';
+import type { ActivityMetadata, JsonValue } from './model.js';
 
-import type { MetadataMatch, MetadataScalar } from './channel-metadata.js';
-export type { MetadataMatch, MetadataScalar, DeliveryDeferral } from './channel-metadata.js';
+export type MetadataScalar = null | boolean | number | string;
+export interface MetadataMatch {
+  readonly fields: readonly Readonly<{ path: readonly string[]; equals: MetadataScalar }>[];
+}
+export interface DeliveryDeferral { readonly id: string; readonly expiresAt: string; }
 export interface DeliveryDeferralFact {
   readonly participant: string;
   readonly generation: string;
@@ -60,7 +62,7 @@ export function validateDeferralId(value: unknown): string {
   return value;
 }
 
-export function matchesMetadata(metadata: MessageMetadata | undefined, match: MetadataMatch): boolean {
+export function matchesMetadata(metadata: ActivityMetadata | undefined, match: MetadataMatch): boolean {
   if (metadata === undefined) return false;
   return match.fields.every(({ path, equals }) => {
     let value: JsonValue = metadata;
@@ -73,22 +75,13 @@ export function matchesMetadata(metadata: MessageMetadata | undefined, match: Me
 }
 
 export function matchingDeferrals(
-  deferrals: readonly DeliveryDeferralFact[], metadata: MessageMetadata | undefined, now: number,
+  deferrals: readonly DeliveryDeferralFact[], metadata: ActivityMetadata | undefined, now: number,
 ): readonly DeliveryDeferralFact[] {
   return deferrals.filter((lease) => lease.expiresAt > now && matchesMetadata(metadata, lease.match));
 }
 
-export function deliveryDeferralExpiry(facts: ChannelRead, captured: EndpointRef, index: number, now: number): number | undefined {
-  const seat = facts.endpoint(captured.participant);
-  if (seat === undefined || seat.generation !== captured.generation || seat.owner !== captured.owner) return undefined;
-  const leases = facts.deliveryDeferrals(seat.participant, seat.generation);
-  if (!leases.some(lease => lease.expiresAt > now)) return undefined;
-  const message = facts.message(index);
-  return message === undefined ? undefined : earliestMatchingDeferralExpiry(leases, message.metadata, now);
-}
-
 export function earliestMatchingDeferralExpiry(
-  deferrals: readonly DeliveryDeferralFact[], metadata: MessageMetadata | undefined, now: number,
+  deferrals: readonly DeliveryDeferralFact[], metadata: ActivityMetadata | undefined, now: number,
 ): number | undefined {
   const matches = matchingDeferrals(deferrals, metadata, now);
   return matches.length ? Math.min(...matches.map((lease) => lease.expiresAt)) : undefined;

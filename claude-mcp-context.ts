@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { z } from 'zod/v4';
 import { withFileLock } from './file-lock.js';
-import { squareIndexPath } from './square-index.js';
 import { SquareError } from './model.js';
 
 const LEASE_MS = 10 * 60 * 1000;
@@ -14,7 +14,7 @@ const coordinate = z.object({
 const record = coordinate.extend({ token: z.string().regex(/^[a-f0-9]{64}$/u), expiresAt: z.number() });
 type ClaudeMcpCall = z.infer<typeof coordinate>;
 const unavailable = () => new SquareError('unavailable', 'Claude MCP call context unavailable');
-const storeRoot = (env: NodeJS.ProcessEnv) => path.join(path.dirname(squareIndexPath(env)), 'claude-mcp-calls');
+const storeRoot = (env: NodeJS.ProcessEnv) => path.join(path.dirname(env.SQUARE_DELIVERY ?? path.join(os.homedir(), '.square', 'delivery.sqlite')), 'claude-mcp-calls');
 const callFile = (root: string, id: string) => path.join(root, `${createHash('sha256').update(id).digest('hex')}.json`);
 
 async function readRecord(file: string): Promise<z.infer<typeof record> | undefined> {

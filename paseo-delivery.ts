@@ -1,128 +1,35 @@
-import type { WakeRequest, WakeOutcome, WakeTransportPort } from './channel-transport.js';
+import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 import { DeliveryError } from './packages/agent-delivery/src/index.js';
-import { resolvePaseoDaemon } from './packages/agent-delivery/src/paseo-native.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
 import { sendPaseoWake } from './wake-sink.js';
 
-/** How a failed wake reads to the retry layer. `unknown` is never retried. */
-type WakeFailureKind = 'transient' | 'rejected' | 'unknown';
-
-/** Every send failure is a DeliveryError; only its code and certainty decide retry. */
-function diagnostic(
-  phase: 'discovery' | 'selection' | 'boundary' | 'send',
-  address: Readonly<Record<string, string>>,
-  code: string,
-) {
-  return {
-    phase,
-    code,
-    // Only discovery still runs a Paseo CLI; a wake is a capability call on the shared entry.
-    ...(phase === 'discovery' ? { command: 'paseo ls --global --json' } : {}),
-    endpoint: resolvePaseoDaemon(undefined)?.url ?? 'unresolved',
-    paseoAgentIds: [address.agentId].filter(Boolean),
-    passwordPresent: Boolean(process.env.PASEO_PASSWORD),
-  };
-}
-
 export interface PaseoWakeTransportOptions {
-  discover?: (timeoutMs: number) => ReturnType<typeof discoverPaseoAgents> | Awaited<ReturnType<typeof discoverPaseoAgents>>;
+  discover?: typeof discoverPaseoAgents;
   waitForBoundary?: typeof waitForPaseoWakeBoundary;
   sendWake?: typeof sendPaseoWake;
 }
-
-export class PaseoWakeTransport implements WakeTransportPort {
+export class PaseoWakeTransport implements DeliveryTransport {
+  readonly kind = 'paseo';
   private discovering?: ReturnType<typeof discoverPaseoAgents>;
   constructor(private readonly opts: PaseoWakeTransportOptions = {}) {}
-
-  /** Coalesce overlapping inventory reads only; a later send must rediscover current status. */
   private discover(timeoutMs: number): ReturnType<typeof discoverPaseoAgents> {
     return this.discovering ??= Promise.resolve().then(() => (this.opts.discover ?? discoverPaseoAgents)(timeoutMs))
       .finally(() => { this.discovering = undefined; });
   }
-
-  async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
-    const address = request.route.address;
-    const deadline = Date.now() + timeoutMs;
-    const remainingMs = () => Math.max(0, deadline - Date.now());
-    const budgetUnavailable = (): WakeOutcome => ({
-      outcome: 'failed',
-      signature: 'dispatch_budget_exhausted',
-      message: 'The wake dispatch budget elapsed before Paseo accepted the wake.',
-    });
+  async send(card: DeliveryCard, address: Readonly<Record<string, string>>, context: DeliveryTransportContext): Promise<TransportOutcome> {
     const agentId = address.agentId?.trim();
-    if (!agentId) {
-      return {
-        outcome: 'failed',
-        signature: 'invalid_address',
-        message: 'Paseo route has no agent id.',
-        diagnostic: diagnostic('selection', address, 'invalid_address'),
-      };
-    }
-
-    const payload = request.presentation?.payload;
-    if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
-    let remaining = remainingMs();
-    if (remaining === 0) return budgetUnavailable();
-    const discovery = await this.discover(remaining);
-    if (discovery.error && discovery.agents.length === 0) {
-      return {
-        outcome: 'failed',
-        // A credential or authorization refusal is proven; anything else may be transient.
-        signature: /password|auth|unauthori[sz]ed/i.test(discovery.error) ? 'discovery_rejected'
-          : /DAEMON_NOT_RUNNING|ECONNREFUSED|ENOENT|not found.*executable|ETIMEDOUT|timed out|timeout/i.test(discovery.error)
-            ? 'discovery_transient' : 'discovery_rejected',
-        message: `Paseo unavailable: ${discovery.error}`,
-        diagnostic: diagnostic('discovery', address, 'unavailable'),
-      };
-    }
-    const agent = discovery.agents.find((candidate) => candidate.id === agentId);
-    if (agent === undefined || agent.status !== 'idle') {
-      return {
-        outcome: 'failed',
-        signature: agent === undefined ? 'address_not_found' : 'agent_not_idle',
-        message: agent === undefined ? 'The registered Paseo agent was not found.' : 'The registered Paseo agent is not idle.',
-        diagnostic: diagnostic('selection', address, agent === undefined ? 'not_found' : 'not_idle'),
-      };
-    }
-
-    remaining = remainingMs();
-    if (remaining === 0) return budgetUnavailable();
-    if (!(await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent, remaining))) {
-      return {
-        outcome: 'failed',
-        signature: 'boundary_unavailable',
-        message: 'Paseo did not reach the current tool boundary before the wake timeout.',
-        diagnostic: diagnostic('boundary', address, 'unavailable'),
-      };
-    }
-    if (!(await beforeSend())) return { outcome: 'not-capable' };
-    remaining = remainingMs();
-    if (remaining === 0) return budgetUnavailable();
-
+    if (!agentId) return 'not-capable';
+    const remaining = () => Math.max(0, context.deadline - Date.now());
+    if (context.signal.aborted || !remaining()) return 'not-capable';
     try {
-      await (this.opts.sendWake ?? sendPaseoWake)({
-        agentId,
-        prompt: payload,
-        location: request.location,
-        participant: request.participant,
-        message: request.message,
-        ...(request.attemptN === undefined ? {} : { attemptN: request.attemptN }),
-      }, { timeoutMs: remaining });
-      return { outcome: 'accepted' };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const kind: WakeFailureKind = !(error instanceof DeliveryError) || error.maybeDelivered ? 'unknown'
-        : error.code === 'unavailable' ? 'transient'
-          : ['authentication_failed', 'session_not_found', 'rejected', 'invalid_arguments'].includes(error.code) ? 'rejected'
-            : 'unknown';
-      const details = { ...diagnostic('send', address, 'failed'), outcome: kind };
-      if (kind === 'unknown') return { outcome: 'unknown', signature: 'send_unknown', message, diagnostic: details };
-      return {
-        outcome: 'failed',
-        signature: kind === 'transient' ? 'send_pre_accept_transient' : 'send_pre_accept_rejected',
-        message,
-        diagnostic: details,
-      };
-    }
+      const discovery = await this.discover(remaining());
+      const agent = discovery.agents.find(candidate => candidate.id === agentId);
+      if (!agent || agent.status !== 'idle' || !remaining()) return 'failed';
+      if (!await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent, remaining())) return 'failed';
+      if (!await context.prepare({ messageId: context.token }) || context.signal.aborted || !remaining()) return 'not-capable';
+      await (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: card.text, messageId: context.token },
+        { timeoutMs: remaining(), beforeSend: context.beforeSend, signal: context.signal });
+      return 'accepted';
+    } catch (error) { return error instanceof DeliveryError && !error.maybeDelivered ? 'failed' : 'unknown'; }
   }
 }

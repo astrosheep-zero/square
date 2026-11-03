@@ -16,8 +16,8 @@ import threading
 SHIM = '''#!PYTHON
 import json,os,pathlib,subprocess,sys,threading,urllib.parse
 R=pathlib.Path(ROOT)
-index_env='data:text/javascript,'+urllib.parse.quote('process.env.SQUARE_INDEX='+json.dumps(str(R/'index.ndjsonl')))
-cmd=[NODE,"--import",SANDBOX,"--import",index_env,ENTRY]+sys.argv[1:]
+ledger_env='data:text/javascript,'+urllib.parse.quote('process.env.SQUARE_DELIVERY='+json.dumps(str(R/'delivery.sqlite')))
+cmd=[NODE,"--import",SANDBOX,"--import",ledger_env,ENTRY]+sys.argv[1:]
 def record(name,value):
  with (R/name).open('a') as f: f.write(json.dumps(value)+'\\n')
 if sys.argv[1:]==['mcp-server']:
@@ -130,7 +130,7 @@ class Fixture:
             self.endpoint = 'http://127.0.0.1:' + str(server.server_address[1])
             env = {key: value for key, value in os.environ.items() if key in ['PATH', 'LANG', 'LC_ALL', 'TERM', 'SHELL', 'USER', 'LOGNAME']}
             env.update(HOME=str(self.root / 'home'), CLAUDE_CONFIG_DIR=str(self.root / 'config'), TMPDIR=str(self.root),
-                       PATH=str(self.root / 'bin') + ':' + env['PATH'], SQUARE_HOST_LEDGER_ROOT=str(self.root / 'ledger'),
+                       PATH=str(self.root / 'bin') + ':' + env['PATH'], SQUARE_DELIVERY=str(self.root / 'delivery.sqlite'),
                        ANTHROPIC_API_KEY='sk-ant-dummy-fixture-not-a-credential', ANTHROPIC_BASE_URL=self.endpoint,
                        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', TERM='xterm-256color')
             self.master, slave = pty.openpty()

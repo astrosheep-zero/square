@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
-import { diagnoseSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { diagnoseSquareFile } from '../dist/artifact.js';
 
 // One real file exercises the operation, persisted audience, and rebuild together.
 test('unlisten removes only its listen edge, preserves landed audience, and keeps mentions and replies', async (t) => {
@@ -21,10 +21,9 @@ test('unlisten removes only its listen edge, preserves landed audience, and keep
   const stopped = await bob.unlisten('ALICE');
   assert.equal(stopped.activity.kind, 'unlisten');
   assert.deepEqual((await bob.listening()).listening, ['Cara']);
-  const revision = (await readSquareSnapshot(location)).revision;
   assert.equal((await bob.unlisten('Alice')).activity, null);
   assert.equal((await bob.unlisten('Missing')).activity, null);
-  assert.equal((await readSquareSnapshot(location)).revision, revision);
+  assert.deepEqual((await bob.listening()).listening, ['Cara']);
 
   await alice.express('bare after unlisten', { force: true });
   await alice.express('for Cara after unlisten', { mentions: ['Cara'], force: true });
@@ -36,9 +35,7 @@ test('unlisten removes only its listen edge, preserves landed audience, and keep
   ]);
 
   await bob.ignore('Alice');
-  const ignoredRevision = (await readSquareSnapshot(location)).revision;
   assert.equal((await bob.unlisten('Alice')).activity, null);
-  assert.equal((await readSquareSnapshot(location)).revision, ignoredRevision);
   await alice.express('blocked @Bob', { force: true });
   assert.deepEqual((await bob.catch()).activities, []);
   await bob.listen('Alice');

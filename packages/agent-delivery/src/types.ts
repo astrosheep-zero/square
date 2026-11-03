@@ -13,7 +13,7 @@ export type Delivery = 'steer' | 'queue'
 export interface OpenCodeSendTextOptions { readonly delivery?: Delivery; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface ClaudeSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface PiSendTextOptions { readonly delivery?: Delivery; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
-export interface PaseoSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
+export interface PaseoSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal; readonly beforeSend?: () => Promise<boolean> }
 export interface CodexSendTextOptions { readonly delivery?: Delivery; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export type SendTextOptions = OpenCodeSendTextOptions | ClaudeSendTextOptions | PiSendTextOptions | PaseoSendTextOptions | CodexSendTextOptions
 

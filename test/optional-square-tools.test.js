@@ -8,10 +8,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import squarePiExtension, { renderSquareCard } from '../plugins/pi/square-pi.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { SquareError } from '../dist/model.js';
-import { Square } from '../dist/square-api.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { harnessOwner } from '../dist/owner.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled } from '../dist/square-tools.js';
 import { connectPi } from '../dist/packages/agent-delivery/src/pi-client.js';
-import { hasPresentedForOwner } from './presentation-fixtures.js';
 
 function setEnv(t, key, value) {
   const previous = process.env[key];
@@ -108,37 +108,33 @@ test('hidden Pi tools preserve the local receiver and pending notification deliv
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-tools-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     setEnv(t, 'SQUARE_TOOLS', raw);
-    setEnv(t, 'SQUARE_INDEX', path.join(root, 'index.ndjsonl'));
+    setEnv(t, 'SQUARE_DELIVERY', path.join(root, 'delivery.sqlite'));
     const sessionId = `hidden-tools-${raw}`;
-    const squarePath = path.join(root, 'test.square');
-    const square = await Square.build({ path: squarePath, markdown: 'Hidden tools, live notifications' });
+    const owner = harnessOwner({ channel: 'pi', session: sessionId });
+    const ledger = await DeliveryLedger.open();
+    const endpoint = process.platform === 'darwin' ? path.join(root, 'pi.sock') : undefined;
+    const pi = piFixture(endpoint);
+    const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId } };
+    assert.deepEqual(pi.tools, []);
     try {
-      const { participant: alice } = await square.join('Alice', { owner: `pi:${sessionId}-author` });
-      await square.join('Bob', { owner: `pi:${sessionId}` });
-      const { activity } = await alice.express('still listening @Bob', { force: true });
-      const endpoint = process.platform === 'darwin' ? path.join(root, 'pi.sock') : undefined;
-      const pi = piFixture(endpoint);
-      const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId } };
-      assert.deepEqual(pi.tools, []);
-      try {
-        await pi.emit('session_start', {}, ctx);
-        if (endpoint !== undefined) {
-          assert.equal((await connectPi({ harness: 'pi', sessionId, endpoint, timeoutMs: 2_000 })).sessionId, sessionId);
-        }
-        await waitUntil(() => pi.sent.length === 1);
-        const { message, options } = pi.sent[0];
-        assert.match(message.content, /still listening @Bob/);
-        assert.equal(message.customType, 'square');
-        assert.equal(message.details.items[0].body, 'still listening @Bob');
-        assert.deepEqual(options, { deliverAs: 'steer', triggerTurn: true });
-        await pi.emit('message_end', { message: { role: 'custom', ...message } }, ctx);
-        await waitUntil(() => hasPresentedForOwner(sessionId, squarePath, 'Bob', Number(activity.id.slice(4))));
-      } finally {
-        await pi.emit('session_shutdown', {}, ctx);
+      await pi.emit('session_start', {}, ctx);
+      if (endpoint !== undefined) {
+        assert.equal((await connectPi({ harness: 'pi', sessionId, endpoint, timeoutMs: 2_000 })).sessionId, sessionId);
       }
-      if (endpoint !== undefined) assert.equal(fs.existsSync(endpoint), false);
-      const { participants } = await square.status();
-      assert.equal(participants.find(participant => participant.name === 'Bob').presence, 'away');
-    } finally { await square.close(); }
+      await ledger.post({ owner, key: 'producer:card', text: 'still listening @Bob' });
+      await waitUntil(() => pi.sent.length === 1);
+      const { message, options } = pi.sent[0];
+      assert.match(message.content, /still listening @Bob/);
+      assert.equal(message.customType, 'square');
+      assert.deepEqual(options, { deliverAs: 'steer', triggerTurn: true });
+      assert.deepEqual(await ledger.receipts(owner), []);
+      await pi.emit('message_end', { message: { role: 'custom', ...message } }, ctx);
+      await waitUntil(async () => (await ledger.receipts(owner)).length === 1);
+    } finally {
+      await pi.emit('session_shutdown', {}, ctx);
+      assert.equal((await ledger.session(owner)).state, 'detached');
+      await ledger.close();
+    }
+    if (endpoint !== undefined) assert.equal(fs.existsSync(endpoint), false);
   });
 });

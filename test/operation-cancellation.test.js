@@ -25,7 +25,6 @@ test('pre-aborted lifecycle operations do not mutate the artifact', async () => 
   const square = Square.inMemory({ markdown: 'context' });
   const before = await square.history({ limit: null });
   await assert.rejects(() => square.join('Alice', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
-  await assert.rejects(() => square.reattach('Bob', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
   assert.deepEqual(await square.history({ limit: null }), before);
   await square.close();
 });
@@ -117,7 +116,7 @@ test('a published build keeps its result when cancellation follows publication',
   const link = fs.promises.link;
   fs.promises.link = async (...args) => { await link(...args); controller.abort(new Error('late response cancellation')); };
   try {
-    const result = await Square.build({ path: location, env: { SQUARE_INDEX: path.join(root, 'index.ndjsonl') }, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
+    const result = await Square.build({ path: location, env: { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') }, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
     assert.equal(result.location, location);
     assert.equal((await result.status()).hardCap, 3);
     await result.close();
@@ -179,8 +178,9 @@ test('post-commit express preserves its result after response cancellation', asy
   const controller = new AbortController();
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
-    const result = await transactAs(authority, fn, signal);
-    controller.abort(new Error('response discarded'));
+    let landed = false;
+    const result = await transactAs(authority, facts => fn({ ...facts, land(draft) { landed = true; return facts.land(draft); } }), signal);
+    if (authority.kind === 'participant' && landed) controller.abort(new Error('response discarded'));
     return result;
   };
   const result = await writer.express('committed', { force: true }, { signal: controller.signal });
@@ -199,8 +199,9 @@ test('post-commit catch preserves its receipt and result before return cancellat
   const controller = new AbortController();
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
-    const result = await transactAs(authority, fn, signal);
-    controller.abort(new Error('response discarded'));
+    let marked = false;
+    const result = await transactAs(authority, facts => fn({ ...facts, markSeen(...args) { marked = true; return facts.markSeen(...args); } }), signal);
+    if (authority.kind === 'participant' && marked) controller.abort(new Error('response discarded'));
     return result;
   };
   const result = await bob.catch({ observe: true }, { signal: controller.signal });
@@ -217,6 +218,7 @@ test('a result-assembly failure after express commit retains landed certainty an
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (...args) => {
     const result = await transactAs(...args);
+    if (args[0].kind !== 'participant' || !result.value?.stored) return result;
     return { ...result, value: { ...result.value, stored: { ...result.value.stored,
       get kind() { throw new Error('public conversion failed after landing'); },
     } } };

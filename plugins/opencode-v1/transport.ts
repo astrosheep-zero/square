@@ -1,6 +1,5 @@
-import { randomInt } from 'node:crypto';
-import { prepareOpenCodeWake } from '../opencode-shared/delivery.js';
-import type { WakeTransportPort } from '../../ports.js';
+import { randomInt, createHash } from 'node:crypto';
+import type { DeliveryTransport } from '../../delivery-ledger.js';
 
 type Client = { session: { promptAsync(input: unknown): Promise<{ error?: unknown; response?: Response }> } };
 let lastTime = 0, counter = 0;
@@ -15,21 +14,25 @@ export function nativeMessageId(): string {
   return `msg_${prefix}${Array.from({ length: 14 }, () => alphabet[randomInt(62)]).join('')}`;
 }
 
-export function legacyTransport(client: Client, sessionId: string, lifetime: AbortSignal): WakeTransportPort {
+export function legacyTransport(client: Client, sessionId: string, lifetime: AbortSignal): DeliveryTransport {
   return {
-    probe: async route => !lifetime.aborted && route.kind === 'opencode-server' && route.address.sessionId === sessionId,
-    async attempt(request, timeoutMs, beforeSend) {
-      const signal = AbortSignal.any([lifetime, AbortSignal.timeout(timeoutMs)]);
-      const prepared = await prepareOpenCodeWake(request, sessionId, signal, beforeSend, nativeMessageId);
-      if (!prepared || signal.aborted) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
+    kind: 'opencode-server',
+    async send(card, address, context) {
+      const signal = AbortSignal.any([lifetime, context.signal]);
+      if (address.sessionId !== sessionId || signal.aborted) return 'not-capable';
+      const messageId = nativeMessageId();
+      const payloadHash = createHash('sha256').update(card.text).digest('hex');
+      if (!await context.prepare({ token: context.token, messageId, payloadHash }) || signal.aborted
+        || !await context.beforeSend() || signal.aborted || Date.now() >= context.deadline) return 'not-capable';
       let onAbort: (() => void) | undefined;
       try {
-        const response = await Promise.race([
-          client.session.promptAsync({ path: { id: sessionId }, body: { messageID: prepared.inputId, parts: [{ type: 'text', text: prepared.payload }] }, signal }),
+        await Promise.race([
+          client.session.promptAsync({ path: { id: sessionId }, body: { messageID: messageId, parts: [{ type: 'text', text: card.text }] }, signal }),
           new Promise<never>((_, reject) => { onAbort = () => reject(signal.reason); signal.addEventListener('abort', onAbort, { once: true }); if (signal.aborted) onAbort(); }),
         ]);
-        return { outcome: 'unknown', signature: response.error ? 'native-error' : response.response?.status === 204 ? 'submitted' : 'native-response' };
-      } catch { return { outcome: 'unknown', signature: 'native-error-or-timeout' }; }
+        // promptAsync acknowledges only submission, not native acceptance or presentation.
+        return 'unknown';
+      } catch { return 'unknown'; }
       finally { if (onAbort) signal.removeEventListener('abort', onAbort); }
     },
   };

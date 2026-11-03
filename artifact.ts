@@ -5,25 +5,10 @@ import { InternalSquareError, SquareError, type BuildOptions } from './model.js'
 import type { SquareResourceOwner, SquareArtifactPort, SquareRead, SquareWrite, ArtifactWriteAuthority } from './ports.js';
 import { wrapSquareWrite, type LandingWriter } from './square-domain.js';
 import { createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, emptyRuntimeState, squareStoreFormat, type SquareState } from './square-sqlite.js';
-import { createChannelSqlite } from './sqlite-channel.js';
-import { channelLowerSchema } from './channel-sqlite-schema.js';
 import { resetStorageMeta } from './sqlite-framing.js';
 import { createArtifactStore, createStoreFile, replaceStoreFile, inspectStore, observeStoreRevision } from './artifact-store.js';
-import { channelReads, channelWrites } from './channel-artifact.js';
-import type { ChannelArtifact } from './channel-ports.js';
 export { openExistingSquareDatabase } from './artifact-store.js';
-export function channelArtifact(port: SquareArtifactPort): ChannelArtifact {
-    return {
-        read: (select, signal) => port.read(facts => select(facts.channel), signal),
-        transactAs: (authority, change, signal) => port.transactAs(authority, facts => change(facts.channel), signal),
-        claimDelivery: (input, signal) => port.claimDelivery(input, signal),
-        prepareDelivery: (input, signal) => port.prepareDelivery(input, signal),
-        completeDelivery: (input, signal) => port.completeDelivery(input, signal),
-        cancelDeliveries: (seat, through, signal) => port.cancelDeliveries(seat, through, signal),
-        changed: (since, timeout, signal) => port.changed(since, timeout, signal), close: () => port.close(),
-    };
-}
-const format = squareStoreFormat(channelLowerSchema, resetStorageMeta);
+const format = squareStoreFormat(resetStorageMeta);
 /** Explicit-lifetime holder of one reused artifact connection. Request cancellation
  * never becomes the shared connection's lifetime; close drains the owner once. */
 export function createSquareResourceOwner(): SquareResourceOwner {
@@ -105,24 +90,23 @@ export interface SquareSnapshot {
     readonly state: SquareState;
     readonly revision: number;
 }
-const readMethods: readonly (keyof Omit<SquareRead, 'channel'>)[] = [
+const readMethods: readonly (keyof SquareRead)[] = [
     'header', 'participant', 'roster', 'attention', 'incomingAttention',
-    'activity', 'activityByMessage', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
+    'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount',
     'receipt', 'receiptFacts', 'lease', 'participantCounts', 'seat', 'seatsForOwner',
-    'deliveryEvidence', 'deliveryByToken', 'cancelledThrough', 'deliveryDeferrals',
+    'pendingPosts', 'postedPosts', 'ownsPost', 'deliveryDeferrals',
 ];
-const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'updateWakeAddress', 'reattachSeat', 'detachSeat'];
-/** Agora composition over the same lower SQL and ordered store used by standalone Channel. */
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'markSeen', 'setSeatAttachment', 'insertNotice', 'ackMatching', 'putDeliveryDeferral', 'renewDeliveryDeferral', 'releaseDeliveryDeferral', 'acquirePost', 'settlePost', 'foldReceipt'];
+/** Square social state and producer state share one synchronous artifact transaction. */
 export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
-    const store = createArtifactStore(location, format, initial === undefined ? undefined : db => initializeSqlite(db, initial, 0, channelLowerSchema), externalSignal);
+    const store = createArtifactStore(location, format, initial === undefined ? undefined : db => initializeSqlite(db, initial, 0), externalSignal);
     function transaction<R>(select: (facts: SquareRead | SquareWrite) => R, write: boolean, authority?: ArtifactWriteAuthority, signal?: AbortSignal, settlement = false) {
         return store.run(write, ({ db, guard, track }) => {
-            const channel = createChannelSqlite(db);
-            const driver = createSqliteDriver(db, channel);
+            const driver = createSqliteDriver(db);
             track(driver);
-            const reads = Object.assign(Object.fromEntries(readMethods.map(name => [name, guard((driver as unknown as Record<string, (...args: never[]) => unknown>)[name])])), { channel: channelReads(channel, guard) }) as unknown as SquareRead;
-            const writes = Object.assign(Object.fromEntries(writeMethods.map(name => [name, guard((driver as unknown as Record<string, (...args: never[]) => unknown>)[name])])), { channel: channelWrites(channel, guard) }) as unknown as LandingWriter;
+            const reads = Object.fromEntries(readMethods.map(name => [name, guard((driver as unknown as Record<string, (...args: never[]) => unknown>)[name])])) as unknown as SquareRead;
+            const writes = Object.fromEntries(writeMethods.map(name => [name, guard((driver as unknown as Record<string, (...args: never[]) => unknown>)[name])])) as unknown as LandingWriter;
             const gate = write ? wrapSquareWrite(reads, writes, authority!) : undefined;
             const value = select(gate?.facts ?? reads);
             gate?.complete();
@@ -134,24 +118,15 @@ export function createArtifactPort(location: string, initial?: SquareState, exte
         transactAs: (authority, change, signal) => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, authority, signal),
         settleAs: (authority, change) => transaction(change as (facts: SquareRead | SquareWrite) => ReturnType<typeof change>, true, authority, undefined, true),
         revision: store.revision, deliveryRevision: store.deliveryRevision,
-        async claimDelivery(input, signal) { return (await port.transactAs({ kind: 'participant', seat: input.seat }, facts => facts.channel.claimDelivery(input), signal)).value; },
-        async prepareDelivery(input, signal) { return (await port.transactAs({ kind: 'participant', seat: input.seat }, facts => facts.channel.prepareDelivery(input), signal)).value; },
-        async completeDelivery(input, signal) { return (await port.transactAs({ kind: 'participant', seat: input.seat }, facts => facts.channel.completeDelivery(input), signal)).value; },
-        async cancelDeliveries(seat, through, signal) {
-            return (await port.transactAs({ kind: 'participant', seat }, facts => {
-                const boundary = through ?? facts.channel.header().lastMessageIndex;
-                return boundary < 0 ? false : facts.channel.cancelThrough(seat, boundary);
-            }, signal)).value;
-        },
         changed: store.changed, close: store.close,
     };
     return port;
 }
 export function createSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<boolean> {
-    return createStoreFile(location, format, db => initializeSqlite(db, state, 0, channelLowerSchema), signal);
+    return createStoreFile(location, format, db => initializeSqlite(db, state, 0), signal);
 }
 export function writeSquareFile(location: string, state: SquareState, signal?: AbortSignal): Promise<void> {
-    return replaceStoreFile(location, format, (db, revision) => initializeSqlite(db, state, revision, channelLowerSchema), signal);
+    return replaceStoreFile(location, format, (db, revision) => initializeSqlite(db, state, revision), signal);
 }
 export function readSquareSnapshot(location: string, signal?: AbortSignal): Promise<SquareSnapshot> {
     return inspectStore(location, format, db => ({ state: exportSqliteState(db), revision: createSqliteDriver(db).header().revision }), signal);
@@ -166,7 +141,7 @@ export const observeSquareRevision = (location: string) => observeStoreRevision(
 export const observeSquareDeliveryRevision = (location: string) => observeStoreRevision(location, format, true);
 export async function diagnoseSquareFile(location: string): Promise<DiagnoseResult> {
     try {
-        return { problems: [], ...await inspectStore(await canonicalPath(location), format, db => inspectSqlite(db, channelLowerSchema)) };
+        return { problems: [], ...await inspectStore(await canonicalPath(location), format, db => inspectSqlite(db)) };
     }
     catch (error) {
         return { unfixable: error instanceof Error ? error.message : String(error), problems: [] };

@@ -1,52 +1,31 @@
 import { connect, DeliveryError, type CodexCliAgent, type CodexCliConnectOptions } from './packages/agent-delivery/src/index.js';
 export { sendCodexQueue, CodexQueueSendError } from './packages/agent-delivery/src/codex-queue.js';
 export type { CodexQueueRequest, CodexQueueFailureKind } from './packages/agent-delivery/src/codex-queue.js';
-
 import { codexBoundaryStore } from './codex-boundary-state.js';
-import type { WakeRequest, WakeOutcome, WakeTransportPort } from './channel-transport.js';
-import type { WakeRoute } from './channel-values.js';
+import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 
 export interface CodexQueueTransportOptions {
   env?: NodeJS.ProcessEnv;
   connect?: (options: CodexCliConnectOptions) => Promise<CodexCliAgent>;
 }
-
-export class CodexQueueTransport implements WakeTransportPort {
+export class CodexQueueTransport implements DeliveryTransport {
+  readonly kind = 'codex-queue';
   constructor(private readonly opts: CodexQueueTransportOptions = {}) {}
-
-  async attempt(request: WakeRequest, timeoutMs: number, beforeSend: () => Promise<boolean>): Promise<WakeOutcome> {
-    const deadline = Date.now() + timeoutMs;
-    const { address } = request.route;
+  async send(card: DeliveryCard, address: Readonly<Record<string, string>>, context: DeliveryTransportContext): Promise<TransportOutcome> {
     const threadId = address.threadId?.trim();
-    if (!threadId) {
-      return { outcome: 'failed', signature: 'invalid_address', message: 'Codex route has no thread id.' };
-    }
+    if (!threadId) return 'not-capable';
     const env = this.opts.env ?? process.env;
-    const payload = request.presentation?.payload;
-    if (payload === undefined) return { outcome: 'not-capable', diagnostic: 'No pending Square activity to preview.' };
-    if (!(await beforeSend())) return { outcome: 'not-capable' };
     try {
-      const agent = await (this.opts.connect ?? connect)({
-        harness: 'codex', transport: 'cli', sessionId: threadId, boundaries: codexBoundaryStore(env),
-        env, bin: env.SQUARE_CODEX_BIN, codexHome: address.codexHome, endpoint: address.endpoint,
-      });
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        return { outcome: 'failed', signature: 'dispatch_budget_exhausted', message: 'The wake dispatch budget elapsed before queueing.' };
-      }
-      await agent.queue(payload, { timeoutMs: remaining });
-      return { outcome: 'accepted' };
+      const boundaries = codexBoundaryStore(env);
+      const agent = await (this.opts.connect ?? connect)({ harness: 'codex', transport: 'cli', sessionId: threadId,
+        boundaries: { ...boundaries, queueEligible: async id => await boundaries.queueEligible(id)
+          && await context.beforeSend() && !context.signal.aborted && Date.now() < context.deadline },
+        env, bin: env.SQUARE_CODEX_BIN, codexHome: address.codexHome, endpoint: address.endpoint });
+      if (context.signal.aborted || Date.now() >= context.deadline) return 'not-capable';
+      await agent.queue(card.text, { timeoutMs: context.deadline - Date.now(), signal: context.signal });
+      return 'accepted';
     } catch (error) {
-      if (error instanceof DeliveryError && error.code === 'session_inactive') {
-        return { outcome: 'failed', signature: 'boundary_not_stopped',
-          message: 'The Codex thread has no current Stop boundary for queueing.' };
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      if (!(error instanceof DeliveryError) || error.maybeDelivered) return { outcome: 'unknown', signature: 'queue_unknown', message };
-      return { outcome: 'failed', signature: ['unavailable', 'timeout', 'aborted'].includes(error.code)
-        ? 'queue_pre_accept_transient' : 'queue_pre_accept_rejected', message };
+      return error instanceof DeliveryError && !error.maybeDelivered ? 'failed' : 'unknown';
     }
   }
 }
-
-export type { WakeRoute };

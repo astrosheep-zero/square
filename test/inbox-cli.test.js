@@ -5,8 +5,6 @@ import test from 'node:test';
 
 import { inbox } from '../dist/index.js';
 import { Square } from '../dist/square-api.js';
-import { sessionInbox } from '../dist/inbox.js';
-import { rememberSquarePath } from '../dist/square-index.js';
 import { run, testEnv } from './square-cli-helpers.js';
 
 async function makeMembership(root, name, env) {
@@ -18,7 +16,6 @@ async function makeMembership(root, name, env) {
     await square.join(name, { owner: body });
     await sender.express(`notice for ${name}`, { force: true, mentions: [name] });
   } finally { await square.close(); }
-  await rememberSquarePath(file, body, env.SQUARE_INDEX);
   return file;
 }
 
@@ -29,11 +26,11 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   const names = ['Alpha', `BRAVO${'z'.repeat(180)}`, 'Charlie'];
   const files = [];
   for (const name of names) files.push(await makeMembership(root, name, env));
-  const complete = await sessionInbox('codex:inbox-snapshot', env);
-  assert.equal(complete.length, names.length * 2);
-  assert.equal(complete.find((membership) => membership.seat.participant === names[1])?.notifications[0].body, `notice for ${names[1]}`);
+  const complete = await inbox({ cwd: root, env }, 'codex:inbox-snapshot');
+  assert.equal(complete.total, names.length * 2);
+  assert.equal(complete.rows.find(row => row.name === names[1])?.pending, 1);
 
-  const result = run(['inbox', '--for-owner', 'codex:inbox-snapshot', '--json'], { env });
+  const result = run(['inbox', '--for-owner', 'codex:inbox-snapshot', '--json'], { env, cwd: root });
   assert.equal(result.status, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.deepEqual(snapshot, await inbox({ cwd: root, env }, 'codex:inbox-snapshot'));
@@ -43,7 +40,7 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   assert.equal(snapshot.rows.some(row => row.name === names[1] && row.squarePath === fs.realpathSync(files[1])), true);
   assert.doesNotMatch(result.stdout, /notification body|notifications|catchLease|route|actIndex/);
 
-  const text = run(['inbox', '--for-owner', 'codex:inbox-snapshot'], { env });
+  const text = run(['inbox', '--for-owner', 'codex:inbox-snapshot'], { env, cwd: root });
   assert.equal(text.status, 0, text.stderr);
   const preview = value => [...value].length <= 159 ? value : `${[...value].slice(0, 159).join('').trimEnd()}…`;
   assert.equal(text.stdout, snapshot.rows.map((row) => `${preview(row.name)}\t${preview(row.squarePath)}\t${row.pending}\n`).join(''));

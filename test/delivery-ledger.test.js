@@ -513,6 +513,84 @@ test('GC is bounded and sequence/cancellation authority survives collection of e
   assert.equal(batch.cards[0].key, 'p:later');
 });
 
+test('prepared handoff references fence admission and preserve separate late presentation evidence', async t => {
+  let now = 100;
+  const f = await fixture(t, { clock: () => now, leaseMs: 10 });
+  assert.equal(await f.ledger.handoff('missing'), undefined);
+  for (const cause of ['cancel', 'rotation', 'delete', 'deadline', 'route']) {
+    const own = `${owner}/${cause}`;
+    const initial = await f.ledger.attach({ owner: own, expectedGeneration: null, routes });
+    await f.ledger.post({ owner: own, key: cause, text: cause });
+    const ready = Promise.withResolvers(), done = Promise.withResolvers();
+    const running = f.ledger.dispatchHandoff(own, cause, { kind: push.kind, async send(_card, _address, ctx) {
+      assert.equal(await f.ledger.handoff(ctx.token), undefined);
+      assert.equal(await ctx.prepare({ payloadHash: 'hash' }), true);
+      assert.equal(await ctx.prepare({ payloadHash: 'other' }), false);
+      ready.resolve(ctx.token); return done.promise;
+    } }, { generation: initial.generation, timeoutMs: 60000 });
+    const token = await ready.promise;
+    const ref = await f.ledger.handoff(token);
+    assert.deepEqual(ref, { token, owner: own, generation: initial.generation, payloadHash: 'hash', routeKind: push.kind });
+    assert.equal(await f.ledger.guardHandoff(ref), true);
+    for (const patch of [{ token: 'other' }, { owner }, { generation: 'other' }, { payloadHash: 'other' }, { routeKind: 'other' }]) {
+      const wrong = { ...ref, ...patch };
+      assert.equal(await f.ledger.guardHandoff(wrong), false);
+      assert.equal(await f.ledger.acceptHandoff(wrong), false);
+      assert.equal(await f.ledger.observePresentation(wrong), false);
+    }
+    if (cause === 'cancel') await f.ledger.cancel({ owner: own, generation: initial.generation });
+    if (cause === 'rotation') await f.ledger.attach({ owner: own, expectedGeneration: initial.generation, routes });
+    if (cause === 'delete') await f.ledger.markDeleted({ owner: own, generation: initial.generation });
+    if (cause === 'deadline') now += 60001;
+    if (cause === 'route') await f.ledger.updateRoutes({ owner: own, generation: initial.generation, routes: [pull] });
+    assert.equal(await f.ledger.guardHandoff(ref), false);
+    assert.equal(await f.ledger.acceptHandoff(ref), true);
+    assert.equal(await f.ledger.acceptHandoff(ref), true);
+    assert.equal(await f.ledger.guardHandoff(ref), false);
+    assert.equal((await f.ledger.receipts(own)).length, 0);
+    if (['cancel', 'rotation', 'delete', 'route'].includes(cause)) assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: true }), false);
+    assert.equal(await f.ledger.observePresentation(ref), true);
+    assert.equal(await f.ledger.acceptHandoff(ref), true);
+    assert.equal((await f.ledger.receipts(own)).length, 1);
+    done.resolve('accepted'); await running;
+  }
+});
+
+test('stored evidence before the admitted callback retains its receipt', async t => {
+  const f = await fixture(t);
+  await f.post('stored-first');
+  const ready = Promise.withResolvers(), done = Promise.withResolvers();
+  const running = f.ledger.dispatchHandoff(owner, 'stored-first', { kind: push.kind, async send(_card, _address, ctx) {
+    await ctx.prepare({ payloadHash: 'hash' }); ready.resolve(ctx.token); return done.promise;
+  } }, { generation: f.session.generation, timeoutMs: 60000 });
+  const ref = await f.ledger.handoff(await ready.promise);
+  assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: true }), true);
+  assert.equal(await f.ledger.acceptHandoff(ref), true);
+  assert.equal((await f.ledger.receipts(owner)).length, 1);
+  assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: true }), false);
+  done.resolve('accepted'); await running;
+});
+
+test('handoff query facts and failed or released evidence remain distinct', async t => {
+  const f = await fixture(t);
+  for (const outcome of ['failed', 'not-capable']) {
+    await f.post(outcome);
+    const result = await f.ledger.dispatchHandoff(owner, outcome, { kind: push.kind, async send(_card, _address, ctx) {
+      await ctx.prepare({ payloadHash: outcome }); return outcome;
+    } }, { generation: f.session.generation, timeoutMs: 1000 });
+    const ref = await f.ledger.handoff(result.token);
+    assert.equal(await f.ledger.acceptHandoff(ref), false);
+    assert.equal(await f.ledger.observePresentation(ref), false);
+  }
+  const list = await f.ledger.handoffs(owner, { generation: f.session.generation });
+  assert.deepEqual(list.map(a => a.outcome), ['failed', 'released']);
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(c => c.key), ['failed', 'not-capable']);
+  await f.ledger.detach({ owner, generation: f.session.generation });
+  assert.equal((await f.ledger.sessions())[0].state, 'detached');
+  assert.deepEqual(await f.ledger.pending(owner, { generation: f.session.generation }), []);
+  assert.equal((await f.ledger.handoffs(owner, { generation: f.session.generation })).length, 2);
+});
+
 test('unsupported existing formats and foreign databases are refused without changing bytes', async t => {
   const f = await fixture(t);
   const db = new DatabaseSync(f.location);

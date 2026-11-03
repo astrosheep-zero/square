@@ -12,23 +12,19 @@ inside the activity stream. One participant name means one participant agent, be
 the conversation easier to follow.
 
 Boundaries should be light and useful:
-- Membership and host attachment are separate. Participant `done` ends membership; Pi/Codex/Claude
-  session end only detaches the exact Body/generation, preserving listens and the read horizon.
-  Detached members are away without a timeout: audience and unread activity continue, writes and
-  proactive delivery do not. Host start/resume restores only detached standing seats of that exact
-  Body before delivery, never a voluntary departure or takeover. Host-confirmed permanent deletion
-  (OpenCode `session.deleted`) still lands fenced `done`. See `guides/participant-ownership.md`.
-- Proactive delivery may be temporarily deferred by the current participant through the SDK
-  `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` methods. Independent leases
-  are artifact-owned, expiring, and fenced to the captured Body/join generation. One lease matches
-  exact nested metadata scalar equalities with AND; active leases combine with OR. They never alter
-  audience, history, unread counts, or explicit catch, and are distinct from the single catch lease.
-  Producer, claim and final send/presentation checks share this policy. Release/expiry restores
-  eligibility through an active pending observer or the next normal delivery opportunity; one-shot
-  producers do not wait, and no deferral recalls an external send already past its final check.
+- Membership and host attachment are separate. Participant `done` ends membership; host lifecycle
+  attaches or detaches the owner in the delivery ledger, without seat restore/detach hooks. Detached
+  members remain away, retain audience and unread activity, but cannot write or receive proactive
+  delivery. Host-confirmed deletion is reconciled as a fenced `done` by the next mutating operation.
+  See `guides/participant-ownership.md`.
+- The SDK's `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` are independent,
+  expiring producer-owned leases fenced to the captured owner/join generation. Nested scalar matches
+  combine with AND, leases with OR. They postpone producer export, not explicit catch or history;
+  release/expiry permits unconsumed work to proceed. They cannot recall export already owned or in
+  ledger custody. Local lease and exact-ACK authorization uses World custody, not host liveness.
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
-- Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior.
+- Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior. Ledger receipts are folded lazily only for full activity cards.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
 - Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches only body scanning off; explicit mentions and replies still apply. Bell also leaves body `@name` text literal and cannot combine with explicit mentions. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients, and the sender receives a notice for unmatched names.
   A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
@@ -76,7 +72,7 @@ Implementation taste:
 - Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
-- The authoritative artifact is one versioned SQLite `.square` database containing the square's state; there is no independent runtime sidecar. SQLite-owned recovery journals are allowed.
+- The authoritative Format12 `.square` database owns square state, content and producer waiting controls. The per-user host delivery ledger owns neutral cards, session lifecycle, attempts and receipts; there is no discovery index. Older artifacts are refused read-only, with no migration or deletion.
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.

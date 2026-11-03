@@ -24,10 +24,10 @@ test('perception shares one settled audience across case and rejoin boundaries',
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
-    { kind: 'say', actor: 'Alice', at: 3, body: 'first @BOB', messageIndex: 0, mentions: ['BOB'] },
+    { kind: 'say', actor: 'Alice', at: 3, body: 'first @BOB', mentions: ['BOB'] },
     { kind: 'done', actor: 'Bob', at: 4 },
     { kind: 'join', actor: 'bob', at: 5 },
-    { kind: 'say', actor: 'Alice', at: 6, body: 'second @bob', messageIndex: 1, mentions: ['bob'] },
+    { kind: 'say', actor: 'Alice', at: 6, body: 'second @bob', mentions: ['bob'] },
   ];
   const cell = memoryCell(acts);
   try {
@@ -49,8 +49,8 @@ test('perception shares one settled audience across case and rejoin boundaries',
       first: { directed: true, perception: 'full' },
       rejoined: { directed: true, perception: 'full' },
       authorFullUnrouted: { directed: false, perception: 'full' },
-      outsiderPresence: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', messageId: 'msg/0', body: 'first @BOB', mentions: ['BOB'], perception: 'presence' },
-      authorPublic: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', messageId: 'msg/0', body: 'first @BOB', mentions: ['BOB'], perception: 'full' },
+      outsiderPresence: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', body: 'first @BOB', mentions: ['BOB'], perception: 'presence' },
+      authorPublic: { id: 'act/2', at: 3, kind: 'say', actor: 'Alice', body: 'first @BOB', mentions: ['BOB'], perception: 'full' },
       lifecycleFull: 'full',
       bobSuffix: 2,
     });
@@ -67,17 +67,17 @@ test('landed audience settles mentions, bell, attention, ignore and self in prio
     { kind: 'join', actor: 'Cara', at: 3 },
     { kind: 'listen', actor: 'Cara', target: 'Alice', at: 4 },
     { kind: 'ignore', actor: 'Bob', target: 'Alice', at: 5 },
-    { kind: 'say', actor: 'Alice', at: 6, body: 'mention', messageIndex: 0, mentions: ['Bob', 'Cara'] },
-    { kind: 'say', actor: 'Alice', at: 7, body: 'bell', messageIndex: 1, reach: 'bell' },
-    { kind: 'say', actor: 'Alice', at: 8, body: 'attention', messageIndex: 2 },
-    { kind: 'say', actor: 'Alice', at: 9, body: 'self', messageIndex: 3, mentions: ['Alice'] },
+    { kind: 'say', actor: 'Alice', at: 6, body: 'mention', mentions: ['Bob', 'Cara'] },
+    { kind: 'say', actor: 'Alice', at: 7, body: 'bell', reach: 'bell' },
+    { kind: 'say', actor: 'Alice', at: 8, body: 'attention' },
+    { kind: 'say', actor: 'Alice', at: 9, body: 'self', mentions: ['Alice'] },
   ];
   const cell = memoryCell(acts);
   try {
     const facts = (await cell.read((read) => ({
-      mention: read.audience(5),
-      bell: read.audience(6),
-      attention: read.audience(7),
+      mention: read.audience(5).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
+      bell: read.audience(6).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
+      attention: read.audience(7).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
       selfEdge: read.directedAt('Alice', 8),
       selfIncluded: read.audience(8).some((recipient) => recipient.recipient === 'Alice'),
       bobDirect: read.directedCount('Bob', {}),

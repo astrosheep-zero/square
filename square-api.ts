@@ -2,16 +2,10 @@ import { SqliteSquare } from './sqlite-square.js';
 import { SquareError, type Owner } from './model.js';
 import { requireOwner } from './seats.js';
 import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
-import { createDefaultWakeTransport } from './notifications.js';
 
 export type Square = SqliteSquare;
-export const Square = { at: async (input: SquareAtInput, control?: OperationControl) =>
-  SqliteSquare.at({ ...input, wakeTransport: await resolveWakeTransport(input) }, control),
-  build: async (input: SquareBuildInput, control?: OperationControl) =>
-    SqliteSquare.build({ ...input, wakeTransport: await resolveWakeTransport(input) }, control), inMemory: SqliteSquare.inMemory };
-const resolveWakeTransport = (input: SquareAtInput) => input.wakeTransport !== undefined
-  ? Promise.resolve(input.wakeTransport)
-  : createDefaultWakeTransport(input.env ?? process.env).catch(() => undefined);
+export const Square = { at: (input: SquareAtInput, control?: OperationControl) => SqliteSquare.at(input, control),
+  build: (input: SquareBuildInput, control?: OperationControl) => SqliteSquare.build(input, control), inMemory: SqliteSquare.inMemory };
 
 export { requireOwner, requireJoinName } from './seats.js';
 export type * from './square-facade.js';
@@ -22,7 +16,8 @@ export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | '
   if (owner === undefined && options?.optional && name === undefined) return undefined;
   const caller = requireOwner(owner);
   if (name !== undefined) return square.participant(name, { owner: caller });
-  const seats = (await square.seatsOf(caller)).filter(seat => seat.attachment === 'attached');
+  // Selection is local producer custody, not a ledger attachment check.
+  const seats = await square.seatsOf(caller);
   if (seats.length !== 1) {
     if (options?.optional) return undefined;
     throw new SquareError('invalid_args', seats.length > 1

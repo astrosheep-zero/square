@@ -74,7 +74,7 @@ test('unknown peer messages pass through; recognized stale messages are consumed
   assert.equal(nextCount, 1);
   f.setResult({ recognized: true, current: false });
   const consumed = await f.invoke('session.receive', peer, async () => { throw new Error('must not queue'); });
-  assert.match(consumed.consumed, /stale or cancelled/);
+  assert.match(consumed.consumed, /stale/);
 });
 
 test('append confirms only the returned main user-role stored text block, not entry or subagent rows', async () => {
@@ -91,23 +91,23 @@ test('append confirms only the returned main user-role stored text block, not en
   assert.equal(f.calls.length, 0);
 });
 
-test('bridge/state/timer errors preserve exactly one next and returned native results', async () => {
+test('unavailable guard fails closed; later timer errors do not repeat native effects', async () => {
   const f = fixture();
   let count = 0;
   const next = async () => { count++; return { text }; };
   f.$.process.run = async () => { throw new Error('bridge unavailable'); };
-  await f.invoke('session.receive', peer, next);
-  assert.equal(count, 1);
+  assert.match((await f.invoke('session.receive', peer, next)).consumed, /unavailable/);
+  assert.equal(count, 0);
   f.$.clock.now = async () => { throw new Error('clock unavailable'); };
   await f.invoke('session.end', { sessionId: 'old-session' }, next);
-  assert.equal(count, 2);
+  assert.equal(count, 1);
   const g = fixture();
   g.$.clock.after = () => { throw new Error('timer denied'); };
   assert.deepEqual(await g.invoke('session.receive', peer, next), { text });
-  assert.equal(count, 3);
+  assert.equal(count, 2);
   g.$.state.get = async () => { throw new Error('state denied'); };
   await g.invoke('session.receive', peer, next);
-  assert.equal(count, 4);
+  assert.equal(count, 3);
 });
 
 test('classic resume uses pinned target while session API still reads the ending coordinate', async () => {
@@ -161,7 +161,7 @@ test('explicit abort suppression survives code reload; ordinary completion is no
   await f.invoke('session.start', {});
   assert.equal(f.calls.at(-1).input.cancelAt, 100);
   await f.invoke('session.receive', peer, async () => ({ text }));
-  assert.equal(f.calls.at(-1).input.cancelAt, 100);
+  assert.equal(f.calls.findLast(call => call.input.operation === 'guard').input.cancelAt, 100);
   const cancellations = f.calls.filter((call) => call.input.operation === 'cancel').length;
   await f.invoke('turn.complete', { reason: 'answer' });
   assert.equal(f.calls.filter((call) => call.input.operation === 'cancel').length, cancellations);

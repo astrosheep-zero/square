@@ -1,514 +1,151 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
-import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
-import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { preparePendingPresentation, presentPending } from '../dist/presentation-operations.js';
-import { presentPrepared } from '../dist/delivery-effects.js';
-import { observeSessionPending, sessionInbox, nativePendingPreview, projectBoundaryEligibility } from '../dist/inbox.js';
-import { matchesMetadata, validateMetadataMatch, MAX_DELIVERY_DEFERRAL_MS } from '../dist/delivery-deferral.js';
+import { Square, selectOwnSeat } from '../dist/square-api.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
 
-const match = { fields: [{ path: ['job', 'kind'], equals: 'outcome' }, { path: ['job', 'id'], equals: 7 }] };
-const metadata = { job: { kind: 'outcome', id: 7 } };
-const invalid = error => error.code === 'invalid_args';
-const replaced = error => error.code === 'already_joined';
-
-async function fixture(t, extra = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-deferral-'));
-  const location = path.join(root, 'test.square');
-  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_NOW_MS: undefined };
-  const resources = [];
-  t.after(async () => { for (const resource of resources) await resource.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const open = async (options = {}) => {
-    const square = await Square.at({ path: location, env, ...options });
-    resources.push(square);
-    return square;
-  };
-  const square = await Square.build({ path: location, env, markdown: 'Deferral tests',
-    wakeTransport: { probe: async () => false, attempt: () => assert.fail('fixture must never perform I/O') }, ...extra });
-  resources.push(square);
-  const alice = (await square.join('Alice', { owner: ':' })).participant;
-  const receiver = await open(extra);
-  const bobBody = 'test:Bob';
-  const bobWakeAddress = { kind: 'paseo', address: { agentId: 'bob' } };
-  const bob = (await receiver.join('Bob', { owner: bobBody, wakeAddress: bobWakeAddress })).participant;
-  const artifact = createArtifactPort(location);
-  resources.push(artifact);
-  const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
-  const say = async (value = metadata, mentions = ['Bob']) => (await alice.express({ body: 'ready', metadata: value, mentions, force: true })).activity;
-  const messageOf = async activity => `msg/${(await artifact.read(facts => facts.activity(Number(activity.id.slice(4))).messageIndex)).value}`;
-  return { root, location, env, square, alice, receiver, bob, bobWakeAddress, artifact, channel: channelArtifact(artifact), seat, say, open, messageOf };
-}
-
-function armed(observer, timeoutMs = 2000, options = {}) {
-  let ready;
-  const armed = new Promise(resolve => { ready = resolve; });
-  const result = observer.wait(timeoutMs, { ...options, onChangeArmed: ready });
-  return { armed, result };
-}
-
-test('nested matching is exact scalar AND over object own properties, not an array or query language', () => {
-  const validated = validateMetadataMatch(match);
-  assert.equal(matchesMetadata(metadata, validated), true);
-  for (const value of [undefined, {}, { job: null }, { job: [] }, { job: { kind: 'outcome', id: '7' } }, { job: { kind: 'other', id: 7 } }])
-    assert.equal(matchesMetadata(value, validated), false);
-  assert.equal(matchesMetadata(Object.create(metadata), validated), false);
-  assert.equal(matchesMetadata({ 'job.id': 7 }, { fields: [{ path: ['job.id'], equals: 7 }] }), true);
-  assert.equal(matchesMetadata({ 'job.id': 7 }, { fields: [{ path: ['job', 'id'], equals: 7 }] }), false);
-  assert.equal(matchesMetadata({ x: [7] }, { fields: [{ path: ['x', '0'], equals: 7 }] }), false);
-  for (const equals of [null, false, true, 0, '']) {
-    assert.equal(matchesMetadata({ x: equals }, { fields: [{ path: ['x'], equals }] }), true);
-    assert.equal(matchesMetadata({}, { fields: [{ path: ['x'], equals }] }), false);
-  }
-  for (const value of [null, {}, { fields: [] }, { fields: Array(1) }, { fields: [{ path: [], equals: 1 }] },
-    { fields: [{ path: [''], equals: 1 }] }, { fields: [{ path: Array(1), equals: 1 }] },
-    { fields: [{ path: ['x'], equals: undefined }] }, { fields: [{ path: ['x'], equals: NaN }] },
-    { fields: [{ path: ['x'], equals: Infinity }] }, { fields: [{ path: ['x'], equals: {} }] },
-    { fields: [{ path: ['x'], equals: [] }] }, { fields: [{ path: ['x'], equals: 1 }, { path: ['x'], equals: 2 }] }])
-    assert.throws(() => validateMetadataMatch(value), invalid);
-});
-
-test('local leases are independent, operation-clock bounded, delivery-only state with exact expiry', async t => {
+const match = (turn = 'turn/7') => ({ fields: [
+  { path: ['keiyaku', 'kind'], equals: 'akuma.turn-outcome' },
+  { path: ['keiyaku', 'akumaId'], equals: 'aku/intern/12345678' },
+  { path: ['keiyaku', 'historyId'], equals: turn },
+] });
+const notice = (turn = 'turn/7', to = ['observer']) => ({ from: 'keiyaku-notice', to,
+  body: `result ${turn}`, metadata: { keiyaku: { kind: 'akuma.turn-outcome', akumaId: 'aku/intern/12345678', historyId: turn }, extra: 'allowed' } });
+async function setup(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-producer-'));
+  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
   let now = 1000;
-  const f = await fixture(t, { clock: () => now });
-  const initial = (await f.artifact.read(facts => facts.header())).value;
-  const one = await f.bob.deferDelivery({ match, durationMs: 100 });
-  const two = await f.bob.deferDelivery({ match, durationMs: Number.MAX_SAFE_INTEGER });
-  assert.notEqual(one.id, two.id);
-  assert.deepEqual(Object.keys(one).sort(), ['expiresAt', 'id']);
-  assert.equal(Date.parse(one.expiresAt), 1100);
-  assert.equal(Date.parse(two.expiresAt), now + MAX_DELIVERY_DEFERRAL_MS);
-  const created = (await f.artifact.read(facts => ({ header: facts.header(), leases: facts.deliveryDeferrals('Bob', f.seat.generation), lease: facts.lease('Bob') }))).value;
-  assert.equal(created.header.revision, initial.revision);
-  assert.equal(created.header.nextActIndex, initial.nextActIndex);
-  assert.equal(created.header.deliveryRevision, initial.deliveryRevision + 2);
-  assert.equal(created.leases.length, 2);
-  assert.equal(created.lease, undefined);
-  for (const durationMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
-    await assert.rejects(f.bob.deferDelivery({ match, durationMs }), invalid);
-  await assert.rejects(f.bob.releaseDeliveryDeferral('not-an-id'), invalid);
-  await assert.rejects(f.bob.renewDeliveryDeferral(one.id, 0), invalid);
-  now = 1050;
-  assert.equal(Date.parse((await f.bob.renewDeliveryDeferral(one.id, 200)).expiresAt), 1250);
-  assert.equal(await f.bob.releaseDeliveryDeferral(two.id), true);
-  assert.equal(await f.bob.releaseDeliveryDeferral(two.id), false);
-  now = 1250;
-  assert.equal(await f.bob.renewDeliveryDeferral(one.id, 10), null);
-  assert.equal(await f.bob.releaseDeliveryDeferral(one.id), false);
-  assert.equal(await f.bob.renewDeliveryDeferral(randomUUID(), 10), null);
-  assert.equal((await f.artifact.read(facts => facts.header())).value.revision, initial.revision);
-});
-
-test('memory and persisted handles require captured current ownership, never a name or retired generation', async t => {
-  const memory = Square.inMemory({ markdown: 'memory', clock: () => 1000 });
-  const body = "test" + ":" + ('one');
-  t.after(() => memory.close());
-  const old = (await memory.join('Local', { owner: body })).participant;
-  const lease = await old.deferDelivery({ match, durationMs: 100 });
-  await old.done();
-  const fresh = (await memory.join('Local', { owner: body })).participant;
-  for (const work of [() => old.deferDelivery({ match, durationMs: 100 }), () => old.renewDeliveryDeferral(lease.id, 100), () => old.releaseDeliveryDeferral(lease.id)])
-    await assert.rejects(work(), replaced);
-  assert.equal(await fresh.renewDeliveryDeferral(lease.id, 100), null);
-  const f = await fixture(t);
-  const saved = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const reconnected = await f.open();
-  assert.equal(await (await reconnected.participant('Bob', { owner: f.seat.owner })).renewDeliveryDeferral(saved.id, 10000) !== null, true);
-  const foreign = await f.open();
-  const foreignBody = "pi" + ":" + ('Other');
-  await assert.rejects(foreign.participant('Bob', { owner: foreignBody }), replaced);
-  const thief = (await foreign.join('Bob', { owner: foreignBody, takeover: true })).participant;
-  await assert.rejects(f.bob.renewDeliveryDeferral(saved.id, 10000), replaced);
-  assert.equal(await thief.releaseDeliveryDeferral(saved.id), false);
-  assert.deepEqual((await f.artifact.read(facts => facts.deliveryDeferrals('Bob', f.seat.generation))).value, []);
-});
-
-test('producer, sweep and session projection suppress OR leases without consumption; catch remains explicit', async t => {
-  const f = await fixture(t);
-  const one = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const two = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const activity = await f.say();
-  let sends = 0;
-  const input = { artifact: f.channel, location: f.location, transport: { attempt: async (_request, _timeout, beforeSend) => {
-    assert.equal(await beforeSend(), true); sends++; return { outcome: 'accepted' };
-  } } };
-  await deliverPending(input);
-  assert.equal(sends, 0);
-  assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
-  assert.deepEqual(await sweepPending({ ...input, now: Date.now(), graceMs: -1, limit: 10 }), []);
-  assert.deepEqual((await sessionInbox(f.seat.owner, f.env)).flatMap(member => member.notifications), []);
-  assert.equal((await f.receiver.status({ viewer: 'Bob' })).participants.find(person => person.name === 'Bob').unreadActivityCount, 1);
-  assert.equal((await f.receiver.history()).activities.some(item => item.id === activity.id), true);
-  assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
-  await f.bob.releaseDeliveryDeferral(one.id);
-  await deliverPending(input);
-  assert.equal(sends, 0);
-  await f.bob.releaseDeliveryDeferral(two.id);
-  await deliverPending(input);
-  assert.equal(sends, 1);
-  assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.map(row => row.outcome), ['accepted']);
-  const nextLease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const next = await f.say();
-  assert.deepEqual((await f.bob.catch({ id: next.id })).activities.map(item => item.id), [next.id]);
-  await f.bob.releaseDeliveryDeferral(nextLease.id);
-  await deliverPending(input);
-  assert.equal(sends, 1, 'explicit consumption prevents a later replay');
-  const unmatchedLease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  await f.say({ job: { kind: 'other', id: 7 } });
-  await deliverPending(input);
-  assert.equal(sends, 2, 'nonmatching metadata remains eligible');
-  await f.bob.releaseDeliveryDeferral(unmatchedLease.id);
-});
-
-test('atomic claims and final transport checks stop races, while already dispatched sends are not recalled', async t => {
-  const f = await fixture(t);
-  const activity = await f.say();
-  let lease, attempts = 0, sends = 0;
-  await deliverPending({ artifact: f.channel, location: f.location, transport: {
-    probe: async () => { lease = await f.bob.deferDelivery({ match, durationMs: 10000 }); return true; },
-    attempt: async () => { attempts++; return { outcome: 'accepted' }; },
-  } });
-  assert.equal(attempts, 0, 'claim must recheck deferral');
-  assert.deepEqual((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value, []);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.channel, location: f.location, transport: {
-    attempt: async (_request, _timeout, beforeSend) => {
-      attempts++;
-      lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-      assert.equal(await beforeSend(), false);
-      return { outcome: 'accepted' }; // a refused pre-send gate is not an accepted send
-    },
-  } });
-  assert.equal(attempts, 1);
-  assert.equal(sends, 0);
-  assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.every(row => row.outcome === 'released'), true);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.channel, location: f.location, transport: {
-    attempt: async (_request, _timeout, beforeSend) => {
-      attempts++;
-      assert.equal(await beforeSend(), true);
-      // The external send is already past its last gate when this lease commits.
-      sends++;
-      lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-      return { outcome: 'accepted' };
-    },
-  } });
-  assert.equal(sends, 1);
-  assert.equal((await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value.at(-1).outcome, 'accepted');
-  assert.equal((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value, undefined);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  await deliverPending({ artifact: f.channel, location: f.location, transport: { attempt: async () => { attempts++; return { outcome: 'accepted' }; } } });
-  assert.equal(attempts, 2, 'accepted send is not replayed');
-});
-
-test('presentation suppresses before the sink but retains successful post-sink evidence without replay', async t => {
-  const f = await fixture(t);
-  const activity = await f.say();
-  let writes = 0;
-  const input = { artifact: f.artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity), seat: f.seat,
-    sink: { present: () => { writes++; } } };
-  const batch = await sessionInbox(f.seat.owner, f.env);
-  let lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  assert.deepEqual(await projectBoundaryEligibility(batch), []);
-  assert.equal((await presentPending(input)).presented, false);
-  assert.equal(writes, 0);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  const prepared = await preparePendingPresentation(input);
-  assert.ok(prepared);
-  lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const race = await presentPrepared(prepared, input.sink.present);
-  assert.equal(race.observation.kind, 'not-invoked');
-  assert.equal(writes, 0);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await presentPending({ ...input, sink: { present: async () => {
-    writes++;
-    lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  } } })).presented, true);
-  assert.equal(writes, 1, 'an already-dispatched sink effect is not recalled');
-  assert.ok((await f.artifact.read(facts => facts.receipt('Bob', Number(activity.id.slice(4))))).value);
-  const evidence = (await f.artifact.read(facts => facts.deliveryEvidence('Bob', f.seat.generation))).value;
-  assert.equal(evidence.filter(row => row.outcome === 'presented').length, 1);
-  assert.equal(evidence.some(row => row.outcome === 'dispatching'), false);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await presentPending(input)).presented, false);
-  assert.equal(writes, 1, 'lease release cannot replay an already successful sink');
-  let wakeAttempts = 0;
-  await deliverPending({ artifact: f.channel, location: f.location,
-    transport: { attempt: async () => { wakeAttempts++; return { outcome: 'accepted' }; } },
-  });
-  assert.equal(wakeAttempts, 0, 'a successful presentation must prevent wake replay');
-});
-
-test('every item in a successful batch retains truthful receipts despite post-sink deferrals', async t => {
-  const f = await fixture(t);
-  const cara = (await f.receiver.join('Cara', { owner: f.seat.owner, wakeAddress: f.bobWakeAddress })).participant;
-  const first = await f.say(metadata, ['Bob', 'Cara']);
-  const second = await f.say(metadata, ['Bob', 'Cara']);
-  let sends = 0;
-  const leases = [];
-  const output = await presentPendingAtBoundary(f.seat.owner, async context => {
-    sends++;
-    for (const activity of [first, second]) assert.match(context, new RegExp(activity.id));
-    leases.push(await f.bob.deferDelivery({ match, durationMs: 10000 }));
-    leases.push(await cara.deferDelivery({ match, durationMs: 10000 }));
-    return context;
-  }, sessionInbox, f.env);
-  assert.ok(output);
-  for (const participant of ['Bob', 'Cara']) {
-    const recorded = (await f.artifact.read(facts => {
-      const seat = facts.seat(participant);
-      return { receipts: [first, second].map(activity => facts.receipt(participant, Number(activity.id.slice(4)))),
-        evidence: facts.deliveryEvidence(participant, seat.generation).filter(row => row.kind === 'presentation') };
-    })).value;
-    assert.equal(recorded.receipts.every(Boolean), true, 'later batch items were already rendered, not fresh attempts');
-    assert.deepEqual(recorded.evidence.map(row => row.outcome), ['presented', 'presented']);
+  const input = { path: path.join(root, 'world.square'), env, clock: () => now };
+  const square = await Square.build({ ...input, markdown: '' });
+  const observer = (await square.join('observer', { owner: `observer:${root}` })).participant;
+  const other = (await square.join('other', { owner: `other:${root}` })).participant;
+  const reopened = await Square.at(input);
+  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  t.after(async () => { await reopened.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const owner = `observer:${root}`;
+  async function cards(forOwner = owner) {
+    const session = await ledger.session(forOwner);
+    return ledger.pending(forOwner, { generation: session.generation });
   }
-  await f.bob.releaseDeliveryDeferral(leases[0].id);
-  await cara.releaseDeliveryDeferral(leases[1].id);
-  assert.equal(await presentPendingAtBoundary(f.seat.owner, () => { sends++; }, sessionInbox, f.env), undefined);
-  assert.equal(sends, 1, 'post-sink deferral release never repeats the batch');
+  return { square, reopened, observer, other, ledger, cards, owner, input, env, advance: value => { now += value; } };
+}
+
+test('independent World leases hold posting until both release or expire', async t => {
+  const c = await setup(t);
+  const first = await c.observer.deferDelivery({ match: match(), durationMs: 100 });
+  const second = await (await c.reopened.participant('observer', { owner: c.owner })).deferDelivery({ match: match(), durationMs: 100 });
+  assert.notEqual(first.id, second.id);
+  await c.square.send(notice());
+  assert.equal((await c.cards()).length, 0);
+  await c.observer.releaseDeliveryDeferral(first.id);
+  await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
+  assert.equal((await c.cards()).length, 0);
+  c.advance(101);
+  assert.equal(await c.observer.renewDeliveryDeferral(second.id, 100), null);
+  await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
+  assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/7']);
 });
 
-test('budget omissions settle with the winning batch and never drain again after observer restart', async t => {
-  const f = await fixture(t);
-  const activities = [];
-  for (let i = 0; i < 30; i++) activities.push((await f.alice.express({
-    body: `old activity ${i}`, mentions: ['Bob'], force: true,
-  })).activity);
-  const stale = await sessionInbox(f.seat.owner, f.env);
-  let sends = 0;
-  const context = await presentPendingAtBoundary(f.seat.owner, (context, delivered) => {
-    sends++;
-    assert.equal(delivered.flatMap(item => item.notifications).length, activities.length);
-    return context;
-  }, () => stale, f.env);
-  assert.match(context, /more activities not shown/);
-  const state = (await f.artifact.read(facts => activities.map(activity => ({
-    id: activity.id,
-    receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
-    evidence: facts.deliveryEvidence('Bob', f.seat.generation, activity.messageId).map(row => row.outcome),
-  })))).value;
-  const omitted = state.filter(item => !context.includes(`id="${item.id}"`));
-  assert.ok(omitted.length > 0);
-  for (const item of state) {
-    const shown = context.includes(`id="${item.id}"`);
-    assert.deepEqual(item.evidence, [shown ? 'presented' : 'clipped']);
-    assert.equal(Boolean(item.receipt), shown, 'omission is delivery, never full consumption');
-  }
-  for (let restart = 0; restart < 2; restart++) {
-    const observer = await observeSessionPending(f.seat.owner, f.env);
-    try { assert.deepEqual(await observer.read(), []); } finally { observer.close(); }
-    assert.equal(await presentPendingAtBoundary(f.seat.owner, () => { sends++; }, () => stale, f.env), undefined);
-  }
-  let wakes = 0;
-  await deliverPending({ artifact: f.channel, location: f.location, transport: {
-    attempt: async () => { wakes++; return { outcome: 'accepted' }; },
-  } });
-  assert.equal(wakes, 0, 'omitted items cannot fall back to a wake either');
-  assert.deepEqual((await f.bob.catch({ id: omitted[0].id })).activities.map(item => item.id), [omitted[0].id]);
-  const fresh = await f.say();
-  await presentPendingAtBoundary(f.seat.owner, (context, delivered) => {
-    sends++;
-    assert.match(context, new RegExp(`id="${fresh.id}"`));
-    assert.equal(delivered.flatMap(item => item.notifications).length, 1);
-  }, sessionInbox, f.env);
-  assert.equal(sends, 2, 'only fresh activity starts another batch, not the old omitted backlog');
+test('explicit exact ACK consumes existing and future notices only for its captured recipient and outcome', async t => {
+  const c = await setup(t);
+  const lease = await c.observer.deferDelivery({ match: match(), durationMs: 1000 });
+  const sent = await c.square.send(notice('turn/7', ['observer', 'other']));
+  assert.match(sent.id, /^notice\//);
+  assert.equal((await c.square.history({ limit: null })).activities.some(activity => activity.actor === 'keiyaku-notice'), false);
+  assert.deepEqual(await c.observer.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
+  await c.observer.releaseDeliveryDeferral(lease.id);
+  await c.square.send(notice());
+  await c.square.send(notice('turn/8'));
+  assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/8']);
+  assert.deepEqual(await c.observer.ack({ from: 'KEIYAKU-NOTICE', match: match('turn/9'), future: 'exact' }), { consumed: 0 });
+  await c.square.send(notice('turn/9'));
+  assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/8']);
+  const otherCards = await c.cards(`other:${path.dirname(c.input.path)}`);
+  assert.deepEqual(otherCards.map(card => card.text), ['result turn/7']);
 });
 
-test('a successful single sink settles despite cancellation of both operation and artifact work', async t => {
-  for (const captured of [false, true]) await t.test(captured ? 'artifact captures the signal' : 'operation signal only', async t => {
-    const f = await fixture(t);
-    const activity = await f.say();
-    const controller = new AbortController();
-    const artifact = captured ? createArtifactPort(f.location, undefined, controller.signal) : f.artifact;
-    if (captured) t.after(() => artifact.close());
-    let effects = 0;
-    const result = await presentPending({ artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity),
-      seat: f.seat, signal: controller.signal, sink: { present() { effects++; controller.abort(new Error('after success')); } } });
-    assert.equal(result.presented, true);
-    assert.equal(effects, 1);
-    const state = (await f.artifact.read(facts => ({
-      receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
-      evidence: facts.deliveryEvidence('Bob', f.seat.generation).map(row => row.outcome),
-    }))).value;
-    assert.ok(state.receipt);
-    assert.deepEqual(state.evidence, ['presented']);
-    assert.equal((await presentPending({ artifact: f.artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity),
-      sink: { present() { assert.fail('successful effect must not replay'); } } })).presented, false);
-  });
+test('zero-count future ACK is durable without a TTL or ledger access and matches nested scalar equalities', async t => {
+  const c = await setup(t);
+  const deniedLedger = path.join(path.dirname(c.input.path), 'denied-ledger');
+  await fs.mkdir(deniedLedger);
+  const sandbox = await Square.at({ ...c.input, env: { ...c.env, SQUARE_DELIVERY: deniedLedger } });
+  try {
+    const seat = await selectOwnSeat(sandbox, c.owner, 'observer');
+    assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 0 });
+    const lease = await seat.deferDelivery({ match: match('turn/8'), durationMs: 100 });
+    assert.ok(await seat.renewDeliveryDeferral(lease.id, 200));
+    assert.equal(await seat.releaseDeliveryDeferral(lease.id), true);
+  } finally { await sandbox.close(); }
+  c.advance(1000 * 60 * 60 * 24 * 500);
+  const again = await c.reopened.participant('observer', { owner: c.owner });
+  assert.deepEqual(await again.ack({ from: 'keiyaku-notice', match: { fields: [...match().fields].reverse() }, future: 'exact' }), { consumed: 0 });
+  await c.square.send(notice());
+  await c.square.send(notice('turn/8'));
+  assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/8']);
+  await assert.rejects(() => again.ack({ from: 'keiyaku-notice', match: match() }), error => error.code === 'invalid_args');
 });
 
-test('pre-sink cancellation releases custody but a throwing sink retains uncertainty without a receipt', async t => {
-  for (const phase of ['before', 'rejected']) await t.test(phase, async t => {
-    const f = await fixture(t);
-    const activity = await f.say();
-    const controller = new AbortController();
-    const artifact = createArtifactPort(f.location, undefined, controller.signal);
-    t.after(() => artifact.close());
-    const cancelled = new Error('cancelled presentation');
-    let reads = 0;
-    const input = { artifact: phase === 'before' ? { ...artifact, read: async (...args) => {
-      const result = await artifact.read(...args);
-      if (++reads === 2) controller.abort(cancelled); // final eligibility read succeeded, sink has not run
-      return result;
-    } } : artifact, location: f.location, participant: 'Bob', message: await f.messageOf(activity), seat: f.seat, signal: controller.signal,
-    sink: { present() {
-      assert.equal(phase, 'rejected', 'cancellation before the sink must suppress the effect');
-      controller.abort(cancelled);
-      throw cancelled;
-    } } };
-    if (phase === 'before') assert.equal((await presentPending(input)).presented, false);
-    else await assert.rejects(presentPending(input), error => error === cancelled);
-    const state = (await f.artifact.read(facts => ({
-      receipt: facts.receipt('Bob', Number(activity.id.slice(4))),
-      evidence: facts.deliveryEvidence('Bob', f.seat.generation).map(row => row.outcome),
-    }))).value;
-    assert.equal(state.receipt, undefined);
-    assert.deepEqual(state.evidence, [phase === 'before' ? 'released' : 'unknown']);
-  });
+test('ACK and lease after committed export ownership do not recall the captured post or hold a World writer', async t => {
+  const c = await setup(t);
+  const original = DeliveryLedger.prototype.post;
+  let enter, resume;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const resumed = new Promise(resolve => { resume = resolve; });
+  DeliveryLedger.prototype.post = async function(input) {
+    if (input.text === 'result turn/7') { enter(); await resumed; }
+    return original.call(this, input);
+  };
+  try {
+    const sending = c.square.send(notice());
+    await entered;
+    // A separately opened producer handle can commit while the external post is paused.
+    const seat = await c.reopened.participant('observer', { owner: c.owner });
+    const lease = await seat.deferDelivery({ match: match(), durationMs: 1000 });
+    assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
+    resume();
+    await sending;
+    // Catch/retraction may remove an unclaimed card, but no pre-export suppression is claimed.
+    const session = await c.ledger.session(c.owner);
+    assert.equal(session.state, 'attached');
+    await seat.releaseDeliveryDeferral(lease.id);
+    await c.square.send(notice());
+    assert.equal((await c.cards()).length, 0);
+  } finally { resume(); DeliveryLedger.prototype.post = original; }
 });
 
-test('a successful batch settles every rendered item after cancellation without replay', async t => {
-  const f = await fixture(t);
-  await f.receiver.join('Cara', { owner: f.seat.owner, wakeAddress: f.bobWakeAddress });
-  const activities = [await f.say(metadata, ['Bob', 'Cara']), await f.say(metadata, ['Bob', 'Cara'])];
-  const controller = new AbortController();
-  let effects = 0;
-  const result = await presentPendingAtBoundary(f.seat.owner, context => {
-    effects++;
-    for (const activity of activities) assert.match(context, new RegExp(activity.id));
-    controller.abort(new Error('cancel after batch success'));
-    return 'landed';
-  }, sessionInbox, f.env, controller.signal);
-  assert.equal(result, 'landed');
-  assert.equal(effects, 1);
-  for (const participant of ['Bob', 'Cara']) {
-    const state = (await f.artifact.read(facts => ({
-      receipts: activities.map(activity => facts.receipt(participant, Number(activity.id.slice(4)))),
-      evidence: facts.deliveryEvidence(participant, facts.seat(participant).generation).map(row => row.outcome),
-    }))).value;
-    assert.equal(state.receipts.every(Boolean), true);
-    assert.deepEqual(state.evidence, ['presented', 'presented']);
-  }
-  assert.equal(await presentPendingAtBoundary(f.seat.owner, () => assert.fail('batch must not replay'), sessionInbox, f.env), undefined);
+test('World-local discovery preserves known identities without probing host delivery', async t => {
+  const c = await setup(t);
+  const departed = (await c.square.join('departed', { owner: 'departed:owner' })).participant;
+  await departed.done();
+  await c.square.join('foreign', { owner: 'foreign:owner' });
+  const session = await c.ledger.session(c.owner);
+  await c.ledger.updateRoutes({ owner: c.owner, generation: session.generation, routes: [{ kind: 'test', address: {} }] });
+  assert.equal((await c.square.participants()).participants.find(person => person.name === 'observer').deliveryAvailable, true);
+  await c.ledger.detach({ owner: c.owner, generation: session.generation });
+  assert.equal((await c.square.participants()).participants.find(person => person.name === 'observer').presence, 'away');
+  const deniedLedger = path.join(path.dirname(c.input.path), 'denied-discovery-ledger');
+  await fs.mkdir(deniedLedger);
+  const sandbox = await Square.at({ ...c.input, env: { ...c.env, SQUARE_DELIVERY: deniedLedger } });
+  try {
+    const local = await sandbox.participants({ local: true, observe: true });
+    assert.equal(local.participants.find(person => person.name === 'observer').presence, 'active', 'local attachment has not reconciled host detach');
+    assert.equal(local.participants.find(person => person.name === 'departed').presence, 'done');
+    assert.equal(local.participants.find(person => person.name === 'foreign').presence, 'active');
+    assert.ok(local.observation);
+    assert.ok(local.participants.every(person => person.deliveryAvailable === false));
+    await assert.rejects(() => sandbox.participants());
+    await assert.rejects(() => sandbox.participant('foreign', { owner: c.owner }));
+    await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
+    assert.equal((await sandbox.participants({ local: true })).participants.find(person => person.name === 'observer').presence, 'away');
+    await assert.rejects(() => sandbox.participant('observer', { owner: c.owner }));
+  } finally { await sandbox.close(); }
 });
 
-test('a rejected batch sink leaves every rendered item unconsumed, even when cancelled', async t => {
-  const f = await fixture(t);
-  const activities = [await f.say(), await f.say()];
-  const controller = new AbortController();
-  const rejected = new Error('batch did not land');
-  await assert.rejects(presentPendingAtBoundary(f.seat.owner, () => {
-    controller.abort(rejected);
-    throw rejected;
-  }, sessionInbox, f.env, controller.signal), error => error === rejected);
-  const state = (await f.artifact.read(facts => ({
-    receipts: activities.map(activity => facts.receipt('Bob', Number(activity.id.slice(4)))),
-    evidence: facts.deliveryEvidence('Bob', f.seat.generation).map(row => row.outcome),
-  }))).value;
-  assert.equal(state.receipts.every(receipt => receipt === undefined), true);
-  assert.deepEqual(state.evidence, ['unknown', 'unknown']);
-});
-
-test('a final batch sink excludes a newly deferred peer item and receipts only the rendered items', async t => {
-  const f = await fixture(t);
-  const ordinary = (await f.alice.express({ body: 'ordinary batch item', metadata: { job: { kind: 'other' } }, mentions: ['Bob'], force: true })).activity;
-  const protectedItem = (await f.alice.express({ body: 'protected batch item', metadata, mentions: ['Bob'], force: true })).activity;
-  const batch = await sessionInbox(f.seat.owner, f.env);
-  let acquiring;
-  const first = batch[0].notifications[0];
-  const body = first.body;
-  // Start acquisition after initial eligibility projection, while preparing the first batch.
-  Object.defineProperty(first, 'body', { get() {
-    acquiring ??= f.bob.deferDelivery({ match, durationMs: 10000 });
-    return body;
-  } });
-  const rendered = await presentPendingAtBoundary(f.seat.owner, async (context, delivered) => {
-    await acquiring;
-    assert.deepEqual(delivered.flatMap(item => item.notifications.map(note => note.actIndex)), [Number(ordinary.id.slice(4))]);
-    return context;
-  }, () => batch, f.env);
-  assert.match(rendered, /ordinary batch item/);
-  assert.doesNotMatch(rendered, /protected batch item/);
-  const receipts = (await f.artifact.read(facts => ({
-    ordinary: facts.receipt('Bob', Number(ordinary.id.slice(4))), protected: facts.receipt('Bob', Number(protectedItem.id.slice(4))),
-  }))).value;
-  assert.ok(receipts.ordinary);
-  assert.equal(receipts.protected, undefined);
-});
-
-test('a matching lease affects only its recipient, not other current recipients', async t => {
-  const f = await fixture(t);
-  const caraSquare = await f.open();
-  await caraSquare.join('Cara', { owner: ':',
-    wakeAddress: { kind: 'paseo', address: { agentId: 'cara' } } });
-  await f.bob.deferDelivery({ match, durationMs: 10000 });
-  await f.say(metadata, ['Bob', 'Cara']);
-  const recipients = [];
-  await deliverPending({ artifact: f.channel, location: f.location, transport: {
-    attempt: async (request, _timeout, beforeSend) => {
-      assert.equal(await beforeSend(), true);
-      recipients.push(request.participant);
-      return { outcome: 'accepted' };
-    },
-  } });
-  assert.deepEqual(recipients, ['Cara']);
-});
-
-test('native previews for both native addresses revalidate current-generation deferrals', async t => {
-  const f = await fixture(t);
-  const activity = await f.say();
-  const lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const previews = [];
-  for (const [routeKind, address] of [['claude-native', { endpoint: '/tmp/unused-deferral-test.sock', sessionId: 'Bob', loaded: 'true' }], ['opencode-server', { sessionId: 'Bob' }]]) {
-    await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, { kind: routeKind, address }));
-    const input = { location: f.location, participant: 'Bob', generation: f.seat.generation,
-      index: Number((await f.messageOf(activity)).slice(4)), now: Date.now(), route: { kind: routeKind, address } };
-    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, input))).value, undefined);
-    previews.push(input);
-  }
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  for (const input of previews) {
-    await f.artifact.transactAs({ kind: 'participant', seat: f.seat }, facts => facts.updateWakeAddress(f.seat, input.route));
-    assert.ok((await f.artifact.read(facts => nativePendingPreview(facts, input))).value);
-    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, generation: 'act/999' }))).value, undefined);
-    assert.equal((await f.artifact.read(facts => nativePendingPreview(facts, { ...input, route: { ...input.route, address: { ...input.route.address, stale: 'route' } } }))).value, undefined);
-  }
-});
-
-test('active observers restore eligibility on release without another conversation activity', async t => {
-  const f = await fixture(t);
-  const lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-  const activity = await f.say();
-  const observer = await observeSessionPending(f.seat.owner, f.env);
-  t.after(() => observer.close());
-  assert.deepEqual(await observer.read(), []);
-  const waiting = armed(observer);
-  assert.equal(await waiting.armed, true);
-  await f.bob.releaseDeliveryDeferral(lease.id);
-  assert.equal((await waiting.result)[0].notifications[0].actIndex, Number(activity.id.slice(4)));
-});
-
-test('active observer expiry follows renewal while a one-shot producer never sleeps for that expiry', async t => {
-  const f = await fixture(t);
-  const lease = await f.bob.deferDelivery({ match, durationMs: 250 });
-  const activity = await f.say();
-  const observer = await observeSessionPending(f.seat.owner, f.env);
-  t.after(() => observer.close());
-  const waiting = armed(observer);
-  assert.equal(await waiting.armed, true);
-  const renewed = await f.bob.renewDeliveryDeferral(lease.id, 400);
-  assert.ok(renewed);
-  let sends = 0;
-  await deliverPending({ artifact: f.channel, location: f.location, transport: { attempt: async () => { sends++; return { outcome: 'accepted' }; } } });
-  assert.equal(sends, 0);
-  assert.ok(Date.now() < Date.parse(renewed.expiresAt), 'producer returns while the lease is still live');
-  const eligible = await waiting.result;
-  assert.equal(eligible[0].notifications[0].actIndex, Number(activity.id.slice(4)));
-  assert.ok(Date.now() >= Date.parse(renewed.expiresAt), 'renewal moves the observer deadline');
+test('local World custody refuses known departure or replacement without probing the ledger', async t => {
+  const c = await setup(t);
+  await c.square.join('observer', { owner: 'replacement', takeover: true });
+  await assert.rejects(() => c.observer.deferDelivery({ match: match(), durationMs: 100 }), /replaced/);
+  await assert.rejects(() => c.observer.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), /replaced/);
 });

@@ -15,6 +15,7 @@ import { createSquareMcpServer } from '../dist/mcp.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from '../dist/claude-mcp-context.js';
 import { commandIdentity } from '../dist/cli/context.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 
 const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -47,7 +48,7 @@ test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the envi
   const identity = commandIdentity(env);
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, ...identity }));
   const artifact = createArtifactPort(squarePath);
-  const square = await Square.at({ path: squarePath, env, wakeTransport: false });
+  const square = await Square.at({ path: squarePath, env });
   t.after(async () => { await close(); await artifact.close(); await square.close(); });
   const joined = await client.callTool({ name: 'join', arguments: { as: 'Mcp' } });
   assert.equal(joined.isError, undefined);
@@ -69,10 +70,16 @@ test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the envi
     assert.equal(seat.owner, identity.owner);
     assert.equal(seat.wakeAddress, undefined);
   }
+  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  try {
+    const session = await ledger.session(identity.owner);
+    assert.equal(session.state, 'attached');
+    assert.equal(session.routes.some(route => route.kind === 'paseo'), false);
+  } finally { await ledger.close(); }
   const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
   await alice.express({ body: 'parity message', mentions: ['Cli', 'Mcp', 'Pi'], force: true });
-  const delivered = await presentPendingAtBoundary(identity.owner, (_text, memberships) => memberships, undefined, env);
-  assert.deepEqual(new Set(delivered.map(item => item.seat.participant)), new Set(['Cli', 'Mcp', 'Pi']));
+  const delivered = await presentPendingAtBoundary(identity.owner, text => text, env);
+  assert.match(delivered, /parity message/);
 });
 
 test('MCP tools validate JSON arguments and return only CLI text', async () => {
@@ -229,9 +236,13 @@ test('MCP request metadata binds the participant seat to the live call body', as
         assert.match(joined.content[0].text, /you stepped into the square/);
         let seats = (await readSeats()).value;
         assert.deepEqual(seats.seat.owner, `${channel}:${callBody.session}`);
-        assert.deepEqual(seats.seat.wakeAddress, channel === 'codex'
-          ? { kind: 'codex-queue', address: { threadId: callBody.session, codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock' } }
-          : { kind: 'paseo', address: { agentId: 'managed-agent' } });
+        const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+        try {
+          const session = await ledger.session(seats.seat.owner);
+          assert.deepEqual(session.routes, [channel === 'codex'
+            ? { kind: 'codex-queue', address: { threadId: callBody.session, codexHome: '/recipient/codex', endpoint: 'unix:///recipient/control.sock' } }
+            : { kind: 'paseo', address: { agentId: 'managed-agent' } }]);
+        } finally { await ledger.close(); }
         assert.deepEqual(seats.callBodySeats.map(({ participant }) => participant), ['rei']);
 
         const refused = await callJoin(`${channel}-second`);

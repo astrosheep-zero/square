@@ -12,9 +12,7 @@ import { createArtifactPort } from '../dist/artifact.js';
 import { catchPresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
 function makeState(overrides = {}) {
-  let messageIndex = 0;
-  const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index,
-    ...(act.kind === 'say' ? { messageIndex: messageIndex++ } : {}) }));
+  const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
   return {
     hardCap: 'hardCap' in overrides ? overrides.hardCap : null,
     throttlePerMinute: overrides.throttlePerMinute,

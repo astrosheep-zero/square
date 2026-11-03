@@ -184,7 +184,7 @@ export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { own
   const coordinate = native[0] ?? selected[0];
   if (coordinate === undefined) return { owner: localUserOwner() };
   const owner = harnessOwner({ channel: coordinate.channel, session: coordinate.session });
-  const wakeAddress = coordinate.channel === 'codex' ? codexWakeAddress(coordinate.session, env)
+  const wakeAddress = coordinate.channel === 'codex' ? { ...codexWakeAddress(coordinate.session, env), kind: 'codex-queue' as const }
     : coordinate.channel === 'paseo' ? { kind: 'paseo' as const, address: { agentId: coordinate.session } } : undefined;
   return { owner, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }

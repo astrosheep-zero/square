@@ -181,7 +181,7 @@ test('catch fences selection and captures the page facts in its receipt transact
   };
   const caught = await bob.catch({ limit: 1, observe: true });
   assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
-  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, messageId: 'msg/0', perception: 'full', via: 'mention' }]);
+  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
   assert.equal(caught.reason, 'drained');
   assert.equal(caught.remaining, 1);
   assert.equal(caught.observation.standingCount, 2);

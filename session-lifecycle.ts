@@ -1,41 +1,39 @@
-import { Square } from './square-api.js';
-import { harnessOwner, type Owner } from './owner.js';
-import type { AutomaticProvider } from './participant-identity.js';
-import type { WakeAddress } from './model.js';
-import { projectSessionCandidates, projectSessionSeats } from './inbox.js';
+import os from 'node:os';
+import path from 'node:path';
+import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
+import type { Owner } from './owner.js';
 
-function ownerFor(provider: AutomaticProvider, sessionId: string): Owner {
-  return harnessOwner({ channel: provider === 'claude' ? 'claude-code' : provider, session: sessionId });
+function openLedger(env: NodeJS.ProcessEnv): Promise<DeliveryLedger> {
+  return DeliveryLedger.open({ location: env.SQUARE_DELIVERY ?? path.join(os.homedir(), '.square', 'delivery.sqlite') });
 }
 
-/** Host shutdown suspends execution, not membership. Discovery never grants custody. */
-export async function detachSessionSeats(provider: AutomaticProvider, sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const owner = ownerFor(provider, sessionId);
-  for (const { location, seat } of await projectSessionSeats({ owner, env })) {
-    let square: Square | undefined;
-    try {
-      square = await Square.at({ path: location, env });
-      await square.detach(seat.participant, { owner, generation: seat.generation });
-    } catch { /* One unavailable or replaced seat must not block cleanup of the others. */ }
-    finally { await square?.close(); }
-  }
+/** Rotate the captured session generation; omitted routes retain its registrations. */
+export async function attachDeliverySession(owner: Owner, env: NodeJS.ProcessEnv = process.env, routes?: readonly DeliveryRoute[], signal?: AbortSignal): Promise<DeliverySession | false> {
+  return attach(owner, env, routes, false, signal);
 }
 
-/** Restore only detached, standing seats of this exact owner before starting a receiver. */
-export async function restoreSessionSeats(owner: Owner, env: NodeJS.ProcessEnv = process.env, wakeAddress?: WakeAddress, signal?: AbortSignal): Promise<void> {
-  const locations = new Set((await projectSessionCandidates({ owner, env })).map(candidate => candidate.location));
-  for (const location of locations) {
-    if (signal?.aborted) return;
-    let square: Square | undefined;
-    try {
-      square = await Square.at({ path: location, env }, { signal });
-      for (const seat of await square.seatsOf(owner)) {
-        if (signal?.aborted) return;
-        if (seat.attachment !== 'detached') continue;
-        try { await square.reattach(seat.name, { owner, wakeAddress }, { signal }); }
-        catch { /* A replacement or one failed seat does not block its peers. */ }
-      }
-    } catch { /* An indexed location is only a candidate, not a promise of availability. */ }
-    finally { await square?.close(); }
-  }
+/** Replace the supplied route kinds while preserving every other registered route. */
+export async function attachDeliverySessionRoutes(owner: Owner, env: NodeJS.ProcessEnv = process.env, routes: readonly DeliveryRoute[], signal?: AbortSignal): Promise<DeliverySession | false> {
+  return attach(owner, env, routes, true, signal);
+}
+
+async function attach(owner: Owner, env: NodeJS.ProcessEnv, routes: readonly DeliveryRoute[] | undefined, merge: boolean, signal?: AbortSignal): Promise<DeliverySession | false> {
+  if (signal?.aborted) return false;
+  const ledger = await openLedger(env);
+  try {
+    const previous = await ledger.session(owner);
+    if (signal?.aborted) return false;
+    const selected = merge && routes ? [...(previous?.routes ?? []).filter(old => !routes.some(route => route.kind === old.kind)), ...routes] : routes ?? previous?.routes ?? [];
+    return await ledger.attach({ owner, expectedGeneration: previous?.generation ?? null, routes: selected });
+  } finally { await ledger.close(); }
+}
+
+export async function detachDeliverySession(owner: Owner, generation: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const ledger = await openLedger(env);
+  try { return await ledger.detach({ owner, generation }); } finally { await ledger.close(); }
+}
+
+export async function markDeliverySessionDeleted(owner: Owner, generation: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const ledger = await openLedger(env);
+  try { return await ledger.markDeleted({ owner, generation }); } finally { await ledger.close(); }
 }

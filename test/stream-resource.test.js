@@ -6,13 +6,10 @@ import test from 'node:test';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { streamSquare } from '../dist/stream.js';
-import { processActNotificationsOnce, sweepPendingNotifications } from '../dist/notifications.js';
-import { classifyDeliveryHealth, doctorDeliveryHealth } from '../dist/delivery-health.js';
-import { runClaudeMod } from '../dist/claude-mod.js';
 
 async function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-stream-resource-')));
-  const env = { SQUARE_INDEX: path.join(root, 'index.ndjsonl'), SQUARE_DISABLE_PASEO_WAKE: '1' };
+  const env = { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' };
   const body = "claude-code" + ":" + ('stream-resource');
   const location = path.join(root, 'original.square');
   const square = await Square.build({ path: location, markdown: '', env });
@@ -77,20 +74,4 @@ test('explicit borrowed stream leaves its port alive and reports a closed port i
   const timer = setTimeout(() => controller.abort(new Error('closed port was swallowed')), 1000);
   try { await assert.rejects(closed.next(), /Square artifact is closed/); }
   finally { clearTimeout(timer); await closed.return(); }
-});
-
-test('direct diagnostics preserve unavailable errors while host resume skips missing candidate paths', async t => {
-  const f = await fixture(t);
-  await f.alice.done();
-  await f.square.close();
-  fs.unlinkSync(f.location);
-  for (const operation of [
-    () => processActNotificationsOnce(f.location, 0, { env: f.env, transports: {} }),
-    () => sweepPendingNotifications(f.location, { env: { ...f.env, SQUARE_DISABLE_PASEO_WAKE: '0' } }),
-    () => classifyDeliveryHealth(f.location, { graceMs: 0 }),
-    () => doctorDeliveryHealth(f.location, 0, Date.now(), f.env),
-  ]) await assert.rejects(operation, error => error.code === 'unavailable' && error.message === `Square is unavailable at ${f.location}`);
-  const resumed = JSON.parse(await runClaudeMod(JSON.stringify({ operation: 'start', resume: true,
-    sessionId: 'stream-resource', cwd: f.root, version: 'test' }), f.env));
-  assert.deepEqual(resumed.bindings, []);
 });

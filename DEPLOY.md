@@ -24,7 +24,7 @@ On 1.x, a host below 1.15.11, without a reachable native health endpoint, or wit
 
 A 1.x native 204 is uncertain submission, not admission or presentation. Exact prepared text observed at Square's pre-model hook may record presentation; later plugins can still remove it. This does not prove provider receipt, model processing or human acknowledgement. An isolated OpenCode 1.19.5 `opencode serve` supports native proactive delivery in the tested setup; 1.15.11 was tested in reduced mode. The tested 1.19.5 interactive embedded TUI currently runs reduced, without proactive delivery, because its supplied health URL is unreachable. Other versions and platforms are not thereby certified. On 2.x user cancellation suppresses the local pending batch, not already admitted native input.
 
-For an authenticated 1.x session deletion, Square stops that session's local receiver and discovers its seats during the deletion handler; it ends only the owner and generation captured for each seat. This is a handler-observation boundary, not an atomic snapshot at the remote event time or a permanent cross-process tombstone.
+For an authenticated 1.x session deletion, the receiver marks the host session deleted in the delivery ledger. The next privileged mutating Square operation reconciles the deletion as a generation-fenced `done`; read-only history and status do not end membership.
 
 The v2 plugin checks its version family and required location, session and event capabilities at setup. OpenCode 2.0.20 was tested; other eligible 2.x releases have not been individually validated and future API changes can break compatibility.
 
@@ -75,16 +75,15 @@ their existing installation and delivery paths.
 
 ## Square persistence
 
-The user-level host ledger is a separate `host-ledger.sqlite`, also using
-DELETE/FULL. `square ledger verify` is read-only and needs no square location
-or participant. `square ledger gc` reclaims only artifact-proven closed delivery
-evidence; freed storage can be reused but the file need not immediately shrink.
-Small permanent Claude recognition tokens remain, and their total count is unbounded.
-Do not roll back to retained NDJSON files after SQLite writes have begun.
+The user-level delivery ledger defaults to `~/.square/delivery.sqlite`. It holds
+neutral cards, host session lifecycle, attempts and receipts; Square content and
+producer waiting controls remain in the `.square` artifact. There is no discovery
+index. Host start and end attach or detach the ledger session without restoring
+or detaching Square seats.
 
-Each `.square` artifact is a transactional SQLite database using DELETE journal
-mode and FULL synchronous writes. Ordinary opens refuse older or unsupported
-artifact formats; they do not convert them.
+Each `.square` artifact is a transactional SQLite database. Format 12 is fresh-store
+only: ordinary opens refuse older or unsupported formats read-only, without migration,
+conversion or deletion.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

@@ -213,9 +213,11 @@ test('only admission rejection proves a failed express unsent; post-commit failu
   const alice = (await square.join('Alice', { owner: ':' })).participant;
   await assert.rejects(alice.express('bad target', { mentions: ['Nobody'] }), error => error.facts?.activityUnsent === true && error.operation.expressEffect === 'unsent');
   const transactAs = artifact.transactAs.bind(artifact);
-  artifact.transactAs = async (...args) => {
-    await transactAs(...args);
-    throw new SquareError('invalid_args', 'injected failure after the commit');
+  artifact.transactAs = async (authority, fn, signal) => {
+    let landed = false;
+    const result = await transactAs(authority, facts => fn({ ...facts, land(draft) { landed = true; return facts.land(draft); } }), signal);
+    if (authority.kind === 'participant' && landed) throw new SquareError('invalid_args', 'injected failure after the commit');
+    return result;
   };
   await assert.rejects(alice.express('actually committed'), error => error.code === 'invalid_args' && error.facts?.activityUnsent !== true && error.operation.expressEffect === 'unknown');
   assert.equal((await square.history()).activities.at(-1).body, 'actually committed');

@@ -26,7 +26,6 @@ test('one identity-free memory resource carries explicit current seats for multi
   const aliceSeat = (await square.seatsOf(aliceBody))[0];
   assert.equal(aliceSeat.name, 'Alice');
   assert.match(aliceSeat.generation, /^endpoint\/[0-9a-f-]{36}$/);
-  assert.equal(aliceSeat.attachment, 'attached');
   assert.deepEqual((await square.seatsOf(bobBody)).map(seat => seat.name), ['Bob']);
   assert.equal((await square.participant('Alice', { owner: aliceBody })).name, 'Alice');
   assert.equal((await square.participant('Bob', { owner: bobBody })).name, 'Bob');
@@ -42,13 +41,9 @@ test('one identity-free memory resource carries explicit current seats for multi
     'existing handles observe the current seat wake readiness, not their acquisition snapshot');
 
   const stale = alice.participant;
-  assert.equal(await square.detach('Alice', { owner: aliceBody, generation: aliceSeat.generation }), true);
+  await stale.done();
   await rejectsWithoutSeat(square.participant('Alice', { owner: aliceBody }));
-  await assert.rejects(stale.express('detached', { force: true }), error => error.code === 'already_joined');
-  const attached = await square.reattach('Alice', { owner: aliceBody });
-  assert.equal(attached.name, 'Alice');
-  await attached.done();
-  await rejectsWithoutSeat(square.participant('Alice', { owner: aliceBody }));
+  await assert.rejects(stale.express('departed', { force: true }), error => error.code === 'already_joined');
 });
 
 test('adapter selection uses only an explicit own name or one attached own seat', async t => {
@@ -65,8 +60,7 @@ test('adapter selection uses only an explicit own name or one attached own seat'
   await assert.rejects(selectOwnSeat(square, a), /multiple names/);
   assert.equal((await selectOwnSeat(square, a, 'alice')).name, 'Alice');
   await assert.rejects(selectOwnSeat(square, a, 'Foreign', { optional: true }), { code: 'already_joined' });
-  const aliceSeat = (await square.seatsOf(a)).find(seat => seat.name === 'Alice');
-  await square.detach('Alice', { owner: a, generation: aliceSeat.generation });
+  await (await square.participant('Alice', { owner: a })).done();
   assert.equal((await selectOwnSeat(square, a)).name, 'Bob');
   await assert.rejects(selectOwnSeat(square, a, 'Alice', { optional: true }), { code: 'already_joined' });
 });
@@ -82,7 +76,6 @@ test('a file-backed identity-free resource joins separate Bodies and publishes o
   await square.join('Alice', { owner: a });
   await square.join('Bob', { owner: b });
   await square.close();
-  await fs.unlink(env.SQUARE_INDEX);
 
   const reopened = await Square.at({ path: location, env });
   try {
@@ -93,8 +86,7 @@ test('a file-backed identity-free resource joins separate Bodies and publishes o
     assert.deepEqual((await reopened.seatsOf(b)).map(seat => seat.name), ['Bob']);
     await (await reopened.participant('Alice', { owner: a })).express('no discovery side effect', { force: true });
     await assert.rejects(fs.stat(env.SQUARE_INDEX), { code: 'ENOENT' });
-    await reopened.reattach('Alice', { owner: a });
-    assert.ok((await fs.stat(env.SQUARE_INDEX)).isFile());
+    await assert.rejects(fs.stat(env.SQUARE_INDEX), { code: 'ENOENT' });
   } finally {
     await reopened.close();
   }

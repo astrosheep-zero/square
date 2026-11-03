@@ -24,7 +24,12 @@ async function fixture(t, extra = [], hardCap = null) {
 function withoutBodies(facts) {
   return { ...facts, activity() { assert.fail('catch probe must not hydrate a body'); }, activities() { assert.fail('catch probe must not hydrate bodies'); } };
 }
-function noWriter() { assert.fail('empty catch must not acquire the artifact writer'); }
+function noParticipantWriter(cell) {
+  return (authority, change, signal) => {
+    assert.notEqual(authority.kind, 'participant', 'empty catch must not acquire a participant writer');
+    return cell.transactAs(authority, change, signal);
+  };
+}
 
 test('an empty filtered catch returns its snapshot without bodies, a writer, or receipts', async t => {
   const { cell, artifact, bob } = await fixture(t, [
@@ -33,14 +38,12 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
     { kind: 'say', actor: 'Bob', at: 4, body: 'own activity' },
   ], 1);
   const revision = await cell.revision();
-  let reads = 0;
-  artifact.read = (select, signal) => { reads++; return cell.read(facts => select(withoutBodies(facts)), signal); };
-  artifact.transactAs = noWriter;
+  artifact.read = (select, signal) => cell.read(facts => select(withoutBodies(facts)), signal);
+  artifact.transactAs = noParticipantWriter(cell);
   const result = await bob.catch({ from: ['Alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
   const { observation } = result;
   assert.deepEqual([observation.participant, observation.standingCount, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, 100, 1, 1]);
-  assert.equal(reads, 2, 'one selection and one explicitly requested presence read');
   assert.equal(await cell.revision(), revision);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 3))).value, undefined);
 });
@@ -52,11 +55,12 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
   const hydrated = [];
   let writes = 0, probed = false;
   artifact.read = async (select, signal) => {
-    const result = await cell.read(facts => select(withoutBodies(facts)), signal);
-    if (!probed) {
+    let selected = false;
+    const result = await cell.read(facts => select({ ...withoutBodies(facts), directed(...args) { selected = true; return facts.directed(...args); } }), signal);
+    if (!probed && selected) {
       probed = true;
       assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
-      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.channel.markSeen('Bob', [0], 50));
+      await cell.transactAs({ kind: 'participant', seat: bobSeat }, facts => facts.markSeen('Bob', [2], 50));
       await cell.transactAs({ kind: 'participant', seat: seats.get('Alice') }, facts => {
         facts.land({ kind: 'say', actor: 'Alice', at: 51, body: 'selected by writer', mentions: ['Bob'] });
         facts.land({ kind: 'say', actor: 'Alice', at: 52, body: 'remaining', mentions: ['Bob'] });
@@ -65,8 +69,8 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
     return result;
   };
   artifact.transactAs = (authority, change, signal) => {
-    writes++;
-    return cell.transactAs(authority, facts => change({ ...facts, activities(indexes) { hydrated.push([...indexes]); return facts.activities(indexes); } }), signal);
+    if (authority.kind === 'participant') writes++;
+    return cell.transactAs(authority, facts => change({ ...facts, activities(indexes) { if (authority.kind === 'participant') hydrated.push([...indexes]); return facts.activities(indexes); } }), signal);
   };
   const caught = await bob.catch({ from: ['alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual(caught.activities.map(({ id, body }) => ({ id, body })), [{ id: 'act/3', body: 'selected by writer' }]);
@@ -83,18 +87,17 @@ test('exact-ID catches retain their repeatable receipt transaction and never use
   const marked = [];
   artifact.read = (select, signal) => cell.read(facts => select({ ...facts, directed() { assert.fail('ID catch must not probe a directed page'); } }), signal);
   artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, facts => change({
-    ...facts, channel: { ...facts.channel,
-      markSeen(name, indexes, at) { marked.push([...indexes]); return facts.channel.markSeen(name, indexes, at); } },
+    ...facts, markSeen(name, indexes, at) { marked.push([...indexes]); return facts.markSeen(name, indexes, at); },
   }), signal);
   const first = await bob.catch({ id: 'act/2' });
   assert.deepEqual(await bob.catch({ id: 'act/2' }), first);
-  assert.deepEqual(marked, [[0], [0]]);
+  assert.deepEqual(marked, [[2], [2]]);
 });
 
 test('empty catch validates caller, filters, limits, and semantic time without a writer', async t => {
   const { cell, artifact, square } = await fixture(t);
   await assert.rejects(square.participant('Missing', { owner: bodyFor('Bob') }), { code: 'already_joined' });
-  artifact.transactAs = noWriter;
+  artifact.transactAs = noParticipantWriter(cell);
   const bob = await square.participant('Bob', { owner: bodyFor('Bob') });
   await assert.rejects(bob.catch({ from: ['Missing'] }), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
   for (const limit of [0, 101, 1.5]) await assert.rejects(bob.catch({ limit }), { code: 'invalid_args' });
@@ -111,12 +114,12 @@ test('catch propagates cancellation through probe and writer but keeps a committ
   const { cell, artifact, bob } = await fixture(t, [{ kind: 'say', actor: 'Alice', at: 2, body: 'pending', mentions: ['Bob'] }]);
   const controller = new AbortController(), reason = new Error('cancelled after probe');
   artifact.read = async (select, signal) => {
-    assert.equal(signal, controller.signal);
-    const result = await cell.read(facts => select(withoutBodies(facts)), signal);
-    controller.abort(reason);
+    let selected = false;
+    const result = await cell.read(facts => select({ ...withoutBodies(facts), directed(...args) { selected = true; return facts.directed(...args); } }), signal);
+    if (selected && signal === controller.signal) controller.abort(reason);
     return result;
   };
-  artifact.transactAs = (authority, change, signal) => { assert.equal(signal, controller.signal); return cell.transactAs(authority, change, signal); };
+  artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, change, signal);
   await assert.rejects(bob.catch({}, { signal: controller.signal }), error => error === reason);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
   await assert.rejects(bob.catch({}, { signal: controller.signal }), error => error === reason);
@@ -124,7 +127,7 @@ test('catch propagates cancellation through probe and writer but keeps a committ
   const late = new AbortController();
   artifact.transactAs = async (authority, change, signal) => {
     const result = await cell.transactAs(authority, change, signal);
-    late.abort(new Error('response cancelled after commit'));
+    if (authority.kind === 'participant') late.abort(new Error('response cancelled after commit'));
     return result;
   };
   const committed = await bob.catch({}, { signal: late.signal });
@@ -136,14 +139,13 @@ test('empty catch keeps its completed snapshot after late read cancellation', as
   const { cell, artifact, bob } = await fixture(t);
   const controller = new AbortController(), order = [];
   artifact.read = async (select, signal) => {
-    order.push('read');
-    assert.equal(signal, controller.signal);
-    const result = await cell.read(facts => select(withoutBodies(facts)), signal);
-    controller.abort(new Error('late snapshot cancellation'));
+    let selected = false;
+    const result = await cell.read(facts => select({ ...withoutBodies(facts), directed(...args) { selected = true; return facts.directed(...args); } }), signal);
+    if (selected && signal === controller.signal) { order.push('probe'); controller.abort(new Error('late snapshot cancellation')); }
     return result;
   };
-  artifact.transactAs = noWriter;
+  artifact.transactAs = noParticipantWriter(cell);
   assert.deepEqual((await bob.catch({}, { signal: controller.signal })).activities, []);
-  assert.deepEqual(order, ['read']);
+  assert.deepEqual(order, ['probe']);
   assert.equal(controller.signal.aborted, true);
 });

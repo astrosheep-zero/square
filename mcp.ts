@@ -60,7 +60,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           ? wakeAddress : undefined;
         return {
           identity: { owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-            ? codexWakeAddress(threadId, env) : callWake },
+            ? { ...codexWakeAddress(threadId, env), kind: 'codex-queue' as const } : callWake },
           open: (location, control) => Square.at({
             ...resourceOptions, env, cwd: claude?.cwd ?? resourceOptions.cwd,
             path: location ?? options.path,

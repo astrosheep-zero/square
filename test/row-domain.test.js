@@ -3,49 +3,16 @@ import test from 'node:test';
 
 import { readCursor, presenceAnchor } from '../dist/runtime.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { pendingHeads } from '../dist/delivery.js';
-import { catchCoverage } from '../dist/square-domain.js';
 
 const T0 = 1_700_000_000_000;
 
-test('pending reasons and catch coverage need only say relations, not content', () => {
-  const heads = [
-    { index: 3, at: T0, from: 'Alice', recipient: 'Bob' },
-    { index: 4, at: T0, from: 'Carol', recipient: 'Bob' },
-    { index: 5, at: T0, from: 'Alice', recipient: 'Bob' },
-  ];
-  const facts = {
-    channel: {
-      endpoint: () => ({ participant: 'Bob', attachment: 'attached', generation: 'join' }),
-      directed: () => ({ items: heads, hasMore: false }),
-      suppressed: () => false,
-    },
-    activityByMessage: index => index === 5 ? undefined : {
-      kind: 'say', index: index + 10, at: T0, actor: index === 3 ? 'Alice' : 'Carol', messageIndex: index,
-      get body() { throw new Error('content must not be hydrated'); },
-      get metadata() { throw new Error('metadata must not be hydrated'); },
-    },
-    directedAt: (name, index) => name === 'Bob' ? { route: index === 13 ? 'mention' : 'reply' } : undefined,
-  };
-  assert.deepEqual(pendingHeads(facts, 'Bob', T0), [
-    { index: 3, at: T0, actor: 'Alice', recipient: 'Bob', activityIndex: 13, route: 'mention' },
-    { index: 4, at: T0, actor: 'Carol', recipient: 'Bob', activityIndex: 14, route: 'reply' },
-    { index: 5, at: T0, actor: 'Alice', recipient: 'Bob' },
-  ]);
-  const lease = { leaseId: 'catch', heartbeatAt: T0, expiresAt: T0 + 1000, filter: { participants: ['Alice'], mention: 'Bob' } };
-  assert.deepEqual(catchCoverage(facts, 'Bob', lease), [3]);
-  assert.deepEqual(catchCoverage(facts, 'Bob', { ...lease, filter: { mention: 'Bob' } }), [3, 4]);
-});
-
 function fixtureState(acts, options = {}) {
   const lastIndex = acts.reduce((max, act) => Math.max(max, act.index), -1);
-  let messageIndex = 0;
-  const imported = acts.map(act => act.kind === 'say' ? { ...act, messageIndex: messageIndex++ } : act);
   return {
     hardCap: options.hardCap === undefined ? null : options.hardCap,
     preamble: ['preamble line'],
     warmup: ['warmup line'],
-    acts: imported,
+    acts,
     runtime: {
       nextActIndex: options.nextActIndex === undefined ? lastIndex + 1 : options.nextActIndex,
       observations: options.observations ?? {},
@@ -151,7 +118,7 @@ test('audience priority is bell > mention > reply > attention, with self and ign
   const acts = stored(SEQUENTIAL_SOURCE);
   const port = createArtifactPort(':memory:', fixtureState(acts));
   try {
-    const audience = async (index) => (await port.read((facts) => facts.audience(index))).value;
+    const audience = async (index) => (await port.read((facts) => facts.audience(index))).value.map(({ owner, ...entry }) => entry);
     assert.deepEqual(await audience(3), [{ recipient: 'Bob', route: 'mention', generation: 'act/1' }, { recipient: 'Carol', route: 'mention', generation: 'act/2' }], 'case-variant mentions resolve to roster spelling');
     assert.deepEqual(await audience(4), [], 'unknown and self mentions reach nobody');
     assert.deepEqual(await audience(5), [{ recipient: 'Alice', route: 'reply', generation: 'act/0' }]);
@@ -182,7 +149,7 @@ test('sparse orphan receipts retain coordinates and owner spelling', async () =>
       casefolded: facts.receipt('Ghost', 14),
     }))).value;
     assert.deepEqual(view, { orphan: { at: T0 + 100 }, missing: undefined,
-      facts: { latestAt: T0 + 100, latestActorActivityIndex: 11 }, exact: { at: T0 + 150 }, casefolded: undefined });
+      facts: { latestAt: T0 + 100, latestActorActivityIndex: 11 }, exact: { at: T0 + 150 }, casefolded: { at: T0 + 150 } });
   } finally { await port.close(); }
 });
 
@@ -207,7 +174,7 @@ test('cursor and presence distinguish holes, reads and orphan receipts', async (
     'act/10': { state: 'seen', at: T0 + 950 } } });
   assert.equal(beyond.cursor, 8, 'a seen row beyond a hole does not advance the cursor');
   assert.equal(beyond.presence, 13, 'an orphan receipt does not move the anchor');
-  assert.equal(beyond.receiptFacts.latestAt, T0 + 900, 'a receipt on a non-content activity has no message to survive import');
+  assert.equal(beyond.receiptFacts.latestAt, T0 + 900, 'only activity receipts contribute');
   assert.equal(beyond.receiptFacts.latestActorActivityIndex, 13);
   const complete = await probe({ Alice: { 'act/12': { state: 'seen', at: T0 + 1000 },
     'act/13': { state: 'seen', at: T0 + 900 } } });

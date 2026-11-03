@@ -1,37 +1,18 @@
 # Square and Participant API
 
-`Square` opens the concrete local SQLite resource shared by SDK, CLI, MCP and Pi. `square-api.ts`
-exports the public `{at, build, inMemory}` entrypoints and `type Square`; `square.ts` remains the
-executable CLI entrypoint.
-For audience computation without opening a square, see the [attention primitive](attention-primitive.md).
-For transaction-scoped attempt custody and the storage-independent dispatch/prepared presentation
-lifecycles used by Square's actual adapters, see the [delivery primitives](delivery-primitives.md).
-Full presentation settlement atomically completes its captured attempt and full-consumption receipts;
-clipped previews record no full receipt. Cancellation/deferral is pre-effect policy, never a veto of a
-successful sink. The public primitive distinguishes sink observations from refused/failed persistence;
-Square retains its existing result shapes and explicit failed classification for rejected sinks.
-For caller-owned item admission and sparse consumption, see the [receive primitive](receive-primitive.md).
-`square-facade.ts` contains only public types. There is no separate operation factory, policy
-dispatcher or `{data, projection}` envelope.
+`Square` is the concrete resource shared by SDK, CLI, MCP and Pi; `square.ts` is the CLI
+entrypoint. `square-facade.ts` declares public operation types, not a second execution path. See
+[attention-primitive.md](attention-primitive.md) for audience computation and
+[delivery-primitives.md](delivery-primitives.md) for the host delivery ledger.
 
-## Open, select, join, close
-
-Membership is explicit: no harness joins a square based on its filename or working directory.
-`PUBLIC.square` has exactly the same behavior as any other square file. Membership (join/done,
-read horizon and listens) is separate from host attachment (whether an exact owner is currently
-executing for that participant). Host shutdown detaches; it does not make the participant leave.
-An owner is an opaque, non-secret string compared only for equality. It is not a participant name
-or authentication credential: one owner may control several names. The SDK requires it explicitly;
-`localUserOwner()` supplies `user:<OS username>@<hostname>` when that is the intended actor.
+## Open and join
 
 ```ts
 import { Square } from '@astrosheep/square';
 
-const owner = 'example:alice-process';
 const square = await Square.at({ path: './discussion.square' });
 try {
-  const joined = await square.join('Alice', { owner });
-  const alice = joined.participant;
+  const { participant: alice } = await square.join('Alice', { owner: 'example:alice' });
   const sent = await alice.express('Hello @Bob', { force: true });
   const page = await square.history();
   console.log(sent.activity.id, page.activities);
@@ -40,422 +21,91 @@ try {
 }
 ```
 
-- `Square.build({path, markdown, hardCap?, throttlePerMinute?, template?, force?, ...})` returns
-  the same open resource. Public `Square.at` and `Square.build` resolve an omitted `wakeTransport`
-  once from `env ?? process.env` to the product's Claude/Codex/Paseo/HTTP defaults; if creation fails,
-  opening still succeeds without proactive wake. A supplied port is used unchanged; `false`
-  disables proactive wake. Activities still land normally without a transport.
-- Synchronous `Square.inMemory` uses only an explicitly supplied port; omitted or `false` means
-  no wake. An injected transport runs the same claim, deferral and final currentness checks as
-  file delivery. Each memory resource has a unique `memory://` identity; this is not a remotely
-  openable address, is not indexed, and does not enable file-based hooks.
-- `Square.at` accepts `path`, optional `cwd`, `env`, `clock`, `wakeTransport` and a caller-owned
-  connection via `resources`. At entry, `env` resolves the path, clock and discovery index path
-  once. `Square.at`, `Square.build` and `Square.inMemory` do not capture a
-  `owner`, `wakeAddress` or default `participant`. The same resource can serve multiple owners;
-  identity is supplied at each join or participant selection. `wakeTransport` injection is retained
-  for both file-backed build/open and memory resources.
-- Local artifact paths resolve against `cwd`; an omitted path uses `SQUARE_LOCATION` at entry.
-- `await square.participant(name, {owner})` selects an **attached, standing** seat held by that exact
-  owner without joining, claiming or reentering. It never manufactures a ghost handle: a never-joined,
-  done, foreign or detached seat is refused with `already_joined`, `reason: 'needs_seat'` and a `join`
-  recovery fact.
-  Foreign custody still requires explicit takeover. The returned handle captures the current owner
-  and generation; subsequent mutations recheck custody. A name alone never authorizes writes.
-- `await square.seatsOf(owner)` returns the owner's standing seats as
-  `[{name, generation, attachment}]`, including attached and detached seats but not done participants.
-  It is read-only and neither joins nor restores a seat. `selectOwnSeat(square, owner, name?)` is the
-  adapter helper: an explicit name is checked through `participant`; otherwise exactly one attached
-  seat is required. For an overview-capable call,
-  `selectOwnSeat(square, owner, undefined, {optional: true})` instead returns `undefined` for a missing
-  owner or zero/multiple attached seats. Selection does not change membership.
-- Join with an explicit name and owner: `square.join('Alice', {owner, wakeAddress?, ...options}, control?)`
-  returns one `JoinResult`: `{participant, kind, activity, observation?}`. The name is required even
-  when the owner holds exactly one seat. `participant` is a handle, not a string. `takeover: true`
-  atomically replaces a standing seat; a rejoin after done establishes a new join generation.
-  Same-owner reconnection retains its generation. A detached seat reattaches with kind `reconnected`,
-  no activity and no change to its read horizon or listens; the operation supplies any wake address.
-  A foreign owner still needs explicit takeover, including for an away participant. Old handles remain
-  fenced after takeover or rejoin, including when the same owner reacquires the name. There is no
-  separate `Participant.join()` or public `takeover()` API.
-- Owner selection prevents accidental custody reuse, not malicious impersonation; never let untrusted
-  input choose another caller's owner. A Square owns its connection unless
-  `resources: createSquareResourceOwner()` lends it one. Closing a borrowing resource leaves that
-  owner open. Request signals never become the borrowed connection's lifetime. The MCP server drains
-  cancelled/in-flight work before closing its owner; explicit location overrides get independent
-  request-owned connections.
+`Square.at`, `Square.build` and `Square.inMemory` open resources; an owner is supplied per join or
+selection, never captured as the resource's default participant. Owners are opaque non-secret strings,
+not authorization credentials. Adapters resolve their own harness identity without rewriting process
+environment. Membership is explicit; `PUBLIC.square` is an ordinary filename. A participant handle
+captures owner and join generation; rejoin or takeover fences old handles. `done` ends membership;
+host attachment is separate, as described in [participant-ownership.md](participant-ownership.md).
 
-The rebuildable HOME discovery index is only a source of candidate paths, never custody authority.
-File-backed successful joins and non-null reattachments attempt best-effort publication of their
-owner and path; opening, building, selecting a participant or expressing does not publish. Memory
-resources are not indexed. Losing the index may delay discovery, but cannot transfer a seat.
+## Activity and delivery
 
-## Adapter owner resolution
+`Participant.express` lands activity in Square, with optional immutable JSON `metadata` (maximum
+16 KiB). Mentions, replies, bells, listening and ignores determine the landed audience. Activity IDs
+are `act/N`. `Square.history` is the read-only archive; `Participant.catch` consumes directed activity,
+and `Participant.pending` reads addressed unconsumed says without consuming them. `listen`, `unlisten`,
+`ignore`, `listening` and `done` operate on the participant. History, status and participants are
+Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
+later cancellation.
 
-Owners are nonempty strings without control characters, at most 512 UTF-8 bytes. The core stores
-and compares them without interpreting harnesses. One adapter codec, `harnessOwner`, escapes each
-coordinate segment with `encodeURIComponent`: `<channel>:<session>[:agent:<agent>]`.
-`decodeHarnessOwner` is for adapters only; custom owner strings need no harness spelling.
+A live idle catch owns matching activity notifications before producer export ownership is acquired.
+Matching uses its sender and directed-attention filters against the activity's landed delivery route;
+other activities and direct notices remain eligible. Release or expiry permits still-unconsumed activity
+at the next ordinary posting opportunity; caught or ACKed activity is not exported. Starting a catch
+cannot recall or retroactively suppress export ownership already committed.
 
-CLI uses `--owner` or `SQUARE_OWNER` exactly when supplied, then one complete native harness
-coordinate (Paseo is auxiliary), otherwise `localUserOwner()`. Multiple native identities or an
-incomplete Claude-child identity refuse rather than using the human's owner. Plain terminal owners
-have no automatic host lifecycle or wake address: join explicitly and use `catch --idle`.
-MCP uses the call-local harness coordinate, else its configured owner, never tool arguments. Pi and
-native adapters encode their own coordinate; the Slack bridge uses its local configured owner.
-`inbox(input, owner)` and `square inbox --for-owner <owner>` select exact opaque equality.
+After landing, Square renders and posts a card per audience member to the host delivery ledger using
+`square:<canonical-path>#act/N/recipient/<encodeURIComponent(nameKey(recipient))>/join/<encodeURIComponent(capturedJoinGeneration)>`.
+Notices use the analogous `notice/N` key. The recipient and participant join generation are frozen at
+landing; ledger attachment rotation does not change the key. Post, receipt lookup and retraction use
+the same captured coordinates. A later mutating operation retries unposted work idempotently. Directed
+activity cards bound the body to 200 characters and point to `square_catch` when shortened. Square records which cards contain
+the full activity. Unread means after the read horizon, not caught, and without a ledger receipt for
+a full card. Square folds retained receipts lazily during privileged producer operations; catch retracts
+the corresponding ledger cards when possible. Ledger receipt evidence has finite retention: after proof
+expires, locally unproved activity remains unread until explicit catch or ACK. Missing evidence proves
+neither consumption nor non-delivery. A shortened card cannot consume the full activity. Handoff
+acceptance is not presentation; a boundary receipt is not proof of comprehension.
 
-## Host attachment lifecycle
+`Square.send({from, to, body, metadata?}, control?)` creates a producer-owned notice, not a say or a
+membership. `to` is a participant name or readonly array of names. It returns Square-owned
+`SendResult` `{id, at, from, to, body, metadata?}` with `id: notice/N`, distinct from `act/N`.
+Recipients are frozen when the notice lands. The delivered notice text is exactly the supplied body,
+including its original newlines; no sender label or metadata is added to that text. Sender and metadata
+remain producer facts for queries and exact ACK. There is no sender truncate or preview option.
+Notices use the same producer export ownership path as activity cards.
 
-`square.detach(name, {owner, generation})` checks the exact owner and generation inside the artifact
-transaction. It returns `true` when it detaches, or `null` for stale, replaced, foreign, done or
-already-detached custody. It lands no activity, preserves membership/read horizon/listens, and
-clears wake readiness, catch ownership and delivery deferrals. Detached handles cannot write,
-including an empty catch; reattachment or same-owner rejoin restores access. Proactive claims,
-observers and final send/presentation checks exclude detached seats. Existing receipts and delivery
-evidence survive. A detached participant stays away indefinitely; no timer manufactures a departure.
+## Queries and acknowledgement
 
-`square.reattach(name, {owner, wakeAddress?}, control?)` restores a standing seat of that exact owner
-and returns a `Participant`, or `null` if the seat is absent, foreign or done; it never creates
-membership. It preserves the generation, read horizon and listens. On an already attached seat it
-returns a handle and can refresh the supplied wake address, subject to native-route preference.
-Host start/resume restores detached seats found with `seatsOf(owner)` before arming delivery,
-independently across seats and locations. Concurrent departure or takeover remains fenced; a foreign
-takeover between the initial seat read and transaction can refuse instead of returning `null`.
-New/forked owners restore nothing, and hosts do not recover from historical done coordinates.
+`Square.participants({local: true, observe?: true}, control?)` reads only World-known participant
+facts, including known departure and attachment state. It needs no host ledger access and does not
+prove current host liveness; `deliveryAvailable` is false in this mode. The default query still overlays
+host attachment and route availability. Local discovery can distinguish known names before selection;
+it does not grant custody or allow fallback over a departed, foreign or detached identity.
 
-There are three endings: participant `done` ends membership; Pi shutdown, Codex SessionEnd and
-Claude session end detach only; host-confirmed permanent deletion uses
-`square.endHeld(name, {owner, generation})` to land a fenced `done` on an attached or detached seat,
-returning its lifecycle result or `null` when custody no longer matches. OpenCode `session.deleted`
-is permanent deletion. Takeover replaces either attachment state with `done -> join`; late cleanup
-or restoration by the old owner cannot reclaim it.
+`Square.history` returns `{activities}` without consuming; `Participant.pending` returns
+`{activities, remaining}` oldest first. Activity queries support exact IDs, senders, metadata matches,
+search and exclusive `act/N` cursors. Filters combine with AND. History defaults to ten records;
+`limit: null` requests the complete archive. Pending defaults to 100 and accepts limits 1–100.
+A pending read does not claim work or change the read horizon.
 
-`square.cancelDeliveries(name, {owner, generation})` is also generation-fenced: for an attached
-current seat it advances the suppression boundary through the current activity head, returning
-whether it changed. A mismatched seat returns `false`; a detached or concurrently replaced seat may
-be refused. It does not consume activity or recall an external send already past its final check.
+`Participant.ack(ids: readonly ActivityId[], control?)` remains the exact-ID consumption operation,
+returning `{consumed}`. All IDs must be addressed to the participant; invalid or unaddressed IDs
+reject the batch. Duplicate and already consumed IDs are idempotent. It does not assert presentation.
 
-## HTTP(S) wake notifications
+For producer waiting, the explicit opt-in
+`Participant.ack({from: string, match: MetadataMatch, future: 'exact'}, control?)` returns
+`Promise<{consumed: number}>` and records a durable recipient-scoped sender and metadata predicate,
+including for a matching notice inserted later. Zero consumed still means the future consumption fact
+committed. This is exact equality of each specified nested scalar field, not equality of the whole
+metadata object, nor a prefix or wildcard match. Supply the full outcome identity; unrelated recipients
+and outcomes remain unaffected. The ordinary ID form does not create a future predicate.
 
-File-backed public opens include a built-in `http` wake transport for both HTTP and HTTPS.
-Register its address through SDK join or same-owner `reattach`:
+Insertion, ACK and producer export ownership serialize in World storage. Once export ownership commits,
+the asynchronous ledger post runs outside that transaction: a later ACK cannot promise recall. The
+fact remains until the producer can prove the corresponding source cannot be inserted or exported
+again; no TTL or first-admission cutoff is required. Producer bookkeeping records the immutable
+`firstPossibleExport` at initial export ownership using actual host time, on the ledger's clock basis.
+A claim is recoverable when its process dies or its 60-second ownership expires; settlement is fenced
+to the captured token. An abandoned uncertain export at or beyond the ledger's minimum 30-day identity
+retention window is not automatically reinserted. Clock or boundary uncertainty is treated conservatively.
+This limit is not a source TTL: it does not reject or expire never-exported sources, and catch and ACK
+remain available. A crash between export and bookkeeping leaves honest uncertainty. A token-fenced
+initial attempt proved not to have invoked insertion, or given a definite insertion refusal, releases
+its export bookkeeping while keeping the source pending. Recovering a prior uncertain attempt never
+erases its original export time merely because the current retry was unsent.
 
-```ts
-const { participant: bob } = await square.join('Bob', {
-  owner: 'example:bob-process',
-  wakeAddress: { kind: 'http', address: {
-    url: 'https://example.com/square/wake',
-    tokenEnv: 'BOB_WAKE_TOKEN', // optional; sender process environment variable
-  } },
-});
-```
-
-The URL must have an HTTP(S) scheme and hostname, with no embedded username/password or fragment.
-Local/private endpoints are allowed. HTTPS uses normal certificate validation. The sender POSTs
-`Content-Type: application/json` to that URL without following redirects. When `tokenEnv` is
-configured, the sender resolves it in its own environment (`env` at open, otherwise `process.env`),
-not the receiver's. A missing, blank or invalid bearer token refuses locally without HTTP I/O.
-Keep the secret in that environment variable, never in the stored address. Diagnostics do not echo
-URLs or raw network errors; URL query strings may themselves be sensitive and remain stored config.
-
-The JSON body contains only:
-
-```json
-{
-  "location": "/sender/path/discussion.square",
-  "participant": "Bob",
-  "activity": "act/12",
-  "actor": "Alice",
-  "attemptN": 0,
-  "preview": "<existing rendered Square wake reminder>"
-}
-```
-
-`attemptN` is omitted when unavailable. The preview is the existing rendered awareness reminder,
-not a new payload template or full artifact. Owner, route and claim token are never included. `location` is the
-**sender's artifact locator**, not a downloadable URL. HTTP adds wake notification, not a remote
-Square backend: the receiver owns how it queues/wakes its agent and gives it access to Square.
-
-Return 2xx promptly only after accepting wake custody. A 2xx records an accepted wake, **not** catch
-or presentation; activity remains unread until normal consumption. Redirects and 4xx are rejected,
-5xx are transient failures, and other non-2xx statuses are rejected. A network error or timeout
-after sending starts is **unknown**: the receiver may already have accepted. Unknown/accepted wakes
-are not automatically replayed. There is no retry loop in the HTTP adapter; existing delivery policy
-owns future dispatch. Local configuration, absent preview, expired pre-send budget or a refused final
-gate sends nothing. One deadline covers preparation, the final gate and waiting for response headers;
-response bodies are cancelled rather than read. Claims, per-owner ordering, deferral, attachment and
-cancellation checks are shared with every transport. `wakeTransport: false` still disables wakes,
-and an injected transport remains authoritative.
-
-The enclosing dispatcher's safety deadline is transport-neutral: if an attempt is still unsettled,
-it records conservative **unknown**, even when HTTP has not started (for example, while the final
-send gate is stalled). A local pre-send expiry is known no-send only when the adapter's result arrives
-before that outer fallback. HTTP still must not start I/O after a stalled gate resumes past its
-deadline; the persisted unknown remains and prevents automatic replay. This does not change the
-shared dispatcher's timeout or retry policy.
-
-## One set of operations and defaults
-
-Square owns `history`, `status`, `participants`, `stream`, and recovery observations.
-A file-backed `stream` follows the path with a fresh artifact read for each page, so atomic file
-replacement is visible even while the resource holds its original connection. Its iterator owns
-its observation lifetime: `return()` interrupts a pending pull; closing a local Square does not close
-that independent path observation.
-Internal readers that explicitly borrow an artifact port leave its lifetime with the lender and
-propagate port failures rather than waiting for path repair.
-
-`Activity` is `{id, at, kind, actor, body?, metadata?, mentions, reach?, target?, reply?}` throughout
-the SDK. Stream without a recipient yields these activities; with a recipient it selects
-their landed directed activities and adds `perception` and the landing route `via`
-(`mention`, `reply`, `attention`, or `bell`). Perception follows the viewer's actual landed audience;
-`via` is absent when no directed route exists. Stream starts at a bounded tail or after an `ActivityId`
-like `act/12`; it never consumes activity.
-Participant owns `express`, `catch`, `pending`, `ack`, `listen`, `unlisten`, `ignore`, `listening`, `done`,
-`deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral`. History belongs only to
-Square; there is no `Participant.history`.
-
-- Express waits when throttled unless `noWait: true`, for **every** caller. `ExpressResult`
-  includes the committed `activity`, optional landing-time warnings (`unmatchedMentions`,
-  `replyAuthorNotHere`), `hint` and `observation`. Warnings are not stored on the activity.
-- A say may carry `metadata`, an immutable JSON object with nested JSON values and a maximum serialized
-  UTF-8 size of 16 KiB (`ACTIVITY_METADATA_MAX_BYTES`). `alice.express({body?, metadata?, ...options}, control?)`
-  is the object form; the existing `express(body, options?, control?)` form remains valid. A non-empty
-  body may carry `{}`; an omitted, empty or whitespace-only body requires non-empty metadata. Metadata-only
-  says omit `body` from public activity records. Invalid objects, cycles, unsupported values and oversized
-  metadata refuse before landing with `activityUnsent`. Metadata is carried unchanged by express, history,
-  catch, status/latest, unread projections and stream records through the SDK, CLI and stream, and
-  by channel send/receive/history/pending messages.
-  MCP and Pi tools are not a metadata surface: their `express` requires a body and its schema rejects a
-  `metadata` argument. Tool history/catch return rendered text with a structured-activity placeholder,
-  not metadata JSON or activity objects. Metadata does not affect mentions, replies, listening, audience,
-  ordering, consumption or permissions. A current participant may temporarily defer proactive delivery
-  by exact metadata match through the SDK lease API below. Metadata may nest up to 256 levels; the bound is enforced before
-  persistence and public reads. Human text uses a concise structured-activity placeholder and never prints
-  metadata JSON. SDK history and pending queries accept exact metadata matches; there is no query
-  language or metadata index. CLI `--metadata <json>` remains an express input flag. Channel
-  `send` accepts the same metadata and returns it on `ChannelMessage` records.
-- Catch returns `{activities, remaining, reason, hint?, observation?}`. Each activity includes
-  viewer-relative `perception` and `via`. Reasons are `drained`, `idle`, `capped`, `quorum`,
-  `replaced`, or `already-active`. Omitted/zero idle is immediate; positive idle uses the single
-  leased quiet wait. Receipt selection, perception, routes, counts and terminal facts settle
-  in the receipt transaction. Cancellation/replacement releases only that waiter's lease and never
-  consumes future activity.
-- Agora history (`Square.history`) returns `{activities}`. Default page size is ten;
-  `limit: null` explicitly requests an unbounded archive. Numeric limits must be 1–100. Contextual
-  queries still reject an implicit merged window over 100 activities; an explicit numeric limit
-  bounds it. CLI/tool schemas accept numeric limits only. History never writes receipts; history
-  observations retain lifetime say ordinals for CLI `history --format number`.
-- `participants()` returns `{participants, observation?}` and `listening()` returns
-  `{listening, observation?}`, not arrays carrying metadata. Participant summaries use `presence`
-  (`never-joined`, `active`, `watching`, `away`, or `done`). Away participants remain members,
-  count toward in-square totals and keep receiving normal bell, mention and listened audience. Its roster
-  supplies the participant counts. Core `square.status({viewer})` uses only the explicitly supplied viewer; with
-  no viewer it returns an unfiltered overview without viewer-specific `listening`. Core status does
-  not select or authorize a seat. CLI and tools check an explicit `--as`/`as` with `selectOwnSeat`;
-  otherwise exactly one attached seat of the caller's owner becomes the viewer, while zero or multiple
-  seats (or no owner) produce the overview. Snapshot participants use the same `name`, `presence` and
-  `listening` facts, excluding never-joined people; its detached `delivered(name, id)` predicate
-  remains available.
-- `unlisten(target)` removes only that participant's current listen edge to the target, without
-  leaving or blocking future mentions/replies. It returns the same `ListenerChangeResult` as listen
-  and ignore, with `activity: null` when no listen exists. Existing ignores are unchanged. Earlier
-  landed audiences and receipts are never rewritten; listening again remains available.
-- Lifecycle operations return `{activity, observation?}` and use the same artifact custody gate;
-  observations do not repeat the activity. Join entry uses public activities with settled perception,
-  and status observations use public join activities. Done accepts no message and retires only its
-  attached, captured owner/join generation; it never implicitly rejoins. A done participant is not
-  recoverable authority for any host path.
-- Recovery summarizes unread directed activity with per-sender count, latest age and the single
-  greatest-index preview. Age uses the greatest timestamp, which may belong to another activity.
-
-Operations that accept an `OperationControl` use a final argument with `signal` and optional typed
-`onProgress`. Listener/lifecycle operations take optional observation options before that argument;
-participant selection, seat discovery and host cleanup methods do not take an `OperationControl`.
-
-## Channel endpoints and point-to-point messages
-
-`@astrosheep/square/channel` exports the endpoint and messaging resource `Channel`; the Agora
-resource (`Square` / `Participant`) uses the same message substrate. `Channel` has static `open`,
-`create` and `inMemory`, a `location` property, and methods `attach`, `reattach`, `endpoint`,
-`endpointsOf`, `listEndpoints`, `detach`, `cancelDeliveries`, `remove`, `send`, `history` and
-`close`. Obtain a `ChannelEndpoint` from a Channel; it has `name` and `generation` properties and
-methods `pending`, `ack`, `receive`, `deferDelivery`, `renewDeliveryDeferral`,
-`releaseDeliveryDeferral`, `send` and `leave`. Endpoint generations are opaque strings: retain
-and compare them for equality, without interpreting their contents.
-
-The subpath exports the types `MessageId`, `MessageCursor`, `MessageQuery`, `MessageSearch`,
-`MessageMetadata`, `ChannelTruncate`, `ChannelSendInput`, `ChannelSendResult`, `ChannelMessage`,
-`ChannelPendingOptions`, `ChannelPendingResult`, `ChannelReceiveResult`, `ChannelHistoryQuery`,
-`ChannelHistoryResult`, `AckResult`, `ChannelEndpointSummary`, `ChannelEndpointHold`,
-`DeliveryDeferral`, `MetadataMatch`, `Owner`, `OperationControl`, `WakeAddress`, `WakeTransportPort`,
-`ChannelOpenInput`, `ChannelCreateInput`, `HarnessSessionChannel` and `ResolvedHarnessSession`.
-It also exports `harnessOwner`, `decodeHarnessOwner`, `localUserOwner` and `resolveHarnessSession`.
-The package root exports `MessageId`, `MessageCursor` and `MessageQuery`, but not `MessageMetadata`
-or `MessageSearch` under those names; its Agora equivalents are `ActivityMetadata` and `ActivitySearch`.
-
-Square and Participant expose their own Agora lifecycle operations; in particular,
-`square.endHeld` lands a fenced `done`, whereas `channel.remove` removes an endpoint and is not
-`Channel.endHeld`.
-`Square.history` and `Participant.pending` remain Agora projections, not channel reads: Agora
-history selects joins, says, departures and listener changes but never native messages, and Agora
-pending selects addressed, unconsumed says as perceived activities.
-
-- `Channel.send({from, to, body, truncate?, metadata?})` addresses standing endpoints explicitly.
-  `truncate` defaults to `false`, so the full body is delivered and presentation records a receipt.
-  An explicit positive integer at least as long as the body is likewise unclipped; when the body is
-  longer, the landed message stores `preview`, so presentation shows that preview and records clipped
-  coverage without consuming the full stored body. `pending`, `receive` and `ack` still read and
-  consume that full body. Any other `truncate` value is refused before landing. `to` in the send
-  result and in every `ChannelMessage` is the actual landed audience after address resolution. A
-  stored message may have an empty body only when imported from a legacy metadata-only direct say;
-  `Channel.send` itself always requires a non-empty body.
-- `endpoint.receive(options?, control?)` selects the oldest unconsumed addressed messages matching the
-  shared filters and records their receipts in one transaction, returning
-  `{messages, consumed, remaining}`. Each `ChannelMessage` is `{id, at, from, to, body, metadata?}`,
-  symmetric with the send result. `remaining` counts matching unconsumed messages left after that
-  transaction. Nothing is consumed by `pending` or `history`.
-- `Channel.history(query?, control?)` returns `{messages}` for native messages and says, selecting
-  the newest page oldest-first by default; `order: 'desc'` reverses the page. It shares the
-  `MessageQuery` filters (`at`, `from`, `match`, `search`, `cursor`) but has no Agora
-  `contextBefore`/`contextAfter`, `since`, `mention` or `observe` options. Its default page size is
-  100; `limit` accepts 1–100 or `null` for all matches.
-- `listEndpoints(control?)` reports every standing endpoint without an owner argument as
-  `{name, generation, attachment, deliveryAvailable, unreadCount, lastActiveAt?}`. `endpointsOf(owner)`
-  remains the owner-scoped custody list, and neither operation joins, restores or reveals an address.
-- Direct notifications have no separate envelope: the model-facing text is the stored preview, or
-  the body when untruncated, escaped inside the shared `<system-reminder>` frame; sender, recipients
-  and ID are not printed. Body text that would read as `<channel-`, `<square-` or
-  `<system-reminder` is escaped. A mixed boundary keeps notification order; its fixed budget and
-  `N more activities not shown.` line apply only to Agora activity blocks, and the line trails the
-  rendered batch.
-- An unconsumed direct message stays eligible for the proactive inbox and wake horizon across a seat
-  takeover or rejoin. Earlier Agora activity still ends at the recipient's new read horizon.
-
-## Shared history and pending filters
-
-Agora `HistoryQuery` and `PendingOptions` extend the exported `ActivityQuery`:
-
-```ts
-interface ActivityQuery {
-  at?: readonly ActivityId[];
-  from?: readonly string[];
-  match?: MetadataMatch;
-  search?: { text: string; mode: 'literal' | 'regex' };
-  cursor?: { id: ActivityId; direction: 'before' | 'after' };
-}
-```
-
-Channel `ChannelHistoryQuery` and `ChannelPendingOptions` extend `MessageQuery`, whose `at` IDs
-and `MessageCursor.id` are `MessageId` (`msg/N`) rather than `ActivityId` (`act/N`). The message
-query types are exported from `@astrosheep/square/channel` and the package root. Channel history,
-pending, receive and ack use `msg/N`; Agora history, pending and ack use `act/N`. A say has both
-coordinates, which are not interchangeable.
-
-- Filters combine with AND. IDs in `at` and senders in `from` each combine with OR; an absent array
-  is unrestricted, while an explicitly empty array matches nothing. `at` is an exact ID selection;
-  only history can expand those IDs with `contextBefore` / `contextAfter`.
-- Sender names use case-insensitive identity matching and need not belong to a joined participant.
-  Direct senders such as `keiyaku-notice` can be queried without inventing membership. A valid but
-  unmatched sender returns no activities, not an unknown-participant error.
-- `match` uses the same nested own-property, exact type-sensitive scalar equalities as deferrals.
-  `search` tests each activity's ID, sender and body independently, case-insensitively. Literal mode
-  treats regex characters as plain text; regex mode uses JavaScript's built-in regular expressions,
-  without a ReDoS timeout. Search text must be nonempty and regex syntax must be valid. Agora
-  history searches says and departures, not joins. Participant `pending` selects addressed,
-  unconsumed says; `ChannelEndpoint` `pending`/`receive` select addressed, unconsumed messages and
-  says.
-- A cursor is an exclusive boundary in its own coordinate space, independent of `limit`: before excludes the anchor
-  and everything newer; after excludes the anchor and everything older. No consumption is involved.
-  Storage applies the shared filters before limiting and uses the same predicates for counts.
-- Agora history keeps its archive-specific `order`, `mention`, `since` and context options. By
-  default it selects the newest page and returns it oldest first; an after cursor selects the oldest following
-  page. `order: 'desc'` reverses the selected page, not which activities belong to it. Numeric limits
-  stay 1–100, default ten; `limit: null` reads all matches. Exact/context history keeps its existing
-  implicit full-window selection with a 100-activity bound unless a numeric limit is supplied.
-- Pending always selects oldest first, including with a before cursor. Its default and maximum page
-  size remain 100, and `remaining` counts matching unconsumed activities beyond that page within
-  the supplied cursor boundary. It has no history context, ordering or audience override.
-
-The SDK accepts only `search` and `cursor`, not the removed `grep` / `fixed` / `before` / `after`
-fields. CLI flags and tool arguments keep those familiar spellings and translate at the adapter
-boundary, e.g. `--fixed text` becomes `search: {text, mode: 'literal'}` and `--after act/12` becomes
-`cursor: {id: 'act/12', direction: 'after'}`. The query surface keeps these `act/N` and `msg/N` coordinates; format 11 is a separate fresh-store
-breaking upgrade rather than a query change.
-
-## Pending query and exact acknowledgement
-
-`Participant.pending(options?, control?)` and `Participant.ack(ids, control?)` separate a read-only
-query from explicit consumption. Agora `pending` returns addressed, unconsumed `say` records as
-perceived activities, so native messages never appear there. `ChannelEndpoint` from
-`@astrosheep/square/channel` returns `{messages}` for both native messages and says; `ack` records
-receipts for the addressed message IDs. Neither layer keeps a second inbox, read horizon or storage.
-
-Agora publication is participant-scoped: `Participant.express(...)` publishes a say/activity for
-that standing participant. Standalone `Channel.send` addresses standing Channel endpoints, without
-requiring Agora membership, and lands a Channel message, not an Agora activity. Attachment gates
-proactive wake, not landing: a detached Channel recipient retains its unread addressed item and can
-query/ack it after reattachment. Recipient validation is all-or-nothing; a missing or departed
-recipient rejects the entire send without landing a message or waking other recipients. An omitted
-`truncate` sends the full body; truncation is an explicit per-message choice.
-
-```ts
-import type { ChannelEndpoint, MetadataMatch } from '@astrosheep/square/channel';
-
-async function drain(endpoint: ChannelEndpoint, match: MetadataMatch) {
-  for (;;) {
-    const page = await endpoint.pending({ match });
-    if (page.messages.length === 0) break;
-    // Process the entire page successfully before acknowledging its exact IDs.
-    for (const message of page.messages) await processNotice(message);
-    const { consumed } = await endpoint.ack(page.messages.map(message => message.id));
-    // consumed may be smaller if another consumer acknowledged some IDs first.
-  }
-}
-```
-
-- `Participant.pending(query: PendingOptions = {}, control?)` returns
-  `{activities: readonly PerceivedActivity[], remaining: number}` and selects landed, addressed,
-  unconsumed says oldest first, with viewer-relative `perception` and `via` as in catch.
-  `ChannelEndpoint.pending` returns `{messages: readonly ChannelMessage[], remaining: number}` for
-  addressed, unconsumed messages and says; each message is `{id, at, from, to, body, metadata?}`.
-  Both read full stored bodies, never clipped previews or delivery remnants.
-- Limit defaults to 100 and must be an integer from 1 through 100. The shared filters above are
-  available alongside that limit. Storage applies addressedness, consumption and all supplied
-  filters **before** limiting. `remaining` counts matching unconsumed activities for Agora and
-  messages for Channel outside the returned page in the same read transaction. It is not the global
-  unread count or a durable cursor.
-- A pending query consumes nothing, changes no read horizon and writes no delivery/presentation
-  evidence. Deferrals, catch leases, cancellation and prior clipped presentation do not hide these
-  explicit reads. Agora catch and pending include historical addressed activity receipt holes from
-  before a rejoin; they are not proactive delivery eligibility queries. Channel pending, receive and
-  ack use only addresses valid for the current endpoint generation. Ordinary unfenced `Channel.send`
-  messages remain addressed across takeover or rejoin until consumed.
-- Agora `ack(ids: readonly ActivityId[], control?)` and Channel `ack(ids: readonly MessageId[], control?)`
-  return `{consumed: number}`, the count of newly
-  consumed exact IDs. It validates that **every** supplied ID is addressed to this participant before
-  recording any receipts; Channel also checks that the address is valid for the current generation. Malformed, nonexistent or unaddressed IDs reject the whole batch with
-  `invalid_args` (`reason: 'not_addressed'` for valid but unaddressed IDs). There is no implicit prefix
-  acknowledgement, no match reselection and no requirement for an earlier pending call.
-- Duplicate IDs, repeated acknowledgement and an empty array are idempotent. Existing receipt
-  timestamps remain unchanged. Acknowledgement uses the same sparse receipts as catch/full
-  presentation, so it removes those IDs from pending and ordinary catch, but exact catch remains
-  repeatable. It does **not** assert wake acceptance or presentation and writes no such evidence.
-- Both operations require their captured current owner, generation and attached seat; even an empty
-  query/ack cannot reuse a detached, retired or replaced handle. No storage format change is needed.
-  Cancellation before the receipt transaction prevents consumption; a committed ack is not undone.
-- To drain all matching notices, keep querying and acknowledging pages until an **empty** page.
-  Acknowledging one page exposes the next without a cursor. For read-only pagination instead, pass
-  `cursor: {id: page.messages.at(-1)!.id, direction: 'after'}` on a channel endpoint (or
-  `page.activities` on a Participant) with the same filters; earlier pages
-  stay unconsumed. Do not silently stop after the default page or treat a snapshot `remaining: 0`
-  as proof that concurrent producers have stopped. Query and
-  ack are separate operations, not an exclusive claim or an exactly-once external-effect guarantee.
-
-## Temporary proactive delivery deferral
-
-SDK Participants expose three operations. There are no CLI/MCP/Pi authoring
-commands or listing operation in this delivery. Existing proactive adapters still obey deferrals.
+## Temporary producer delivery deferral
 
 ```ts
 const lease = await alice.deferDelivery({
@@ -466,167 +116,35 @@ const lease = await alice.deferDelivery({
   durationMs: 60_000,
 });
 try {
-  // Explicit history and catch remain available, including catch({id}).
-  const renewed = await alice.renewDeliveryDeferral(lease.id, 60_000);
-  // null means absent, expired, or not owned by this current generation.
+  await alice.renewDeliveryDeferral(lease.id, 60_000);
 } finally {
   await alice.releaseDeliveryDeferral(lease.id);
 }
 ```
 
-- `MetadataScalar` is `null | boolean | number | string`; numbers must be finite. `MetadataMatch`
-  has nonempty `fields`, each `{path: readonly string[], equals: MetadataScalar}`. Paths have one
-  or more nonempty string segments, with no duplicates. Only JSON object own properties are
-  traversed: arrays, missing/nonobject intermediates and inherited properties do not match.
-  Equalities are exact and type-sensitive. A dot inside one segment is a literal key, not path
-  syntax. All fields combine with AND; any matching live lease blocks delivery (OR across leases).
-- Each acquire returns a fresh UUID and an operation-clock ISO `expiresAt`: `{id, expiresAt}`.
-  Match objects are not returned. `durationMs` must be a positive safe integer and is capped at
-  24 hours. Invalid matches, durations and IDs refuse with `invalid_args` before mutation.
-- Renewal extends that same live lease from the renewal operation's clock; expired/missing IDs
-  return `null`, and release returns `false`. Independent overlapping leases are never merged;
-  releasing one cannot end another. A captured current owner/join generation is required for every
-  mutation. Stale handles retain the ownership refusal; done/takeover/rejoin retire old leases.
-- Lease writes change delivery revision, not conversation history. They do not create a receipt,
-  change audience or unread counts, hide an archive record, or prohibit explicit catch/pending/ack.
-  Catch and ack consume normally; a consumed record is not replayed when a deferral ends. The catch
-  lease is a separate, single quiet-wait lease with its existing filters and lifecycle.
-- Producer/sweep, atomic claims, session/native projections, final pre-send checks and proactive
-  presentation all share current-generation unexpired matching. Suppressed items get no seen or
-  presented receipt. An active pending observer rechecks on release and the earliest relevant
-  expiry, including renewed deadlines, without needing a new conversation activity. A one-shot
-  producer skips and returns promptly. With no active observer, eligibility is reconsidered at
-  the next normal opportunity; no daemon or per-message timer is created.
-- Acquiring a lease is not recall. An external send already past its final freshness check can race
-  with acquisition and remain dispatched; a sink effect already written cannot be withdrawn.
-  Presentation eligibility is checked before the effect, not again as a veto after success. A batch
-  claims and filters its items before its one sink call, then records exactly the successfully rendered
-  set under each captured owner/join generation. A lease acquired while the sink returns or before a
-  later item's evidence commit does not erase success or allow replay after release. Cancellation
-  likewise stops pre-effect work, not truthful completion after a successful sink: evidence settles
-  on the original connection with an independent bounded storage lifetime and the same seat fences.
-  A rejected/cancelled native landing is not a successful sink. Items filtered
-  out before the sink receive no success receipt.
-  Cancellation before commit prevents the lease mutation; after commit it remains until explicit
-  release, expiry, or seat retirement. See [operation-cancellation.md](operation-cancellation.md).
+`MetadataMatch` has nonempty `fields` with nonempty path segments and exact, type-sensitive scalar
+`equals` values (`null`, boolean, finite number or string). Only own object properties are traversed;
+arrays and missing intermediates do not match. Fields combine with AND, and independent live leases
+combine with OR. Each lease has its own ID and expiry; renewal cannot revive an expired lease.
+The three existing lease methods remain separate from the single catch lease. They postpone matching
+producer export without changing audience, history, unread counts or explicit catch and ACK. Release
+or expiry permits unconsumed work to proceed; neither recalls export already owned or in ledger custody.
 
-## Optional observations, not another execution path
+Sandbox participant selection and lease/ACK mutations check captured owner, join generation and locally
+known lifecycle in World storage only. They do not need ledger access and do not prove host liveness.
+Ledger-only detach or delete is learned at the next privileged producer reconciliation; actual export
+is gated by the ledger's current state. Local controls cannot grant delivery authority or resurrect a
+deleted session. Known stale, departed or replaced custody refuses.
 
-Request `observe: true` on the **same method** when rendering needs additional facts. Each operation
-has a concrete optional observation type, without conditional generics or a generic outcome wrapper.
-Data-only calls do not hydrate join history, the pre-expression feed, catch presence enrichment,
-or history/status presentation annotations.
+## Storage and lifecycle
 
-Express captures optional unread context before the attempt: the latest five directed,
-unseen activities after the current join, each preview capped at 400 Unicode characters,
-plus the count outside that preview. It hydrates only that page, not the entire cursor suffix.
-This is a nonconsuming preview even when a short body fits in full; consumption requires `catch`,
-explicit `ack`, or the normal full-notification presentation path. Count and time facts come
-from the committed transaction. Listener and lifecycle observations likewise use their mutation's
-facts, with no postcommit context read. Join uses its mutation's essential facts and treats optional
-entry/history enrichment as best-effort: `observation.enrichmentUnavailable` is explicit and the
-successful receipt survives. Catch preserves its committed page even if optional nearby presence
-fails. A cancellation or failed clock after commit cannot turn these receipts into an unsent retry.
+Format 12 is a breaking fresh-store format. Square owns its activities, audience, participants, read
+state and posting/full-card bookkeeping in the `.square` SQLite artifact. The per-user host delivery
+ledger owns producer-neutral cards, attachment, routes, attempts and receipts; there is no discovery
+index. Older artifacts are refused read-only: no migration, conversion or deletion. Host start/resume
+and end attach/detach the ledger session, not Square seats. Host-confirmed deletion is reconciled to a
+fenced `done` lazily by the next mutating operation, never by history, status or participants.
 
-Delivery readiness is participant-specific, not a property of the Square resource.
-`ParticipantSummary.deliveryAvailable`, `JoinObservation.deliveryAvailable` and
-`CatchObservation.deliveryAvailable` reflect whether the participant's seat has a stored wake
-address. Catch captures this fact with its selection. Join and catch observations require
-`observe: true`. These flags do not prove that a receiver is live or that delivery succeeded.
-
-`OperationError.operation` supplements authoritative error facts with caller/filter/recipient and
-express certainty. Selected-row/execution failures remain unknown unless admission proved the
-expression unsent. CLI saves raw drafts even when opening the resource fails; its initial open
-receives the express abort signal, while recovery reopening is deliberately uncancelled.
-
-## Adapters and standalone functions
-
-CLI and tools only adapt input, identity, resource lifetime and output. They do not import private
-actions, storage, admission, scanners or query execution. CLI `--json` for join, express, catch,
-history, listen, ignore, unlisten, listening, done, status, participants and inbox
-serializes the same SDK result without requesting `observe: true`. Only `observation` is omitted and
-a live Participant handle becomes `{name}`. History returns one JSON document, including an empty
-`activities` array; `history --format` remains human-oriented. `participants --limit` limits only
-human text, not the SDK result. Stream `--ndjson` remains one SDK stream record per line.
-
-MCP/Pi use the shared `square-tools.ts` definitions. All seven tools return only the CLI's rendered text, with no `outputSchema`
-or `structuredContent`. Join text includes its context and recent activity; express text
-includes landing ID/reach, warnings and bounded unread previews, never the sent body echo
-or internal observation tables. Failures remain failed tool results with readable recovery
-text. The SDK and CLI JSON keep their full domain receipts. The optional express observation
-contains `context: {activities: [{id, actor, preview, truncated}], remaining}`, not the old
-unbounded `pendingPublic`/ordinal/perception tables.
-
-Express still finishes attempted notification delivery before releasing its resource.
-It overlaps at most four receiving sessions per dispatch, preserving order within each
-session and draining started work even on failure. Claims, final freshness checks and
-uncertain-delivery suppression remain unchanged. Paseo inventory discovery is asynchronous;
-overlapping attempts share only the in-flight inventory read, never a cached idle status.
-Paseo inventory discovery returns a promise.
-
-`discover(input, options?, control?)`, `inbox(input, owner, options?, control?)`, and
-`diagnoseSquare(input, control?)` are ordinary public exports. They are not methods on a synthetic
-cross-square object. Diagnose resolves a path without opening a valid current-format Square first.
-
-## Artifact format
-
-The current artifact format is 11. It is a breaking fresh-store format, not an upgrade of format
-10. A full Square file combines three separately owned layers in one SQLite database and one
-transaction: the neutral storage revision header, the same Channel message/endpoint/delivery
-tables used by a standalone Channel, and the Agora social tables plus the activity allocator and
-square settings. Standalone Channel storage uses its own format identity and version and contains
-only the neutral and Channel structures; it never creates or reads Agora tables.
-
-Ordinary opens accept only the exact current identity, version and owned schema. Any other
-identity or version is refused read-only, with no conversion, no write and no migrate command.
-There is no automatic upgrade, compatibility decoder or recovery instruction. Stop any session
-using an older `.square` file and start a fresh square; the old bytes are never touched.
-
-## SDK breaking migration: opaque owners
-
-Artifact format 7 introduced opaque owners, format 8 removed hold/resume activities, and format 9
-stores native messages. Format 10 unified message content while keeping Agora relations separate.
-Format 11 splits neutral storage, standalone Channel and Agora, and has no migration from any
-older format. Current artifacts must be created fresh at format 11.
-`Body`, `sameBody` and `validateBody` are removed from the core and public API. Replace identity
-objects with an explicit owner at each identity-bearing operation; do not put identity on a resource:
-
-```ts
-import { Square } from '@astrosheep/square';
-
-const aliceOwner = 'example:alice-process';
-const bobOwner = 'example:bob-process';
-const square = await Square.at({ path: './discussion.square' });
-try {
-  // Previously: pass body/wakeAddress/participant to Square.at and join(name).
-  const { participant: alice } = await square.join('Alice', { owner: aliceOwner }); // wakeAddress is optional
-  const { participant: bob } = await square.join('Bob', { owner: bobOwner }); // same resource, another owner
-  // For an already attached seat, select it without joining:
-  const selected = await square.participant('Alice', { owner: aliceOwner });
-  const seats = await square.seatsOf(aliceOwner);
-  const { activities } = await square.history(); // not alice.history()
-  const status = await square.status({ viewer: selected.name });
-  console.log(alice.name, bob.name, seats, activities, status);
-} finally {
-  await square.close();
-}
-```
-
-Replace `recognize()`/`bodySeats()` with `seatsOf(owner)`, followed by explicit attached-seat
-selection as needed; replace `implicitJoin` with `reattach(name, {owner, wakeAddress?})`. Replace
-`detachOwnedSession`/`endOwnedSession` with the generation-fenced `detach`/`endHeld` methods above.
-`forBody` is removed: use the same Square with operation-local owners. Read readiness from
-participant summaries or join/catch observations, not the removed resource-level
-`automaticDeliveryAvailable`. Core status no longer infers a viewer. Participant selection no longer
-returns a handle for a missing, done, foreign or detached seat.
-
-## Other deliberate migration breaks
-
-The independent `createSquareApplication` API, its options/results/aliases, and `square-application.ts`
-are deleted. Consumers must open/close an actual Square and select a Participant. SDK joins return
-`(await square.join(name, {owner})).participant`; history callers must use `.activities` and opt into
-full archive reads with `limit: null`. SDK express now waits by default. MCP constructor configuration
-uses `path`, consistent with `Square.at`, rather than `squarePath`.
-
-External consumers must adapt their code before taking this source version. Editing source does not update
-an installed plugin, build, or running extension.
+The package exports `DeliveryLedger` and its types from both the root and
+`@astrosheep/square/delivery-ledger`. External producers post finished text and own their content;
+the ledger has no metadata matching, deferral or Square-specific API.

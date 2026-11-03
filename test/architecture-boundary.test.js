@@ -47,41 +47,6 @@ test('the local resource accepts transport injection without composing harness d
   assert.doesNotMatch(resource, /createDefaultWakeTransport/);
 });
 
-test('the channel owns endpoint messaging and the Agora resource delegates to it', () => {
-  const channel = productionSources.get('channel.ts');
-  assert.ok(channel);
-  assert.deepEqual(moduleEdges('channel.ts', channel)
-    .filter(edge => ['./square-api.js', './sqlite-square.js'].includes(edge.module)), [],
-  'channel.ts must not wrap the Agora resource');
-  const resource = productionSources.get('sqlite-square.ts') ?? '';
-  assert.ok(moduleEdges('sqlite-square.ts', resource).some(edge => edge.module === './channel-internal.js'
-    && ['Channel', 'ChannelEndpoint'].every(name => edge.names.includes(name))),
-  'sqlite-square.ts must compose the shared internal channel and endpoints');
-  // One implementation per behavior: the Agora layer keeps only delegation here.
-  for (const owned of [/facts\.seatsForOwner\(/, /Channel truncate must be/])
-    assert.doesNotMatch(resource, owned);
-  assert.match(productionSources.get('channel-internal.ts'), /Channel truncate must be false or a positive integer\./);
-  assert.doesNotMatch(channel, /Channel truncate must be false or a positive integer\./);
-});
-
-test('Channel entrypoints and the shared dispatcher have no transitive Agora runtime dependency', () => {
-  const forbidden = new Set(['artifact.ts', 'square-sqlite.ts', 'square-domain.ts', 'square-core.ts', 'attention.ts',
-    'attention-presentation.ts', 'decisions.ts', 'catch-decisions.ts', 'catch-selection.ts', 'inbox.ts', 'wake-preview.ts', 'views.ts', 'sqlite-square.ts']);
-  const visited = new Set(), leaks = [];
-  const visit = (file, chain) => {
-    if (visited.has(file)) return;
-    visited.add(file);
-    for (const edge of moduleEdges(file, productionSources.get(file) ?? '')) {
-      if (edge.names.length === 0 || !edge.module.startsWith('.')) continue;
-      const target = resolvedTarget(file, edge.module), trail = [...chain, target];
-      if (forbidden.has(target)) leaks.push(trail.join(' -> '));
-      else if (productionSources.has(target)) visit(target, trail);
-    }
-  };
-  for (const file of ['channel.ts', 'delivery-operations.ts']) visit(file, [file]);
-  assert.deepEqual(leaks, []);
-});
-
 test('neutral storage closure excludes Agora, including type-only dependencies', () => {
   const roots = ['artifact-store.ts', 'sqlite-framing.ts', 'sqlite-values.ts'];
   const forbidden = /^(?:model|ports|square-facade|square-core|artifact|square-sqlite|sqlite-square|square-domain|square-.*(?:schema|framing|domain)|agora(?:-.*)?)\.ts$/;
@@ -123,17 +88,9 @@ function resolvedTarget(file, module) {
 
 function storageLeaks(sources) {
   const artifactBindings = new Map([
-    ['sqlite-square.ts', ['channelArtifact', 'createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile', 'createSquareResourceOwner']],
-    ['channel.ts', ['channelArtifact', 'channelCourier', 'createArtifactPort', 'createSquare', 'prepareSquareBuild', 'createSquareResourceOwner']],
-    ['boundary-presentation.ts', ['createArtifactPort']],
-    ['notifications.ts', ['channelArtifact', 'createArtifactPort']],
-    ['delivery-health.ts', ['createArtifactPort']],
+    ['sqlite-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile', 'createSquareResourceOwner']],
     ['list.ts', ['createArtifactPort']],
-    ['claude-mod.ts', ['channelArtifact', 'createArtifactPort']],
-    ['inbox.ts', ['createArtifactPort', 'observeSquareDeliveryRevision', 'observeSquareRevision']],
-    ['claude-delivery-status.ts', ['createArtifactPort']],
-    ['claude-delivery.ts', ['createArtifactPort']],
-    ['plugins/opencode-shared/delivery.ts', ['channelArtifact', 'createArtifactPort', 'observeSquareRevision']],
+    ['inbox.ts', ['createArtifactPort']],
     ['stream.ts', ['createArtifactPort', 'observeSquareRevision']],
   ]);
   const leaks = [];
@@ -149,6 +106,8 @@ function storageLeaks(sources) {
       }
       if (target === 'square-sqlite.ts' && file !== 'artifact.ts')
         leaks.push(`${file} -> ${target}`);
+      if (target === 'square-producer-sqlite.ts' && !['artifact.ts', 'square-sqlite.ts'].includes(file))
+        leaks.push(`${file} -> ${target}`);
       if (target === 'sqlite-transaction.ts' && !['artifact-store.ts', 'delivery-ledger-sqlite.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
     }
@@ -160,12 +119,12 @@ test('resolved imports preserve artifact and SQL ownership across native integra
   assert.ok(productionSources.has('packages/agent-delivery/src/opencode-native.ts'));
   assert.deepEqual(storageLeaks(productionSources), []);
   assert.deepEqual(storageLeaks(new Map([
-    ['native.ts', "import { createArtifactPort } from './artifact.js';"],
+    ['native.ts', "import { createArtifactPort } from './artifact.js'; import { createProducerDriver } from './square-producer-sqlite.js';"],
     ['plugins/opencode/helper.ts', "export { createSqliteDriver } from '../../square-sqlite.js';"],
     ['sqlite-square.ts', "export { createSqliteDriver } from './square-sqlite.js';"],
     ['cli/hidden.ts', "import { withLedger } from '../host-ledger-sqlite.js';"],
     ['decisions.ts', "import { inSqliteTransaction } from './sqlite-transaction.js';"],
-  ])), ['decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts', 'sqlite-square.ts -> square-sqlite.ts']);
+  ])), ['decisions.ts -> sqlite-transaction.ts', 'native.ts -> artifact.ts', 'native.ts -> square-producer-sqlite.ts', 'plugins/opencode/helper.ts -> square-sqlite.ts', 'sqlite-square.ts -> square-sqlite.ts']);
 });
 
 test('one canonicalizer owns square location keys', () => {
@@ -178,7 +137,7 @@ test('one canonicalizer owns square location keys', () => {
 });
 
 test('SQLite artifact rows stay private to storage framing', () => {
-  const boundary = ['artifact.ts', 'artifact-store.ts', 'channel-sqlite-schema.ts', 'sqlite-channel.ts', 'sqlite-framing.ts', 'sqlite-values.ts', 'square-sqlite.ts', 'delivery-ledger-sqlite.ts'];
+  const boundary = ['artifact.ts', 'artifact-store.ts', 'sqlite-framing.ts', 'sqlite-values.ts', 'square-sqlite.ts', 'square-producer-sqlite.ts', 'delivery-ledger-sqlite.ts'];
   assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'packages/agent-delivery/src/file-lock.ts', 'sqlite-transaction.ts']), []);
   const framing = productionSources.get('sqlite-framing.ts') ?? '';
   assert.match(framing, /CREATE TABLE storage_meta/);
@@ -207,31 +166,17 @@ test('artifact callbacks are synchronous typed capabilities, not replacement sna
 test('pure landing depends only on domain facts, syntax, and standalone attention', () => {
   const edges = moduleEdges('square-domain.ts', productionSources.get('square-domain.ts'));
   for (const edge of edges) {
-    assert.ok(['./model.js', './ports.js', './attention.js', './channel-domain.js', './channel-ports.js', './catch-selection.js', './message.js'].includes(edge.module), edge.module);
-    if (edge.module === './ports.js' || edge.module === './channel-ports.js') assert.deepEqual(edge.names, []);
+    assert.ok(['./model.js', './ports.js', './attention.js', './square-post.js', './message.js', './runtime.js', './catch-selection.js'].includes(edge.module), edge.module);
+    if (edge.module === './runtime.js') assert.deepEqual(edge.names, ['freshWatchLease']);
+    if (edge.module === './catch-selection.js') assert.deepEqual(edge.names, ['leaseOwnsNotification']);
+    if (edge.module === './ports.js' || edge.module === './square-post.js') assert.deepEqual(edge.names, []);
   }
   assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
-test('delivery leaves are dependency-free; real dispatch and single/batch adapters compose the public effect owner', () => {
-  for (const file of ['delivery-attempts.ts', 'delivery-effects.ts'])
-    assert.deepEqual(moduleEdges(file, productionSources.get(file)), []);
-  const entry = moduleEdges('delivery-primitives.ts', productionSources.get('delivery-primitives.ts'));
-  assert.ok(entry.length > 0);
-  assert.ok(entry.every(edge => ['./delivery-attempts.js', './delivery-effects.js'].includes(edge.module)));
-  for (const [file, bindings] of [
-    ['delivery-operations.ts', ['dispatchEffect']],
-    ['presentation-operations.ts', ['preparePresentation', 'presentPrepared']],
-    ['boundary-presentation.ts', ['presentPreparedBatch']],
-  ]) {
-    const effects = moduleEdges(file, productionSources.get(file)).find(edge => edge.module === './delivery-effects.js');
-    for (const binding of bindings) assert.ok(effects?.names.includes(binding), `${file} uses ${binding}`);
-  }
-});
-
-test('receive is a dependency-free leaf composed by production landing and catch', () => {
+test('receive is a dependency-free leaf composed by catch', () => {
   assert.deepEqual(moduleEdges('receive.ts', productionSources.get('receive.ts')), []);
-  for (const [file, binding] of [['sqlite-channel.ts', 'receive'], ['sqlite-channel.ts', 'recordConsumed'], ['catch-decisions.ts', 'consumeReceived'], ['catch-decisions.ts', 'selectReceivedHeads']]) {
+  for (const [file, binding] of [['catch-decisions.ts', 'consumeReceived'], ['catch-decisions.ts', 'selectReceivedHeads']]) {
     assert.ok(moduleEdges(file, productionSources.get(file)).some(edge => edge.module === './receive.js' && edge.names.includes(binding)), `${file} uses ${binding}`);
   }
 });
@@ -289,7 +234,7 @@ test('decisions and perception use domain facts, outside host and storage operat
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['artifact.ts', 'channel-internal.ts', 'sqlite-square.ts', 'stream.ts', 'list.ts', 'boundary-presentation.ts', 'notifications.ts', 'delivery-health.ts', 'claude-mod.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode-shared/delivery.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['artifact.ts', 'sqlite-square.ts', 'stream.ts', 'list.ts', 'inbox.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The real Square resource is the only entry into participant execution.
   for (const file of ['open-square.ts', 'square-actions.ts']) assert.equal(productionSources.has(file), false, `${file} must be deleted`);

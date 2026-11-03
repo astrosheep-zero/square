@@ -1,147 +1,26 @@
-import path from 'node:path';
-import { Container, Markdown, Spacer, Text } from '@earendil-works/pi-tui';
+import { Markdown } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
-import { Square, harnessOwner } from '../../dist/square-api.js';
+import { Square } from '../../dist/square-api.js';
+import { harnessOwner } from '../../dist/owner.js';
+import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
-
-import { presentPendingAtBoundary, renderPendingAtBoundary } from '../../dist/boundary-presentation.js';
 import { operationEnv } from '../../dist/participant-identity.js';
-import { detachSessionSeats, restoreSessionSeats } from '../../dist/session-lifecycle.js';
-import { projectSessionSeats, observeSessionPending, pendingKey } from '../../dist/inbox.js';
-import { projectMessageNotification } from '../../dist/attention-presentation.js';
-import { formatActivityId } from '../../dist/square-core.js';
-import { formatMessageId } from '../../dist/message.js';
+import { attachDeliverySession, detachDeliverySession } from '../../dist/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
-class PiDeliveryDroppedError extends Error {
-  constructor() {
-    super('Pi discarded the queued Square notification');
-    this.name = 'PiDeliveryDroppedError';
-  }
-}
+const BUDGET_CHARS = 12_000;
 
-export function pendingInbox(inbox) {
-  return inbox.filter((item) => item.notifications?.length > 0);
-}
-
-export function inboxKeys(inbox) {
-  return pendingInbox(inbox).flatMap((item) => item.notifications.map((note) =>
-    pendingKey(item, note.messageIndex)
-  ));
-}
-
-export function renderPiInbox(inbox) {
-  return renderPendingAtBoundary(pendingInbox(inbox));
-}
-
-function framePiMessage(content) {
-  return `\n${content.replace(/^\n+/, '').replace(/\n+$/, '')}\n`;
-}
-
-/** Renderer-only card facts for Pi and Paseo; Pi never sends `details` to the model. */
-export function pendingCardDetails(pending) {
-  const items = pending.flatMap((membership) => membership.notifications.map((note) => {
-    const projected = projectMessageNotification({ squarePath: membership.location, recipient: membership.seat.participant,
-      actor: note.actor, body: note.body, ...(note.preview === undefined ? {} : { preview: note.preview }),
-      ...(note.actIndex === undefined || note.route === undefined ? {} : { agora: { actIndex: note.actIndex, route: note.route } }) });
-    return ({
-    square: path.basename(membership.location, '.square'),
-    actor: note.actor,
-    recipient: membership.seat.participant,
-    route: note.route,
-    act: note.actIndex === undefined ? formatMessageId(note.messageIndex) : formatActivityId(note.actIndex),
-    preview: projected.preview,
-    description: projected.description,
-    body: note.body,
-  }); }));
-  if (items.length === 0) return undefined;
-  const fullText = pending.flatMap((membership) => membership.notifications.map((note) => projectMessageNotification({
-    squarePath: membership.location, recipient: membership.seat.participant, actor: note.actor, body: note.body,
-    ...(note.preview === undefined ? {} : { preview: note.preview }),
-    ...(note.actIndex === undefined || note.route === undefined ? {} : { agora: { actIndex: note.actIndex, route: note.route } }),
-  }).full)).join('\n\n');
-  return { items, fullText };
-}
-
-// Conservative terminal width: anything outside ASCII counts as two columns, so a
-// truncated line never exceeds the viewport (Pi stops the TUI when a line overflows).
-const columnsOf = (char) => (char.charCodeAt(0) < 0x80 ? 1 : 2);
-const widthOf = (text) => Array.from(text).reduce((sum, char) => sum + columnsOf(char), 0);
-
-function fitColumns(text, columns) {
-  if (widthOf(text) <= columns) return text;
-  let used = 1; // the ellipsis
-  let out = '';
-  for (const char of text) {
-    if (used + columnsOf(char) > columns) break;
-    used += columnsOf(char);
-    out += char;
-  }
-  return `${out}…`;
-}
-
-const fg = (theme, color, text) => theme.fg?.(color, text) ?? text;
-const style = (theme, name) => (text) => theme[name]?.(text) ?? text;
-
-function markdownTheme(theme) {
-  const color = (name) => (text) => fg(theme, name, text);
-  return {
+export function renderSquareCard(message, { outputPad = 1 }, theme) {
+  if (typeof message.content !== 'string') return undefined;
+  const color = (name) => (text) => theme.fg?.(name, text) ?? text;
+  const style = (name) => (text) => theme[name]?.(text) ?? text;
+  return new Markdown(message.content, outputPad, 0, {
     heading: color('mdHeading'), link: color('mdLink'), linkUrl: color('mdLinkUrl'), code: color('mdCode'),
     codeBlock: color('mdCodeBlock'), codeBlockBorder: color('mdCodeBlockBorder'), quote: color('mdQuote'),
     quoteBorder: color('mdQuoteBorder'), hr: color('mdHr'), listBullet: color('mdListBullet'),
-    bold: style(theme, 'bold'), italic: style(theme, 'italic'), underline: style(theme, 'underline'),
-    strikethrough: style(theme, 'strikethrough'),
-  };
-}
-
-/** One styled line that never exceeds the width; truncated lines stay unstyled so escapes are never cut. */
-function fitLine(parts, width) {
-  const plain = parts.map(([text]) => text).join('');
-  return widthOf(plain) <= width ? parts.map(([text, paint]) => paint(text)).join('') : fitColumns(plain, width);
-}
-
-/**
- * Collapsed: who reached you and where, then the first line of what they said.
- * Expanded: each activity as a heading line and its Markdown body; the model's
- * framing and continuation hints are not for human eyes.
- */
-export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
-  const items = message.details?.items;
-  if (!Array.isArray(items) || items.length === 0 || items.some((item) => typeof item.body !== 'string')) return undefined;
-  const pad = ' '.repeat(outputPad);
-  const dim = (text) => fg(theme, 'dim', text);
-  if (!expanded) {
-    const [first] = items;
-    const more = items.length > 1 ? ` +${items.length - 1}` : '';
-    // A glance, not a render: drop the commonest inline markers so the line reads as speech.
-    const opening = (first.body.split('\n').find((line) => line.trim() !== '') ?? '')
-      .trim().replace(/^(#{1,6}|>|[-*+])\s+/, '').replace(/\*\*|__|`/g, '');
-    return {
-      invalidate() {},
-      render(width) {
-        const room = Math.max(1, width - outputPad * 2 - 2);
-        return [
-          `${pad}${fg(theme, 'customMessageLabel', '■')} ${fitLine([[first.description, (t) => t], [` · ${first.square} · ${first.recipient}${more}`, dim]], room)}`,
-          ...(opening ? [`${pad}  ${fitLine([[opening, dim]], room)}`] : []),
-        ];
-      },
-    };
-  }
-  const card = new Container();
-  for (const [index, item] of items.entries()) {
-    if (index > 0) card.addChild(new Spacer(1));
-    card.addChild({
-      invalidate() {},
-      render(width) {
-        const room = Math.max(1, width - outputPad * 2 - 2);
-        return [`${pad}${fg(theme, 'customMessageLabel', '●')} ${fitLine([[item.description, (t) => t], [`  ${item.square} · ${item.recipient} · ${item.act}`, dim]], room)}`];
-      },
-    });
-    card.addChild(new Spacer(1));
-    card.addChild(new Markdown(item.body, outputPad + 2, 0, markdownTheme(theme)));
-  }
-  return card;
+    bold: style('bold'), italic: style('italic'), underline: style('underline'), strikethrough: style('strikethrough'),
+  });
 }
 
 export default function squarePiExtension(pi) {
@@ -170,339 +49,188 @@ export default function squarePiExtension(pi) {
   }
   pi.registerMessageRenderer?.('square', renderSquareCard);
   pi.registerFlag('agent-delivery-socket', { type: 'string', description: 'Explicit private local delivery socket' });
-  createPiReceiver(pi, {
-    get endpoint() { return pi.getFlag('agent-delivery-socket'); },
-  });
-  let sessionId;
+  createPiReceiver(pi, { get endpoint() { return pi.getFlag('agent-delivery-socket'); } });
+
+  let session;
+  let epoch = 0;
   let watcher;
   let watcherAbort;
-  let generation = 0;
-  const handledPending = new Set();
-  const observedPending = new Set();
-  const landingAcks = new Map();
-  let retryAfterChange = false;
-  let retryWait;
+  let cancellation = Promise.resolve();
+  let cancellationFailed = false;
+  let cancelled = false;
+  let detachRunAbort;
   let turnIndex = 0;
   let activeTurn;
-  let currentRunSignal;
-  let detachRunAbort;
-  let cancelledRun = false;
-  let pendingCancellations = new Map();
-  const cancellationFailures = new Set();
+  const landings = new Map();
 
-  const cancelRunDelivery = () => {
-    if (cancelledRun) return;
-    cancelledRun = true;
-    for (const key of observedPending) handledPending.add(key);
-    persistSessionCancellation(sessionId);
-    generation += 1;
-    stopWatcher();
-    failAcks(new Error('Pi notification delivery cancelled'));
-    retryAfterChange = false;
-    retryWait = undefined;
-  };
-
-  const failAcks = (error) => {
-    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
-    for (const ack of acks) ack.settle(error);
-  };
-
-  const acknowledgeLanding = (message) => {
-    if (message?.role !== 'custom' || message.customType !== 'square' || typeof message.content !== 'string') return;
-    const acks = landingAcks.get(message.content);
-    if (acks === undefined) return;
-    for (const ack of [...acks]) ack.settle();
-  };
-
-  const waitForLanding = (content, signal, kind) => {
-    let ack;
+  function finishLandings(error) {
+    for (const landing of [...landings.values()]) landing.finish(error);
+  }
+  function waitForLanding(content, signal) {
+    let landing;
     const promise = new Promise((resolve, reject) => {
-      const abort = () => ack.settle(signal.reason || new Error('Pi native injection aborted'));
-      ack = {
-        kind,
-        sentAfterTurn: turnIndex,
-        emptyTurnWindows: 0,
-        settle(error) {
-          if (ack.settled) return;
-          ack.settled = true;
+      const abort = () => landing.finish(signal.reason ?? new Error('Pi delivery aborted'));
+      landing = {
+        sentAfterTurn: turnIndex, emptyTurnWindows: 0,
+        finish(error) {
+          if (landings.get(content) !== landing) return;
+          landings.delete(content);
           signal.removeEventListener('abort', abort);
-          const acks = landingAcks.get(content);
-          if (acks?.delete(ack) && acks.size === 0) landingAcks.delete(content);
-          if (error === undefined) resolve();
-          else reject(error);
+          if (error) reject(error); else resolve();
         },
       };
-      let acks = landingAcks.get(content);
-      if (acks === undefined) {
-        acks = new Set();
-        landingAcks.set(content, acks);
-      }
-      acks.add(ack);
-      if (signal.aborted) abort();
-      else signal.addEventListener('abort', abort, { once: true });
+      landings.set(content, landing);
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
     });
-    return { promise, ack };
-  };
-
-  // Each operation carries its own session coordinate. Never rewrite the process environment:
-  // Pi owns PI_SESSION_ID and several SDK sessions may coexist in one process.
-  const sessionEnv = (id) => ({ ...process.env, ...(id === undefined ? {} : { PI_SESSION_ID: id }) });
-
-  const persistSessionCancellation = (id) => {
-    if (id === undefined) return Promise.resolve();
-    const previous = pendingCancellations.get(id) ?? Promise.resolve();
-    let operation;
-    operation = previous.then(async () => {
-      const owner = harnessOwner({ channel: 'pi', session: id });
-      const env = sessionEnv(id);
-      const seats = await projectSessionSeats({ owner, env });
-      for (const { location, seat } of seats) {
-        if (seat.attachment !== 'attached') continue;
-        const square = await Square.at({ path: location, env });
-        try { await square.cancelDeliveries(seat.participant, { owner, generation: seat.generation }); }
-        finally { await square.close(); }
-      }
-    }).then(() => {
-      cancellationFailures.delete(id);
-    }, () => {
-      cancellationFailures.add(id);
-    }).finally(() => {
-      if (pendingCancellations.get(id) === operation) pendingCancellations.delete(id);
-    });
-    pendingCancellations.set(id, operation);
-    return operation;
-  };
-
-  const waitForSessionCancellation = async (id) => {
-    if (id === undefined) return true;
-    while (true) {
-      const pending = pendingCancellations.get(id);
-      if (pending !== undefined) await pending;
-      if (pendingCancellations.get(id) !== pending) continue;
-      return !cancellationFailures.has(id);
-    }
-  };
-
-  // Aborting releases native landing waits; retain cleanup until the observer
-  // has closed, including when cancellation precedes a lifecycle hook.
-  const stopWatcher = () => {
+    return { promise, landing };
+  }
+  function stopWatcher() {
     watcherAbort?.abort();
     watcherAbort = undefined;
     return watcher;
-  };
-
-  const pause = (signal, delayMs) => new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const finish = () => {
-      signal.removeEventListener('abort', finish);
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, delayMs);
-    signal.addEventListener('abort', finish, { once: true });
-  });
-
-  const wake = async (token, signal) => {
-    const boundSessionId = sessionId;
-    const env = sessionEnv(boundSessionId);
-    const observer = await observeSessionPending(harnessOwner({ channel: 'pi', session: boundSessionId }), env);
+  }
+  function cancelRun() {
+    if (cancelled) return;
+    cancelled = true;
+    const captured = session;
+    epoch += 1;
+    stopWatcher();
+    finishLandings(new Error('Pi notification delivery cancelled'));
+    if (captured) cancellation = cancellation.then(async () => {
+      if (!await captured.ledger.cancel({ owner: captured.owner, generation: captured.generation })) throw new Error('Pi cancellation fence lost');
+      cancellationFailed = false;
+    }).catch(() => { cancellationFailed = true; });
+  }
+  async function watch(captured, token, signal) {
+    const { ledger, owner, generation } = captured;
+    const observer = await ledger.observe(owner);
     try {
-      if (signal.aborted || token !== generation) return;
-      const armDeferredRetry = () => {
-        const controller = new AbortController();
-        let resolveArmed;
-        const armed = new Promise((resolve) => { resolveArmed = resolve; });
-        const abort = () => controller.abort();
-        signal.addEventListener('abort', abort, { once: true });
-        const pending = observer.wait(Infinity, {
-          signal: controller.signal,
-          excludeKeys: handledPending,
-          skipImmediate: true,
-          onChangeArmed: resolveArmed,
-        }).catch(() => {
-          resolveArmed(false);
-          return [];
-        }).finally(() => signal.removeEventListener('abort', abort));
-        return { armed, pending, cancel: () => controller.abort() };
-      };
-
-      while (sessionId !== undefined && token === generation && !signal.aborted) {
-        const deferredRetry = retryAfterChange;
-        let pending;
+      while (!signal.aborted && token === epoch) {
+        const edge = observer.generation;
+        let claim;
         try {
-          pending = deferredRetry && retryWait !== undefined
-            ? await retryWait
-            : await observer.wait(Infinity, { signal, excludeKeys: handledPending });
-        } catch {
-          await pause(signal, 1_000);
-          continue;
-        }
-        if (sessionId === undefined || token !== generation || signal.aborted) return;
-        if (pending.length === 0) {
-          if (deferredRetry) {
-            retryAfterChange = false;
-            retryWait = undefined;
-          }
-          continue;
-        }
-        retryAfterChange = false;
-        retryWait = undefined;
-
-        const keys = inboxKeys(pending);
-        for (const key of keys) observedPending.add(key);
-        const deferred = armDeferredRetry();
-        const retryArmed = await deferred.armed;
-        if (!retryArmed) {
-          deferred.cancel();
-          continue;
-        }
-        let keepDeferred = false;
-        try {
-          await presentPendingAtBoundary(
-            harnessOwner({ channel: 'pi', session: boundSessionId }),
-            async (content, delivered) => {
-              if (signal.aborted || currentRunSignal?.aborted) throw new Error('Pi notification delivery cancelled');
-              // One card for the human: a compact heading, expandable to the full body.
-              // Model context stays bounded; renderer-only details carry the complete text.
-              const messageContent = framePiMessage(content);
-              const landing = waitForLanding(messageContent, signal, 'steer');
-              try {
-                sendPiMessage(pi,
-                  { customType: 'square', content: messageContent, display: true, details: pendingCardDetails(delivered) },
-                  { deliverAs: 'steer', triggerTurn: true },
-                );
-              } catch (error) {
-                landing.ack.settle(error);
-              }
-              return landing.promise;
-            },
-            async (_id, _env, boundarySignal) => {
-              // Recheck committed revisions and current bindings before reusing observed content.
-              const inbox = await observer.read({ signal: boundarySignal, excludeKeys: handledPending });
-              if (signal.aborted || token !== generation) return [];
-              for (const key of inboxKeys(inbox)) observedPending.add(key);
-              pending = inbox;
-              return inbox;
-            },
-            env,
-            signal,
-          );
-          if (signal.aborted || token !== generation) return;
-          // Only committed evidence suppresses successful delivery. A competing wake may
-          // have won the claim and can still fail before sending, making this item eligible again.
-        } catch (error) {
-          if (signal.aborted || token !== generation) return;
-          if (error instanceof PiDeliveryDroppedError) {
-            deferred.cancel();
+          claim = await ledger.claimPresentation(owner, { generation, budgetChars: BUDGET_CHARS, signal });
+          if (!claim) {
+            await observer.hinted(edge, 2_000, signal);
             continue;
           }
-          // The next state edge is already being observed before native injection starts.
-          retryAfterChange = true;
-          retryWait = deferred.pending;
-          keepDeferred = true;
-        } finally {
-          if (!keepDeferred) { deferred.cancel(); await deferred.pending; }
+          if (signal.aborted || token !== epoch || !await claim.current(signal) || signal.aborted || token !== epoch) {
+            await claim.settle('released');
+            continue;
+          }
+          const content = `\n${claim.text.replace(/^\n+|\n+$/g, '')}\n`;
+          const { promise, landing } = waitForLanding(content, signal);
+          try {
+            sendPiMessage(pi, { customType: 'square', content, display: true }, { deliverAs: 'steer', triggerTurn: true });
+          } catch (error) { landing.finish(error); }
+          await promise;
+          await claim.settle('presented');
+        } catch (error) {
+          if (claim) await claim.settle(error?.dropped ? 'failed' : 'unknown').catch(() => undefined);
+          if (signal.aborted || token !== epoch) return;
+          // Avoid re-injecting a failed batch until another ledger edge or reconciliation.
+          await observer.hinted(observer.generation, 2_000, signal).catch(() => undefined);
         }
       }
     } finally { observer.close(); }
-  };
+  }
+  function startWatcher(captured, token) {
+    watcherAbort = new AbortController();
+    watcher = watch(captured, token, watcherAbort.signal).catch(() => undefined);
+  }
 
   pi.on('session_start', async (_event, ctx) => {
     detachRunAbort?.();
-    cancelledRun = false;
-    generation += 1;
-    failAcks(new Error('Pi session replaced'));
+    detachRunAbort = undefined;
+    cancelled = false;
+    const token = ++epoch;
+    finishLandings(new Error('Pi session replaced'));
     const stopped = stopWatcher();
-    handledPending.clear();
-    observedPending.clear();
-    retryAfterChange = false;
-    retryWait = undefined;
-    turnIndex = 0;
-    activeTurn = undefined;
-    currentRunSignal = undefined;
-    sessionId = ctx.sessionManager.getSessionId();
-    const token = generation;
+    const previous = session;
+    session = undefined;
     await stopped;
-    await waitForSessionCancellation(sessionId);
-    if (token !== generation || cancellationFailures.has(sessionId)) return;
-    watcherAbort = new AbortController();
-    const signal = watcherAbort.signal;
-    await restoreSessionSeats(harnessOwner({ channel: 'pi', session: sessionId }), sessionEnv(sessionId), undefined, signal).catch(() => undefined);
-    if (token !== generation || signal.aborted) return;
-    watcher = wake(token, signal).catch(() => undefined);
+    await cancellation;
+    if (previous) {
+      await detachDeliverySession(previous.owner, previous.generation).catch(() => undefined);
+      await previous.ledger.close();
+    }
+    if (token !== epoch || cancellationFailed) return;
+    const owner = harnessOwner({ channel: 'pi', session: ctx.sessionManager.getSessionId() });
+    const attached = await attachDeliverySession(owner);
+    if (!attached) return;
+    if (token !== epoch) {
+      await detachDeliverySession(owner, attached.generation);
+      return;
+    }
+    let ledger;
+    try {
+      ledger = await DeliveryLedger.open();
+      if (token !== epoch) {
+        await detachDeliverySession(owner, attached.generation);
+        await ledger.close();
+        return;
+      }
+      session = { ledger, owner, generation: attached.generation };
+      turnIndex = 0;
+      activeTurn = undefined;
+      startWatcher(session, token);
+    } catch (error) {
+      await detachDeliverySession(owner, attached.generation).catch(() => undefined);
+      await ledger?.close();
+      throw error;
+    }
   });
 
   pi.on('agent_start', async (_event, ctx) => {
     detachRunAbort?.();
-    currentRunSignal = ctx?.signal;
-    if (ctx?.mode !== 'tui' || currentRunSignal === undefined) return;
-    const runSignal = currentRunSignal;
-    detachRunAbort = () => runSignal.removeEventListener('abort', cancelRunDelivery);
-    if (runSignal.aborted) cancelRunDelivery();
-    else runSignal.addEventListener('abort', cancelRunDelivery, { once: true });
+    if (ctx?.mode !== 'tui' || !ctx.signal) return;
+    const signal = ctx.signal;
+    detachRunAbort = () => signal.removeEventListener('abort', cancelRun);
+    if (signal.aborted) cancelRun(); else signal.addEventListener('abort', cancelRun, { once: true });
   });
-
   pi.on('message_end', async (event) => {
-    if (activeTurn !== undefined && (event.message?.role === 'user' || event.message?.role === 'custom')) {
-      activeTurn.hasInput = true;
+    const message = event.message;
+    if (activeTurn && (message?.role === 'user' || message?.role === 'custom')) activeTurn.hasInput = true;
+    if (message?.role === 'custom' && message.customType === 'square' && typeof message.content === 'string') {
+      landings.get(message.content)?.finish();
     }
-    acknowledgeLanding(event.message);
   });
-
-  pi.on('turn_start', async () => {
-    turnIndex += 1;
-    activeTurn = { index: turnIndex, hasInput: false, signal: currentRunSignal };
-  });
-
+  pi.on('turn_start', async () => { activeTurn = { index: ++turnIndex, hasInput: false }; });
   pi.on('turn_end', async (event, ctx) => {
     const turn = activeTurn;
     activeTurn = undefined;
-    const acks = [...landingAcks.values()].flatMap((waiters) => [...waiters]);
-    if (event.message?.stopReason === 'aborted' && ctx?.mode === 'tui') {
-      if (!cancelledRun) cancelRunDelivery();
-      return;
-    }
-    if (turn === undefined) return;
-    for (const ack of acks) {
-      if (ack.kind !== 'steer' || turn.index <= ack.sentAfterTurn) continue;
-      if (turn.hasInput) {
-        ack.emptyTurnWindows = 0;
-      } else {
-        ack.emptyTurnWindows += 1;
-        if (ack.emptyTurnWindows >= 2) ack.settle(new PiDeliveryDroppedError());
-      }
+    if (event.message?.stopReason === 'aborted' && ctx?.mode === 'tui') { cancelRun(); return; }
+    if (!turn) return;
+    for (const landing of [...landings.values()]) {
+      if (turn.index <= landing.sentAfterTurn) continue;
+      if (turn.hasInput) landing.emptyTurnWindows = 0;
+      else if (++landing.emptyTurnWindows >= 2) landing.finish(Object.assign(new Error('Pi discarded queued notification'), { dropped: true }));
     }
   });
-
   pi.on('agent_settled', async () => {
     detachRunAbort?.();
     detachRunAbort = undefined;
-    currentRunSignal = undefined;
-    if (!cancelledRun || sessionId === undefined) return;
-    const token = generation;
+    if (!cancelled || !session) return;
+    const token = epoch;
     await stopWatcher();
-    await waitForSessionCancellation(sessionId);
-    if (token !== generation || sessionId === undefined || cancellationFailures.has(sessionId)) return;
-    cancelledRun = false;
-    watcherAbort = new AbortController();
-    watcher = wake(token, watcherAbort.signal).catch(() => undefined);
+    await cancellation;
+    if (token !== epoch || !session || cancellationFailed) return;
+    cancelled = false;
+    startWatcher(session, token);
   });
-
   pi.on('session_shutdown', async () => {
     detachRunAbort?.();
     detachRunAbort = undefined;
-    cancelledRun = false;
-    generation += 1;
-    failAcks(new Error('Pi session ended'));
+    ++epoch;
+    finishLandings(new Error('Pi session ended'));
     const stopped = stopWatcher();
-    const endedId = sessionId;
-    const endedEnv = sessionEnv(endedId);
-    sessionId = undefined;
-    retryWait = undefined;
-    activeTurn = undefined;
-    currentRunSignal = undefined;
+    const ended = session;
+    session = undefined;
     await stopped;
-    await waitForSessionCancellation(endedId);
-    if (endedId) await detachSessionSeats('pi', endedId, endedEnv).catch(() => undefined);
+    await cancellation;
+    if (ended) {
+      await detachDeliverySession(ended.owner, ended.generation).catch(() => undefined);
+      await ended.ledger.close();
+    }
   });
 }

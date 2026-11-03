@@ -2,129 +2,92 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { createArtifactPort, observeSquareRevision, readSquareRevision } from '../dist/artifact.js';
-import { Square } from '../dist/square-api.js';
-import { sessionInbox, observeSessionPending } from '../dist/inbox.js';
-import { formatActivityId } from '../dist/square-core.js';
-import { hasPresentedForOwner } from './presentation-fixtures.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { harnessOwner } from '../dist/owner.js';
 
-async function waitUntil(predicate, message) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function until(predicate, message) {
+  for (let i = 0; i < 300; i++) {
     if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
   }
   assert.fail(message);
 }
 
-async function pendingFixture(root, sessionId) {
-  const squarePath = path.join(root, 'SQUARE.square');
-  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const authorBody = "pi" + ":" + `${sessionId}-author`;
-  const recipientBody = "pi" + ":" + (sessionId);
-  const author = await Square.build({ path: squarePath, markdown: 'pending-cache', env });
-  try { await author.join('Alice', { owner: authorBody }); }
-  finally { await author.close(); }
-  const recipient = await Square.at({ path: squarePath, env });
-  try { await recipient.join('Bob', { owner: recipientBody }); }
-  finally { await recipient.close(); }
-  const speaker = await Square.at({ path: squarePath, env });
-  try { await (await speaker.participant('Alice', { owner: authorBody })).express('cached pending', { force: true, mentions: ['Bob'] }); }
-  finally { await speaker.close(); }
-  return { squarePath, env, authorBody, recipientBody, sessionId };
-}
-
-function isolatePiIndex(t, indexPath) {
-  const previous = process.env.SQUARE_INDEX;
-  process.env.SQUARE_INDEX = indexPath;
-  t.after(() => {
-    if (previous === undefined) delete process.env.SQUARE_INDEX;
-    else process.env.SQUARE_INDEX = previous;
-  });
-}
-
-test('a Pi batch hydrates the recipient projection once and reuses it at the boundary', { timeout: 15_000 }, async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-cache-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const sessionId = 'pi-pending-cache';
-  const fixture = await pendingFixture(root, sessionId);
-  isolatePiIndex(t, fixture.env.SQUARE_INDEX);
-
-  // Count the artifact's bounded notification projection, not any host-side authority read.
-  const canonicalArtifact = fs.realpathSync.native(fixture.squarePath);
-  const hydrations = [];
-  const prepare = DatabaseSync.prototype.prepare;
-  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql, ...args) {
-    if (typeof sql === 'string' && sql.includes('FROM messages WHERE msg_index IN (SELECT value FROM json_each')
-      && fs.realpathSync.native(this.location()) === canonicalArtifact) hydrations.push(sql);
-    return prepare.call(this, sql, ...args);
-  });
-
-  const handlers = new Map();
-  const sent = [];
+async function fixture(t, { start = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-ledger-'));
+  const old = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
+  const ledger = await DeliveryLedger.open();
+  const owner = harnessOwner({ channel: 'pi', session: 'receiver' });
+  const initial = await ledger.attach({ owner, expectedGeneration: null, routes: [{ kind: 'push', address: { socket: '/tmp/example' } }] });
+  const handlers = new Map(), sent = [];
   squarePiExtension({
-    registerTool() {},
-    registerFlag() {}, getFlag() {},
+    registerTool() {}, registerFlag() {}, getFlag() {},
     on(event, handler) {
-      const prior = handlers.get(event);
-      handlers.set(event, async (...args) => { await prior?.(...args); await handler(...args); });
+      const previous = handlers.get(event);
+      handlers.set(event, async (...args) => { await previous?.(...args); await handler(...args); });
     },
-    sendMessage(message) { sent.push(message.content); },
+    sendMessage(message) { sent.push(message); },
   });
-  const ctx = { cwd: root, sessionManager: { getSessionId: () => sessionId } };
-  try {
-    await handlers.get('session_start')({}, ctx);
-    await waitUntil(() => sent.length === 1, 'Pi never delivered the mentioned activity');
-    assert.equal(hydrations.length, 1, 'one pending batch must hydrate the recipient projection once');
-
-    // A fresh public inbox read hydrates again; the boundary itself reuses the observed batch.
-    hydrations.length = 0;
-    await sessionInbox(fixture.recipientBody, fixture.env);
-    assert.equal(hydrations.length, 1, 'a fresh inbox read hydrates the projection again');
-
-    await handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: sent[0] } });
-    await waitUntil(
-      async () => await hasPresentedForOwner(sessionId, fixture.squarePath, 'Bob', 2),
-      'Pi did not present the cached pending activity',
-    );
-    const artifact = createArtifactPort(fixture.squarePath);
-    try {
-      assert.deepEqual((await artifact.read(facts => facts.channel.deliveryEvidence('Bob', facts.seat('Bob').generation, 'msg/0'))).value
-        .filter(row => row.kind === 'presentation').map(row => row.outcome), ['presented']);
-    } finally { await artifact.close(); }
-  } finally {
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => 'receiver' } };
+  t.after(async () => {
     await handlers.get('session_shutdown')({}, ctx);
-  }
+    await ledger.close();
+    if (old === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = old;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  if (start) await handlers.get('session_start')({}, ctx);
+  return { ledger, owner, initial, handlers, sent, ctx };
+}
+
+test('Pi pulls ledger cards and records receipts only after message_end, preserving push routes', async t => {
+  const f = await fixture(t);
+  const attached = await f.ledger.session(f.owner);
+  assert.notEqual(attached.generation, f.initial.generation);
+  assert.deepEqual(attached.routes, f.initial.routes);
+  await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'a finished card' });
+  await until(() => f.sent.length === 1, 'Pi did not inject the card');
+  assert.match(f.sent[0].content, /a finished card/);
+  assert.deepEqual(await f.ledger.receipts(f.owner), []);
+  await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
+  await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the receipt');
 });
 
+test('Pi yields while a producer-push attempt holds custody', async t => {
+  const f = await fixture(t, { start: false });
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  await f.ledger.post({ owner: f.owner, key: 'producer:held', text: 'held card' });
+  const push = f.ledger.dispatchHandoff(f.owner, 'producer:held', {
+    kind: 'push', async send() { started.resolve(); await release.promise; return 'accepted'; },
+  }, { generation: f.initial.generation, timeoutMs: 10_000 });
+  await started.promise;
+  await f.handlers.get('session_start')({}, f.ctx);
+  const generation = (await f.ledger.session(f.owner)).generation;
+  // A competing pull cannot claim a card while this handoff is in flight.
+  assert.equal(await f.ledger.claimPresentation(f.owner, { generation, budgetChars: 1000 }), undefined);
+  release.resolve();
+  assert.equal((await push).outcome, 'accepted');
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(await f.ledger.receipts(f.owner), []);
+});
 
-test('an explicit inbox read honors a new catch lease before filesystem hints arrive', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-fresh-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  // Hold filesystem hints and periodic reconciliation; the artifact seat and lease remain authoritative.
-  t.mock.method(fs, 'watch', () => ({ on() { return this; }, close() {} }));
-  t.mock.method(globalThis, 'setInterval', () => undefined);
-  const fixture = await pendingFixture(root, 'fresh');
-  const observer = await observeSessionPending(fixture.recipientBody, fixture.env);
-  const versionObserver = await observeSquareRevision(fixture.squarePath);
-  const artifact = createArtifactPort(fixture.squarePath);
-  try {
-    assert.equal((await observer.wait(0))[0].notifications[0].actIndex, 2);
-    const oldRevision = await versionObserver.read();
-    const seat = (await artifact.read(facts => facts.seat('Bob'))).value;
-    const ref = { participant: seat.participant, owner: seat.owner, generation: seat.generation };
-    await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.putLease('Bob', {
-      leaseId: 'fresh-catch', heartbeatAt: Date.now(), expiresAt: Date.now() + 60_000, filter: { mention: 'Bob' },
-    }, seat.generation));
-    assert.equal(await versionObserver.read(), oldRevision, 'the filesystem revision hint must remain stale');
-    assert.ok(await readSquareRevision(fixture.squarePath) > oldRevision, 'the lease committed despite the delayed hint');
-    assert.deepEqual(await observer.read(), [], 'a current boundary must yield to the newly committed catch lease');
-    await artifact.transactAs({ kind: 'participant', seat: ref }, facts => facts.removeLease('Bob', 'fresh-catch', seat.generation));
-    assert.equal((await observer.read())[0].notifications[0].actIndex, 2, 'a later current read sees release without a hint');
-  } finally {
-    observer.close(); versionObserver.close(); await artifact.close();
-  }
+test('Pi cancellation suppresses the queued batch but allows later cards', async t => {
+  const f = await fixture(t);
+  const controller = new AbortController();
+  await f.handlers.get('agent_start')({}, { mode: 'tui', signal: controller.signal });
+  await f.ledger.post({ owner: f.owner, key: 'producer:old', text: 'old card' });
+  await until(() => f.sent.length === 1, 'Pi did not queue the card');
+  controller.abort();
+  await f.handlers.get('agent_settled')();
+  await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
+  assert.deepEqual(await f.ledger.receipts(f.owner), []);
+  await f.ledger.post({ owner: f.owner, key: 'producer:new', text: 'new card' });
+  await until(() => f.sent.length === 2, 'Pi did not deliver new activity after cancellation');
+  assert.match(f.sent[1].content, /new card/);
+  assert.doesNotMatch(f.sent[1].content, /old card/);
+  await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[1].content } });
+  await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the new receipt');
+  assert.equal((await f.ledger.receipts(f.owner))[0].key, 'producer:new');
 });

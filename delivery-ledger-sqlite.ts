@@ -5,7 +5,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
 import { renderDeliveryBatch } from './delivery-ledger-render.js';
-import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, RetractResult } from './delivery-ledger.js';
+import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, RetractResult } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
 const FORMAT = 1;
@@ -130,6 +130,17 @@ export class LedgerStore {
     this.db.prepare('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
   }
   session(owner: string): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner)); }
+  sessions(): Promise<readonly DeliverySession[]> {
+    return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!));
+  }
+  pendingCards(owner: string, generation: string): Promise<readonly DeliveryCard[]> {
+    return this.transaction(false, () => this.attached(owner, generation)
+      ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row)).map(card) : []);
+  }
+  handoffs(owner: string, generation: string): Promise<readonly DeliveryAttempt[]> {
+    return this.transaction(false, () => (this.db.prepare(`SELECT a.* FROM attempts a JOIN cards c ON c.seq=a.seq
+      WHERE c.owner=? AND a.generation=? AND a.track='handoff' ORDER BY a.rowid`).all(owner, generation) as Row[]).map(attempt));
+  }
   attach(input: { owner: string; expectedGeneration: string | null; routes: readonly DeliveryRoute[] }): Promise<DeliverySession | false> {
     const encoded = JSON.stringify(input.routes);
     return this.transaction(true, now => {
@@ -244,6 +255,7 @@ export class LedgerStore {
     return this.transaction(true, now => {
       const a = this.getAttempt(token);
       if (!a || a.outcome !== 'dispatching' || a.expiresAt <= now) return false;
+      if (a.correlation.payloadHash !== undefined && a.correlation.payloadHash !== value.payloadHash) return false;
       const row = this.db.prepare('SELECT owner FROM cards WHERE seq=?').get(a.seq);
       if (!row || !this.attached(row.owner as string, a.generation)) return false;
       this.db.prepare('UPDATE attempts SET correlation_json=? WHERE token=?').run(encoded, token);
@@ -285,9 +297,51 @@ export class LedgerStore {
       return true;
     });
   }
-  observePresentation(token: string): Promise<boolean> {
+  private handoffFacts(token: string): { attempt: DeliveryAttempt; row: Row; ref: DeliveryHandoffRef & { routeKind: string } } | undefined {
+    const a = this.getAttempt(token);
+    if (!a || a.track !== 'handoff' || !a.routeKind || !a.correlation.payloadHash) return undefined;
+    const row = this.db.prepare('SELECT * FROM cards WHERE seq=?').get(a.seq) as Row | undefined;
+    if (!row) return undefined;
+    return { attempt: a, row, ref: { token: a.token, owner: row.owner as string, generation: a.generation,
+      payloadHash: a.correlation.payloadHash, routeKind: a.routeKind } };
+  }
+  private matchingHandoff(ref: DeliveryHandoffRef): ReturnType<LedgerStore['handoffFacts']> {
+    if (!ref || typeof ref !== 'object' || typeof ref.token !== 'string') return undefined;
+    const facts = this.handoffFacts(ref.token);
+    return facts && facts.ref.owner === ref.owner && facts.ref.generation === ref.generation
+      && facts.ref.payloadHash === ref.payloadHash && ref.routeKind === facts.ref.routeKind ? facts : undefined;
+  }
+  private currentHandoff(facts: NonNullable<ReturnType<LedgerStore['handoffFacts']>>, now: number): boolean {
+    const s = this.attached(facts.ref.owner, facts.ref.generation);
+    return facts.attempt.expiresAt > now && !!s && s.routes.some(route => route.kind === facts.ref.routeKind) && this.eligible(facts.row);
+  }
+  handoff(token: string): Promise<(DeliveryHandoffRef & { routeKind: string }) | undefined> {
+    return this.transaction(false, () => this.handoffFacts(token)?.ref);
+  }
+  guardHandoff(ref: DeliveryHandoffRef): Promise<boolean> {
+    return this.transaction(false, now => {
+      const facts = this.matchingHandoff(ref);
+      return !!facts && ['dispatching', 'unknown'].includes(facts.attempt.outcome) && this.currentHandoff(facts, now);
+    });
+  }
+  acceptHandoff(ref: DeliveryHandoffRef): Promise<boolean> {
     return this.transaction(true, now => {
-      const a = this.getAttempt(token);
+      const a = this.matchingHandoff(ref)?.attempt;
+      if (!a || !['dispatching', 'unknown', 'accepted'].includes(a.outcome)) return false;
+      if (a.outcome !== 'accepted') this.db.prepare("UPDATE attempts SET outcome='accepted',settled_at=? WHERE token=?").run(now, a.token);
+      return true;
+    });
+  }
+  observePresentation(handoff: string | DeliveryHandoffRef, options?: { readonly requireCurrent?: boolean }): Promise<boolean> {
+    return this.transaction(true, now => {
+      const facts = typeof handoff === 'string' ? undefined : this.matchingHandoff(handoff);
+      if (options?.requireCurrent) {
+        const s = facts && this.attached(facts.ref.owner, facts.ref.generation);
+        if (!facts || !s || !s.routes.some(route => route.kind === facts.ref.routeKind) || !this.eligible(facts.row)
+          || !!this.db.prepare(`SELECT 1 FROM attempts WHERE seq=? AND rowid>(SELECT rowid FROM attempts WHERE token=?) LIMIT 1`)
+            .get(facts.attempt.seq, facts.attempt.token)) return false;
+      }
+      const a = typeof handoff === 'string' ? this.getAttempt(handoff) : facts?.attempt;
       return a ? this.confirm(a, now) : false;
     });
   }

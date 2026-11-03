@@ -55,7 +55,7 @@ test('CLI read-only opens need no identity; participant writes do', async () => 
   const file = tempSquare();
   assert.equal(build(file).status, 0);
   const square = await Square.at(squareInput({
-    command: 'status', cwd: ROOT, env: { SQUARE_INDEX: path.join(path.dirname(file), 'index.ndjsonl') }, squarePath: file, name: 'Alice', homeDir: os.homedir(),
+    command: 'status', cwd: ROOT, env: { SQUARE_DELIVERY: path.join(path.dirname(file), 'delivery.sqlite') }, squarePath: file, name: 'Alice', homeDir: os.homedir(),
   }));
   try {
     assert.equal((await square.participants()).participants.length, 0);
@@ -210,11 +210,17 @@ test('standalone skills install target is removed; skills ship with plugins', ()
   }
 });
 
-test('delivery harness doctor skips a missing or unreadable square path', () => {
-  const missing = path.join(os.tmpdir(), `square-missing-${process.pid}-${Date.now()}.square`);
-  const result = run(withPath(missing, ['harness', 'doctor', 'delivery']));
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /delivery health skipped/);
+test('delivery harness doctor reads ledger health without requiring a square', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-doctor-ledger-'));
+  try {
+    const missing = path.join(home, 'missing.square');
+    const result = run(withPath(missing, ['harness', 'doctor', 'delivery']), {
+      env: { HOME: home, SQUARE_DELIVERY: path.join(home, 'delivery.sqlite') },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /delivery health.*unknown attempts.*repeated failures.*sessions without route/);
+    assert.equal(fs.existsSync(missing), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test('every public subcommand exposes scoped help without a square', async () => {

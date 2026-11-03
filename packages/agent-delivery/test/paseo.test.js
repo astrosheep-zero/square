@@ -121,6 +121,19 @@ test('a Paseo send steers with the caller id and never interrupts', async (t) =>
   assert.ok(state.sends.every((request) => request.activeTurnBehavior === 'steer'))
 })
 
+test('final send fence runs after the send connection and suppresses the request', async (t) => {
+  environment(t)
+  const { state, endpoint } = await daemon(t, { onSend: accepted })
+  const agent = await connect({ harness: 'paseo', agentId: 'agent-one', endpoint, password: 'pw' })
+  let hellosAtFence = 0
+  await assert.rejects(agent.steer('text', { beforeSend: async () => { hellosAtFence = state.hellos.length; return false } }), error => {
+    assert.equal(error.maybeDelivered, false)
+    return true
+  })
+  assert.equal(hellosAtFence, 2)
+  assert.deepEqual(state.sends, [])
+})
+
 test('a key conflict is a refusal and an unknown agent is not found', async (t) => {
   environment(t)
   const conflict = await daemon(t, { onSend: (message) => refused(message, 'agent_request_key_conflict') })

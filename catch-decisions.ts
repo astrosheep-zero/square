@@ -83,19 +83,13 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
   }
   let consumed;
   try {
-    // Receipts are recorded by message coordinate; the batch hydration above already resolved each selected say.
-    let selected: ReadonlyMap<number, HydratedAct> = new Map();
     consumed = consumeReceived({
       ...squareReceiveRead(facts),
-      load(keys) { selected = facts.activities(keys).reduce((map, item) => map.set(item.index, item), new Map<number, HydratedAct>()); return selected; },
       addressed(recipient, index) {
         const head = facts.directed(recipient, { indexes: [index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items[0];
         return head === undefined ? undefined : { key: head.index, via: head.route };
       },
-      insertReceipt: (ref, time) => {
-        const item = selected.get(ref.item);
-        return item?.kind === 'say' && facts.channel.markSeen(ref.recipient, [item.messageIndex], time) > 0;
-      },
+      insertReceipt: (ref, time) => facts.markSeen(ref.recipient, [ref.item], time) > 0,
     }, viewer, selection, at);
   } catch (error) {
     if ((error instanceof TypeError || error instanceof RangeError) && (typeof at !== 'number' || !Number.isFinite(at))) {

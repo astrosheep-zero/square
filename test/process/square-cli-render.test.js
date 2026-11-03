@@ -9,7 +9,7 @@ import test from 'node:test';
 import { formatActivityId } from '../../dist/square-core.js';
 import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
 import { Square } from '../../dist/square-api.js';
-import { rememberSquarePath } from '../../dist/square-index.js';
+import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { discover } from '../../dist/square-api.js';
 import { listCommand } from '../../dist/cli/observation-commands.js';
 import {
@@ -45,17 +45,21 @@ test('status stays compact and focuses on the current square', async () => {
 
 test('status previews ten active participants and links to the complete roster', async () => {
   const peers = Array.from({ length: 12 }, (_value, index) => `Peer${String(index + 1).padStart(2, '0')}`);
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Viewer', { owner: body, wakeAddress });
-    for (const name of peers) {
-      const participant = (await square.join(name, { owner: body, wakeAddress })).participant;
-      await participant.express(`recent activity from ${name}`, { force: true });
-    }
+  const file = await persistSquare(async ({ square, file, body, wakeAddress, time }) => {
+    // Seed the historical actor before real joins, so replacement does not discard live seat ownership.
+    await square.close();
+    const historical = (await readSquareSnapshot(file)).state;
+    historical.acts.push({ kind: 'read', actor: 'Reserved', at: 0, through: 0, index: historical.runtime.nextActIndex++ });
+    await writeSquareFile(file, historical);
+    const reopened = await Square.at({ path: file, env: testEnv({}, file), clock: time.tick });
+    try {
+      await reopened.join('Viewer', { owner: body, wakeAddress });
+      for (const name of peers) {
+        const participant = (await reopened.join(name, { owner: body, wakeAddress })).participant;
+        await participant.express(`recent activity from ${name}`, { force: true });
+      }
+    } finally { await reopened.close(); }
   }, { hardCap: 100 });
-  // Historical actor facts need not have a join; status filters them, participants does not.
-  const historical = (await readSquareSnapshot(file)).state;
-  historical.acts.push({ kind: 'read', actor: 'Reserved', at: 0, through: 0, index: historical.runtime.nextActIndex++ });
-  await writeSquareFile(file, historical);
 
   const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '100000' } });
   assert.equal(status.status, 0, status.stderr);
@@ -208,7 +212,7 @@ test('express does not surface delivery-health diagnostics during normal use', a
     env: { SQUARE_NOW_MS: '70000' },
   });
   assert.equal(diagnosed.status, 0, diagnosed.stderr);
-  assert.match(diagnosed.stdout, /delivery attention · 1 pending/);
+  assert.match(diagnosed.stdout, /delivery health.*unknown attempts.*repeated failures.*sessions without route/);
 });
 
 test('catch --mention renders matching says and suppresses room changes', async () => {
@@ -618,11 +622,8 @@ test('inbox stays read-only while codex admits pending attention once at a bound
     await alice.express('hey @Bob', { force: true, mentions: ['Bob'] });
   });
   const root = path.dirname(file);
-  const env = { SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  // The artifact seat is authority; the index only publishes where that body may look.
-  await rememberSquarePath(file, bobBody, testEnv(env).SQUARE_INDEX);
-
-  const inspected1 = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { env });
+  const env = {};
+  const inspected1 = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { cwd: root, env });
   assert.equal(inspected1.status, 0, inspected1.stderr);
   const pendingInbox = JSON.parse(inspected1.stdout);
   assert.deepEqual(pendingInbox, {
@@ -631,13 +632,20 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   });
   assert.doesNotMatch(inspected1.stdout, /hey @Bob|notifications|catchLease/);
 
-  const textSnapshot = run(['inbox', '--for-owner', 'codex:sid-cli'], { env });
+  const textSnapshot = run(['inbox', '--for-owner', 'codex:sid-cli'], { cwd: root, env });
   assert.equal(textSnapshot.status, 0, textSnapshot.stderr);
   assert.equal(textSnapshot.stdout, `Bob\t${fs.realpathSync(file)}\t1\n`);
 
-  const inspected2 = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { env });
+  const inspected2 = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { cwd: root, env });
   assert.equal(inspected2.status, 0, inspected2.stderr);
   assert.deepEqual(JSON.parse(inspected2.stdout), pendingInbox);
+
+  const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
+  try {
+    const session = await ledger.session(bobBody);
+    assert.ok(session, 'Codex owner is attached');
+    assert.ok((await ledger.pending(bobBody, { generation: session.generation })).some(card => card.text.includes('hey @Bob')), 'the directed card reached the host ledger');
+  } finally { await ledger.close(); }
 
   const inject = spawnSync(process.execPath, [CLI, 'codex-hook'], {
     encoding: 'utf8',
@@ -645,7 +653,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
     env: testEnv(env),
   });
   assert.equal(inject.status, 0, inject.stderr);
-  assert.match(inject.stdout, /"hookEventName":"PostToolUse"/);
+  assert.match(inject.stdout, /"hookEventName":"PostToolUse"/, inject.stderr);
   assert.match(inject.stdout, /hey @Bob/);
 
   const duplicate = spawnSync(process.execPath, [CLI, 'codex-hook'], {
@@ -667,7 +675,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   assert.equal(stop.status, 0, stop.stderr);
   assert.equal(stop.stdout, '');
 
-  const afterStop = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { env });
+  const afterStop = run(['inbox', '--for-owner', 'codex:sid-cli', '--json'], { cwd: root, env });
   assert.equal(afterStop.status, 0, afterStop.stderr);
   assert.equal(JSON.parse(afterStop.stdout).total, 1);
 });

@@ -51,7 +51,7 @@ test('participant counts are immutable, transaction-scoped facts with read-your-
 });
 
 test('catch and terminal summaries use aggregate facts and preserve all-known-peer quorum and cap precedence', async (t) => {
-  const cell = fixture(t, 1, [{ kind: 'say', actor: 'Ghost', body: 'known', at: 0, index: 0, messageIndex: 0 }]);
+  const cell = fixture(t, 1, [{ kind: 'say', actor: 'Ghost', body: 'known', at: 0, index: 0 }]);
   const aliceSeat = await establishSeat(cell, 'Alice', 0);
   const bobSeat = await establishSeat(cell, 'Bob', 1);
   await cell.transactAs({ kind: 'participant', seat: aliceSeat }, facts => facts.land({ kind: 'done', actor: 'Alice', at: 3 }));

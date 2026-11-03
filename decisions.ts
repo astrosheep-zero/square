@@ -56,7 +56,7 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   let afterIndex = readCursor(facts, name);
   const summaries = new Map<string, { count: number; latestAt: number; lastIndex: number }>();
   while (true) {
-    const page = facts.directed(name, { afterIndex, kinds: ['say'] }, { edge: 'oldest', limit: FACT_PAGE_SIZE });
+    const page = facts.directed(name, { afterIndex, kinds: ['say'], unseenOnly: true }, { edge: 'oldest', limit: FACT_PAGE_SIZE });
     for (const item of page.items) {
       const summary = summaries.get(item.actor) ?? { count: 0, latestAt: -Infinity, lastIndex: item.index };
       summary.count++;
@@ -181,7 +181,7 @@ export function coreParticipants(facts: SquareRead, now: number): ParticipantSum
       activityCount: current.sayCount, lastActiveAt,
       presence: current.done ? 'done' : !current.joined ? 'never-joined' : facts.seat(current.name)?.attachment === 'detached' ? 'away'
         : freshWatchLease(facts, current.name, now) !== undefined ? 'watching' : 'active',
-      unreadActivityCount: current.joined ? facts.directedCount(current.name, { kinds: ['say'], afterIndex: readCursor(facts, current.name) }) : 0,
+      unreadActivityCount: current.joined ? facts.directedCount(current.name, { kinds: ['say'], afterIndex: readCursor(facts, current.name), unseenOnly: true }) : 0,
       pendingMentionCount: current.joined ? facts.directedCount(current.name, { kinds: ['say'], afterIndex: current.lastJoinIndex ?? -1, unseenOnly: true }) : 0,
     };
   }).sort(compareParticipantActivity);

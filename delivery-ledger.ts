@@ -28,6 +28,13 @@ export interface DeliveryCorrelation {
   readonly messageId?: string;
   readonly payloadHash?: string;
 }
+export interface DeliveryHandoffRef {
+  readonly token: string;
+  readonly owner: Owner;
+  readonly generation: string;
+  readonly payloadHash: string;
+  readonly routeKind: string;
+}
 export type DeliveryOutcome = 'dispatching' | 'accepted' | 'presented' | 'failed' | 'unknown' | 'released';
 export type PresentationOutcome = 'presented' | 'failed' | 'unknown' | 'released';
 export interface DeliveryAttempt {
@@ -137,6 +144,13 @@ export class DeliveryLedger {
     return this.store.lifecycle(input, state);
   }
   session(owner: Owner): Promise<DeliverySession | undefined> { validateOwner(owner); return this.store.session(owner); }
+  sessions(): Promise<readonly DeliverySession[]> { return this.store.sessions(); }
+  pending(owner: Owner, options: { readonly generation: string }): Promise<readonly DeliveryCard[]> {
+    validateOwner(owner); nonempty(options.generation); return this.store.pendingCards(owner, options.generation);
+  }
+  handoffs(owner: Owner, options: { readonly generation: string }): Promise<readonly DeliveryAttempt[]> {
+    validateOwner(owner); nonempty(options.generation); return this.store.handoffs(owner, options.generation);
+  }
   post(input: { readonly owner: Owner; readonly key: string; readonly text: string }): Promise<PostResult> {
     validateOwner(input.owner); nonempty(input.key);
     if (typeof input.text !== 'string') throw new TypeError('Expected card text');
@@ -168,9 +182,16 @@ export class DeliveryLedger {
       },
     };
   }
+  /** Resolve the original prepared handoff, including its stored route kind. */
+  handoff(token: string): Promise<DeliveryHandoffRef | undefined> {
+    nonempty(token); return this.store.handoff(token);
+  }
+  guardHandoff(ref: DeliveryHandoffRef): Promise<boolean> { return this.store.guardHandoff(ref); }
+  acceptHandoff(ref: DeliveryHandoffRef): Promise<boolean> { return this.store.acceptHandoff(ref); }
   /** Confirms the exact existing external effect; never sends or returns text. */
-  observePresentation(handoffToken: string): Promise<boolean> {
-    nonempty(handoffToken); return this.store.observePresentation(handoffToken);
+  observePresentation(handoff: string | DeliveryHandoffRef, options?: { readonly requireCurrent?: boolean }): Promise<boolean> {
+    if (typeof handoff === 'string') nonempty(handoff);
+    return this.store.observePresentation(handoff, options);
   }
   health(owner?: Owner): Promise<DeliveryHealth> {
     if (owner !== undefined) validateOwner(owner);
