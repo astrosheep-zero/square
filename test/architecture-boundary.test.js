@@ -133,7 +133,7 @@ function storageLeaks(sources) {
     ['inbox.ts', ['createArtifactPort', 'observeSquareDeliveryRevision', 'observeSquareRevision']],
     ['claude-delivery-status.ts', ['createArtifactPort']],
     ['claude-delivery.ts', ['createArtifactPort']],
-    ['plugins/opencode/delivery.ts', ['channelArtifact', 'createArtifactPort', 'observeSquareRevision']],
+    ['plugins/opencode-shared/delivery.ts', ['channelArtifact', 'createArtifactPort', 'observeSquareRevision']],
     ['stream.ts', ['createArtifactPort', 'observeSquareRevision']],
   ]);
   const leaks = [];
@@ -156,7 +156,7 @@ function storageLeaks(sources) {
   return leaks.sort();
 }
 
-test('resolved imports preserve artifact and SQL ownership across native integrations', () => {  assert.ok(productionSources.has('plugins/opencode/delivery.ts'));
+test('resolved imports preserve artifact and SQL ownership across native integrations', () => {  assert.ok(productionSources.has('plugins/opencode-shared/delivery.ts'));
   assert.ok(productionSources.has('packages/agent-delivery/src/opencode-native.ts'));
   assert.deepEqual(storageLeaks(productionSources), []);
   assert.deepEqual(storageLeaks(new Map([
@@ -289,7 +289,7 @@ test('decisions and perception use domain facts, outside host and storage operat
 });
 
 test('product adapters stay behind the facade and close boundary', () => {
-  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['artifact.ts', 'channel-internal.ts', 'sqlite-square.ts', 'stream.ts', 'list.ts', 'boundary-presentation.ts', 'notifications.ts', 'delivery-health.ts', 'claude-mod.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode/delivery.ts']);
+  const directClose = filesContaining(/\bartifact\.close\s*\(/, ['artifact.ts', 'channel-internal.ts', 'sqlite-square.ts', 'stream.ts', 'list.ts', 'boundary-presentation.ts', 'notifications.ts', 'delivery-health.ts', 'claude-mod.ts', 'inbox.ts', 'claude-delivery-status.ts', 'claude-delivery.ts', 'plugins/opencode-shared/delivery.ts']);
   assert.deepEqual(directClose, [], `artifact close escaped its package-private boundary: ${directClose.join(', ')}`);
   // The real Square resource is the only entry into participant execution.
   for (const file of ['open-square.ts', 'square-actions.ts']) assert.equal(productionSources.has(file), false, `${file} must be deleted`);

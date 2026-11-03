@@ -168,7 +168,9 @@ test('install and uninstall manage an explicit OpenCode target', () => {
     const path = require('node:path');
     const target = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json');
     const [command, action] = process.argv.slice(2);
-    if (command === 'plugin' && ['add', 'update'].includes(action)) {
+    if (command === '--version') {
+      console.log('2.0.20');
+    } else if (command === 'plugin' && ['add', 'update'].includes(action)) {
       if (!JSON.parse(fs.readFileSync(target, 'utf8')).plugins.includes('@astrosheep/square')) process.exit(1);
     } else {
       process.exit(1);

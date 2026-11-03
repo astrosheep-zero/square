@@ -12,12 +12,24 @@ import { indexedSquareEntries } from '../../square-index.js';
 import { asSeatRef } from '../../seats.js';
 import { restoreSessionSeats } from '../../session-lifecycle.js';
 import { presentPending } from '../../presentation-operations.js';
-import { createNativeInputId, sendNativeText, type OpenCodeNativeSession } from '../../packages/agent-delivery/src/opencode-native.js';
 
 const routeKind = 'opencode-server' as const;
 const ownerFor = (sessionId: string) => harnessOwner({ channel: 'opencode', session: sessionId });
 const payloadHash = (payload: string) => createHash('sha256').update(payload).digest('hex');
 export interface OpenCodeContextMessage { readonly id?: string; readonly role: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
+
+/** Prepare durable correlation under the same claim and final-send fences for both hosts. */
+export async function prepareOpenCodeWake(request: WakeRequest, sessionId: string, signal: AbortSignal,
+  beforeSend: () => Promise<boolean>, createId: () => string): Promise<{ inputId: string; payload: string } | undefined> {
+  const presentation = request.presentation;
+  if (request.claimToken === undefined || parseMessageId(request.message) === undefined || presentation === undefined
+    || request.route.kind !== routeKind || request.route.address.sessionId !== sessionId || signal.aborted || !await beforeSend() || signal.aborted) return undefined;
+  const inputId = createId();
+  if (!await request.channel.prepare({ correlation: { harness: 'opencode', token: inputId, payloadHash: payloadHash(presentation.payload) },
+    coverage: presentation.coverage, ...(presentation.description === undefined ? {} : { description: presentation.description }) }, signal)) return undefined;
+  if (signal.aborted || !await beforeSend() || signal.aborted) return undefined;
+  return { inputId, payload: presentation.payload };
+}
 
 export async function indexedOpenCodeSessions(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   return [...new Set((await indexedSquareEntries({ }, env)).flatMap((entry) => {
@@ -32,37 +44,6 @@ export async function discoverOpenCodeSeats(sessionId: string, env: NodeJS.Proce
 
 function sameSeat(left: Seat | undefined, right: Seat): boolean {
   return left !== undefined && left.attachment === 'attached' && left.generation === right.generation && left.owner === right.owner;
-}
-
-function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
-  return {
-    probe: async (route) => !lifetime.aborted && route.kind === routeKind
-      && route.address.sessionId === target.sessionId,
-    async attempt(request: WakeRequest, timeoutMs: number, beforeSend) {
-      const presentation = request.presentation;
-      if (request.claimToken === undefined || parseMessageId(request.message) === undefined || presentation === undefined
-        || request.route.kind !== routeKind || request.route.address.sessionId !== target.sessionId) {
-        return { outcome: 'not-capable', diagnostic: 'OpenCode attention has no matching artifact claim or session.' };
-      }
-      const signal = AbortSignal.any([lifetime, AbortSignal.timeout(timeoutMs)]);
-      const started = Date.now();
-      if (signal.aborted || !await beforeSend())
-        return { outcome: 'not-capable', diagnostic: 'OpenCode attention changed before send.' };
-      const inputId = createNativeInputId();
-      const correlation = { harness: 'opencode' as const, token: inputId, payloadHash: payloadHash(presentation.payload) };
-      if (!await request.channel.prepare({ correlation,
-        coverage: presentation.coverage, ...(presentation.description === undefined ? {} : { description: presentation.description }) }, signal))
-        return { outcome: 'not-capable', diagnostic: 'OpenCode delivery claim is no longer current.' };
-      if (signal.aborted || !await beforeSend())
-        return { outcome: 'not-capable', diagnostic: 'OpenCode attention was consumed before send.' };
-      const result = await sendNativeText(target, presentation.payload, {
-        inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
-      });
-      if (result.state === 'accepted') return { outcome: 'accepted' };
-      if (result.state === 'unavailable') return { outcome: 'failed', signature: result.code };
-      return { outcome: 'unknown', signature: result.code };
-    },
-  };
 }
 
 function textMessage(message: OpenCodeContextMessage): string | undefined {
@@ -118,9 +99,8 @@ export async function observeOpenCodeContext(sessionId: string, messages: readon
 }
 
 /** The native receiver owns no claims outside the artifact; HOME is used only for discovery. */
-export async function receiveOpenCodePending(target: OpenCodeNativeSession, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  const observer = await observeSessionPending(ownerFor(target.sessionId), env);
-  const transport = createOpenCodeWakeTransport(target, signal);
+export async function receiveOpenCodePending(sessionId: string, transport: WakeTransportPort, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  const observer = await observeSessionPending(ownerFor(sessionId), env);
   let waiting: ReturnType<typeof observer.wait> | undefined;
   try {
     while (!signal.aborted) {
@@ -187,8 +167,8 @@ export async function cancelOpenCodeDeliveries(sessionId: string, env: NodeJS.Pr
   }
 }
 
-export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-  for (const { location, seat } of await discoverOpenCodeSeats(sessionId, env, signal)) {
+export async function endOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv, signal: AbortSignal, captured?: Awaited<ReturnType<typeof discoverOpenCodeSeats>>): Promise<void> {
+  for (const { location, seat } of captured ?? await discoverOpenCodeSeats(sessionId, env, signal)) {
     if (signal.aborted) return;
     const { Square } = await import('../../square-api.js');
     const square = await Square.at({ path: location, env });

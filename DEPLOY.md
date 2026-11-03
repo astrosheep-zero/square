@@ -8,7 +8,7 @@ an existing local Square package is already configured; that source is preserved
 
 - For Claude native inbox delivery: macOS Claude Code, with the
   Square mod actually loaded in a trusted/approved interactive terminal
-- For OpenCode native body delivery: a compatible OpenCode 2.x host with the Square v2 server plugin loaded; the installed host tested is 2.0.20
+- OpenCode 1.x uses the separate legacy plugin; native proactive delivery requires 1.15.11 or newer and a runtime supporting Square's SQLite API. OpenCode 2.x uses the separate v2 server plugin.
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
 ## Steps
@@ -18,18 +18,15 @@ npm install -g @astrosheep/square
 square install --all -f
 ```
 
-The OpenCode integration is installed from the published `@astrosheep/square`
-package through OpenCode's npm plugin loader. The package's `exports["./server"]`
-entry tells OpenCode which `{ id, setup }` server plugin to load. Square still
-links its skills into the local agent configuration. The loaded plugin sends
-body previews through OpenCode's own session capability while idle or busy;
-only an exact matching prepared primary context records presentation. Native
-admission alone is not presentation. User cancellation suppresses the local
-pending batch, not OpenCode's already admitted inbox or unrelated execution.
-The plugin checks for the v2 version family and the required location, session,
-and event capabilities at setup. Other 2.x releases with those APIs are eligible,
-but have not been individually validated; future API changes can still break
-compatibility. No legacy tool-output injection fallback is installed.
+`square install opencode` checks the installed OpenCode major first. For 2.x it uses the npm loader and `./server`; for 1.x it configures the separate `./opencode-v1` function by an absolute file URL to this Square installation. Re-run installation after moving or upgrading Square. A missing entry with an intact Square package manifest can be refreshed; if the old package root and manifest are gone, doctor reports unverified ownership and preserves that URL for manual inspection. Configuration does not prove a running host loaded the plugin.
+
+On 1.x, a host below 1.15.11, without a reachable native health endpoint, or without the required SQLite runtime uses reduced integration: no resident receiver or proactive delivery. Explicit Node CLI catch/history remains available. Shell session identity is supplied only when OpenCode provides it (1.2.7 or newer); on older hosts use the native session ID explicitly, for example `square --owner 'opencode:<native-session-id>' ... catch --idle` or the corresponding history command. No tool-output injection is used.
+
+A 1.x native 204 is uncertain submission, not admission or presentation. Exact prepared text observed at Square's pre-model hook may record presentation; later plugins can still remove it. This does not prove provider receipt, model processing or human acknowledgement. An isolated OpenCode 1.19.5 `opencode serve` supports native proactive delivery in the tested setup; 1.15.11 was tested in reduced mode. The tested 1.19.5 interactive embedded TUI currently runs reduced, without proactive delivery, because its supplied health URL is unreachable. Other versions and platforms are not thereby certified. On 2.x user cancellation suppresses the local pending batch, not already admitted native input.
+
+For an authenticated 1.x session deletion, Square stops that session's local receiver and discovers its seats during the deletion handler; it ends only the owner and generation captured for each seat. This is a handler-observation boundary, not an atomic snapshot at the remote event time or a permanent cross-process tombstone.
+
+The v2 plugin checks its version family and required location, session and event capabilities at setup. OpenCode 2.0.20 was tested; other eligible 2.x releases have not been individually validated and future API changes can break compatibility.
 
 Pi treats local paths and npm names as different package identities. Do not configure
 both sources for Square: they register the same tools twice. `square install pi`
@@ -39,7 +36,7 @@ both sources for Square: they register the same tools twice. `square install pi`
 ## Plugin sources
 
 Host-specific entries live under `plugins/pi`, `plugins/claude`, `plugins/codex`,
-`plugins/opencode`, and `plugins/paseo`. Package metadata and native install
+`plugins/opencode`, `plugins/opencode-v1`, and `plugins/paseo`. Package metadata and native install
 recipes select their entries; moving the sources does not change the existing
 `square install` commands or OpenCode's public `./server` export.
 

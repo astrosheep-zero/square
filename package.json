@@ -74,6 +74,10 @@
       "types": "./dist/paseo.d.ts",
       "default": "./dist/paseo.js"
     },
+    "./opencode-v1": {
+      "types": "./dist/plugins/opencode-v1/index.d.ts",
+      "default": "./dist/plugins/opencode-v1/index.js"
+    },
     "./server": {
       "types": "./dist/plugins/opencode/index.d.ts",
       "default": "./dist/plugins/opencode/index.js"

@@ -16,7 +16,7 @@ import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { nativePendingPreview, sessionInbox } from '../dist/inbox.js';
 import { channelWakePreview } from '../dist/delivery-operations.js';
 import { nativePayload, observeClaudeDelivery } from '../dist/claude-delivery.js';
-import { observeOpenCodeContext } from '../dist/plugins/opencode/delivery.js';
+import { observeOpenCodeContext } from '../dist/plugins/opencode-shared/delivery.js';
 
 const body = 'Full direct message @unmatched @Other\n' + '正文'.repeat(2600) + '\nTHE END';
 const metadata = { job: { id: 7, kind: 'result' } };

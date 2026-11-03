@@ -49,6 +49,10 @@ test('generated release artifacts expose the current identity and supported host
     types: './dist/plugins/opencode/index.d.ts',
     default: './dist/plugins/opencode/index.js',
   });
+  assert.deepEqual(packageJson.exports['./opencode-v1'], {
+    types: './dist/plugins/opencode-v1/index.d.ts',
+    default: './dist/plugins/opencode-v1/index.js',
+  });
   assert.equal(packageJson.peerDependenciesMeta['@getpaseo/client'].optional, true);
   assert.equal(packageJson.peerDependenciesMeta.ws.optional, true);
   assert.equal(SQUARE_IDENTITY.packageName, packageJson.name);
@@ -87,7 +91,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(packageJson.dependencies['@opencode/client'], undefined);
   const openCodeLeaf = path.join(path.dirname(leaf), 'opencode-native.js');
   assert.equal(fs.existsSync(openCodeLeaf), true);
-  assert.match(fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'delivery.js'), 'utf8'), /\.\.\/\.\.\/packages\/agent-delivery\/src\/opencode-native\.js/);
+  assert.match(fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'index.js'), 'utf8'), /\.\.\/\.\.\/packages\/agent-delivery\/src\/opencode-native\.js/);
   assert.doesNotMatch(fs.readFileSync(openCodeLeaf, 'utf8'), /@opencode|square|\.square/);
   const openCodePlugin = fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'index.js'), 'utf8');
   assert.match(openCodePlugin, /async setup\(ctx\)/);
@@ -140,6 +144,8 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/paseo/client/square-message.tsx',
     'dist/plugins/opencode/index.js',
     'dist/plugins/opencode/index.d.ts',
+    'dist/plugins/opencode-v1/index.js',
+    'dist/plugins/opencode-v1/index.d.ts',
   ]) assert.ok(packed.files.some((entry) => entry.path === file), `missing packed plugin: ${file}`);
   assert.equal(packed.files.some((entry) => entry.path.includes('/node_modules/')), false);
   assert.equal(packed.files.some((entry) => /^(?:claude-plugin|codex-plugin|extensions)\//.test(entry.path)), false);
@@ -193,7 +199,7 @@ console.log(JSON.stringify(await agent.steer('packed root 字')));`);
   assert.equal(frame.priority, 'next');
   const nativePath = 'dist/packages/agent-delivery/src/opencode-native.js';
   assert.ok(packed.files.some((entry) => entry.path === nativePath));
-  assert.ok(packed.files.some((entry) => entry.path === 'dist/plugins/opencode/delivery.js'));
+  assert.ok(packed.files.some((entry) => entry.path === 'dist/plugins/opencode-shared/delivery.js'));
   fs.writeFileSync(path.join(fixture, 'native.mjs'), `import {connectNative,sendNativeText} from './package/${nativePath}';
 const session={async get({sessionID}){return {id:sessionID}},async prompt(input){return {id:input.id,sessionID:input.sessionID,type:'user',delivery:input.delivery,payload:{text:input.text},time:{created:Date.now()}}}};
 const target=await connectNative({sessionId:'root-packed-native',session});

@@ -198,6 +198,7 @@ test('OpenCode installation adds globally once and updates even a cached fresh i
   const calls = [];
   const run = (_home, args) => {
     assert.equal(_home, home);
+    if (args[0] === '--version') { calls.push(args); return { status: 0, stdout: '2.0.20', stderr: '' }; }
     calls.push(args);
     // Native add sees its exact entry and does not rewrite the entire array.
     assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugins, ['other', '@astrosheep/square']);
@@ -207,8 +208,8 @@ test('OpenCode installation adds globally once and updates even a cached fresh i
   const installed = fs.readFileSync(target, 'utf8');
   installOpenCodePlugin(home, false, run);
   assert.deepEqual(calls, [
-    ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square'],
-    ['plugin', 'update', '@astrosheep/square'],
+    ['--version'], ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square'],
+    ['--version'], ['plugin', 'update', '@astrosheep/square'],
   ]);
   assert.deepEqual(parse(installed), { plugins: ['other', '@astrosheep/square'], model: 'provider/model' });
   for (const comment of source.matchAll(/\/\/[^\n]*/g)) assert.ok(installed.includes(comment[0]));
@@ -218,8 +219,8 @@ test('OpenCode installation adds globally once and updates even a cached fresh i
 test('OpenCode installation creates its global config when absent', (t) => {
   const { home, config } = openCodeHome(t);
   const calls = [];
-  installOpenCodePlugin(home, false, (_home, args) => { calls.push(args); return { status: 0, stdout: '', stderr: '' }; });
-  assert.deepEqual(calls, [['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+  installOpenCodePlugin(home, false, (_home, args) => { calls.push(args); return { status: 0, stdout: args[0] === '--version' ? '2.0.20' : '', stderr: '' }; });
+  assert.deepEqual(calls, [['--version'], ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(config, 'opencode.json'), 'utf8')), { plugins: ['@astrosheep/square'] });
 });
 
@@ -241,7 +242,7 @@ test('OpenCode install converges legacy duplicates and old pins to one unpinned 
   const otherTarget = path.join(config, 'opencode.json');
   fs.writeFileSync(otherTarget, '{"plugins":["other-json","@astrosheep/square@0.3.67"],"setting":true}');
   const calls = [];
-  const run = (_home, args) => { calls.push(args); return { status: 0, stdout: '', stderr: '' }; };
+  const run = (_home, args) => { calls.push(args); return { status: 0, stdout: args[0] === '--version' ? '2.0.20' : '', stderr: '' }; };
   installOpenCodePlugin(home, false, run);
   const installed = fs.readFileSync(target, 'utf8');
   const installedOther = fs.readFileSync(otherTarget, 'utf8');
@@ -249,7 +250,7 @@ test('OpenCode install converges legacy duplicates and old pins to one unpinned 
   assert.deepEqual(parse(installedOther), { plugins: ['other-json', { package: '@astrosheep/square', options }], setting: true });
   for (const comment of source.matchAll(/\/\/[^\n]*/g)) assert.ok(installed.includes(comment[0]));
   installOpenCodePlugin(home, true, run);
-  assert.deepEqual(calls, [['plugin', 'update', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+  assert.deepEqual(calls, [['--version'], ['plugin', 'update', '@astrosheep/square'], ['--version'], ['plugin', 'update', '@astrosheep/square']]);
   assert.equal(fs.readFileSync(target, 'utf8'), installed);
   assert.equal(fs.readFileSync(otherTarget, 'utf8'), installedOther);
 });
@@ -266,10 +267,11 @@ test('OpenCode install unpins a sole old object or tuple before native add and l
     const calls = [];
     installOpenCodePlugin(home, false, (_home, args) => {
       calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: '2.0.20', stderr: '' };
       assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugins, [{ package: '@astrosheep/square', options }]);
       return { status: 0, stdout: '', stderr: '' };
     });
-    assert.deepEqual(calls, [['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
+    assert.deepEqual(calls, [['--version'], ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
     assert.deepEqual(parse(fs.readFileSync(target, 'utf8')).plugin ?? [], []);
   }
 });
@@ -282,7 +284,7 @@ test('OpenCode install refuses conflicting owned options before changing files o
     '{"plugins":[{"package":"@astrosheep/square","options":{"enabled":false}}]}',
   ];
   targets.forEach((target, index) => fs.writeFileSync(target, sources[index]));
-  assert.throws(() => installOpenCodePlugin(home, false, () => assert.fail('must not invoke OpenCode')), /Conflicting Square plugin options.*reconcile/);
+  assert.throws(() => installOpenCodePlugin(home, false, (_home, args) => { assert.deepEqual(args, ['--version']); return { status: 0, stdout: '2.0.20', stderr: '' }; }), /Conflicting Square plugin options.*reconcile/);
   targets.forEach((target, index) => assert.equal(fs.readFileSync(target, 'utf8'), sources[index]));
 });
 
@@ -292,7 +294,7 @@ test('OpenCode installation propagates native add and update failures', (t) => {
   for (const failing of ['add', 'update']) {
     const source = JSON.stringify({ plugins: failing === 'update' ? ['@astrosheep/square'] : [] });
     fs.writeFileSync(target, source);
-    const run = (_home, args) => ({ status: args[1] === failing ? 1 : 0, stdout: '', stderr: 'external failure' });
+    const run = (_home, args) => ({ status: args[1] === failing ? 1 : 0, stdout: args[0] === '--version' ? '2.0.20' : '', stderr: 'external failure' });
     assert.throws(() => installOpenCodePlugin(home, false, run), /OpenCode .* failed: external failure/);
     assert.equal(fs.readFileSync(target, 'utf8'), source);
   }
@@ -367,7 +369,7 @@ test('OpenCode lifecycle refuses malformed config without editing any files or i
   const invalidTarget = path.join(config, 'opencode.jsonc');
   for (const invalid of ['{', 'null', '[]', '{"plugins":false}', '{"plugin":{}}']) {
     fs.writeFileSync(invalidTarget, invalid);
-    assert.throws(() => installOpenCodePlugin(home, false, () => assert.fail('must not invoke OpenCode')), /Invalid OpenCode/);
+    assert.throws(() => installOpenCodePlugin(home, false, (_home, args) => { assert.deepEqual(args, ['--version']); return { status: 0, stdout: '2.0.20', stderr: '' }; }), /Invalid OpenCode/);
     assert.throws(() => uninstallOpenCodePlugin(home), /Invalid OpenCode/);
     assert.equal(fs.readFileSync(validTarget, 'utf8'), valid);
     assert.equal(fs.readFileSync(invalidTarget, 'utf8'), invalid);

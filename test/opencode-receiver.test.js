@@ -9,7 +9,8 @@ import { createArtifactPort, prepareSquareBuild, writeSquareFile } from '../dist
 import { automaticWakeEligible } from '../dist/delivery.js';
 import { observeSessionPending } from '../dist/inbox.js';
 import { rememberSquarePath } from '../dist/square-index.js';
-import { receiveOpenCodePending, observeOpenCodeContext } from '../dist/plugins/opencode/delivery.js';
+import { receiveOpenCodePending, observeOpenCodeContext } from '../dist/plugins/opencode-shared/delivery.js';
+import { createOpenCodeWakeTransport } from '../dist/plugins/opencode/index.js';
 
 async function until(predicate, message) {
   const deadline = Date.now() + 4_000;
@@ -45,7 +46,8 @@ async function fixture(t) {
   const receivers = [];
   const start = prompt => {
     const abort = new AbortController();
-    const running = receiveOpenCodePending({ sessionId: 'native-session', session: { get: async () => ({ id: 'native-session' }), prompt } }, env, abort.signal);
+    const transport = createOpenCodeWakeTransport({ sessionId: 'native-session', session: { get: async () => ({ id: 'native-session' }), prompt } }, abort.signal);
+    const running = receiveOpenCodePending('native-session', transport, env, abort.signal);
     // Retain any unexpected receiver failure until cleanup asserts it.
     void running.catch(() => {});
     const receiver = { abort, running };

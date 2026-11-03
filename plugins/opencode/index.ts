@@ -1,7 +1,29 @@
+import type { WakeRequest, WakeTransportPort } from '../../ports.js';
 import { observeSquareIndex } from '../../square-index.js';
 import { canonicalPath } from '../../canonical-path.js';
-import { connectNative, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
-import { cancelOpenCodeDeliveries, endOpenCodeSession, indexedOpenCodeSessions, observeOpenCodeContext, publishOpenCodeAddress, receiveOpenCodePending, type OpenCodeContextMessage } from './delivery.js';
+import { connectNative, createNativeInputId, sendNativeText, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
+import { cancelOpenCodeDeliveries, endOpenCodeSession, indexedOpenCodeSessions, observeOpenCodeContext, prepareOpenCodeWake, publishOpenCodeAddress, receiveOpenCodePending, type OpenCodeContextMessage } from '../opencode-shared/delivery.js';
+
+const routeKind = 'opencode-server' as const;
+
+export function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifetime: AbortSignal): WakeTransportPort {
+  return {
+    probe: async (route) => !lifetime.aborted && route.kind === routeKind
+      && route.address.sessionId === target.sessionId,
+    async attempt(request: WakeRequest, timeoutMs: number, beforeSend) {
+      const signal = AbortSignal.any([lifetime, AbortSignal.timeout(timeoutMs)]);
+      const started = Date.now();
+      const prepared = await prepareOpenCodeWake(request, target.sessionId, signal, beforeSend, createNativeInputId);
+      if (!prepared || signal.aborted) return { outcome: 'not-capable', diagnostic: 'OpenCode attention is no longer current.' };
+      const result = await sendNativeText(target, prepared.payload, {
+        inputId: prepared.inputId, delivery: 'steer', timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), signal,
+      });
+      if (result.state === 'accepted') return { outcome: 'accepted' };
+      if (result.state === 'unavailable') return { outcome: 'failed', signature: result.code };
+      return { outcome: 'unknown', signature: result.code };
+    },
+  };
+}
 
 interface OpenCodePluginContext {
   readonly app: { readonly version: string };
@@ -73,7 +95,7 @@ export default {
         if (receivers.get(sessionId)?.settled === false) continue;
         const abort = new AbortController();
         const signal = AbortSignal.any([lifetime.signal, abort.signal]);
-        const receiver: Receiver = { abort, settled: false, running: receiveOpenCodePending(target, env, signal).catch(() => {}).finally(() => { receiver.settled = true; }) };
+        const receiver: Receiver = { abort, settled: false, running: receiveOpenCodePending(sessionId, createOpenCodeWakeTransport(target, signal), env, signal).catch(() => {}).finally(() => { receiver.settled = true; }) };
         receivers.set(sessionId, receiver);
       }
       for (const sessionId of receivers.keys()) if (!candidates.has(sessionId)) stop(sessionId);

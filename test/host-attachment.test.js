@@ -12,7 +12,7 @@ import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { nativePendingPreview, observeSessionPending, sessionInbox, sessionInboxCounts } from '../dist/inbox.js';
 import { restoreSessionSeats } from '../dist/session-lifecycle.js';
 import { rememberSquarePath } from '../dist/square-index.js';
-import { endOpenCodeSession, publishOpenCodeAddress } from '../dist/plugins/opencode/delivery.js';
+import { endOpenCodeSession, publishOpenCodeAddress } from '../dist/plugins/opencode-shared/delivery.js';
 import openCodePlugin from '../dist/plugins/opencode/index.js';
 
 async function fixture(t, extra = {}) {

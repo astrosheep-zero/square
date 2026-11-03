@@ -15,7 +15,7 @@ import { channelWakePreview } from '../dist/delivery-operations.js';
 import { deliverPending } from '../dist/delivery-operations.js';
 import { presentPending } from '../dist/presentation-operations.js';
 import { nativePayload, observeClaudeDelivery } from '../dist/claude-delivery.js';
-import { observeOpenCodeContext } from '../dist/plugins/opencode/delivery.js';
+import { observeOpenCodeContext } from '../dist/plugins/opencode-shared/delivery.js';
 import { pendingCardDetails } from '../plugins/pi/square-pi.js';
 import { rememberSquarePath } from '../dist/square-index.js';
 import { Square } from '../dist/square-api.js';
