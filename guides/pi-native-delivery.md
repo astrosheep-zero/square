@@ -6,6 +6,13 @@ Both its activity steer and advisory `nextTurn` send call the SDK-free shared
 framing, custom type, display, preview/UI, observation/presentation evidence,
 uncertain-landing and canceled-batch suppression; the leaf neither schedules nor tracks.
 
+An attached Pi seat with a registered wake address belongs to that explicit sender route,
+including Paseo, HTTP, or a native address. The Pi boundary observer presents only while the
+current seat has no registered address; it checks again before claiming and before presentation.
+If the observer is stopped, or the registered sender is unknown, stopped, or busy, activity stays
+pending rather than switching routes. A Paseo environment variable does not invent a fallback for
+an addressless Pi seat.
+
 Pi injection and external wake injection acquire mutually exclusive artifact-owned content custody.
 An accepted or uncertain Paseo wake suppresses native Pi reinjection without asserting presentation
 or consumption. Only proven failed/released attempts can return to the automatic queue. Missing

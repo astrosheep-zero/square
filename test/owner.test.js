@@ -20,6 +20,12 @@ test('opaque owners compare exactly while harness encoding roundtrips reserved s
   assert.equal(commandIdentity({ SQUARE_OWNER: 'env' }, 'explicit').owner, 'explicit');
   assert.deepEqual(commandIdentity({ CLAUDE_CODE_SESSION_ID: 'native', PASEO_AGENT_ID: 'managed' }), {
     owner: harnessOwner({ channel: 'claude-code', session: 'native' }),
+  });
+  assert.deepEqual(commandIdentity({ PI_SESSION_ID: 'pi-session', PASEO_AGENT_ID: 'managed' }), {
+    owner: harnessOwner({ channel: 'pi', session: 'pi-session' }),
+  });
+  assert.deepEqual(commandIdentity({ PASEO_AGENT_ID: 'managed' }), {
+    owner: harnessOwner({ channel: 'paseo', session: 'managed' }),
     wakeAddress: { kind: 'paseo', address: { agentId: 'managed' } },
   });
   for (const invalid of ['', 'control\u0000', 'control\u0085', '😀'.repeat(129)])

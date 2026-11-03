@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { formatMessageId, parseMessageId } from './message.js';
-import type { WakeRoute, JsonValue } from './channel-values.js';
+import type { JsonValue } from './channel-values.js';
 import type { ChannelArtifact, ChannelRead, EndpointFact, MessageHead } from './channel-ports.js';
 import type { WakeProjection, WakeProjectionContext, WakeRequest, WakeTransportPort } from './channel-transport.js';
 
@@ -13,7 +13,7 @@ interface DeliverPendingInput {
   readonly now?: number;
   readonly message?: string | number;
 }
-import { pendingAddresses, pendingHeadAt, pendingMessageHeads, presentationBlocksWake } from './channel-delivery.js';
+import { deliveryAddress, pendingAddresses, pendingHeadAt, pendingMessageHeads, presentationBlocksWake } from './channel-delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { dispatchEffect } from './delivery-effects.js';
 import { projectChannelNotification, renderSquareReminder } from './channel-presentation.js';
@@ -34,14 +34,6 @@ export async function channelWakePreview(artifact: ChannelArtifact, request: Wak
       actor: item.from, body: item.body, ...(item.preview === undefined ? {} : { preview: item.preview }) });
     return { payload: renderSquareReminder([projected.text]), coverage: projected.clipped ? 'clipped' as const : 'full' as const };
   }, signal)).value;
-}
-
-function routeFor(location: string, seat: { participant: string; attachment: 'attached' | 'detached'; wakeAddress?: { kind: WakeRoute['kind']; address: Readonly<Record<string, string>> } }, now: number): WakeRoute | undefined {
-  if (seat.attachment !== 'attached' || seat.wakeAddress === undefined) return undefined;
-  return {
-    location, participant: seat.participant,
-    kind: seat.wakeAddress.kind, address: { ...seat.wakeAddress.address }, updatedAt: now,
-  };
 }
 
 interface Currentness {
@@ -117,8 +109,9 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
     receivers.set(key, group);
   }
   const dispatch = async ({ seat, head }: Candidate): Promise<void> => {
-    const route = routeFor(location, seat, input.now ?? Date.now());
-    if (route === undefined) return;
+    const address = deliveryAddress(seat);
+    if (address === undefined) return;
+    const route = { location, participant: seat.participant, ...address, address: { ...address.address }, updatedAt: input.now ?? Date.now() };
     const request = {
       location, participant: seat.participant, message: formatMessageId(head.index), actor: head.from,
       seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation }, route,
@@ -174,14 +167,13 @@ export async function deliverPending(input: DeliverPendingInput): Promise<void> 
         return { outcome: 'not-capable', data: { diagnostic: 'The pending presentation is no longer current.' } };
       const remaining = deadline - Date.now();
       if (remaining <= 0) return { outcome: 'not-capable', data: { diagnostic: 'The presentation budget elapsed before transport.' } };
-      const presentation = prepared;
       const preparationSeat = Object.freeze({ ...request.seat });
       const channel: WakeRequest['channel'] = { prepare: (details, signal) => input.artifact.prepareDelivery({
         seat: preparationSeat, claimToken: claim.token, correlation: details.correlation,
         coverage: details.coverage, description: details.description,
       }, signal) };
-      const outcome = await input.transport.attempt({ ...request, seat: { ...request.seat }, channel, claimToken: claim.token, attemptN: claim.ordinal,
-        ...(presentation === undefined ? {} : { presentation }) }, remaining, beforeSend);
+      const outcome = await input.transport.attempt({ ...request, seat: { ...request.seat }, channel, claimToken: claim.token,
+        attemptN: claim.ordinal, presentation: prepared }, remaining, beforeSend);
       return { outcome: outcome.outcome, data: outcome };
     }, { timeoutMs: leaseMs });
   };

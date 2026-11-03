@@ -176,18 +176,16 @@ export function squareInput(context: CommandContext) {
 
 export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: WakeAddress } {
   if (explicit !== undefined) return { owner: explicit };
-  const configured = env.SQUARE_OWNER;
-  if (configured !== undefined) return { owner: configured };
+  if (env.SQUARE_OWNER !== undefined) return { owner: env.SQUARE_OWNER };
+  if (env.CLAUDE_CODE_CHILD_SESSION === '1') throw new Error('Harness identity is incomplete; provide --owner explicitly.');
   const selected = harnessSessionSources.flatMap(({ variable, channel }) => env[variable]?.trim() ? [{ channel, session: env[variable]!.trim() }] : []);
   const native = selected.filter(source => source.channel !== 'paseo');
-  if (env.CLAUDE_CODE_CHILD_SESSION === '1') throw new Error('Harness identity is incomplete; provide --owner explicitly.');
   if (native.length > 1) throw new Error('Multiple harness execution coordinates are present; select one explicit owner.');
-  const paseo = selected.find(source => source.channel === 'paseo');
-  const coordinate = native[0] ?? paseo;
+  const coordinate = native[0] ?? selected[0];
   if (coordinate === undefined) return { owner: localUserOwner() };
   const owner = harnessOwner({ channel: coordinate.channel, session: coordinate.session });
   const wakeAddress = coordinate.channel === 'codex' ? codexWakeAddress(coordinate.session, env)
-    : paseo === undefined ? undefined : { kind: 'paseo' as const, address: { agentId: paseo.session } };
+    : coordinate.channel === 'paseo' ? { kind: 'paseo' as const, address: { agentId: coordinate.session } } : undefined;
   return { owner, ...(wakeAddress === undefined ? {} : { wakeAddress }) };
 }
 

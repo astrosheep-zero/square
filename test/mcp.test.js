@@ -13,6 +13,9 @@ import { Square, selectOwnSeat } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from '../dist/claude-mcp-context.js';
+import { commandIdentity } from '../dist/cli/context.js';
+import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import squarePiExtension from '../plugins/pi/square-pi.js';
 
 const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -32,6 +35,45 @@ async function connectedClient(server) {
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return { client, close: async () => { await client.close(); await server.close(); } };
 }
+
+test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the environment', async t => {
+  const { cwd, squarePath } = await fixture();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'pi-index'), PI_SESSION_ID: 'parity', PASEO_AGENT_ID: 'managed',
+    CODEX_THREAD_ID: '', CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', OPENCODE_SESSION_ID: '' };
+  delete env.SQUARE_OWNER;
+  const cli = spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', squarePath, '--as', 'Cli', 'join'], { env, encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  const identity = commandIdentity(env);
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, ...identity }));
+  const artifact = createArtifactPort(squarePath);
+  const square = await Square.at({ path: squarePath, env, wakeTransport: false });
+  t.after(async () => { await close(); await artifact.close(); await square.close(); });
+  const joined = await client.callTool({ name: 'join', arguments: { as: 'Mcp' } });
+  assert.equal(joined.isError, undefined);
+  const before = (await artifact.read(facts => facts.seat('Cli'))).value;
+  const keys = ['SQUARE_INDEX', 'PASEO_AGENT_ID', 'PI_SESSION_ID', 'CODEX_THREAD_ID', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'OPENCODE_SESSION_ID', 'SQUARE_OWNER'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) env[key] === undefined ? delete process.env[key] : process.env[key] = env[key];
+  t.after(() => { for (const key of keys) previous[key] === undefined ? delete process.env[key] : process.env[key] = previous[key]; });
+  const tools = new Map();
+  squarePiExtension({ registerTool: tool => tools.set(tool.name, tool), registerFlag() {}, getFlag() {}, on() {} });
+  const ctx = { cwd, sessionManager: { getSessionId: () => 'parity' } };
+  for (const as of ['Cli', 'Pi']) {
+    const result = await tools.get('square_join').execute('test', { location: squarePath, as }, undefined, undefined, ctx);
+    assert.equal(result.isError, undefined, result.content[0].text);
+  }
+  assert.equal((await artifact.read(facts => facts.seat('Cli'))).value.generation, before.generation);
+  for (const name of ['Cli', 'Mcp', 'Pi']) {
+    const seat = (await artifact.read(facts => facts.seat(name))).value;
+    assert.equal(seat.owner, identity.owner);
+    assert.equal(seat.wakeAddress, undefined);
+  }
+  const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
+  await alice.express({ body: 'parity message', mentions: ['Cli', 'Mcp', 'Pi'], force: true });
+  const delivered = await presentPendingAtBoundary(identity.owner, (_text, memberships) => memberships, undefined, env);
+  assert.deepEqual(new Set(delivered.map(item => item.seat.participant)), new Set(['Cli', 'Mcp', 'Pi']));
+});
 
 test('MCP tools validate JSON arguments and return only CLI text', async () => {
   const { server } = await fixture();

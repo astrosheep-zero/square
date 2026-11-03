@@ -302,9 +302,9 @@ test('deferral leases match persisted metadata and release restores boundary eli
   assert.equal(await endpoint.releaseDeliveryDeferral(lease.id), true);
   assert.equal(await endpoint.releaseDeliveryDeferral(lease.id), false);
   assert.equal(await endpoint.renewDeliveryDeferral(lease.id, 1000), null);
-  const presented = await presentPendingAtBoundary(owner, text => text, undefined, env);
-  assertFull(presented, deferred);
-  assert.equal(Boolean((await square.artifact.read(facts => facts.channel.receipt('Recipient', Number(deferred.id.slice(4))))).value), true);
+  const presented = await presentPendingAtBoundary(owner, () => assert.fail('registered Paseo route owns this notification'), undefined, env);
+  assert.equal(presented, undefined);
+  assert.equal(Boolean((await square.artifact.read(facts => facts.channel.receipt('Recipient', Number(deferred.id.slice(4))))).value), false);
 });
 
 test('send preserves full body in history, stores truncated preview when clipped, and unifies two-layer ack', async t => {

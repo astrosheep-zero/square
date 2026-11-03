@@ -1,5 +1,9 @@
-import type { ChannelRead, ChannelDeliveryEvidence as DeliveryEvidence, MessageHead } from './channel-ports.js';
+import type { ChannelRead, ChannelDeliveryEvidence as DeliveryEvidence, EndpointFact, MessageHead } from './channel-ports.js';
 import { automaticDispatchEligible, presentationBlocksDispatch, type Attempt } from './delivery-attempts.js';
+export function deliveryAddress(endpoint: EndpointFact | undefined) {
+  return endpoint?.attachment === 'attached' ? endpoint.wakeAddress : undefined;
+}
+
 function custody(evidence: readonly DeliveryEvidence[]): Pick<Attempt<unknown>, 'purpose' | 'outcome' | 'expiresAt'>[] {
   return evidence.map(row => ({ purpose: row.kind === 'wake' ? 'dispatch' : 'presentation', outcome: row.outcome, expiresAt: row.expiresAt }));
 }

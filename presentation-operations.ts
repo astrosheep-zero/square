@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { formatMessageId, parseMessageId } from './message.js';
 import { isSquareError } from './model.js';
 import type { PresentationResult, PresentPendingInput, SquareRead } from './ports.js';
-import { pendingHead, sameJoin } from './delivery.js';
+import { pendingHead } from './delivery.js';
 import { deliveryDeferralExpiry } from './delivery-deferral.js';
 import { asSeatRef } from './seats.js';
 import { preparePresentation, presentPrepared } from './delivery-effects.js';
@@ -16,8 +16,7 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
     const seat = facts.channel.endpoint(input.participant);
     if (seat === undefined || seat.attachment !== 'attached' || input.generation !== undefined && input.generation !== seat.generation
       || input.seat !== undefined && (input.seat.generation !== seat.generation || input.seat.owner !== seat.owner)
-      || input.current?.(facts) === false || !pendingHead(facts, input.participant, index)
-      || deliveryDeferralExpiry(facts.channel, seat, index, input.now ?? Date.now()) !== undefined) return undefined;
+      || !pendingHead(facts, input.participant, index)) return undefined;
     const item = facts.channel.message(index);
     return item === undefined ? undefined : { participant: { name: input.participant, generation: seat.generation }, seat, item };
   }, input.signal).catch(() => undefined);
@@ -26,17 +25,19 @@ export async function preparePendingPresentation(input: Omit<PresentPendingInput
   const ref = asSeatRef(seat);
   const owns = (facts: SquareRead) => {
     const current = facts.seat(seat.participant);
-    return current !== undefined && current.attachment === 'attached' && current.owner === seat.owner && current.generation === seat.generation
-      && sameJoin(facts, participant);
+    return current !== undefined && current.attachment === 'attached' && current.owner === seat.owner && current.generation === seat.generation;
   };
   const claimToken = randomUUID();
   return preparePresentation({
     payload: item, coverage: input.markSeen === false ? 'clipped' : 'full',
     port: {
       async claim(signal) {
-        const claimed = await input.artifact.claimDelivery({ seat: ref, message: formatMessageId(index), kind: 'presentation',
-          observationOf: input.observationOf, at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken }, signal).catch(() => ({ status: 'stale' as const }));
-        return claimed.status === 'acquired' ? { token: claimToken, ordinal: claimed.attemptN } : undefined;
+        const claimed = await input.artifact.transactAs({ kind: 'participant', seat: ref }, facts => {
+          if (!owns(facts) || input.current?.(facts) === false) return undefined;
+          return facts.channel.claimDelivery({ seat: ref, message: formatMessageId(index), kind: 'presentation',
+            observationOf: input.observationOf, at: input.now ?? Date.now(), leaseMs: input.timeoutMs ?? 5000, claimToken });
+        }, signal).then(result => result.value).catch(() => undefined);
+        return claimed?.status === 'acquired' ? { token: claimToken, ordinal: claimed.attemptN } : undefined;
       },
       async current(signal) {
         return (await input.artifact.read(facts => owns(facts) && input.current?.(facts) !== false

@@ -5,6 +5,58 @@ import path from 'node:path';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
+import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
+import { sessionInbox } from '../dist/inbox.js';
+
+test('a registered route owns Pi delivery, including when registered after inbox projection', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-route-'));
+  const location = path.join(root, 'route.square');
+  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
+  const square = await Square.build({ path: location, markdown: 'Routes', env, wakeTransport: false });
+  const artifact = createArtifactPort(location);
+  t.after(async () => { await artifact.close(); await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const owner = 'pi:route-test';
+  const address = { kind: 'paseo', address: { agentId: 'receiver' } };
+  const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
+  const routed = [
+    ['Paseo', address],
+    ['Http', { kind: 'http', address: { url: 'https://example.com/wake' } }],
+    ['RegisteredNative', { kind: 'codex-queue', address: { sessionId: 'receiver' } }],
+  ];
+  for (const [name, wakeAddress] of routed) await square.join(name, { owner, wakeAddress });
+  await square.join('Native', { owner });
+  await square.join('Racing', { owner });
+  const activity = (await alice.express({ body: 'hello everyone', mentions: [...routed.map(([name]) => name), 'Native', 'Racing'], force: true })).activity;
+  const index = (await artifact.read(facts => facts.activity(Number(activity.id.slice(4))).messageIndex)).value;
+  const seat = name => artifact.read(facts => facts.seat(name)).then(result => result.value);
+  const state = async name => {
+    const captured = await seat(name);
+    return (await artifact.read(facts => ({ receipt: facts.channel.receipt(name, index),
+      evidence: facts.channel.deliveryEvidence(name, captured.generation, `msg/${index}`) }))).value;
+  };
+  const batch = await sessionInbox(owner, env);
+  const native = batch.find(item => item.seat.participant === 'Native').notifications[0];
+  const body = native.body;
+  let registration;
+  // Rendering follows the boundary's inbox projection but precedes its item claims.
+  Object.defineProperty(native, 'body', { get() {
+    registration ??= square.join('Racing', { owner, wakeAddress: address });
+    return body;
+  } });
+  let calls = 0;
+  const text = await presentPendingAtBoundary(owner, context => { calls++; return context; }, () => batch, env);
+  assert.ok(registration);
+  await registration;
+  assert.deepEqual((await seat('Racing')).wakeAddress, address);
+  assert.equal(calls, 1);
+  assert.match(text, /hello everyone/);
+  assert.ok((await state('Native')).receipt, 'address-free Pi presentation records its receipt');
+  for (const name of [...routed.map(([name]) => name), 'Racing']) {
+    const result = await state(name);
+    assert.equal(result.receipt, undefined, `${name} remains pending`);
+    assert.equal(result.evidence.some(row => row.outcome === 'presented' || row.outcome === 'clipped'), false);
+  }
+});
 
 // Native registrations belong to a seat generation, not an expiring routes table.
 // Ordinary managed reconnects must preserve them; retirement and takeover must not.

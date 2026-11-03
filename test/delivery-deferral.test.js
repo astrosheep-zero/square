@@ -8,7 +8,8 @@ import { Square } from '../dist/square-api.js';
 import { channelArtifact, createArtifactPort } from '../dist/artifact.js';
 import { deliverPending, sweepPending } from '../dist/delivery-operations.js';
 import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
-import { presentPending } from '../dist/presentation-operations.js';
+import { preparePendingPresentation, presentPending } from '../dist/presentation-operations.js';
+import { presentPrepared } from '../dist/delivery-effects.js';
 import { observeSessionPending, sessionInbox, nativePendingPreview, projectBoundaryEligibility } from '../dist/inbox.js';
 import { matchesMetadata, validateMetadataMatch, MAX_DELIVERY_DEFERRAL_MS } from '../dist/delivery-deferral.js';
 
@@ -33,7 +34,7 @@ async function fixture(t, extra = {}) {
   resources.push(square);
   const alice = (await square.join('Alice', { owner: ':' })).participant;
   const receiver = await open(extra);
-  const bobBody = "pi" + ":" + ('Bob');
+  const bobBody = 'test:Bob';
   const bobWakeAddress = { kind: 'paseo', address: { agentId: 'bob' } };
   const bob = (await receiver.join('Bob', { owner: bobBody, wakeAddress: bobWakeAddress })).participant;
   const artifact = createArtifactPort(location);
@@ -217,12 +218,11 @@ test('presentation suppresses before the sink but retains successful post-sink e
   assert.equal((await presentPending(input)).presented, false);
   assert.equal(writes, 0);
   await f.bob.releaseDeliveryDeferral(lease.id);
-  const racingArtifact = { ...f.artifact, claimDelivery: async (...args) => {
-    const claim = await f.artifact.claimDelivery(...args);
-    lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
-    return claim;
-  } };
-  assert.equal((await presentPending({ ...input, artifact: racingArtifact })).presented, false);
+  const prepared = await preparePendingPresentation(input);
+  assert.ok(prepared);
+  lease = await f.bob.deferDelivery({ match, durationMs: 10000 });
+  const race = await presentPrepared(prepared, input.sink.present);
+  assert.equal(race.observation.kind, 'not-invoked');
   assert.equal(writes, 0);
   await f.bob.releaseDeliveryDeferral(lease.id);
   assert.equal((await presentPending({ ...input, sink: { present: async () => {

@@ -9,6 +9,8 @@ import { sessionInbox, projectBoundaryEligibility, pendingKey } from './inbox.js
 import type { Owner, PendingMembership } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
 import { projectChannelNotification, projectNotification, renderSquareReminder } from './attention-presentation.js';
+import { decodeHarnessOwner } from './owner.js';
+import { deliveryAddress } from './channel-delivery.js';
 
 const CONTEXT_MAX = 1200;
 
@@ -81,6 +83,7 @@ async function presentPendingAtBoundaryUnlocked<T>(
   if (signal?.aborted) return undefined;
   const pending = await projectBoundaryEligibility(inbox);
   if (pending.length === 0 || signal?.aborted) return undefined;
+  const piObserver = decodeHarnessOwner(identity)?.channel === 'pi';
   const artifacts = new Map<string, SquareArtifactPort>();
   const claims: { key: string; claim: NonNullable<Awaited<ReturnType<typeof preparePendingPresentation>>> }[] = [];
   try {
@@ -95,7 +98,8 @@ async function presentPendingAtBoundaryUnlocked<T>(
           artifacts.set(location, artifact);
         }
         const claim = await preparePendingPresentation({ artifact, location, participant: seat.participant,
-          message: entry.messageIndex, seat, markSeen: entry.markSeen, signal });
+          message: entry.messageIndex, seat, markSeen: entry.markSeen,
+          ...(piObserver ? { current: facts => deliveryAddress(facts.channel.endpoint(seat.participant)) === undefined } : {}), signal });
         if (claim !== undefined) claims.push({ key: pendingKey(entry.membership, entry.messageIndex), claim });
       }
     } catch (error) {

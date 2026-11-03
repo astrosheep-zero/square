@@ -28,7 +28,7 @@ const normalizedBody = body.replace(/\r\n/g, '\n');
 const metadata = { job: { id: 7, kind: 'result' } };
 const hash = text => createHash('sha256').update(text).digest('hex');
 
-async function fixture(t, native = 'pi') {
+async function fixture(t, native = 'pi', addressless = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-direct-'));
   // Wakes correlate on the rendered channel path, so the fixture speaks the canonical spelling.
   const location = await canonicalPath(path.join(root, 'direct.square'));
@@ -46,7 +46,7 @@ async function fixture(t, native = 'pi') {
   const attach = async (participant, participantOwner, wake) => (await artifact.transactAs({ kind: 'endpoint', participant, owner: participantOwner },
     facts => facts.channel.storeEndpoint({ participant, owner: participantOwner, generation: `endpoint/${participant.toLowerCase()}-seat`, attachment: 'attached', ...(wake === undefined ? {} : { wakeAddress: wake }) }))
     && (await artifact.read(facts => facts.channel.endpoint(participant))).value);
-  const bob = await attach('Bob', owner, wakeAddress);
+  const bob = await attach('Bob', owner, addressless ? undefined : wakeAddress);
   await rememberSquarePath(location, owner, env.SQUARE_INDEX);
   const read = async select => (await artifact.read(select)).value;
   const send = async (extra = {}, actor = 'Worker') => channel.send({ from: actor, to: extra.to ?? ['Bob'], body, metadata, ...extra });
@@ -145,11 +145,11 @@ test('native rendering is raw stored text inside the fixed outer frame, with a s
 });
 
 test('Codex/Pi boundary and Pi cards present native bodies in full and consume them without touching metadata or deferrals', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, 'pi', true);
   const square = await Square.at({ path: f.location, env: f.env,
     wakeTransport: { probe: async () => false, attempt: () => assert.fail('no external send') } });
   t.after(() => square.close());
-  const bob = (await square.join('Bob', { owner: f.owner, wakeAddress: f.wakeAddress })).participant;
+  const bob = (await square.join('Bob', { owner: f.owner })).participant;
   const lease = await bob.deferDelivery({ match: { fields: [{ path: ['job', 'id'], equals: 7 }] }, durationMs: 60_000 });
   const first = await f.send();
   assert.equal((await sessionInbox(f.owner, f.env))[0].notifications.length, 0);

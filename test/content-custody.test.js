@@ -17,7 +17,7 @@ async function fixture(t) {
   const location = path.join(root, 'test.square');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index') };
   const square = await Square.build({ path: location, env, markdown: '', wakeTransport: false });
-  const owner = 'pi:content-custody';
+  const owner = 'test:content-custody';
   await square.join('Bob', { owner, wakeAddress: { kind: 'paseo', address: { agentId: 'fake-bob' } } });
   const { id: activity } = await square.send({ from: 'Worker', to: 'Bob', body: 'report/519', truncate: false });
   const producer = createArtifactPort(location), receiver = createArtifactPort(location);
@@ -38,7 +38,7 @@ async function fixture(t) {
 }
 
 // Hold the actual transport after its final gate: moving that gate cannot fix this race.
-for (const first of ['paseo', 'pi']) test(`${first} wins content custody across two artifact connections`, async t => {
+for (const first of ['paseo', 'presentation']) test(`${first} wins content custody across two artifact connections`, async t => {
   const f = await fixture(t);
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
   t.after(() => release.resolve());
@@ -53,8 +53,8 @@ for (const first of ['paseo', 'pi']) test(`${first} wins content custody across 
   });
   const wake = () => deliverPending({ artifact: channelArtifact(f.producer), preparePresentation: squareWakeProjection(f.producer), location: f.location, message: f.activity, transport });
   const native = () => f.present(async () => {
-    if (first === 'pi') { entered.resolve(); await release.promise; }
-    effects.push('pi');
+    if (first === 'presentation') { entered.resolve(); await release.promise; }
+    effects.push('presentation');
   });
   const pending = first === 'paseo' ? wake() : native();
   await entered.promise;
@@ -68,8 +68,8 @@ for (const first of ['paseo', 'pi']) test(`${first} wins content custody across 
   assert.equal((await native()).presented, false);
   assert.deepEqual(effects, [first]);
   assert.deepEqual((await f.evidence()).map(r => [r.kind, r.outcome]),
-    [[first === 'pi' ? 'presentation' : 'wake', first === 'pi' ? 'presented' : 'accepted']]);
-  assert.equal(Boolean(await f.seen()), first === 'pi', 'wake acceptance must not fabricate consumption');
+    [[first === 'presentation' ? 'presentation' : 'wake', first === 'presentation' ? 'presented' : 'accepted']]);
+  assert.equal(Boolean(await f.seen()), first === 'presentation', 'wake acceptance must not fabricate consumption');
 });
 
 for (const first of ['wake', 'presentation']) test(`${first} custody survives expiry and uncertainty; only proven failure releases it`, async t => {
