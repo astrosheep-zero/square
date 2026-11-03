@@ -3,7 +3,6 @@ import path from 'node:path';
 import { validateOwner, type Owner } from './neutral.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
 import { LedgerStore } from './delivery-ledger-sqlite.js';
-import { renderDeliveryBatch } from './delivery-ledger-render.js';
 
 export interface DeliveryRoute {
   readonly kind: string;
@@ -60,7 +59,6 @@ export interface DeliveryHealth {
 export interface PresentationClaim {
   readonly cards: readonly DeliveryCard[];
   readonly attempts: readonly DeliveryAttempt[];
-  readonly text: string;
   /** Recheck immediately before handing text to the external receiver. */
   current(signal?: AbortSignal): Promise<boolean>;
   /** Captured custody survives attachment rotation; errors propagate without a false receipt. */
@@ -174,7 +172,7 @@ export class DeliveryLedger {
     const claim = await this.store.claimPresentation(owner, options.generation, options.budgetChars, this.leaseMs, options.signal);
     if (!claim) return undefined;
     const tokens = claim.attempts.map(attempt => attempt.token);
-    return { ...claim, text: renderDeliveryBatch(claim.cards),
+    return { ...claim,
       current: signal => this.store.current(tokens, signal ?? options.signal),
       settle: outcome => {
         if (!['presented', 'failed', 'unknown', 'released'].includes(outcome)) throw new TypeError('Invalid presentation outcome');

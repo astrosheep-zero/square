@@ -1,4 +1,5 @@
 import { randomInt, createHash } from 'node:crypto';
+import { renderDeliveryReminder } from '../../delivery-frame.js';
 import type { DeliveryTransport } from '../../delivery-ledger.js';
 
 type Client = { session: { promptAsync(input: unknown): Promise<{ error?: unknown; response?: Response }> } };
@@ -21,13 +22,14 @@ export function legacyTransport(client: Client, sessionId: string, lifetime: Abo
       const signal = AbortSignal.any([lifetime, context.signal]);
       if (address.sessionId !== sessionId || signal.aborted) return 'not-capable';
       const messageId = nativeMessageId();
-      const payloadHash = createHash('sha256').update(card.text).digest('hex');
+      const text = renderDeliveryReminder([card.text], { tagged: true });
+      const payloadHash = createHash('sha256').update(text).digest('hex');
       if (!await context.prepare({ token: context.token, messageId, payloadHash }) || signal.aborted
         || !await context.beforeSend() || signal.aborted || Date.now() >= context.deadline) return 'not-capable';
       let onAbort: (() => void) | undefined;
       try {
         await Promise.race([
-          client.session.promptAsync({ path: { id: sessionId }, body: { messageID: messageId, parts: [{ type: 'text', text: card.text }] }, signal }),
+          client.session.promptAsync({ path: { id: sessionId }, body: { messageID: messageId, parts: [{ type: 'text', text }] }, signal }),
           new Promise<never>((_, reject) => { onAbort = () => reject(signal.reason); signal.addEventListener('abort', onAbort, { once: true }); if (signal.aborted) onAbort(); }),
         ]);
         // promptAsync acknowledges only submission, not native acceptance or presentation.

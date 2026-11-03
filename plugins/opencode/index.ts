@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { renderDeliveryReminder } from '../../delivery-frame.js';
 import type { DeliveryTransport } from '../../delivery-ledger.js';
 import { canonicalPath } from '../../canonical-path.js';
 import { connectNative, createNativeInputId, sendNativeText, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
@@ -13,10 +14,11 @@ export function createOpenCodeWakeTransport(target: OpenCodeNativeSession, lifet
       const signal = AbortSignal.any([lifetime, context.signal]);
       if (address.sessionId !== target.sessionId || signal.aborted) return 'not-capable';
       const messageId = createNativeInputId();
-      const payloadHash = createHash('sha256').update(card.text).digest('hex');
+      const text = renderDeliveryReminder([card.text], { tagged: true });
+      const payloadHash = createHash('sha256').update(text).digest('hex');
       if (!await context.prepare({ token: context.token, messageId, payloadHash }) || signal.aborted
         || !await context.beforeSend() || signal.aborted || Date.now() >= context.deadline) return 'not-capable';
-      const result = await sendNativeText(target, card.text, {
+      const result = await sendNativeText(target, text, {
         inputId: messageId, delivery: 'steer', timeoutMs: Math.max(1, context.deadline - Date.now()), signal,
       });
       if (result.state === 'accepted') return 'accepted';

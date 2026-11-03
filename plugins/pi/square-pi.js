@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 import { Square } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
 import { operationEnv } from '../../dist/participant-identity.js';
 import { attachDeliverySession, detachDeliverySession } from '../../dist/session-lifecycle.js';
@@ -109,7 +110,7 @@ export default function squarePiExtension(pi) {
         const edge = observer.generation;
         let claim;
         try {
-          claim = await ledger.claimPresentation(owner, { generation, budgetChars: BUDGET_CHARS, signal });
+          claim = await ledger.claimPresentation(owner, { generation, budgetChars: BUDGET_CHARS - deliveryFrameOverhead({ tagged: true }), signal });
           if (!claim) {
             await observer.hinted(edge, 2_000, signal);
             continue;
@@ -118,7 +119,7 @@ export default function squarePiExtension(pi) {
             await claim.settle('released');
             continue;
           }
-          const content = `\n${claim.text.replace(/^\n+|\n+$/g, '')}\n`;
+          const content = renderDeliveryReminder(claim.cards.map(card => card.text), { tagged: true });
           const { promise, landing } = waitForLanding(content, signal);
           try {
             sendPiMessage(pi, { customType: 'square', content, display: true }, { deliverAs: 'steer', triggerTurn: true });

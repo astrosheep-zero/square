@@ -1,4 +1,5 @@
 import { DeliveryLedger } from './delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from './delivery-frame.js';
 import type { Owner } from './owner.js';
 
 const CONTEXT_MAX = 1200;
@@ -14,7 +15,7 @@ export async function presentPendingAtBoundary<T>(
   try {
     const session = await ledger.session(owner);
     if (!session || session.state !== 'attached' || signal?.aborted) return undefined;
-    const claim = await ledger.claimPresentation(owner, { generation: session.generation, budgetChars: CONTEXT_MAX, signal });
+    const claim = await ledger.claimPresentation(owner, { generation: session.generation, budgetChars: CONTEXT_MAX - deliveryFrameOverhead({ tagged: true }), signal });
     if (!claim) return undefined;
     let current: boolean;
     try { current = await claim.current(signal); }
@@ -24,7 +25,7 @@ export async function presentPendingAtBoundary<T>(
       return undefined;
     }
     let result: T;
-    try { result = await present(claim.text); }
+    try { result = await present(renderDeliveryReminder(claim.cards.map(card => card.text), { tagged: true })); }
     catch (error) { await claim.settle('unknown'); throw error; }
     await claim.settle('presented');
     return result;

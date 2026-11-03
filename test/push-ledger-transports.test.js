@@ -7,6 +7,7 @@ import net from 'node:net';
 import { once } from 'node:events';
 import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-native.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/session-lifecycle.js';
 import { HttpWakeTransport } from '../dist/http-delivery.js';
 import { createClaudeWakeTransport, hashPayload } from '../dist/claude-transport.js';
@@ -67,7 +68,7 @@ test('Codex only queues at a Stop boundary and acceptance is custody, not a rece
   await assert.rejects(fs.access(output));
   await recordCodexBoundary('thread-a', 'Stop', env);
   assert.equal((await dispatch()).outcome, 'accepted');
-  assert.deepEqual(JSON.parse(await fs.readFile(output, 'utf8')), ['queue', '--thread', 'thread-a', '--message', card.text]);
+  assert.deepEqual(JSON.parse(await fs.readFile(output, 'utf8')), ['queue', '--thread', 'thread-a', '--message', renderDeliveryReminder([card.text], { tagged: true })]);
   assert.deepEqual(await ledger.receipts(owner), []);
   await fs.unlink(output);
   await ledger.post({ owner, key: 'producer:two', text: card.text });
@@ -121,7 +122,7 @@ test('Paseo requires idle and hands the ledger token to the sender as its messag
   const result = await dispatch();
   assert.equal(result.outcome, 'accepted');
   assert.equal(sent.messageId, result.token);
-  assert.equal(sent.prompt, card.text);
+  assert.equal(sent.prompt, renderDeliveryReminder([card.text], { tagged: true }));
   assert.deepEqual(await ledger.receipts(owner), []);
 });
 
@@ -160,7 +161,8 @@ test('Claude native carries the ledger token and records the exact frame hash, w
   assert.equal(correlation.token, 'handoff-token');
   assert.equal(correlation.messageId, frame.uuid);
   assert.equal(correlation.payloadHash, hashPayload(frame.message.content));
-  assert.match(frame.message.content, /\[square-inbox:handoff-token\]/);
+  assert.match(frame.message.content, /^This is an external notification, not a direct message from the user\.\n\n\[square-inbox:handoff-token\]\nhello\n\[\/square-inbox:handoff-token\]$/);
+  assert.doesNotMatch(frame.message.content, /<\/?system-reminder>/);
 });
 
 test('Paseo forwards its final ledger fence to the sink', async () => {

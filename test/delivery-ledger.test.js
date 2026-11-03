@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { renderDeliveryBatch } from '../dist/delivery-ledger-render.js';
 
 const owner = 'native:session/1';
 const pull = { kind: 'boundary', address: {} };
@@ -62,7 +61,7 @@ test('stable owner cards are idempotent, whole, and retained through detach and 
   assert.equal(await f.claim(), undefined);
   const batch = await f.claim(1000, resumed.generation);
   assert.deepEqual(batch.cards.map(c => c.key), ['p:1', 'p:2']);
-  assert.ok(batch.text.includes(text));
+  assert.equal(batch.cards[0].text, text);
   assert.equal(await batch.settle('presented'), true);
   assert.equal(await f.claim(1000, resumed.generation), undefined);
   assert.equal((await f.ledger.receipts(owner)).length, 2);
@@ -185,20 +184,21 @@ test('expiry becomes unknown without stealing custody, with late truthful settle
   assert.equal((await f.ledger.receipts(owner)).length, 1);
 });
 
-test('batches fit whole rendered cards, skip non-fitting cards, and claim an oversized card alone', async t => {
+test('batches count only card text and separators, stop at overflow, and admit an oversized first card alone', async t => {
   const f = await fixture(t);
-  await f.post('p:a', 'aaa'); await f.post('p:b', 'b'.repeat(50)); await f.post('p:c', 'ccc');
-  const budget = renderDeliveryBatch([{ text: 'aaa' }, { text: 'ccc' }]).length;
-  const batch = await f.claim(budget);
-  assert.deepEqual(batch.cards.map(c => c.key), ['p:a', 'p:c']);
-  assert.equal(batch.text.length, budget);
-  assert.equal(f.read('SELECT COUNT(*) AS n FROM attempts')[0].n, 2);
+  await f.post('p:a', 'aaa'); await f.post('p:b', 'bbb');
+  await f.post('p:c', 'c'.repeat(50)); await f.post('p:d', 'ddd');
+  const narrow = await f.claim(7);
+  assert.deepEqual(narrow.cards.map(c => c.key), ['p:a']);
+  await narrow.settle('released');
+  const batch = await f.claim(8);
+  assert.deepEqual(batch.cards.map(c => c.key), ['p:a', 'p:b']);
   await batch.settle('presented');
-  const large = await f.claim(budget);
-  assert.deepEqual(large.cards.map(c => c.key), ['p:b']);
-  assert.ok(large.text.includes('b'.repeat(50)));
-  assert.ok(large.text.length > budget);
-  assert.equal(large.text.length, renderDeliveryBatch(large.cards).length);
+  const large = await f.claim(8);
+  assert.deepEqual(large.cards.map(c => c.key), ['p:c']);
+  assert.equal(large.cards[0].text, 'c'.repeat(50));
+  await large.settle('presented');
+  assert.deepEqual((await f.claim(8)).cards.map(c => c.key), ['p:d']);
 });
 
 test('cancel cutoff survives attachment rotation, fences stale writers, and consumes nothing', async t => {

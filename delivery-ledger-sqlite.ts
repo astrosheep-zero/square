@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
-import { renderDeliveryBatch } from './delivery-ledger-render.js';
 import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, RetractResult } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
@@ -215,11 +214,13 @@ export class LedgerStore {
       if (!this.attached(owner, generation)) return undefined;
       this.normalize(now);
       const cards: DeliveryCard[] = [], attempts: DeliveryAttempt[] = [];
+      let size = 0;
       for (const row of this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]) {
         if (!this.eligible(row) || this.listAttempts(row.seq as number).some(holds)) continue;
         const next = card(row);
-        const size = renderDeliveryBatch([...cards, next]).length;
-        if (size > budgetChars && cards.length > 0) continue;
+        const nextSize = size + next.text.length + (cards.length ? 2 : 0);
+        if (nextSize > budgetChars && cards.length > 0) break;
+        size = nextSize;
         cards.push(next);
         attempts.push(this.insertAttempt(next.seq, generation, 'presentation', null, now, leaseMs));
         if (size > budgetChars) break;

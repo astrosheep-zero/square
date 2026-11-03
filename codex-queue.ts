@@ -2,6 +2,7 @@ import { connect, DeliveryError, type CodexCliAgent, type CodexCliConnectOptions
 export { sendCodexQueue, CodexQueueSendError } from './packages/agent-delivery/src/codex-queue.js';
 export type { CodexQueueRequest, CodexQueueFailureKind } from './packages/agent-delivery/src/codex-queue.js';
 import { codexBoundaryStore } from './codex-boundary-state.js';
+import { renderDeliveryReminder } from './delivery-frame.js';
 import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 
 export interface CodexQueueTransportOptions {
@@ -22,7 +23,7 @@ export class CodexQueueTransport implements DeliveryTransport {
           && await context.beforeSend() && !context.signal.aborted && Date.now() < context.deadline },
         env, bin: env.SQUARE_CODEX_BIN, codexHome: address.codexHome, endpoint: address.endpoint });
       if (context.signal.aborted || Date.now() >= context.deadline) return 'not-capable';
-      await agent.queue(card.text, { timeoutMs: context.deadline - Date.now(), signal: context.signal });
+      await agent.queue(renderDeliveryReminder([card.text], { tagged: true }), { timeoutMs: context.deadline - Date.now(), signal: context.signal });
       return 'accepted';
     } catch (error) {
       return error instanceof DeliveryError && !error.maybeDelivered ? 'failed' : 'unknown';

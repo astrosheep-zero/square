@@ -9,6 +9,7 @@ import plugin from '../dist/plugins/opencode-v1/index.js';
 import { legacyTransport, nativeMessageId } from '../dist/plugins/opencode-v1/transport.js';
 import { startReceiver } from '../dist/plugins/opencode-v1/runtime.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
 import { installOpenCodePlugin, uninstallOpenCodePlugin, verifyOpenCodeRuntime } from '../dist/harness-links.js';
 
@@ -28,8 +29,9 @@ test('v1 persists correlation before submission but never claims native acceptan
   assert.deepEqual(events.map(event => event[0]), ['prepare', 'check', 'call']);
   assert.equal(events[0][1].token, 'handoff');
   assert.equal(events[0][1].messageId, events[2][1].body.messageID);
-  assert.equal(events[0][1].payloadHash, createHash('sha256').update('hello').digest('hex'));
-  assert.deepEqual(events[2][1].body.parts, [{ type: 'text', text: 'hello' }]);
+  const text = renderDeliveryReminder(['hello'], { tagged: true });
+  assert.equal(events[0][1].payloadHash, createHash('sha256').update(text).digest('hex'));
+  assert.deepEqual(events[2][1].body.parts, [{ type: 'text', text }]);
 });
 
 test('v1 refuses an aborted final fence without invoking the SDK', async () => {

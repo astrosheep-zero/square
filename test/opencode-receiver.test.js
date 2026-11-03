@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
 import { observeOpenCodeContext, receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
 import plugin, { createOpenCodeWakeTransport } from '../dist/plugins/opencode/index.js';
@@ -37,6 +38,7 @@ test('v2 records the native input identity before confirmed native acceptance', 
   assert.equal(correlation.token, 'handoff');
   assert.equal(correlation.messageId, sent.id);
   assert.equal(correlation.payloadHash, hash(sent.text));
+  assert.equal(sent.text, renderDeliveryReminder(['hello'], { tagged: true }));
 });
 
 test('exact context hash confirms the current handoff, never a changed message or canceled card', async t => {

@@ -51,9 +51,9 @@ test('a metadata-only card receipt leaves the structured activity unread until e
   const sent = await alice.express({ metadata: { payload: { outcome: 'hidden structured data' } }, mentions: ['Bob'] });
   const session = await ledger.session(`b:${root}`);
   const claim = await ledger.claimPresentation(session.owner, { generation: session.generation, budgetChars: 4000 });
-  assert.match(claim.text, /structured activity/);
-  assert.match(claim.text, new RegExp(`square_catch.*${sent.activity.id}`));
-  assert.doesNotMatch(claim.text, /hidden structured data/);
+  assert.match(claim.cards[0].text, /structured activity/);
+  assert.match(claim.cards[0].text, new RegExp(`square_catch.*${sent.activity.id}`));
+  assert.doesNotMatch(claim.cards[0].text, /hidden structured data/);
   assert.equal(await claim.settle('presented'), true);
   await square.join('Alice', { owner: `a:${root}` });
   assert.deepEqual((await bob.pending()).activities.map(activity => activity.id), [sent.activity.id]);

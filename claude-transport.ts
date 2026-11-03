@@ -1,11 +1,14 @@
 import { stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { renderDeliveryReminder } from './delivery-frame.js';
 import type { DeliveryTransport } from './delivery-ledger.js';
 import { writeClaudeNative } from './packages/agent-delivery/src/claude-native.js';
 
 const marker = /(?:^|\n)\[square-inbox:([a-zA-Z0-9-]+)\](?:\n|$)/g;
 export function nativeTokens(text: string): string[] { return [...text.matchAll(marker)].map(match => match[1]!); }
-export function nativePayload(token: string, text: string): string { return `[square-inbox:${token}]\n${text}\n[/square-inbox:${token}]`; }
+export function nativePayload(token: string, text: string): string {
+  return renderDeliveryReminder([`[square-inbox:${token}]\n${text}\n[/square-inbox:${token}]`], { tagged: false });
+}
 export function hashPayload(payload: string): string { return createHash('sha256').update(payload).digest('hex'); }
 
 export function createClaudeWakeTransport(env: NodeJS.ProcessEnv = process.env): DeliveryTransport {

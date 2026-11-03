@@ -1,5 +1,6 @@
 import { DeliveryLedger, type DeliveryHandoffRef } from './delivery-ledger.js';
 import { harnessOwner } from './owner.js';
+import { renderDeliveryReminder } from './delivery-frame.js';
 import { hashPayload, nativeTokens } from './claude-transport.js';
 
 export { createClaudeWakeTransport, nativeTokens, nativePayload } from './claude-transport.js';
@@ -8,8 +9,13 @@ export type ClaudeBinding = { readonly session: string; readonly generation: str
 
 /** Extract complete frames and hash the exact bytes observed by the native host. */
 export function claudeFrames(text: string): readonly { token: string; payloadHash: string }[] {
+  const prefix = renderDeliveryReminder([''], { tagged: false });
   return [...text.matchAll(/(?:^|\n)(\[square-inbox:([a-zA-Z0-9-]+)\]\n[\s\S]*?\n\[\/square-inbox:\2\])(?=\n|$)/g)]
-    .map(frame => ({ token: frame[2]!, payloadHash: hashPayload(frame[1]!) }));
+    .flatMap(frame => {
+      const start = frame.index! + frame[0].length - frame[1]!.length;
+      return text.slice(start - prefix.length, start) === prefix
+        ? [{ token: frame[2]!, payloadHash: hashPayload(prefix + frame[1]!) }] : [];
+    });
 }
 
 /** Guard pre-effect; admit and observe only the exact captured handoff after each native effect. */

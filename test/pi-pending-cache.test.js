@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
 
 async function until(predicate, message) {
@@ -49,10 +50,22 @@ test('Pi pulls ledger cards and records receipts only after message_end, preserv
   assert.deepEqual(attached.routes, f.initial.routes);
   await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'a finished card' });
   await until(() => f.sent.length === 1, 'Pi did not inject the card');
-  assert.match(f.sent[0].content, /a finished card/);
+  assert.equal(f.sent[0].content, renderDeliveryReminder(['a finished card'], { tagged: true }));
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
   await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the receipt');
+});
+
+test('Pi reserves the reminder frame within its batch budget', async t => {
+  const f = await fixture(t, { start: false });
+  await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'first' });
+  await f.ledger.post({ owner: f.owner, key: 'producer:two', text: 'x'.repeat(12_000 - deliveryFrameOverhead({ tagged: true }) - 7) });
+  await f.ledger.post({ owner: f.owner, key: 'producer:later', text: 'later' });
+  await f.handlers.get('session_start')({}, f.ctx);
+  await until(() => f.sent.length === 1, 'Pi did not inject the batch');
+  assert.equal(f.sent[0].content.length, 12_000);
+  await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
+  await until(async () => (await f.ledger.receipts(f.owner)).length === 2, 'Pi did not record both receipts');
 });
 
 test('Pi yields while a producer-push attempt holds custody', async t => {

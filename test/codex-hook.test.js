@@ -6,6 +6,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { codexHookResponse, runCodexHook } from '../dist/codex-hook.js';
 import { harnessOwner } from '../dist/owner.js';
 
@@ -28,9 +29,20 @@ test('Codex confirms only after the output sink accepts the response', async t =
     assert.equal((await ledger.receipts(owner)).length, 0);
     output = JSON.parse(text);
   }, env, () => {});
-  assert.match(output.hookSpecificOutput.additionalContext, /hello from a producer/);
+  assert.equal(output.hookSpecificOutput.additionalContext, renderDeliveryReminder(['hello from a producer'], { tagged: true }));
   assert.equal((await ledger.receipts(owner)).length, 1);
   assert.equal(await runCodexHook(JSON.stringify(input), env, () => assert.fail('already presented')), '');
+});
+
+test('Codex reserves the reminder frame within its context budget', async t => {
+  const { env, ledger, owner, input } = await fixture(t);
+  const remaining = 1200 - deliveryFrameOverhead({ tagged: true }) - 'hello from a producer'.length - 2;
+  await ledger.post({ owner, key: 'fixture:2', text: 'x'.repeat(remaining) });
+  await ledger.post({ owner, key: 'fixture:3', text: 'later' });
+  let output;
+  await codexHookResponse(input, text => { output = JSON.parse(text); }, env, () => {});
+  assert.equal(output.hookSpecificOutput.additionalContext.length, 1200);
+  assert.deepEqual((await ledger.receipts(owner)).map(receipt => receipt.key).sort(), ['fixture:1', 'fixture:2']);
 });
 
 test('the actual CLI writes one hook response before recording its receipt', async t => {

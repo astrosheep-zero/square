@@ -28,6 +28,7 @@ test('native admission is distinct from exact stored presentation, even after ro
   assert.deepEqual(wrong, { recognized: true, current: false });
   const guard = await observeClaudeDelivery('session', payload, 'guard', env);
   assert.equal(guard.current, true);
+  assert.deepEqual(await observeClaudeDelivery('session', payload.replace('external notification', 'direct request'), 'guard', env), { recognized: true, current: false });
   await ledger.attach({ owner, expectedGeneration: session.generation, routes: [route] });
   assert.equal((await observeClaudeDelivery('session', payload, 'admitted', env, guard.refs)).current, true);
   assert.equal((await ledger.receipts(owner)).length, 0);

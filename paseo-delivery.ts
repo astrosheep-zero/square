@@ -1,3 +1,4 @@
+import { renderDeliveryReminder } from './delivery-frame.js';
 import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 import { DeliveryError } from './packages/agent-delivery/src/index.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';
@@ -27,7 +28,7 @@ export class PaseoWakeTransport implements DeliveryTransport {
       if (!agent || agent.status !== 'idle' || !remaining()) return 'failed';
       if (!await (this.opts.waitForBoundary ?? waitForPaseoWakeBoundary)(agent, remaining())) return 'failed';
       if (!await context.prepare({ messageId: context.token }) || context.signal.aborted || !remaining()) return 'not-capable';
-      await (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: card.text, messageId: context.token },
+      await (this.opts.sendWake ?? sendPaseoWake)({ agentId, prompt: renderDeliveryReminder([card.text], { tagged: true }), messageId: context.token },
         { timeoutMs: remaining(), beforeSend: context.beforeSend, signal: context.signal });
       return 'accepted';
     } catch (error) { return error instanceof DeliveryError && !error.maybeDelivered ? 'failed' : 'unknown'; }

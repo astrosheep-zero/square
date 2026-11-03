@@ -18,7 +18,6 @@ function sourceFiles(dir, relative = '', recursive = true) {
 // Include separately compiled native integrations, not just tsconfig's roots.
 const productionFiles = [
   ...sourceFiles(root, '', false),
-  ...sourceFiles(path.join(root, 'cmd'), 'cmd'),
   ...sourceFiles(path.join(root, 'cli'), 'cli'),
   ...sourceFiles(path.join(root, 'plugins'), 'plugins'),
   ...sourceFiles(path.join(root, 'packages/agent-delivery/src'), 'packages/agent-delivery/src'),
