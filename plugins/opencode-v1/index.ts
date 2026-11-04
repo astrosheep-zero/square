@@ -23,7 +23,7 @@ export default async function squareOpenCodeV1(ctx: LegacyContext) {
     const match = typeof health.version === 'string' && /^(\d+)\.(\d+)\.(\d+)$/.exec(health.version);
     if (!match || Number(match[1]) !== 1 || Number(match[2]) < 15 || (Number(match[2]) === 15 && Number(match[3]) < 11)) throw new Error('native version below resident floor or unknown');
     if (typeof ctx.client?.session?.get !== 'function' || typeof ctx.client.session.promptAsync !== 'function') throw new Error('native session API unavailable');
-    const { DatabaseSync } = await import('node:sqlite');
+    const { DatabaseSync } = await import('../../delivery-ledger-sqlite.js');
     const db = new DatabaseSync(':memory:');
     try { db.exec('CREATE TABLE capability (value TEXT)'); db.prepare('INSERT INTO capability VALUES (?)').run('ok'); db.prepare('SELECT value FROM capability').get(); }
     finally { db.close(); }

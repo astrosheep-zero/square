@@ -1,7 +1,30 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import type { DatabaseSync as NodeDatabaseSync, DatabaseSyncOptions, SQLInputValue } from 'node:sqlite';
+
+const bunSqlite = 'bun:sqlite';
+export const { DatabaseSync } = await (process.versions.bun
+  ? import(bunSqlite).then(({ Database }) => ({
+      DatabaseSync: class {
+        private readonly db: InstanceType<typeof Database>;
+        constructor(location: string, options?: DatabaseSyncOptions) {
+          this.db = new Database(location, options?.readOnly ? { readonly: true } : { create: true, readwrite: true });
+        }
+        exec(sql: string): void { this.db.exec(sql); }
+        close(): void { this.db.close(); }
+        prepare(sql: string) {
+          const statement = this.db.prepare(sql);
+          return {
+            get: (...values: SQLInputValue[]) => statement.get(...values) ?? undefined,
+            all: (...values: SQLInputValue[]) => statement.all(...values),
+            run: (...values: SQLInputValue[]) => statement.run(...values),
+          };
+        }
+      },
+    }))
+  : import('node:sqlite')) as { DatabaseSync: typeof NodeDatabaseSync };
+type DatabaseSync = NodeDatabaseSync;
 import { inSqliteTransaction } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
 import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult } from './delivery-ledger.js';
