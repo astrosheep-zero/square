@@ -71,7 +71,8 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
   { names: ['codex-watch'], usage: '{command}', summary: 'Observe pending attention from a native async Stop hook.', hiddenFromIndex: true },
   { names: ['codex-interrupt'], usage: '{command}', summary: 'Cancel pending attention at a native Interrupt boundary.', hiddenFromIndex: true },
-  { names: ['claude-mod'], usage: '{command}', summary: 'Receive a structured operation from the loaded Claude mod.', hiddenFromIndex: true },
+  { names: ['claude-hook'], usage: '{command}', summary: 'Receive a native Claude hook event.', hiddenFromIndex: true },
+  { names: ['claude-watch'], usage: '{command}', summary: 'Observe pending attention from a native async Stop hook.', hiddenFromIndex: true },
   {
     names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search the archive without changing what you have caught.',

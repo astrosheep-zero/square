@@ -6,8 +6,7 @@ an existing local Square package is already configured; that source is preserved
 
 ## Requirements
 
-- For Claude native inbox delivery: macOS Claude Code, with the
-  Square mod actually loaded in a trusted/approved interactive terminal
+- Claude proactive delivery: install the Square plugin on Claude Code with native hooks enabled. Active prompt boundaries present synchronously; one native `asyncRewake` Stop observer waits up to 86,400 seconds. See [Claude delivery](guides/claude-native.md) for prompt fencing, exact frame evidence and Escape/timeout limits.
 - OpenCode 1.x uses the separate legacy plugin; native proactive delivery requires 1.15.11 or newer and a runtime supporting Square's SQLite API. OpenCode 2.x uses the separate v2 server plugin.
 - Codex proactive delivery: native 0.166.0 with hooks enabled and an accessible hosting app-server endpoint. Active prompt/tool boundaries present synchronously; one native async Stop hook observes idle cards. See [Codex delivery](guides/codex-delivery.md) for finite observation, interruption and recovery limits.
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
@@ -61,18 +60,18 @@ npm install -g @astrosheep/square@latest
 square install --all -f
 ```
 
-Claude must load the updated Square mod. Start a new trusted interactive
-conversation (or confirm its mod hot reload); installing the plugin or finding
-an inbox socket alone does not prove it loaded. Approve the mod through Claude's
-normal UI. A disabled/unapproved mod, the ordinary unapproved headless `-p` path,
-other Claude builds, and other platforms are unavailable until validated. There
-is no legacy injection fallback.
+Claude must load the updated Square plugin hooks; start a new trusted interactive
+conversation after updating. `SessionStart` registers the receiver-owned hook
+route and retires Square's old native socket registration. Historical unknown or
+already held native custody is not replayed. Hook installation alone cannot prove
+that a running host loaded it. macOS Claude 2.1.299 is validated; other versions,
+platforms and headless lifetimes require their own evidence.
 
 Run `square harness doctor claude` for installation/capability guidance and
 `square harness doctor delivery` for current receiver routes and delivery
-evidence. See [Claude native inbox](guides/claude-native.md) for membership,
-admission, cancellation, and native custody limits. Other harnesses retain
-their existing installation and delivery paths.
+evidence. See [Claude delivery](guides/claude-native.md) for exact token/hash
+observation, finite lifetime and Escape limits. Other harnesses retain their
+existing installation and delivery paths.
 
 ## Square persistence
 

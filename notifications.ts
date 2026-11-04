@@ -35,9 +35,9 @@ export async function dispatchPostedCard(ledger: DeliveryLedger, owner: Owner, k
   const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
   const timeoutMs = Number.isSafeInteger(configured) && configured > 0 ? configured : 5000;
   for (const route of session.routes) {
-    // Codex custody belongs to its native receiver, including for callers that
-    // supply transports explicitly to the public producer API.
-    if (route.kind === 'codex-queue') continue;
+    // Claude and Codex custody belongs to their native receivers, including for
+    // callers that supply transports explicitly to the producer API.
+    if (['codex-queue', 'claude-async-hook', 'claude-native'].includes(route.kind)) continue;
     if (signal?.aborted) return;
     const transport = transports.find(candidate => candidate.kind === route.kind);
     if (!transport) continue;

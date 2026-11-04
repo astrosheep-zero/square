@@ -1,8 +1,7 @@
 {
   "name": "square",
   "version": "0.4.1",
-  "description": "Native Claude Code inbox delivery for Square participants",
-  "types": "./types.d.ts",
+  "description": "Native Claude Code hook delivery for Square participants",
   "author": {
     "name": "Square"
   }

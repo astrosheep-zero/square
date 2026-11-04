@@ -42,7 +42,7 @@ test('the local resource accepts transport injection without composing harness d
   const resource = productionSources.get('sqlite-square.ts');
   assert.ok(resource);
   assert.equal(moduleEdges('sqlite-square.ts', resource).some(edge =>
-    ['./notifications.js', './claude-delivery.js', './codex-queue.js', './paseo-delivery.js'].includes(edge.module)), false);
+    ['./notifications.js', './codex-queue.js', './paseo-delivery.js'].includes(edge.module)), false);
   assert.doesNotMatch(resource, /createDefaultWakeTransport/);
 });
 
@@ -279,7 +279,7 @@ function moduleEdges(file, source) {
 // entrypoints end this product-operation traversal; no ordinary CLI helper does.
 const integrationEdges = new Map([
   ['cli/harness-command.ts -> harness.ts', ['executeHarnessTarget', 'harnessTargets']],
-  ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
+  ['cli/observation-commands.ts -> claude-hook.ts', ['runClaudeHook', 'runClaudeWatch']],
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHook', 'runCodexInterrupt']],
   ['cli/observation-commands.ts -> codex-watch.ts', ['runCodexWatch']],
   ['mcp.ts -> claude-mcp-context.ts', ['readClaudeMcpCall']],

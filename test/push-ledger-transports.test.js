@@ -3,14 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import net from 'node:net';
-import { once } from 'node:events';
-import { writeClaudeNative } from '../dist/packages/agent-delivery/src/claude-native.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/session-lifecycle.js';
 import { HttpWakeTransport } from '../dist/http-delivery.js';
-import { createClaudeWakeTransport, hashPayload } from '../dist/claude-transport.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
 const owner = 'test:push';
@@ -89,45 +85,6 @@ test('Paseo requires idle and hands the ledger token to the sender as its messag
   assert.equal(sent.messageId, result.token);
   assert.equal(sent.prompt, renderDeliveryReminder([card.text], { tagged: true }));
   assert.deepEqual(await ledger.receipts(owner), []);
-});
-
-test('Claude native checks the final fence after connecting and suppresses all bytes', async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'push-claude-'));
-  const endpoint = path.join(dir, 'socket');
-  let bytes = '';
-  const closed = Promise.withResolvers();
-  const server = net.createServer(socket => { socket.on('data', data => { bytes += data; }); socket.on('end', () => closed.resolve()); });
-  server.listen(endpoint);
-  await once(server, 'listening');
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); });
-  let checked = false;
-  const result = await writeClaudeNative({ sessionId: 'test', endpoint, claudeHome: dir }, 'hello', {
-    deadline: Date.now() + 1000, beforeSend: async () => { checked = true; return false; },
-  });
-  await closed.promise;
-  assert.equal(checked, true);
-  assert.equal(result.outcome, 'unavailable');
-  assert.equal(bytes, '');
-});
-
-test('Claude native carries the ledger token and records the exact frame hash, without claiming admission', async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'push-claude-frame-'));
-  const endpoint = path.join(dir, 'socket');
-  const received = Promise.withResolvers();
-  const server = net.createServer(socket => { let bytes = ''; socket.on('data', data => { bytes += data; }); socket.on('end', () => received.resolve(bytes)); });
-  server.listen(endpoint);
-  await once(server, 'listening');
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await fs.rm(dir, { recursive: true, force: true }); });
-  let correlation;
-  const result = await createClaudeWakeTransport({ CLAUDE_CONFIG_DIR: dir }).send(card,
-    { loaded: 'true', endpoint, sessionId: 'test' }, context({ prepare: async value => { correlation = value; return true; } }));
-  const frame = JSON.parse((await received.promise).trim().split('\n').at(-1));
-  assert.equal(result, 'unknown');
-  assert.equal(correlation.token, 'handoff-token');
-  assert.equal(correlation.messageId, frame.uuid);
-  assert.equal(correlation.payloadHash, hashPayload(frame.message.content));
-  assert.match(frame.message.content, /^This is an external notification, not a direct message from the user\.\n\n\[square-inbox:handoff-token\]\nhello\n\[\/square-inbox:handoff-token\]$/);
-  assert.doesNotMatch(frame.message.content, /<\/?system-reminder>/);
 });
 
 test('Paseo forwards its final ledger fence to the sink', async () => {

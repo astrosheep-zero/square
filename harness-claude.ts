@@ -80,9 +80,8 @@ export async function doctorClaudePlugin(homeDir: string, run: ClaudeCommandRunn
   return [
     fs.existsSync(bundle) ? `✓ Square Claude plugin bundle ${root}` : `○ Square Claude plugin bundle missing ${root}`,
     installed ? `✓ ${CLAUDE_PLUGIN_ID} installed` : `○ ${CLAUDE_PLUGIN_ID} unavailable`,
-    `Claude native inbox: requires macOS Claude Code with a trusted, approved interactive mod.`,
-    `Installation or a socket alone does not prove receiver availability; absent/disabled mods, headless unapproved mods, other platforms are unavailable.`,
-    `Queue admission is not model processing. Queued or held native messages cannot be retracted by Square cancellation.`,
-    `Live routes and admission/presentation evidence: square harness doctor delivery. No legacy fallback.`,
+    `Claude delivery uses synchronous prompt/tool hooks and one finite 24-hour asyncRewake Stop observer; actual coverage ends at native boundaries.`,
+    `Idle Escape cannot disarm a watcher, and already emitted notifications cannot be recalled; busy Escape disarms at the next prompt boundary.`,
+    `Native stderr output is recorded unknown until its exact token/hash frame appears at a later prompt boundary; model comprehension is not observed.`,
   ];
 }

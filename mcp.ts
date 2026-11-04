@@ -33,7 +33,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
       const call = invoke(tool, args, { signal: extra.signal }, async () => {
         const threadId = extra._meta?.threadId;
         const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
-        // Claude's plugin endpoint requires the mod's call-local coordinate, never startup identity.
+        // Claude's bundled plugin requires a per-call native hook association; startup identity is not a fallback.
         const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
           ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
           : undefined;
@@ -55,7 +55,6 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
               : baseEnv;
         const callWake = wakeAddress !== undefined && (owner === configuredOwner
           || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
-          || wakeAddress.kind === 'claude-native' && wakeAddress.address.sessionId === claude?.sessionId
           || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
           ? wakeAddress : undefined;
         return {

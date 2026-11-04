@@ -38,7 +38,9 @@ if sys.argv[1:]==['mcp-server']:
  # The input pump may still be blocked; avoid interpreter teardown locks.
  os._exit(code)
 value=sys.stdin.read()
-p=subprocess.run(cmd,input=value,text=True,capture_output=True,timeout=12)
+try: record('invocations.jsonl',{'argv':sys.argv[1:],'input':json.loads(value)})
+except ValueError: record('invocations.jsonl',{'argv':sys.argv[1:],'raw':value})
+p=subprocess.run(cmd,input=value,text=True,capture_output=True,timeout=86410 if sys.argv[1:]==['claude-watch'] else 12)
 try: record('bridge.jsonl',{'input':json.loads(value),'stdout':p.stdout,'stderr':p.stderr,'exit':p.returncode})
 except ValueError: pass
 sys.stdout.write(p.stdout);sys.stderr.write(p.stderr);sys.exit(p.returncode)
@@ -134,6 +136,7 @@ class Fixture:
                        ANTHROPIC_API_KEY='sk-ant-dummy-fixture-not-a-credential', ANTHROPIC_BASE_URL=self.endpoint,
                        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', TERM='xterm-256color')
             self.master, slave = pty.openpty()
+            self.env = env
             try:
                 self.process = subprocess.Popen(args, cwd=self.root / 'work', env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
             finally:

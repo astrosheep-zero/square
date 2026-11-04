@@ -1,21 +1,13 @@
-# Claude native inbox
+# Claude Code delivery
 
-Square's Claude plugin is a mod, not a shell-hook injector. Its MCP server uses the mod's call-local
-session association; a missing or expired association fails closed. A session ID or socket alone does
-not establish that the mod is loaded. The supported native path requires macOS Claude Code with the
-mod loaded and approved. Square does not alter inbound policy or bypass a held peer message.
+The Square Claude plugin uses ordinary native command hooks. It has no mod, native inbox, or producer socket route. `SessionStart` attaches the exact native session to the host delivery ledger; `SessionEnd` fences and detaches that captured attachment without changing Square membership.
 
-The mod attaches and detaches the exact host session in the delivery ledger. Membership remains in
-Square; host end does not land `done`, and start/resume does not restore seats. See
-[participant-ownership.md](participant-ownership.md).
+At `UserPromptSubmit`, Square records Claude's native `prompt_id` before presenting pending cards through event-correct `additionalContext`. Tool boundaries (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`) use the same boundary presenter for the exact native main/child owner, so cards arriving during a running turn need not wait for another user prompt. Autonomous hook-generated prompts are boundaries too, not evidence of human approval. A later prompt records presentation only when its input contains the exact complete prepared frame, including the ledger token and stored full-frame hash. That establishes observation before the model processes the prompt, not comprehension. The async frame uses a plain warning and token delimiters; Square never decodes entities or accepts changed/truncated text as an exact observation.
 
-The sender dispatches finished ledger cards through the native socket. Native admission settles a
-handoff as accepted, not presented; the stored main user-role text observation settles presentation
-through its handoff reference. This establishes observation at that boundary, not comprehension, and
-cannot promise that a later plugin leaves the card intact. Unknown native custody is not a safe reason
-to replay through another route. A shortened activity card points to catch; Square only folds a receipt
-for a full card into its read state. Direct producer notices retain their full body.
+At a normal `Stop`, one per-owner OS-locked observer waits for ledger changes for at most 86,400 seconds. It rechecks the exact captured `prompt_id`, attachment generation, Stop epoch and route after acquiring the lock and immediately before output. A new prompt disarms old observers. The watcher claims one card at a time and uses the existing handoff token/hash correlation. Invoked stderr output is `unknown` until that exact frame is observed at a later prompt boundary; there is no automatic fallback replay. Missing prompt IDs fail closed.
 
-`turn.abort` cancels the outstanding ledger batch without asserting it was read. Already queued or
-natively held messages cannot be recalled. The shared transport and its validated limits are documented
-in [agent-delivery's README](../packages/agent-delivery/README.md) and `VALIDATION.md`.
+This is a finite, boundary-driven observer, not a promise of continuous coverage. Missing Stop, timeout, process exit, headless teardown, or a busy Escape with no later normal Stop may leave cards pending. Idle Escape has no classic hook and may not disarm an already waiting observer; already emitted asyncRewake notifications cannot be recalled. No Square inbox fallback is retained for these cases.
+
+The bundled MCP server gets call-local session, cwd, and agent attribution from native `PreToolUse`/terminal tool hooks keyed by Claude's `claudecode/toolUseId` metadata. Duplicate or incomplete call identity is denied by the event-specific PreToolUse permission response; unrelated tool hooks do not block. Cleanup matches tool-use ID, session and agent. Interrupted calls without a terminal hook expire after ten minutes. Models cannot supply identity as tool arguments.
+
+The installed and tested native runtime evidence is macOS Claude Code 2.1.299 with isolated HOME, plugin settings, delivery ledger and a dummy-key loopback provider. This does not certify other platforms, versions, or headless behavior. The final native prompt/generation check and async hook completion are not atomic. `node --import ./test/sandbox-env.js test/claude-hook-native.mjs` with `SQUARE_CLAUDE_HOOK_NATIVE_SMOKE=1` runs the shipped manifest and candidate CLI through a scratch PATH shim and preserves hook/provider evidence in `/tmp`. It proves repeated idle wake, prompt/attachment fencing, duplicate suppression, active prompt/tool context, native main/child MCP attribution and identity-failure denial.

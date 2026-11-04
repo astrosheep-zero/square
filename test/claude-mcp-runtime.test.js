@@ -3,70 +3,85 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createArtifactPort } from '../dist/artifact.js';
+import { harnessOwner } from '../dist/owner.js';
 
-const repo = fileURLToPath(new URL('../', import.meta.url));
-const plugin = path.join(repo, 'plugins/claude');
-const driver = path.join(repo, 'test/fixtures/claude-mcp-runtime.py');
-const json = file => JSON.parse(fs.readFileSync(file, 'utf8'));
-const lines = file => fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+const repo = path.resolve(import.meta.dirname, '..');
+const enabled = process.env.SQUARE_CLAUDE_HOOK_NATIVE_SMOKE === '1';
 
-test('shipped Claude MCP correlates main/child calls and removes call maps', {
-  skip: process.env.SQUARE_CLAUDE_LIVE_TEST !== '1', timeout: 100_000,
-}, async () => {
-  assert.ok(process.env.SQUARE_CLAUDE_BIN, 'Set SQUARE_CLAUDE_BIN explicitly for the opt-in runtime');
-  const binary = path.resolve(process.env.SQUARE_CLAUDE_BIN);
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-mcp-runtime-')));
-  console.log(`Claude MCP runtime evidence: ${root}`);
-  // Preserve scratch evidence on success and failure; never touch user configuration.
-  const { Square } = await import('../dist/square-api.js');
-  fs.mkdirSync(path.join(root, 'work'));
+test('native Claude MCP hooks preserve main/child call attribution and clean exact calls', {
+  skip: !enabled, timeout: 100_000,
+}, async t => {
+  assert.equal(process.platform, 'darwin');
+  const binary = process.env.SQUARE_CLAUDE_BIN || '/Users/astrosheep/.local/bin/claude';
+  const root = fs.realpathSync(fs.mkdtempSync('/tmp/square-claude-mcp-hooks-'));
+  console.log(`Claude MCP hook evidence: ${root}`);
+  // Preserve isolated runtime evidence after the test.
   const location = path.join(root, 'work/test.square');
+  const { Square } = await import('../dist/square-api.js');
   const square = await Square.build({ path: location, markdown: 'Local Claude MCP ownership fixture' });
   await square.close();
-  const run = spawnSync('python3', ['-B', driver, repo, root, binary, process.execPath], {
+  const run = spawnSync('python3', ['-B', path.join(repo, 'test/fixtures/claude-mcp-runtime.py'), repo, root, binary, process.execPath], {
     encoding: 'utf8', timeout: 85_000,
     env: Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'LANG', 'LC_ALL', 'TERM', 'SHELL', 'USER', 'LOGNAME'].includes(key))),
   });
   fs.writeFileSync(path.join(root, 'controller.log'), `${run.stdout ?? ''}${run.stderr ?? ''}`);
   assert.equal(run.status, 0, `Runtime failed: ${root}\n${run.stderr}\n${run.stdout}`);
-  // Prove that the candidate hook/manifest, not a stand-in, executed.
-  for (const name of ['mods/square.js', 'hooks/hooks.json', '.mcp.json', '.claude-plugin/plugin.json']) {
-    assert.equal(fs.readFileSync(path.join(root, 'plugin', name), 'utf8'), fs.readFileSync(path.join(plugin, name), 'utf8'));
+  for (const name of ['hooks/hooks.json', '.mcp.json', '.claude-plugin/plugin.json']) {
+    assert.equal(fs.readFileSync(path.join(root, 'plugin', name), 'utf8'), fs.readFileSync(path.join(repo, 'plugins/claude', name), 'utf8'));
   }
-  const api = json(path.join(root, 'api.json'));
+  const api = JSON.parse(fs.readFileSync(path.join(root, 'api.json'), 'utf8'));
   const schemas = api.flatMap(call => call.data.tools ?? []).filter(tool => tool.name.startsWith('mcp__plugin_square_square__'));
-  for (const tool of schemas) {
-    for (const field of ['sessionId', 'agentId', 'toolUseId']) {
-      assert.equal(field in (tool.input_schema.properties ?? {}), false, `${tool.name} exposes ${field}`);
-    }
-  }
-  const bridges = lines(path.join(root, 'bridge.jsonl'));
-  const requests = lines(path.join(root, 'mcp-in.jsonl'));
-  const responses = lines(path.join(root, 'mcp-out.jsonl'));
-  const begins = new Map();
+  assert.ok(schemas.some(tool => tool.name === 'mcp__plugin_square_square__join'));
+  for (const tool of schemas) for (const field of ['sessionId', 'agentId', 'toolUseId'])
+    assert.equal(field in (tool.input_schema.properties ?? {}), false, `${tool.name} exposes ${field}`);
+
+  const invocations = fs.readFileSync(path.join(root, 'invocations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    .map(row => row.input).filter(Boolean);
+  const pre = new Map(invocations.filter(row => row.hook_event_name === 'PreToolUse').map(row => [row.tool_use_id, row]));
+  const post = new Set(invocations.filter(row => row.hook_event_name === 'PostToolUse' || row.hook_event_name === 'PostToolUseFailure').map(row => row.tool_use_id));
+  const requests = fs.readFileSync(path.join(root, 'mcp-in.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const responses = fs.readFileSync(path.join(root, 'mcp-out.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const identities = {};
   for (const name of ['main', 'child']) {
     const id = `toolu_fixture_${name}`;
-    const begin = bridges.find(row => row.input.operation === 'tool-begin' && row.input.toolUseId === id);
-    assert.ok(begin, `Missing shipped mod begin ${id}`);
-    assert.equal(begin.exit, 0, begin.stderr);
-    begins.set(name, begin.input);
+    const hook = pre.get(id);
+    assert.ok(hook, `Missing native PreToolUse ${id}`);
+    assert.ok(post.has(id), `Missing native terminal hook ${id}`);
     const request = requests.find(row => row.method === 'tools/call' && row.params._meta?.['claudecode/toolUseId'] === id);
-    assert.ok(request, `No matching MCP metadata ${id}`);
+    assert.ok(request, `No matching native MCP metadata ${id}`);
     assert.equal(request.params.name, 'join');
     assert.deepEqual(request.params.arguments, { location: 'test.square', as: name });
-    const response = responses.find(row => row.id === request.id && row.result);
-    assert.ok(response, `No MCP response ${id}`);
-    assert.ok(!response.result.isError, JSON.stringify(response));
-    assert.ok(bridges.some(row => row.input.operation === 'tool-end' && row.input.toolUseId === id && row.exit === 0));
+    assert.ok(responses.some(row => row.id === request.id && row.result && !row.result.isError));
+    identities[name] = hook;
   }
-  const main = begins.get('main'), child = begins.get('child');
-  assert.equal(main.agentId, undefined);
-  assert.ok(child.agentId);
-  assert.equal(child.sessionId, main.sessionId);
-  const transcripts = fs.readdirSync(path.join(root, 'config/projects'), { recursive: true });
-  assert.ok(transcripts.some(name => path.basename(name) === `agent-${child.agentId}.jsonl`), 'Mapped agentId must match the native child transcript');
-  const maps = fs.readdirSync(path.join(root, 'ledger/claude-mcp-calls'));
-  assert.deepEqual(maps.filter(name => name.endsWith('.json') || name.endsWith('.tmp')), [], 'Completed tool calls must remove their maps');
+  assert.equal(identities.main.agent_id, undefined);
+  assert.ok(identities.child.agent_id);
+  assert.equal(identities.child.session_id, identities.main.session_id);
+  const artifact = await createArtifactPort(location);
+  try {
+    const seats = (await artifact.read(facts => ['main', 'child'].map(name => ({ name, seat: facts.seat(name) })))).value;
+    assert.equal(seats.find(row => row.name === 'main').seat.owner,
+      harnessOwner({ channel: 'claude-code', session: identities.main.session_id }));
+    assert.equal(seats.find(row => row.name === 'child').seat.owner,
+      harnessOwner({ channel: 'claude-code', session: identities.child.session_id, agent: identities.child.agent_id }));
+  } finally { await artifact.close(); }
+  const bridges = fs.readFileSync(path.join(root, 'bridge.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const presented = bridges.find(row => row.input.hook_event_name === 'PreToolUse'
+    && row.input.tool_use_id === 'toolu_fixture_agent' && row.stdout.includes('NATIVE_DURING_TURN_TOOL_NOTICE'));
+  assert.ok(presented, 'The next legitimate native tool boundary must present a card posted during the turn');
+  assert.equal(JSON.parse(presented.stdout).hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.ok(api.some(row => JSON.stringify(row.data.messages).includes('NATIVE_DURING_TURN_TOOL_NOTICE')),
+    'Native tool additionalContext must reach a provider request');
+  const maps = fs.readdirSync(path.join(root, 'claude-mcp-calls'));
+  const stored = maps.filter(name => name.endsWith('.json')).map(name => JSON.parse(fs.readFileSync(path.join(root, 'claude-mcp-calls', name), 'utf8')));
+  assert.deepEqual(stored.map(call => [call.toolUseId, call.sessionId]), [['toolu_fixture_collision', 'foreign-session']],
+    'Only the unrelated pre-existing call may remain; completed native main/child calls are removed');
+  assert.equal(requests.some(row => row.method === 'tools/call' && row.params._meta?.['claudecode/toolUseId'] === 'toolu_fixture_collision'), false,
+    'PreToolUse identity failure must deny the actual native MCP call');
+  assert.ok(bridges.some(row => row.input.tool_use_id === 'toolu_fixture_collision'
+    && row.stdout && JSON.parse(row.stdout).hookSpecificOutput?.permissionDecision === 'deny'));
+  assert.ok(api.some(row => JSON.stringify(row.data.messages).includes('Square MCP call identity is unavailable')));
+  console.log(`main/child native MCP identity and cleanup passed: ${root}`);
 });
