@@ -2,7 +2,7 @@ import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { SquareMessageData } from "../shared/message";
+import { COLLAPSED_PREVIEW_MAX_CHARS, outputPreview, type SquareMessageData } from "../shared/message";
 import { MONO, SquareCue, SquareInline, SquareMarkdownBody } from "./markdown";
 import { squarePalette } from "./palette";
 
@@ -20,18 +20,19 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const palette = useMemo(() => squarePalette(theme), [theme]);
   const items = "items" in item.data ? item.data.items : undefined;
   const text = "text" in item.data ? item.data.text : undefined;
+  const squareItems = items?.filter(entry => "square" in entry);
   const latest = items?.at(-1);
   // Keep the source's own line breaks: collapsed and expanded text must wrap alike.
-  const preview = latest?.preview ?? text;
-  const speakers = [...new Set(items?.map(entry => entry.actor))];
+  const preview = latest && "text" in latest ? outputPreview(latest.text, COLLAPSED_PREVIEW_MAX_CHARS)
+    : latest?.preview ?? text;
+  const speakers = [...new Set(squareItems?.map(entry => entry.actor))];
   const chorus = speakers.length > 1;
-  const squares = [...new Set(items?.map(entry => entry.square))];
+  const squares = [...new Set(squareItems?.map(entry => entry.square))];
   const squareName = squares.join(", ") || "Square";
-  const bell = latest?.route === "bell";
+  const bell = squareItems?.at(-1)?.route === "bell";
   // Exact IDs never imply intervening activities, and different squares keep their own IDs.
-  const actIds = items?.map(entry => entry.act) ?? [];
-  const trailing = [items?.map(entry => squares.length > 1 ? `${entry.square} ${entry.act}` : entry.act).join(", "),
-    items && items.length > 1 ? String(items.length) : undefined].filter(Boolean).join(" · ");
+  const trailing = [squareItems?.map(entry => squares.length > 1 ? `${entry.square} ${entry.act}` : entry.act).join(", "),
+    squareItems && squareItems.length > 1 ? String(squareItems.length) : undefined].filter(Boolean).join(" · ");
   const { accent, border, foreground, foregroundMuted: muted, surface1 } = palette.theme.colors;
   // On web the header brightens its details under the cursor; touch keeps them quiet.
   const detail = layout.platform === "web" && hovered ? foreground : muted;
@@ -65,14 +66,16 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
           <View style={{ ...indent, marginTop: 5, marginLeft: 2.5, paddingLeft: palette.quote.paddingLeft, borderLeftWidth: palette.quote.borderLeftWidth, borderLeftColor: palette.quote.borderLeftColor }}>
-            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus ? latest?.actor : undefined} />
+            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus && latest && "actor" in latest ? latest.actor : undefined} />
           </View>
         )}
       </Pressable>
       {expanded && (
         <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 3 }} nestedScrollEnabled>
           <View style={{ ...indent, gap: 7 }}>
-            {items === undefined ? <SquareMarkdownBody text={text ?? ""} theme={palette.theme} /> : items.map((entry, index) => (
+            {items === undefined ? <SquareMarkdownBody text={text ?? ""} theme={palette.theme} /> : items.map((entry, index) => "text" in entry ? (
+              <SquareMarkdownBody key={index} text={entry.text} theme={palette.theme} />
+            ) : (
               <View key={index} style={{ gap: 6 }}>
                 {entry.route === "bell"
                   ? <SquareCue theme={palette.theme} label={`${entry.actor} 🔔 · ${entry.square} · ${entry.act}`} />

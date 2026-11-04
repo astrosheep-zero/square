@@ -20,6 +20,7 @@ export interface DeliveryCard {
   readonly owner: Owner;
   readonly key: string;
   readonly text: string;
+  readonly details?: Readonly<Record<string, unknown>>;
   readonly postedAt: number;
 }
 export interface DeliveryCorrelation {
@@ -115,11 +116,34 @@ function correlation(value: DeliveryCorrelation): void {
     throw new TypeError('Invalid correlation');
 }
 
+/** Shared by host and producer callers; an explicit delivery override always wins. */
+export function deliveryLedgerLocation(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
+  return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v2.sqlite');
+}
+
+function encodeDetails(details: Readonly<Record<string, unknown>>): string {
+  const ancestors = new Set<object>();
+  const encode = (value: unknown): unknown => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean'
+      || typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'object' || !value || ancestors.has(value)
+      || !Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+      throw new TypeError('Expected JSON card details');
+    ancestors.add(value);
+    const result = Array.isArray(value) ? Array.from(value, encode)
+      : Object.fromEntries(Object.keys(value).sort().map(key => [key, encode((value as Record<string, unknown>)[key])]));
+    ancestors.delete(value);
+    return result;
+  };
+  if (!details || typeof details !== 'object' || Array.isArray(details)) throw new TypeError('Expected a card details object');
+  return JSON.stringify(encode(details));
+}
+
 /** One user-owned ledger; producers supply finished text and callers choose routes. */
 export class DeliveryLedger {
   private constructor(private readonly store: LedgerStore, private readonly leaseMs: number) {}
   static async open(options: { readonly location?: string; readonly clock?: () => number; readonly leaseMs?: number } = {}): Promise<DeliveryLedger> {
-    const location = options.location ?? process.env.SQUARE_DELIVERY ?? path.join(os.homedir(), '.square', 'delivery.sqlite');
+    const location = options.location ?? deliveryLedgerLocation();
     if (!path.isAbsolute(location)) throw new TypeError('Delivery location must be absolute');
     const leaseMs = options.leaseMs ?? 30_000;
     positive(leaseMs);
@@ -149,10 +173,10 @@ export class DeliveryLedger {
   handoffs(owner: Owner, options: { readonly generation: string }): Promise<readonly DeliveryAttempt[]> {
     validateOwner(owner); nonempty(options.generation); return this.store.handoffs(owner, options.generation);
   }
-  post(input: { readonly owner: Owner; readonly key: string; readonly text: string }): Promise<PostResult> {
+  post(input: { readonly owner: Owner; readonly key: string; readonly text: string; readonly details?: Readonly<Record<string, unknown>> }): Promise<PostResult> {
     validateOwner(input.owner); nonempty(input.key);
     if (typeof input.text !== 'string') throw new TypeError('Expected card text');
-    return this.store.post(input);
+    return this.store.post({ ...input, details: input.details === undefined ? null : encodeDetails(input.details) });
   }
   retract(input: { readonly owner: Owner; readonly key: string }): Promise<RetractResult> {
     validateOwner(input.owner); nonempty(input.key); return this.store.retract(input);

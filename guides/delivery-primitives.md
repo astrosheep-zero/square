@@ -1,7 +1,7 @@
 # Delivery ledger
 
 `@astrosheep/square/delivery-ledger` exports `DeliveryLedger` and its types, also available from the
-package root. The per-user ledger defaults to `~/.square/delivery.sqlite` and stores producer-neutral,
+package root. The per-user ledger defaults to `~/.square/delivery.v2.sqlite` and stores producer-neutral,
 finished text cards, session attachment, routes, attempts and receipts. Producers own content and
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
 

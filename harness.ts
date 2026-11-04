@@ -1,6 +1,4 @@
-import path from 'node:path';
-
-import { DeliveryLedger } from './delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 import { truncateExternalDiagnostic } from './presentation.js';
 
 import {
@@ -111,7 +109,7 @@ const TARGETS: readonly HarnessTarget[] = [
     capabilities: ['doctor'],
     async doctor({ homeDir }) {
       return doctorHost('delivery', async () => {
-        const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.sqlite') });
+        const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(process.env, homeDir) });
         try {
           const health = await ledger.health();
           return [`· delivery health · ${health.unknownAttempts.length} unknown attempts · ${health.repeatedFailures.length} repeated failures · ${health.sessionsWithoutRoute.length} sessions without route`];

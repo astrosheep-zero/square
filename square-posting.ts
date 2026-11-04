@@ -1,17 +1,16 @@
-import os from 'node:os';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import { dispatchPostedCard } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { projectNotification } from './attention-presentation.js';
 import { coreDone } from './decisions.js';
 import { activityMetadataHasContent, type Seat } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
+import { formatActivityId } from './square-core.js';
 import { squarePostKey, type SquarePost } from './square-post.js';
 
 const openLedger = (env: NodeJS.ProcessEnv) => DeliveryLedger.open({
-  location: env.SQUARE_DELIVERY ?? path.join(os.homedir(), '.square', 'delivery.sqlite'),
+  location: deliveryLedgerLocation(env),
 });
 function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
   if (post.kind === 'notice') return { text: post.body ?? '', full: true };
@@ -114,7 +113,10 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         if (current?.state !== 'attached' || current.generation !== session.generation
           || !(await artifact.read(facts => facts.ownsPost(token, Date.now()))).value) continue;
         knownUnsent = false;
-        const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text });
+        const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
+          ...(post.kind === 'activity' ? { details: { kind: 'square-activity', square: location,
+            act: formatActivityId(post.index), actor: post.from, recipient: post.recipient, route: post.route } } : {}),
+        });
         posted = ['posted', 'duplicate', 'retracted'].includes(result.status);
         knownUnsent = !posted;
         if (result.status === 'conflict') throw new Error('A Square card key already holds different text.');

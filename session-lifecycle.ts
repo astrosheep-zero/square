@@ -1,10 +1,8 @@
-import os from 'node:os';
-import path from 'node:path';
-import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import type { Owner } from './owner.js';
 
 function openLedger(env: NodeJS.ProcessEnv): Promise<DeliveryLedger> {
-  return DeliveryLedger.open({ location: env.SQUARE_DELIVERY ?? path.join(os.homedir(), '.square', 'delivery.sqlite') });
+  return DeliveryLedger.open({ location: deliveryLedgerLocation(env) });
 }
 
 /** Rotate the captured session generation; omitted routes retain its registrations. */

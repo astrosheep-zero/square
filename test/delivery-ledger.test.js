@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation } from '../dist/delivery-ledger.js';
 
 const owner = 'native:session/1';
 const pull = { kind: 'boundary', address: {} };
@@ -66,6 +66,69 @@ test('stable owner cards are idempotent, whole, and retained through detach and 
   assert.equal(await f.claim(1000, resumed.generation), undefined);
   assert.equal((await f.ledger.receipts(owner)).length, 2);
   assert.equal((await f.ledger.receipts(owner, { keys: ['p:2'] }))[0].key, 'p:2');
+});
+
+test('opaque details round-trip across reopen, compare canonically, and do not consume the text budget', async t => {
+  const f = await fixture(t);
+  const details = { z: ['opaque', { b: true, a: null }], a: { text: 'x'.repeat(20000), nested: 42 } };
+  assert.equal((await f.ledger.post({ owner, key: 'details', text: 'card', details })).status, 'posted');
+  assert.equal((await f.ledger.post({ owner, key: 'details', text: 'card', details: {
+    a: { nested: 42, text: details.a.text }, z: ['opaque', { a: null, b: true }],
+  } })).status, 'duplicate');
+  for (const changed of [undefined, {}, { ...details, z: ['different'] }])
+    assert.equal((await f.ledger.post({ owner, key: 'details', text: 'card', details: changed })).status, 'conflict');
+  assert.equal((await f.post('details', 'different text')).status, 'conflict');
+  await f.post('plain', 'next');
+  const reopened = await DeliveryLedger.open({ location: f.location });
+  try {
+    const pending = await reopened.pending(owner, { generation: f.session.generation });
+    assert.deepEqual(pending[0].details, details);
+    assert.equal(Object.hasOwn(pending[1], 'details'), false);
+    const claim = await reopened.claimPresentation(owner, { generation: f.session.generation,
+      budgetChars: 'card'.length + 'next'.length + 2 });
+    assert.deepEqual(claim.cards.map(card => card.key), ['details', 'plain']);
+    assert.deepEqual(claim.cards[0].details, details);
+    await claim.settle('released');
+    await reopened.dispatchHandoff(owner, 'details', { kind: push.kind, async send(card) {
+      assert.deepEqual(card.details, details); return 'accepted';
+    } }, { generation: f.session.generation, timeoutMs: 1000 });
+  } finally { await reopened.close(); }
+  const cyclic = {}; cyclic.self = cyclic;
+  for (const invalid of [null, [], 'text', 1, cyclic, { value: undefined }, { value: Infinity },
+    { value: 1n }, { value: () => 1 }, { value: Symbol('x') }, { value: new Date() }])
+    assert.throws(() => f.ledger.post({ owner, key: 'invalid', text: 'x', details: invalid }), TypeError);
+});
+
+test('the fresh default uses v2 and leaves an old default file untouched; overrides still win', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-default-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const oldPath = path.join(root, '.square', 'delivery.sqlite');
+  await fs.mkdir(path.dirname(oldPath));
+  const old = new DatabaseSync(oldPath);
+  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=1; CREATE TABLE cards (text TEXT);');
+  old.close();
+  const before = await fs.readFile(oldPath);
+  const override = process.env.SQUARE_DELIVERY;
+  const homedir = mock.method(os, 'homedir', () => root);
+  try {
+    delete process.env.SQUARE_DELIVERY;
+    assert.equal(deliveryLedgerLocation(), path.join(root, '.square', 'delivery.v2.sqlite'));
+    const ledger = await DeliveryLedger.open();
+    await ledger.close();
+    assert.deepEqual(await fs.readFile(oldPath), before);
+    const db = new DatabaseSync(deliveryLedgerLocation(), { readOnly: true });
+    try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2); }
+    finally { db.close(); }
+    process.env.SQUARE_DELIVERY = path.join(root, 'custom.sqlite');
+    const custom = await DeliveryLedger.open();
+    await custom.close();
+    assert.equal(deliveryLedgerLocation(), process.env.SQUARE_DELIVERY);
+    await fs.access(process.env.SQUARE_DELIVERY);
+    assert.deepEqual(await fs.readFile(oldPath), before);
+  } finally {
+    homedir.mock.restore();
+    if (override === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = override;
+  }
 });
 
 test('attachment CAS has one winner and fences all lifecycle, route and new attempt operations', async t => {

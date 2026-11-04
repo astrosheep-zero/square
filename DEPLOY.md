@@ -75,7 +75,7 @@ their existing installation and delivery paths.
 
 ## Square persistence
 
-The user-level delivery ledger defaults to `~/.square/delivery.sqlite`. It holds
+The user-level delivery ledger defaults to `~/.square/delivery.v2.sqlite`. It holds
 neutral cards, host session lifecycle, attempts and receipts; Square content and
 producer waiting controls remain in the `.square` artifact. There is no discovery
 index. Host start and end attach or detach the ledger session without restoring

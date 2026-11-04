@@ -26,7 +26,9 @@ function projectedItems(item: ToolRow) {
   const data = squareMessageSchema.parse(project(item)!.items[0].data);
   assert.ok("items" in data);
   assert.equal("text" in data, false, "structured bodies are not duplicated as envelope text");
-  return data.items;
+  const squareItems = data.items.filter(entry => "square" in entry);
+  assert.equal(squareItems.length, data.items.length);
+  return squareItems;
 }
 
 test("mixed direct and Agora messages preserve structured authors, exact IDs, bell and body boundaries in live/history cards", () => {
@@ -41,6 +43,35 @@ test("mixed direct and Agora messages preserve structured authors, exact IDs, be
   assert.deepEqual(displayed.map(item => [item.square, item.act]), [["jobs", "act/12"], ["jobs", "act/15"], ["design", "act/12"]]);
   assert.deepEqual(displayed.map(item => item.preview), [undefined, undefined, "last bell preview"], "only the last collapsed preview is carried");
   assert.deepEqual(original, before, "projection never mutates source history");
+});
+
+test("receiver details preserve full Square bodies and plain markdown items in batch order", () => {
+  const square = { square: "~/work/discussion.square", actor: "sender", act: "act/42", recipient: "reader",
+    route: "mention" as const, body: "full **body**\n" + "鱼".repeat(500) };
+  const plain = { text: "External **markdown**\n" + quotedTags };
+  for (const mixed of [[square, plain], [plain, square], [plain]]) {
+    const original = row({ metadata: { synthetic: true, customType: "square", details: { items: mixed } } });
+    const data = squareMessageSchema.parse(project(original)!.items[0].data);
+    assert.ok("items" in data);
+    assert.deepEqual(data.items.map(entry => "text" in entry ? entry : {
+      square: entry.square, actor: entry.actor, act: entry.act, recipient: entry.recipient, route: entry.route, body: entry.body,
+    }), mixed);
+  }
+});
+
+test("plain items share the display budget with Square bodies", () => {
+  const mixed = [{ ...items[0]!, body: "SQUARE START\n" + "鱼".repeat(OUTPUT_DISPLAY_MAX_CHARS) + "\nSQUARE END" },
+    { text: "PLAIN START\n" + "🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS) + "\nPLAIN END" }];
+  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: mixed } } });
+  const before = structuredClone(original);
+  const data = squareMessageSchema.parse(project(original)!.items[0].data);
+  assert.ok("items" in data);
+  assert.equal(data.items.length, 2);
+  const bodies = data.items.map(entry => "text" in entry ? entry.text : entry.body);
+  assert.ok(bodies.reduce((sum, body) => sum + body.length, 0) <= OUTPUT_DISPLAY_MAX_CHARS);
+  assert.ok(bodies[0]!.startsWith("SQUARE START\n") && bodies[0]!.endsWith("\nSQUARE END"));
+  assert.ok(bodies[1]!.startsWith("PLAIN START\n") && bodies[1]!.endsWith("\nPLAIN END"));
+  assert.deepEqual(original, before);
 });
 
 test("multi-message bodies and the collapsed preview share one bounded display budget", () => {

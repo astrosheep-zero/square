@@ -7,12 +7,12 @@ import { validateSchema } from './sqlite-framing.js';
 import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, RetractResult } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
-const FORMAT = 1;
+const FORMAT = 2;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL);
 CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
-CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, posted_at REAL NOT NULL, retracted_at REAL, UNIQUE(owner,key));
+CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, retracted_at REAL, UNIQUE(owner,key));
 CREATE INDEX cards_owner ON cards(owner,seq);
 CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
 CREATE INDEX attempts_seq ON attempts(seq);
@@ -33,7 +33,8 @@ function session(row: Row | undefined): DeliverySession | undefined {
     routes: JSON.parse(row.routes_json as string), at: row.at as number } : undefined;
 }
 function card(row: Row): DeliveryCard {
-  return { seq: row.seq as number, owner: row.owner as string, key: row.key as string, text: row.text as string, postedAt: row.posted_at as number };
+  return { seq: row.seq as number, owner: row.owner as string, key: row.key as string, text: row.text as string,
+    ...(row.details === null ? {} : { details: JSON.parse(row.details as string) }), postedAt: row.posted_at as number };
 }
 function attempt(row: Row): DeliveryAttempt {
   return { token: row.token as string, seq: row.seq as number, generation: row.generation as string,
@@ -167,17 +168,17 @@ export class LedgerStore {
       return true;
     });
   }
-  post(input: { owner: string; key: string; text: string }): Promise<PostResult> {
+  post(input: { owner: string; key: string; text: string; details: string | null }): Promise<PostResult> {
     return this.transaction(true, now => {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
       if (s.state === 'deleted') return { status: 'deleted-session' };
-      const previous = this.db.prepare('SELECT text,retracted_at FROM cards WHERE owner=? AND key=?').get(input.owner, input.key);
-      if (previous) return { status: previous.text !== input.text ? 'conflict' : previous.retracted_at === null ? 'duplicate' : 'retracted' };
+      const previous = this.db.prepare('SELECT text,details,retracted_at FROM cards WHERE owner=? AND key=?').get(input.owner, input.key);
+      if (previous) return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : previous.retracted_at === null ? 'duplicate' : 'retracted' };
       const seq = Number(this.db.prepare('SELECT next_seq FROM meta').get()!.next_seq);
       if (!Number.isSafeInteger(seq + 1)) throw new RangeError('Delivery sequence exhausted');
       this.db.prepare('UPDATE meta SET next_seq=?').run(seq + 1);
-      this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,NULL)').run(seq, input.owner, input.key, input.text, now);
+      this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,?,NULL)').run(seq, input.owner, input.key, input.text, input.details, now);
       return { status: 'posted' };
     });
   }

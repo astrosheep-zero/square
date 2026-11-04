@@ -13,13 +13,16 @@ export const transformSquareMessage: PluginTimelineTransformerContribution<"tool
   let data: SquareMessageData;
   if (details.success) {
     const items = details.data.items, latest = items.at(-1)!;
-    const preview = outputPreview(latest.preview ?? latest.body, COLLAPSED_PREVIEW_MAX_CHARS);
+    const preview = outputPreview("text" in latest ? latest.text : latest.preview ?? latest.body, COLLAPSED_PREVIEW_MAX_CHARS);
     let remaining = OUTPUT_DISPLAY_MAX_CHARS - preview.length;
-    const clipped = items.reduce((sum, entry) => sum + entry.body.length, 0) > remaining;
-    data = { items: items.map(({ preview: _preview, ...entry }, index) => {
-      const body = clipped ? outputPreview(entry.body, Math.floor(remaining / (items.length - index))) : entry.body;
+    const clipped = items.reduce((sum, entry) => sum + ("text" in entry ? entry.text : entry.body).length, 0) > remaining;
+    data = { items: items.map((entry, index) => {
+      const source = "text" in entry ? entry.text : entry.body;
+      const body = clipped ? outputPreview(source, Math.floor(remaining / (items.length - index))) : source;
       remaining -= body.length;
-      return { ...entry, body, ...(index === items.length - 1 ? { preview } : {}) };
+      if ("text" in entry) return { text: body };
+      const { preview: _preview, ...square } = entry;
+      return { ...square, body, ...(index === items.length - 1 ? { preview } : {}) };
     }) };
   } else {
     data = { text: outputPreview(item.detail.text) };
