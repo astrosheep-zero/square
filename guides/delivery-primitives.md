@@ -29,8 +29,11 @@ a deleted row is the authority for producer reconciliation and cannot be registe
 Square folds receipts lazily into its own read state only for full activity cards; a shortened activity
 card points to `square_catch` and cannot consume the full activity. Catch permanently suppresses the
 corresponding ledger card where possible. Cancellation suppresses outstanding work without claiming it was seen and cannot
-recall an external send already past its final check. The ledger has no metadata matching or deferral
-API; producer-owned leases and exact ACK are described in [square-api.md](square-api.md).
+recall an external send already past its final check. Producers can call
+`ledger.suppress({owner, key, scope: 'exact' | 'prefix', expiresAt?})` to suppress one key or a key
+prefix. Omit `expiresAt` for permanent suppression within ledger retention, or supply an expiry for
+temporary suppression. This does not consume Square activity; producer-owned exact ACK is described
+in [square-api.md](square-api.md). The ledger does not match producer metadata.
 
 Square posting, the Codex Stop watcher and OpenCode receivers retain their original ledger connection while
 an already-invoked handoff has a pending `lateSettlement`. Timeout or cancellation returns promptly;

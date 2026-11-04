@@ -5,13 +5,10 @@ and reconciliation let catch and stream reconsider changes even if a filesystem 
 subscribers retain independent cancellation and deadlines. Throttling waits for its eligibility time.
 There is no discovery index and no daemon or per-message timer.
 
-Deferral leases live in producer storage, separate from the catch lease and ledger attempts. A live
-matching lease postpones producer export. Release or expiry permits unconsumed work to proceed via
-an active observer or the next normal opportunity; a one-shot producer returns without waiting.
-Lease acquisition cannot recall an export already owned or a card in ledger custody. ACK and export
-ownership serialize with insertion in producer storage; exact future ACK prevents a matching late
-insertion from bypassing it, but cannot recall an already owned export. Cancellation does not erase
-history or imply that activity was read.
+ACK and export ownership serialize with insertion in producer storage; exact future ACK prevents a
+matching late insertion from bypassing it, but cannot recall an already owned export. Cancellation
+does not erase history or imply that activity was read. Proactive delivery suppression belongs in the
+host delivery ledger; see [delivery-primitives.md](delivery-primitives.md).
 
 At the next normal privileged posting opportunity, already-posted eligible keys can be dispatched
 again without reinserting cards or resetting producer state. Ledger attempts exclude accepted, unknown

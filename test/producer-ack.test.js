@@ -32,30 +32,12 @@ async function setup(t) {
   return { square, reopened, observer, other, ledger, cards, owner, input, env, advance: value => { now += value; } };
 }
 
-test('independent World leases hold posting until both release or expire', async t => {
-  const c = await setup(t);
-  const first = await c.observer.deferDelivery({ match: match(), durationMs: 100 });
-  const second = await (await c.reopened.participant('observer', { owner: c.owner })).deferDelivery({ match: match(), durationMs: 100 });
-  assert.notEqual(first.id, second.id);
-  await c.square.send(notice());
-  assert.equal((await c.cards()).length, 0);
-  await c.observer.releaseDeliveryDeferral(first.id);
-  await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
-  assert.equal((await c.cards()).length, 0);
-  c.advance(101);
-  assert.equal(await c.observer.renewDeliveryDeferral(second.id, 100), null);
-  await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
-  assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/7']);
-});
-
 test('explicit exact ACK consumes existing and future notices only for its captured recipient and outcome', async t => {
   const c = await setup(t);
-  const lease = await c.observer.deferDelivery({ match: match(), durationMs: 1000 });
   const sent = await c.square.send(notice('turn/7', ['observer', 'other']));
   assert.match(sent.id, /^notice\//);
   assert.equal((await c.square.history({ limit: null })).activities.some(activity => activity.actor === 'keiyaku-notice'), false);
   assert.deepEqual(await c.observer.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
-  await c.observer.releaseDeliveryDeferral(lease.id);
   await c.square.send(notice());
   await c.square.send(notice('turn/8'));
   assert.deepEqual((await c.cards()).map(card => card.text), ['result turn/8']);
@@ -74,9 +56,6 @@ test('zero-count future ACK is durable without a TTL or ledger access and matche
   try {
     const seat = await selectOwnSeat(sandbox, c.owner, 'observer');
     assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 0 });
-    const lease = await seat.deferDelivery({ match: match('turn/8'), durationMs: 100 });
-    assert.ok(await seat.renewDeliveryDeferral(lease.id, 200));
-    assert.equal(await seat.releaseDeliveryDeferral(lease.id), true);
   } finally { await sandbox.close(); }
   c.advance(1000 * 60 * 60 * 24 * 500);
   const again = await c.reopened.participant('observer', { owner: c.owner });
@@ -87,7 +66,7 @@ test('zero-count future ACK is durable without a TTL or ledger access and matche
   await assert.rejects(() => again.ack({ from: 'keiyaku-notice', match: match() }), error => error.code === 'invalid_args');
 });
 
-test('ACK and lease after committed export ownership do not recall the captured post or hold a World writer', async t => {
+test('ACK after committed export ownership does not recall the captured post or hold a World writer', async t => {
   const c = await setup(t);
   const original = DeliveryLedger.prototype.post;
   let enter, resume;
@@ -102,14 +81,12 @@ test('ACK and lease after committed export ownership do not recall the captured 
     await entered;
     // A separately opened producer handle can commit while the external post is paused.
     const seat = await c.reopened.participant('observer', { owner: c.owner });
-    const lease = await seat.deferDelivery({ match: match(), durationMs: 1000 });
     assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
     resume();
     await sending;
     // Catch/retraction may remove an unclaimed card, but no pre-export suppression is claimed.
     const session = await c.ledger.session(c.owner);
     assert.equal(session.state, 'attached');
-    await seat.releaseDeliveryDeferral(lease.id);
     await c.square.send(notice());
     assert.equal((await c.cards()).length, 0);
   } finally { resume(); DeliveryLedger.prototype.post = original; }
@@ -146,6 +123,5 @@ test('World-local discovery preserves known identities without probing host deli
 test('local World custody refuses known departure or replacement without probing the ledger', async t => {
   const c = await setup(t);
   await c.square.join('observer', { owner: 'replacement', takeover: true });
-  await assert.rejects(() => c.observer.deferDelivery({ match: match(), durationMs: 100 }), /replaced/);
   await assert.rejects(() => c.observer.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), /replaced/);
 });

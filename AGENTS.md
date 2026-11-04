@@ -17,11 +17,6 @@ Boundaries should be light and useful:
   members remain away, retain audience and unread activity, but cannot write or receive proactive
   delivery. Host-confirmed deletion is reconciled as a fenced `done` by the next mutating operation.
   See `guides/participant-ownership.md`.
-- The SDK's `deferDelivery`, `renewDeliveryDeferral`, and `releaseDeliveryDeferral` are independent,
-  expiring producer-owned leases fenced to the captured owner/join generation. Nested scalar matches
-  combine with AND, leases with OR. They postpone producer export, not explicit catch or history;
-  release/expiry permits unconsumed work to proceed. They cannot recall export already owned or in
-  ledger custody. Local lease and exact-ACK authorization uses World custody, not host liveness.
 - `hard_cap` prevents endless talking.
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior. Ledger receipts are folded lazily only for full activity cards.
@@ -72,7 +67,7 @@ Implementation taste:
 - Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
-- The authoritative Format12 `.square` database owns square state, content and producer waiting controls. The per-user host delivery ledger owns neutral cards, session lifecycle, attempts and receipts; there is no discovery index. Older artifacts are refused read-only, with no migration or deletion.
+- The authoritative Format12 `.square` database owns square state, content and producer consumption facts. The per-user host delivery ledger owns neutral cards, session lifecycle, attempts and receipts; there is no discovery index. Older artifacts are refused read-only, with no migration or deletion.
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.

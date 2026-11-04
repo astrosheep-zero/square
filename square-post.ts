@@ -1,5 +1,5 @@
 import { nameKey, type ActivityMetadata, type DirectedNotificationRoute, type Owner } from './model.js';
-import type { DeliveryDeferralFact, MetadataMatch } from './delivery-deferral.js';
+import type { MetadataMatch } from './delivery-deferral.js';
 import type { SeatRef } from './ports.js';
 
 /** Producer notices are not activities in the square. */
@@ -43,14 +43,10 @@ export interface ProducerRead {
   pendingPosts(): readonly SquarePost[];
   postedPosts(): readonly SquarePost[];
   ownsPost(token: string, exportAt?: number): boolean;
-  deliveryDeferrals(participant: string, generation: string): readonly DeliveryDeferralFact[];
 }
 export interface ProducerWrite {
   insertNotice(input: SendInput, at: number): SendResult;
   ackMatching(seat: SeatRef, input: FutureAck, at: number): number;
-  putDeliveryDeferral(seat: SeatRef, id: string, match: MetadataMatch, expiresAt: number, now: number): void;
-  renewDeliveryDeferral(seat: SeatRef, id: string, expiresAt: number, now: number): boolean;
-  releaseDeliveryDeferral(seat: SeatRef, id: string, now: number): boolean;
   acquirePost(post: SquarePost, token: string, pid: number, now: number, exportAt?: number): false | 'initial' | 'recovered';
   settlePost(token: string, full: boolean, disposition: 'posted' | 'uncertain' | 'never-exported'): boolean;
   foldReceipt(post: SquarePost, at: number): boolean;

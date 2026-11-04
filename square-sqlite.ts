@@ -346,7 +346,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     }
     // ----- Upper Agora read capabilities -----
     const readMethods: SquareRead = {
-        pendingPosts: producer.pendingPosts, postedPosts: producer.postedPosts, ownsPost: producer.ownsPost, deliveryDeferrals: producer.deliveryDeferrals,
+        pendingPosts: producer.pendingPosts, postedPosts: producer.postedPosts, ownsPost: producer.ownsPost,
         seat: currentEndpoint,
         seatsForOwner: requested => immutable(all('SELECT participant_json FROM participant_seats WHERE owner_json=?', [encode(requested)]).map(row => currentEndpoint(decoded(row.participant_json, true))!)),
         header() { return readSquareHeader(db); },
@@ -440,8 +440,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     // ----- Upper Agora writes / landing -----
     const writes: LandingWriter = {
         insertNotice: producer.insertNotice, ackMatching: producer.ackMatching,
-        putDeliveryDeferral: producer.putDeliveryDeferral, renewDeliveryDeferral: producer.renewDeliveryDeferral,
-        releaseDeliveryDeferral: producer.releaseDeliveryDeferral, acquirePost: producer.acquirePost, settlePost: producer.settlePost, foldReceipt: producer.foldReceipt,
+        acquirePost: producer.acquirePost, settlePost: producer.settlePost, foldReceipt: producer.foldReceipt,
         setSeatAttachment(seat, attachment) {
             const count = run('UPDATE participant_seats SET attachment=? WHERE participant_key_json=? AND owner_json=? AND generation_json=? AND attachment<>?', [attachment, key(seat.participant), encode(seat.owner), encode(seat.generation), attachment]);
             changed ||= count > 0; return count > 0;

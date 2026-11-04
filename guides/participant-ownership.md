@@ -17,13 +17,11 @@ operation reconciles it and lands a generation-fenced `done`. Read-only history,
 participants do not perform that mutation.
 
 Participant handles capture owner and join generation; stale, departed or replaced custody refuses.
-Sandbox selection and deferral/ACK controls authorize against locally known World custody alone,
+Sandbox selection and exact ACK authorize against locally known World custody alone,
 without requiring access to the user ledger. This is not proof of current host attachment: a ledger-only
 detach or deletion is learned at the next privileged producer reconciliation. A local control never
 grants host delivery authority or revives a deleted session; export checks the actual ledger state.
 
-The three independent metadata deferral leases are producer-owned and generation-fenced. Matching
-scalar predicates combine with AND within a lease, OR across live leases. They postpone export without
-changing history, audience, unread counts or explicit catch. Expiry or release permits unconsumed
-work to proceed; neither can recall export already owned or transferred to ledger custody. Exact
-future ACK is also producer-owned and recipient-scoped; see [square-api.md](square-api.md).
+Exact future ACK is producer-owned and recipient-scoped; see [square-api.md](square-api.md).
+Proactive delivery suppression belongs in the host delivery ledger; see
+[delivery-primitives.md](delivery-primitives.md).

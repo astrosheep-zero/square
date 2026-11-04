@@ -105,32 +105,11 @@ initial attempt proved not to have invoked insertion, or given a definite insert
 its export bookkeeping while keeping the source pending. Recovering a prior uncertain attempt never
 erases its original export time merely because the current retry was unsent.
 
-## Temporary producer delivery deferral
-
-```ts
-const lease = await alice.deferDelivery({
-  match: { fields: [
-    { path: ['job', 'kind'], equals: 'outcome' },
-    { path: ['job', 'id'], equals: 7 },
-  ] },
-  durationMs: 60_000,
-});
-try {
-  await alice.renewDeliveryDeferral(lease.id, 60_000);
-} finally {
-  await alice.releaseDeliveryDeferral(lease.id);
-}
-```
-
 `MetadataMatch` has nonempty `fields` with nonempty path segments and exact, type-sensitive scalar
 `equals` values (`null`, boolean, finite number or string). Only own object properties are traversed;
-arrays and missing intermediates do not match. Fields combine with AND, and independent live leases
-combine with OR. Each lease has its own ID and expiry; renewal cannot revive an expired lease.
-The three existing lease methods remain separate from the single catch lease. They postpone matching
-producer export without changing audience, history, unread counts or explicit catch and ACK. Release
-or expiry permits unconsumed work to proceed; neither recalls export already owned or in ledger custody.
+arrays and missing intermediates do not match. Fields combine with AND.
 
-Sandbox participant selection and lease/ACK mutations check captured owner, join generation and locally
+Sandbox participant selection and exact ACK check captured owner, join generation and locally
 known lifecycle in World storage only. They do not need ledger access and do not prove host liveness.
 Ledger-only detach or delete is learned at the next privileged producer reconciliation; actual export
 is gated by the ledger's current state. Local controls cannot grant delivery authority or resurrect a
@@ -147,4 +126,5 @@ fenced `done` lazily by the next mutating operation, never by history, status or
 
 The package exports `DeliveryLedger` and its types from both the root and
 `@astrosheep/square/delivery-ledger`. External producers post finished text and own their content;
-the ledger has no metadata matching, deferral or Square-specific API.
+the ledger does not match producer metadata. Proactive delivery suppression uses the ledger's exact
+or prefix `suppress` operation, with an optional expiry; see [delivery-primitives.md](delivery-primitives.md).

@@ -26,9 +26,7 @@ test('ledger detach projects away while retaining audience and unread; attach re
   await bob.listen('Alice');
   assert.equal(await ledger.detach({ owner: 'test:bob', generation: session.generation }), true);
   const match = { fields: [{ path: ['job'], equals: 7 }] };
-  const lease = await bob.deferDelivery({ match, durationMs: 10000 });
   assert.deepEqual(await bob.ack({ from: 'Worker', match, future: 'exact' }), { consumed: 0 });
-  assert.equal(await bob.releaseDeliveryDeferral(lease.id), true);
   const sent = (await alice.express('while away', { force: true })).activity;
   const away = (await square.participants()).participants.find(p => p.name === 'Bob');
   assert.equal(away.presence, 'away');

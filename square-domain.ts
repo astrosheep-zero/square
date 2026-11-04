@@ -75,7 +75,7 @@ export function assertCurrentSeat(read: SquareRead, expected: SeatRef, allowDeta
 export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authority: ArtifactWriteAuthority): SquareWriteGate {
   if (!authority || typeof authority !== 'object') throw new SquareError('invalid_args', 'Artifact writes require an explicit authority.');
   const denied = () => { throw new SquareError('invalid_args', 'This authority cannot perform that write.'); };
-  const deniedWrites = { land: denied, putLease: denied, removeLease: denied, markSeen: denied, setSeatAttachment: denied, insertNotice: denied, ackMatching: denied, putDeliveryDeferral: denied, renewDeliveryDeferral: denied, releaseDeliveryDeferral: denied, acquirePost: denied, settlePost: denied, foldReceipt: denied };
+  const deniedWrites = { land: denied, putLease: denied, removeLease: denied, markSeen: denied, setSeatAttachment: denied, insertNotice: denied, ackMatching: denied, acquirePost: denied, settlePost: denied, foldReceipt: denied };
   if (authority.kind === 'producer') {
     return { facts: Object.assign({}, read, deniedWrites, {
       acquirePost(post, token, pid, now, exportAt) {
@@ -156,9 +156,6 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
     removeLease(name: string, leaseId: string, generation?: string) { participant(name, generation); return writes.removeLease(name, leaseId, generation); },
     markSeen(name: string, indexes: readonly number[], at: number) { participant(name); return writes.markSeen(name, indexes, at); },
     ackMatching(seat: SeatRef, input: Parameters<ProducerWrite['ackMatching']>[1], at: number) { participant(seat.participant, seat.generation); if (authority.kind !== 'participant' || authority.seat.owner !== seat.owner) throw new SquareError('already_joined', 'Seat owner changed.'); return writes.ackMatching(seat, input, at); },
-    putDeliveryDeferral(seat: SeatRef, id: string, match: Parameters<ProducerWrite['putDeliveryDeferral']>[2], expiresAt: number, now: number) { participant(seat.participant, seat.generation); if (authority.kind !== 'participant' || authority.seat.owner !== seat.owner) throw new SquareError('already_joined', 'Seat owner changed.'); return writes.putDeliveryDeferral(seat, id, match, expiresAt, now); },
-    renewDeliveryDeferral(seat: SeatRef, id: string, expiresAt: number, now: number) { participant(seat.participant, seat.generation); if (authority.kind !== 'participant' || authority.seat.owner !== seat.owner) throw new SquareError('already_joined', 'Seat owner changed.'); return writes.renewDeliveryDeferral(seat, id, expiresAt, now); },
-    releaseDeliveryDeferral(seat: SeatRef, id: string, now: number) { participant(seat.participant, seat.generation); if (authority.kind !== 'participant' || authority.seat.owner !== seat.owner) throw new SquareError('already_joined', 'Seat owner changed.'); return writes.releaseDeliveryDeferral(seat, id, now); },
   });
   return { facts, complete() {
     if (authority.kind !== 'takeover') return;

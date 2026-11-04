@@ -5,15 +5,6 @@ export type MetadataScalar = null | boolean | number | string;
 export interface MetadataMatch {
   readonly fields: readonly Readonly<{ path: readonly string[]; equals: MetadataScalar }>[];
 }
-export interface DeliveryDeferral { readonly id: string; readonly expiresAt: string; }
-export interface DeliveryDeferralFact {
-  readonly participant: string;
-  readonly generation: string;
-  readonly id: string;
-  readonly match: MetadataMatch;
-  readonly expiresAt: number;
-}
-export const MAX_DELIVERY_DEFERRAL_MS = 24 * 60 * 60 * 1000;
 
 export function validateMetadataMatch(value: unknown): MetadataMatch {
   const fail = (): never => { throw new SquareError('invalid_args', 'Invalid metadata match.'); };
@@ -50,18 +41,6 @@ export function validateMetadataMatch(value: unknown): MetadataMatch {
   return Object.freeze({ fields: Object.freeze(validated) });
 }
 
-export function validateDeferralDuration(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0)
-    throw new SquareError('invalid_args', 'Delivery deferral duration must be a positive safe integer.');
-  return Math.min(value as number, MAX_DELIVERY_DEFERRAL_MS);
-}
-
-export function validateDeferralId(value: unknown): string {
-  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))
-    throw new SquareError('invalid_args', 'Invalid delivery deferral id.');
-  return value;
-}
-
 export function matchesMetadata(metadata: ActivityMetadata | undefined, match: MetadataMatch): boolean {
   if (metadata === undefined) return false;
   return match.fields.every(({ path, equals }) => {
@@ -72,17 +51,4 @@ export function matchesMetadata(metadata: ActivityMetadata | undefined, match: M
     }
     return value === equals && (value === null || typeof value !== 'object');
   });
-}
-
-export function matchingDeferrals(
-  deferrals: readonly DeliveryDeferralFact[], metadata: ActivityMetadata | undefined, now: number,
-): readonly DeliveryDeferralFact[] {
-  return deferrals.filter((lease) => lease.expiresAt > now && matchesMetadata(metadata, lease.match));
-}
-
-export function earliestMatchingDeferralExpiry(
-  deferrals: readonly DeliveryDeferralFact[], metadata: ActivityMetadata | undefined, now: number,
-): number | undefined {
-  const matches = matchingDeferrals(deferrals, metadata, now);
-  return matches.length ? Math.min(...matches.map((lease) => lease.expiresAt)) : undefined;
 }

@@ -1,6 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import { matchesMetadata, matchingDeferrals, validateMetadataMatch } from './delivery-deferral.js';
-import type { DeliveryDeferralFact, MetadataMatch } from './delivery-deferral.js';
+import { matchesMetadata, validateMetadataMatch } from './delivery-deferral.js';
+import type { MetadataMatch } from './delivery-deferral.js';
 import { SquareError, sameName, validateName, validateActivityMetadata, type ActivityMetadata } from './model.js';
 import type { SeatRef } from './ports.js';
 import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost } from './square-post.js';
@@ -16,11 +16,6 @@ CREATE TABLE notice_audience (
   owner_json TEXT NOT NULL, generation_json TEXT NOT NULL, consumed_at REAL,
   PRIMARY KEY (notice_index,recipient_key_json)
 ) WITHOUT ROWID;
-CREATE TABLE producer_leases (
-  recipient_key_json TEXT NOT NULL, owner_json TEXT NOT NULL, generation_json TEXT NOT NULL,
-  lease_id TEXT NOT NULL, match_json TEXT NOT NULL, expires_at REAL NOT NULL,
-  PRIMARY KEY (recipient_key_json,generation_json,lease_id)
-) WITHOUT ROWID;
 CREATE TABLE producer_consumption (
   recipient_key_json TEXT NOT NULL, owner_json TEXT NOT NULL, generation_json TEXT NOT NULL,
   sender_json TEXT NOT NULL, match_json TEXT NOT NULL, at REAL NOT NULL,
@@ -35,7 +30,7 @@ CREATE TABLE square_posts (
 ) WITHOUT ROWID;`;
 export function initializeProducerSqlite(db: DatabaseSync): void { db.exec(producerSchemaSql); }
 export function resetProducerSqlite(db: DatabaseSync): void {
-  for (const table of ['square_posts', 'producer_consumption', 'producer_leases', 'notice_audience', 'square_notices']) db.exec(`DROP TABLE ${table}`);
+  for (const table of ['square_posts', 'producer_consumption', 'notice_audience', 'square_notices']) db.exec(`DROP TABLE ${table}`);
 }
 function canonicalMatch(match: MetadataMatch): string {
   const fields = validateMetadataMatch(match).fields.map(field => ({ path: [...field.path], equals: field.equals }));
@@ -125,10 +120,6 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       return !!row && row.posted !== 1 && withinExportWindow(finite(row.first_export_at), finite(exportAt))
         && exportAt >= finite(row.claim_at) && exportAt - finite(row.claim_at) < EXPORT_OWNERSHIP_MS;
     },
-    deliveryDeferrals(participant, generation) {
-      return rows('SELECT * FROM producer_leases WHERE recipient_key_json=? AND generation_json=?', [key(participant), encode(generation)])
-        .map(row => ({ participant, generation, id: row.lease_id as string, expiresAt: finite(row.expires_at), match: json(row.match_json) as MetadataMatch }));
-    },
     insertNotice(input: SendInput, at: number): SendResult {
       validateName(input.from);
       if (typeof input.body !== 'string' || !input.body.trim()) throw new SquareError('invalid_args', 'A notification needs a non-empty body.');
@@ -167,20 +158,6 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       }
       return count;
     },
-    putDeliveryDeferral(seat, id, match, expiresAt, now) {
-      authority(seat); finite(now);
-      run('INSERT INTO producer_leases VALUES(?,?,?,?,?,?)', [key(seat.participant), encode(seat.owner), encode(seat.generation), id, canonicalMatch(match), finite(expiresAt)]);
-    },
-    renewDeliveryDeferral(seat, id, expiresAt, now) {
-      authority(seat);
-      return run('UPDATE producer_leases SET expires_at=? WHERE recipient_key_json=? AND owner_json=? AND generation_json=? AND lease_id=? AND expires_at>?',
-        [finite(expiresAt), key(seat.participant), encode(seat.owner), encode(seat.generation), id, finite(now)]) > 0;
-    },
-    releaseDeliveryDeferral(seat, id, now) {
-      authority(seat); finite(now);
-      return run('DELETE FROM producer_leases WHERE recipient_key_json=? AND owner_json=? AND generation_json=? AND lease_id=?',
-        [key(seat.participant), encode(seat.owner), encode(seat.generation), id]) > 0;
-    },
     acquirePost(post, token, pid, now, exportAt = Date.now()) {
       // A scanned value is not custody. Re-read all source and policy facts under the World writer.
       const current = allPosts().find(candidate => candidate.kind === post.kind && candidate.index === post.index && candidate.recipient === post.recipient);
@@ -188,7 +165,6 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       const seat = one('SELECT * FROM participant_seats WHERE participant_key_json=?', [key(post.recipient)]);
       if (!seat || seat.owner_json !== encode(post.owner) || seat.generation_json !== encode(post.generation) || seat.attachment !== 'attached') return false;
       if (consumed(current)) { consume(current, now); return false; }
-      if (matchingDeferrals(driver.deliveryDeferrals(post.recipient, post.generation), current.metadata, now).length) return false;
       const previous = one('SELECT * FROM square_posts WHERE kind=? AND item_index=? AND recipient_key_json=?', [post.kind, post.index, key(post.recipient)]);
       finite(exportAt);
       if (previous?.posted === 1) return false;

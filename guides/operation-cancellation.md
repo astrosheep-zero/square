@@ -14,11 +14,8 @@ but the committed activity remains recoverable through `history` or a later `cat
 require a second acknowledgement. The separate `pending` query never consumes; its optional
 follow-up `ack(ids)` commits exact receipts with the same cancellation boundary.
 
-The single catch lease and independent delivery-deferral leases have distinct lifetimes. Cancelling
-an active catch releases only that catch's lease. Cancelling a deferral operation before commit
-prevents its mutation; once creation or renewal commits, the lease survives caller cancellation
-until explicit release, expiry or retirement of its captured seat. A committed release is likewise
-not undone. There is no automatic rollback lease or per-message cancellation timer.
+Cancelling an active catch releases its catch lease, permitting still-unconsumed activity to proceed
+at the next ordinary posting opportunity. It cannot recall export ownership already committed.
 
 Ownership and delivery have the same limitation: cancellation can stop work that has not entered the boundary, but it cannot withdraw an ownership effect or a transport send that already happened. The returned committed result and existing degradation classification remain authoritative.
 

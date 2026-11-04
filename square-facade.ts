@@ -1,5 +1,5 @@
-import type { DeliveryDeferral, MetadataMatch } from './delivery-deferral.js';
-export type { DeliveryDeferral, MetadataMatch, MetadataScalar } from './delivery-deferral.js';
+import type { MetadataMatch } from './delivery-deferral.js';
+export type { MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { Owner, HydratedAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
 import type { SquareResourceOwner } from './ports.js';
@@ -167,9 +167,6 @@ export interface Participant {
   ack(input: FutureAck, control?: OperationControl): Promise<AckResult>;
   /** Leave without a message. Only an omitted or empty body is accepted. */
   done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
-  deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral>;
-  renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null>;
-  releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean>;
 }
 
 export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'away' | 'done';

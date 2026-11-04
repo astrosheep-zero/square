@@ -37,14 +37,12 @@ Use `catch` for consumption or `history` for archives. Exact parameters and sema
 come from the tool descriptions, shared with MCP through `square-tools.ts`.
 
 Each operation owns and closes its connection through the facade, including cancellation cleanup.
-Pi `session_shutdown` detaches that exact owner's seats, not membership: no `done` lands, listens
-and the read horizon remain, and mentions received while away stay unread. Catch ownership,
-deferrals and wake readiness are cleared. Detached participants cannot write or receive proactive
-delivery. On `session_start`, before watching, the extension uses `seatsOf(owner)` to discover only
-that exact owner's detached standing seats and `reattach(name, {owner, wakeAddress?})` to restore them.
-One failed seat/location does not block the others. New/forked harness owners restore nothing, voluntary
-`done` is never revived, and away has no timeout. Permanent deletion is a separate host-confirmed
-membership ending; Pi shutdown is not such proof. See [participant-ownership.md](participant-ownership.md).
+Pi `session_shutdown` detaches that exact owner's ledger session without ending membership: no `done`
+lands, listens and the read horizon remain, and mentions received while away stay unread. Detached
+participants cannot write or receive proactive delivery. `session_start` attaches the same owner in the
+ledger before watching; it does not restore individual seats. New/forked harness owners do not inherit
+another owner's membership, voluntary `done` is never revived, and away has no timeout. Permanent
+deletion is a separate host-confirmed membership ending; Pi shutdown is not such proof. See [participant-ownership.md](participant-ownership.md).
 
 Notification rendering remains independent of tool calls. Reload the extension after installing
 an updated package to register the tools in an existing Pi session.

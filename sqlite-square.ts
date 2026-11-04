@@ -1,13 +1,12 @@
 import { formatActivityId } from './square-core.js';
 import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
-import type { MetadataMatch, DeliveryDeferral } from './delivery-deferral.js';
 import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
 import { checkControl, failure, squareClock } from './operation-control.js';
-import { validateDeferralDuration, validateDeferralId, validateMetadataMatch } from './delivery-deferral.js';
+import { validateMetadataMatch } from './delivery-deferral.js';
 import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from './square-posting.js';
 import { attentionChange, coreDone, coreListening, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
 import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
@@ -423,28 +422,6 @@ export class SqliteSquare {
         }
         return { consumed: facts.markSeen(this.name, indexes, square.clock()) };
       }, control?.signal).then(result => result.value);
-    }
-    async deferDelivery(input: Readonly<{ match: MetadataMatch; durationMs: number }>, control?: OperationControl): Promise<DeliveryDeferral> {
-      checkControl(control);
-      const match = validateMetadataMatch(input?.match), duration = validateDeferralDuration(input?.durationMs);
-      return (await this.owner.artifact.transactAs(participantAuthority(this.seat), facts => {
-        const now = this.owner.clock(), expiresAt = now + duration, id = crypto.randomUUID();
-        facts.putDeliveryDeferral(asSeatRef(this.seat), id, match, expiresAt, now);
-        return { id, expiresAt: new Date(expiresAt).toISOString() };
-      }, control?.signal)).value;
-    }
-    async renewDeliveryDeferral(id: string, durationMs: number, control?: OperationControl): Promise<DeliveryDeferral | null> {
-      checkControl(control); validateDeferralId(id);
-      const duration = validateDeferralDuration(durationMs);
-      return (await this.owner.artifact.transactAs(participantAuthority(this.seat), facts => {
-        const now = this.owner.clock(), expiresAt = now + duration;
-        return facts.renewDeliveryDeferral(asSeatRef(this.seat), id, expiresAt, now) ? { id, expiresAt: new Date(expiresAt).toISOString() } : null;
-      }, control?.signal)).value;
-    }
-    async releaseDeliveryDeferral(id: string, control?: OperationControl): Promise<boolean> {
-      checkControl(control); validateDeferralId(id);
-      return (await this.owner.artifact.transactAs(participantAuthority(this.seat), facts =>
-        facts.releaseDeliveryDeferral(asSeatRef(this.seat), id, this.owner.clock()), control?.signal)).value;
     }
     async done(body?: string, options: ObservationOptions = {}, control?: OperationControl): Promise<LifecycleResult> {
       validateDoneBody(body);
